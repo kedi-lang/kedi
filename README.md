@@ -1,11 +1,11 @@
 # TODO 
 
-* Define marker syntax
-* Extract fields and types
-* Validate type names
-* Transform string types to correspond python types 
-* Implement pydantic model builder from fields and their types, defaults if exists
-* Use that models to generate structured output based on marker topics
+* Define marker syntax (v1, done)
+* Extract fields and types (Done)
+* Validate type names (Done)
+* Transform string types to correspond python types  (Done)
+* Implement pydantic model builder from fields and their types, defaults if exists (model generation done, defaulting gonna added)
+* Use that models to generate structured output based on marker topics (Done)
 
 # Scenario
 
