@@ -36,3 +36,8 @@ output = f'The weather would be better after {when}'
 
 assert output == result.output
 ```
+
+## License
+
+This project is licensed under the [Apache License 2.0](./LICENSE).  
+See the [NOTICE](./NOTICE) and [CREDITS.md](./CREDITS.md) files for details.
