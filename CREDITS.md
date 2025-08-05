@@ -10,8 +10,8 @@
 
 ## Acknowledgements
 
-This project has benefited from thoughtful discussions, design suggestions, and support from the open source and agent framework communities.
-
+This project was independently designed and developed by Mert Sirakaya, inspired by modern agent frameworks such as dspy and its signature pattern.
+No external design contributions were used in the creation of this DSL.
 ---
 
 _© 2025 Mert Sirakaya. All rights reserved._
