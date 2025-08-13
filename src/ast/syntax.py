@@ -1,5 +1,5 @@
 """
-Implementation module for syntax elements.
+Implementation module for syntax nodes.
 """
 
 from statements import Statement as Stmt
