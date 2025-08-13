@@ -4,11 +4,13 @@ Defines the Expression base class and its dependent classes for the AST (Abstrac
 
 import abc
 
+
 class Expression(abc.ABC):
     """
     Abstract class for all expressions in the AST.
     This class can be extended to create specific types of expressions.
     """
+
     @abc.abstractmethod
     def evaluate(self, expr: str):
         """
