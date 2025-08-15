@@ -5,51 +5,53 @@ Implementation module for syntax nodes.
 from statements import Statement as Stmt
 from expressions import Expression as Expr
 
-from typing import Any, List, TypeVar
+from typing import Any, List, Optional, TypeVar
 
-InferT = TypeVar("InferT", bound=Any)
+ParamT = TypeVar("ParamT", bound=Any)
 OutputT = TypeVar("OutputT", bound=str)
 
 
-class In(Expr):
-    """
-    An input node to inject dependencies into prompt.
-    """
+class ASTNode(object):
+    pass
 
+
+class PythonExpr(Expr):
+    pass
+
+
+class Param(ASTNode):
     id: str
-    # type_: type[InferT]
+    type_: type[ParamT]
+
+
+class In(Expr):
+    id: str
 
 
 class Out(Expr):
-    """
-    An output node to provide output based on LLM invokes.
-    """
-
     id: str
     text: str | None
     type_: type[OutputT]
 
 
 class MarkerRun(Expr):
-    """
-    MarkerRunExpr is an expression to run a collection of markers that has return statement.
-    Also can be used as an expression in statements.
-    """
-
     markers: List[Expr]
 
 
-class ExprStmt(Stmt):
-    """
-    Statement that have many of expressions
-    """
+class DefineProcedure(Stmt):
+    id: str
+    params: Optional[List[Param]]
+    stmt_list: List[Stmt]
 
+
+class CallProcedure(Expr):
+    id: str
+    args: List[Expr]
+
+
+class ExprStmt(Stmt):
     expr: Expr
 
 
-class Program(Stmt):
-    """
-    A program that runs every single MarkerRun.
-    """
-
-    run_list: List[MarkerRun]
+class Program(ASTNode):
+    statements: List[Stmt]
