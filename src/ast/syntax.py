@@ -60,7 +60,7 @@ class ForEachLoop(Stmt):
 
 
 class WhileLoop(Stmt):
-    condition: Union[Expr, Literal]
+    condition: Expr
     stmt_list: List[Stmt]
 
 
