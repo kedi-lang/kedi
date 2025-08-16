@@ -3,9 +3,9 @@ Defines the Statement base class and its dependent classes for the AST (Abstract
 """
 
 import abc
+from pydantic import BaseModel
 
-
-class Statement(abc.ABC):
+class Statement(BaseModel):
     """
     Abstract class for all statements.
     """
@@ -15,4 +15,4 @@ class Statement(abc.ABC):
         """
         Run the statement.
         """
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError
