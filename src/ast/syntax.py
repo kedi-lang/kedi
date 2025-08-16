@@ -52,14 +52,17 @@ class CallProcedure(Expr):
     id: str
     args: List[Expr]
 
+
 class ForEachLoop(Stmt):
     iter_id: str
     iterable: Expr
     stmt_list: List[Stmt]
 
+
 class WhileLoop(Stmt):
     condition: Union[Expr, Literal]
     stmt_list: List[Stmt]
+
 
 class ExprStmt(Stmt):
     expr: Expr
