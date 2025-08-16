@@ -32,7 +32,6 @@ class Literal(Expr):
 
 class In(Expr):
     expr: Expr
-    text: str | None
 
 
 class Out(ASTNode):
