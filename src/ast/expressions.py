@@ -3,9 +3,10 @@ Defines the Expression base class and its dependent classes for the AST (Abstrac
 """
 
 import abc
+from pydantic import BaseModel
 
 
-class Expression(abc.ABC):
+class Expression(BaseModel):
     """
     Abstract class for all expressions in the AST.
     This class can be extended to create specific types of expressions.
@@ -17,4 +18,4 @@ class Expression(abc.ABC):
         Evaluate the expression and return its value.
         This method should be overridden by subclasses.
         """
-        raise NotImplementedError("Subclasses must implement this method.")
+        raise NotImplementedError
