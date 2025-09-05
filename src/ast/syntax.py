@@ -9,9 +9,9 @@ from pydantic import BaseModel
 
 from typing import Any, List, Optional, TypeVar, Union
 
-ParamT  = TypeVar("ParamT" , bound=str)
-OutputT = TypeVar("OutputT", bound=str)
-ReturnT = TypeVar("ReturnT", bound=str)
+ParamT  = TypeVar("ParamT" , bound=type)
+OutputT = TypeVar("OutputT", bound=type)
+ReturnT = TypeVar("ReturnT", bound=type)
 
 
 class ASTNode(BaseModel):
@@ -24,27 +24,34 @@ class PythonExpr(Expr):
 
 class Param(ASTNode):
     id: str
-    type_: type[ParamT]
+    type_: ParamT
 
 class Literal(Expr):
     value: Any
 
 
 class In(Expr):
-    expr: Expr
+    id: str 
+    expr: Expr | None
+    
+    def __str__(self):
+        return f"<{self.id}>"
 
 
 class Out(ASTNode):
     id: str
     text: str | None
-    type_: type[OutputT]
+    type_: OutputT
 
 class MarkerText(ASTNode):
     text: str
+    
+    def __str__(self):
+        return self.text
 
 class MarkerReturn(ASTNode):
     text: str
-    type_: type[ReturnT]
+    type_: ReturnT
 
 class MarkerRun(Expr):
     markers: List[Union[MarkerText, In, Out, MarkerReturn]]
