@@ -2,8 +2,8 @@
 Implementation module for syntax nodes.
 """
 
-from statements import Statement as Stmt
-from expressions import Expression as Expr
+from .statements import Statement as Stmt
+from .expressions import Expression as Expr
 
 from pydantic import BaseModel
 
