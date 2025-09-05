@@ -11,7 +11,7 @@ class Expression(BaseModel):
     This class can be extended to create specific types of expressions.
     """
 
-    def evaluate(self, expr: str):
+    def evaluate(self):
         """
         Evaluate the expression and return its value.
         This method should be overridden by subclasses.

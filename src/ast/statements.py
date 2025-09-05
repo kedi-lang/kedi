@@ -4,6 +4,7 @@ Defines the Statement base class and its dependent classes for the AST (Abstract
 
 from pydantic import BaseModel
 
+
 class Statement(BaseModel):
     """
     Abstract class for all statements.
