@@ -17,6 +17,8 @@ ReturnT = TypeVar("ReturnT", bound=type)
 class ASTNode(BaseModel):
     pass
 
+class ExprStmt(Stmt):
+    expr: Expr | None = None
 
 class PythonExpr(Expr):
     pass
@@ -30,13 +32,17 @@ class Param(ASTNode):
 class Literal(Expr):
     value: Any
 
-
-class In(Expr):
-    id: str
-    expr: Expr | None
+class Identifier(Expr):
+    name: str
 
     def __str__(self):
-        return f"<{self.id}>"
+        return self.name
+
+class In(Expr):
+    expr: Expr
+
+    def __str__(self):
+        return str(self.expr)
 
 
 class Out(ASTNode):
@@ -58,13 +64,16 @@ class MarkerReturn(ASTNode):
 
 
 class MarkerRun(Expr):
-    markers: List[Union[MarkerText, In, Out, MarkerReturn]]
+    markers: List[Union[In, Out, MarkerText, MarkerReturn]]
 
 
 class DefineProcedure(Stmt):
     id: str
     params: Optional[List[Param]]
     stmt_list: List[Stmt]
+    
+    def __str__(self):
+        return self.id
 
 
 class CallProcedure(Expr):
@@ -81,10 +90,6 @@ class ForEachLoop(Stmt):
 class WhileLoop(Stmt):
     condition: Expr
     stmt_list: List[Stmt]
-
-
-class ExprStmt(Stmt):
-    expr: Expr
 
 
 class Program(ASTNode):
