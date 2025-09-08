@@ -3,10 +3,16 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Trash
+.DS_Store
+
 # C extensions
 *.so
 
 # Dev files
+Makefile
+
+*.test.py
 
 markers.md
 
