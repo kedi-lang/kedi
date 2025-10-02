@@ -1,0 +1,45 @@
+@get_country(city):
+  <city> is located in [country].
+  = <country>
+
+@get_language(country):
+  The primary language spoken in <country> is [language].
+  = <language>
+
+@translate_greeting(language):
+  'Hello' in <language> is [greeting]
+  = <greeting>
+
+@neighboring_country(country):
+  A country neighboring <country> is [neighbor].
+  = <neighbor>
+
+@describe_trip(city):
+  Start in <city>.
+  <city> is located in [country].
+  The primary language spoken in <country> is [language].
+  'Hello' in <language> is [greeting].
+  A neighbor of <country> is [neighbor].
+  Now, plan a 3-day itinerary in [itinerary] for <city> using <language> and greeting <greeting>.
+  = Itinerary for <city>: <itinerary> (Country: <country>, Neighbor: <neighbor>, Greeting: <greeting>)
+
+@word_chain(word):
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  = Final word: <word>
+
+@make_title(name):
+  = Dr. <name>
+
+@compose_report(city):
+  Report: <make_title(<translate_greeting(<get_language(<get_country(<city>)>)>)>)>
+  Notes: Using language <get_language(<get_country(<city>)>)> in <city>.
+  Extra: <city> has a neighbor <neighboring_country(<get_country(<city>)>)>.
+  = Completed
+
+= Paris country: <get_country(Paris)>   Language: <get_language(<get_country(Paris)>)>   Greeting: <translate_greeting(<get_language(<get_country(Paris)>)>)>    Word chain from apple: <word_chain(apple)>   Trip description: <describe_trip(Paris)>   Report: <compose_report(Paris)>
+
+
