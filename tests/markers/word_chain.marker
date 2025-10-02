@@ -1,0 +1,11 @@
+@word_chain(word):
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  [word] is a word that starts with the last letter of <word>.
+  = <word>
+
+= <word_chain(apple)>
+
+
