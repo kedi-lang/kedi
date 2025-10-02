@@ -40,6 +40,6 @@
   Extra: <city> has a neighbor <neighboring_country(<get_country(<city>)>)>.
   = Completed
 
-= Paris country: <get_country(Paris)>   Language: <get_language(<get_country(Paris)>)>   Greeting: <translate_greeting(<get_language(<get_country(Paris)>)>)>    Word chain from apple: <word_chain(apple)>   Trip description: <describe_trip(Paris)>   Report: <compose_report(Paris)>
+= Paris country: <get_country(Paris)>;   Language: <get_language(<get_country(Paris)>)>;   Greeting: <translate_greeting(<get_language(<get_country(Paris)>)>)>;    Word chain from apple: <word_chain(apple)>;   Trip description: <describe_trip(Paris)>;   Report: <compose_report(Paris)>;
 
 
