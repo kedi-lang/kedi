@@ -52,16 +52,6 @@ def test_marker_llm_language_chain_bonjour() -> None:
     assert low.startswith("bonjour") or low in {"bonjour", "bon jour"}
 
 
-@requires_groq
-@pytest.mark.llm
-@llm_retry(tries=3, delay_s=0.5)
-def test_marker_llm_word_chain_marker_file() -> None:
-    with open("tests/markers/word_chain.marker", "r", encoding="utf-8") as f:
-        src = f.read()
-    rt = compile_program(parse_program(src))
-    out = rt.run_main()
-    assert isinstance(out, str)
-    assert len(out.strip()) > 0
-    assert out.strip().lower() != "apple"
+# Word-chain marker file is covered by the unified markers suite
 
 

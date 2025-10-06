@@ -9,6 +9,7 @@ from .ast import (
     TemplateLine,
     ReturnStmt,
     PythonBlock,
+    AssignStmt,
     Segment,
     TextSegment,
     InputSegment,
@@ -97,8 +98,15 @@ def _eval_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, Any])
     env = _build_python_env(rt, local_env)
     try:
         return eval(code, env, env)
+    except SyntaxError as e_syn:
+        # Fall back to exec for statements like 'assert', assignments, etc.
+        try:
+            exec(code, env, env)
+            return ""
+        except Exception as e:
+            raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
     except Exception as e:
-        raise RuntimeError(f"Inline Python error: {e}") from e
+        raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
 
 
 def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
@@ -146,6 +154,16 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             if k.startswith("__"):
                                 continue
                             kwargs[k] = v
+                    elif isinstance(stmt, AssignStmt):
+                        # Evaluate the RHS expression into a string/value using the same rendering
+                        _, rendered = _prepare_segments(rt, stmt.expr, kwargs)
+                        # Trim ends, keep internal spaces
+                        value = rendered.strip()
+                        kwargs[stmt.name] = value
+                        # Also update runtime env if present (so subsequent rt.m can see it)
+                        env = rt._current_env.get()  # type: ignore[attr-defined]
+                        if env is not None:
+                            env[stmt.name] = value
                     elif isinstance(stmt, ReturnStmt):
                         last_return = _compile_return(rt, stmt)(**kwargs)
                 return last_return
@@ -165,13 +183,40 @@ def compile_program(prog: Program) -> MarkerRuntime:
 
         rt.procedure(make_proc(proc))
 
-    # Top-level main
+    # Top-level main: execute accumulated top-level statements before rendering return
     if prog.toplevel_return is not None:
         ret_stmt = prog.toplevel_return
 
         @rt.main
         def _main() -> Any:
-            return _compile_return(rt, ret_stmt)()
+            # Execute top-level template lines and python blocks to populate env
+            kwargs: dict[str, Any] = {}
+            for stmt in prog.toplevel_body:
+                if isinstance(stmt, TemplateLine):
+                    _compile_template_line(rt, stmt)(**kwargs)
+                    env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if env:
+                        for k, v in env.items():
+                            kwargs[k] = v
+                elif isinstance(stmt, PythonBlock):
+                    env_exec = _build_python_env(rt, kwargs)
+                    try:
+                        exec(stmt.code, env_exec, env_exec)
+                    except Exception as e:
+                        raise RuntimeError(f"Python block error: {e}") from e
+                    for k, v in env_exec.items():
+                        if k.startswith("__"):
+                            continue
+                        kwargs[k] = v
+                elif isinstance(stmt, AssignStmt):
+                    _, rendered = _prepare_segments(rt, stmt.expr, kwargs)
+                    value = rendered.strip()
+                    kwargs[stmt.name] = value
+                    env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if env is not None:
+                        env[stmt.name] = value
+            # Now render the final return using the accumulated env
+            return _compile_return(rt, ret_stmt)(**kwargs)
 
     return rt
 

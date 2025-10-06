@@ -1,14 +1,25 @@
 @word_chain(word):
+  [prev] = <word>
   <`print(f"word chain starts with {word}...")`>
   [word] is a word that starts with the last letter of <word>.
+  <`assert len(word) > 0 and word[0].lower() == prev[-1].lower()`>
+  [prev] = <word>
   <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`assert len(word) > 0 and word[0].lower() == prev[-1].lower()`>
+  [prev] = <word>
   <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`assert len(word) > 0 and word[0].lower() == prev[-1].lower()`>
+  [prev] = <word>
   <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`assert len(word) > 0 and word[0].lower() == prev[-1].lower()`>
+  [prev] = <word>
   <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`assert len(word) > 0 and word[0].lower() == prev[-1].lower()`>
+  <`prev = word`>
   <`print(f"word chain ends with {word}...")`>
   = <word>
 

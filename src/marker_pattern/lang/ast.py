@@ -76,6 +76,12 @@ class PythonBlock(Stmt):
 
 
 @dataclass
+class AssignStmt(Stmt):
+    name: str
+    expr: Expr
+
+
+@dataclass
 class ProcedureDef:
     name: str
     params: List[str]
@@ -86,5 +92,6 @@ class ProcedureDef:
 class Program:
     procedures: List[ProcedureDef] = field(default_factory=list)
     toplevel_return: Optional[ReturnStmt] = None
+    toplevel_body: List[Stmt] = field(default_factory=list)
 
 

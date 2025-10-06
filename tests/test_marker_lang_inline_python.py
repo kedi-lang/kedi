@@ -116,3 +116,44 @@ def test_inline_python_nested_call_arguments(monkeypatch: Any) -> None:
     assert out == "[12]"
 
 
+def test_inline_python_with_comparison_and_assert(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _FakeAgent, raising=True)
+    src = (
+        "@f():\n"
+        "  = <`1 + 1`>\n\n"
+        "= <`assert 5 > 3`>\n"
+    )
+    rt = _compile(src)
+    out = rt.run_main()
+    # assert returns None -> rendered as empty string
+    assert out == ""
+
+
+def test_inline_python_assert_failure_in_return(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _FakeAgent, raising=True)
+    src = (
+        "= <`assert False`>\n"
+    )
+    rt = _compile(src)
+    try:
+        rt.run_main()
+        assert False, "expected inline assert to raise"
+    except RuntimeError as e:
+        assert "Inline Python error" in str(e)
+
+
+def test_inline_python_assert_failure_in_template_line(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _FakeAgent, raising=True)
+    src = (
+        "@p():\n"
+        "  <`assert False`>\n"
+        "  = ok\n\n"
+        "= <p()>\n"
+    )
+    rt = _compile(src)
+    try:
+        rt.run_main()
+        assert False, "expected inline assert in template line to raise"
+    except RuntimeError as e:
+        assert "Inline Python error" in str(e)
+

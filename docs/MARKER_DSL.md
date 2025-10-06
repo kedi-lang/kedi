@@ -51,6 +51,13 @@ python code...
 - The expression can interleave text with substitutions and nested calls.
 - Whitespace handling: trim only at the ends; do not collapse internal spaces. That is, spaces immediately after `=` and before end-of-line are trimmed; the rest are preserved.
 
+### Variable Initialization / Assignment
+- Assign a variable in the current scope using:
+  - `[name] = expression`
+- Example: `[prev] = <word>` assigns the current `word` into `prev`.
+- The right-hand side is a full expression like a return: free text, `<var>`, `<call(...)>`, and inline Python `<`code`>` allowed.
+- The assigned variable is immediately usable in subsequent lines, LLM prompts, calls, and Python.
+
 ### Escaping Special Characters
 Double the character to treat it as a literal:
 - `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`.

@@ -177,7 +177,14 @@ class MarkerRuntime:
             pass
 
         agent = Agent(self.model, output_type=out_type)
-        question = f"Fill in the fields: [{required[0]}]." if len(required) == 1 else f"Solve [{', '.join(required)}]."
+        # Keep question format stable for tests; append description after to preserve key parsing
+        base_q = (
+            f"Fill in the fields: [{required[0]}]."
+            if len(required) == 1
+            else f"Fill in the fields: [{', '.join(required)}]."
+        )
+        # Provide the full description as guidance for better tool performance
+        question = base_q + "\n" + description
         result = agent.run_sync(question)
         
         #print(f"description: {description}")

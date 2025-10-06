@@ -10,6 +10,7 @@ from .ast import (
     TemplateLine,
     ReturnStmt,
     PythonBlock,
+    AssignStmt,
     Segment,
     TextSegment,
     InputSegment,
@@ -91,18 +92,27 @@ def _parse_segments(body: str) -> List[Segment]:
 def _find_matching(s: str, start: int, open_ch: str, close_ch: str) -> int:
     depth = 0
     i = start
+    in_backticks = False
     while i < len(s):
         ch = s[i]
         nxt = s[i + 1] if i + 1 < len(s) else ""
-        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", ",,"):
-            i += 2
+
+        # Toggle backtick mode; inside backticks, we ignore delimiters
+        if ch == "`":
+            in_backticks = not in_backticks
+            i += 1
             continue
-        if ch == open_ch:
-            depth += 1
-        elif ch == close_ch:
-            depth -= 1
-            if depth == 0:
-                return i
+
+        if not in_backticks:
+            if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", ",,"):
+                i += 2
+                continue
+            if ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    return i
         i += 1
     raise ValueError("Unmatched delimiter in expression")
 
@@ -293,10 +303,30 @@ def parse_program(source: str) -> Program:
 
             stmt_block = PythonBlock(code="\n".join(dedented))
             if current_body is None:
-                # Top-level python block allowed: treat as no-op or future hook
-                pass
+                # Top-level python block accumulates into program.toplevel_body
+                program.toplevel_body.append(stmt_block)
             else:
                 current_body.append(stmt_block)
+            continue
+
+        # Inside a procedure body or at top-level
+        # Assignment: [name] = expr
+        if stripped.startswith("[") and "]" in stripped and "=" in stripped:
+            close_br = stripped.find("]")
+            name = stripped[1:close_br].strip()
+            rest = stripped[close_br + 1 :].lstrip()
+            if not rest.startswith("="):
+                raise ValueError("Malformed assignment; expected '=' after [name]")
+            rhs_src = rest[1:]
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                raise ValueError("Assignment target must be an identifier")
+            rhs_segments = _parse_segments(rhs_src)
+            stmt_assign = AssignStmt(name=name, expr=rhs_segments)
+            if current_body is None:
+                program.toplevel_body.append(stmt_assign)
+            else:
+                current_body.append(stmt_assign)
+            i += 1
             continue
 
         # Inside a procedure body or at top-level
@@ -315,9 +345,8 @@ def parse_program(source: str) -> Program:
         segments = _parse_segments(stripped)
         stmt = TemplateLine(segments=segments)
         if current_body is None:
-            # Allow template lines at top-level to drive outputs before a return
-            # For now, treat them as no-ops
-            pass
+            # Accumulate top-level template lines
+            program.toplevel_body.append(stmt)
         else:
             current_body.append(stmt)
         i += 1
