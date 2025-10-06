@@ -180,9 +180,9 @@ class MarkerRuntime:
         question = f"Fill in the fields: [{required[0]}]." if len(required) == 1 else f"Solve [{', '.join(required)}]."
         result = agent.run_sync(question)
         
-        print(f"description: {description}")
-        print(f"question: {question}")
-        print(f"result: {result}")
+        #print(f"description: {description}")
+        #print(f"question: {question}")
+        #print(f"result: {result}")
         data = result.output
         if hasattr(data, "model_dump"):
             data_dict: Dict[str, Any] = data.model_dump()

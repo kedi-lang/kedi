@@ -9,6 +9,7 @@ from .ast import (
     Stmt,
     TemplateLine,
     ReturnStmt,
+    PythonBlock,
     Segment,
     TextSegment,
     InputSegment,
@@ -17,6 +18,7 @@ from .ast import (
     LiteralArg,
     VarArg,
     OutputSegment,
+    PythonExprSegment,
 )
 from .preprocess import preprocess_blocks, BEGIN, END
 
@@ -106,6 +108,10 @@ def _find_matching(s: str, start: int, open_ch: str, close_ch: str) -> int:
 
 
 def _parse_angle(inner: str) -> Segment:
+    # Inline Python: backtick-delimited single-line expression
+    if inner.startswith("`") and inner.endswith("`") and len(inner) >= 2:
+        code = inner[1:-1]
+        return PythonExprSegment(code=code)
     # Determine if call or variable
     if "(" in inner:
         if not inner.endswith(")"):
@@ -159,6 +165,10 @@ def _parse_args(src: str) -> List[CallArg]:
                 args.append(LiteralArg(f"__CALL__:{seg.name}:{len(seg.args)}"))
                 # Also stash the actual segment for the compiler by attaching a private attribute
                 setattr(args[-1], "__call_segment__", seg)  # type: ignore[attr-defined]
+            elif isinstance(seg, PythonExprSegment):
+                # Placeholder literal with attached python segment for runtime eval
+                args.append(LiteralArg("__PYEXPR__"))
+                setattr(args[-1], "__python_segment__", seg)  # type: ignore[attr-defined]
             else:
                 raise ValueError("Unsupported segment in args")
             i = end + 1
@@ -226,6 +236,67 @@ def parse_program(source: str) -> Program:
             proc_stack.append(proc)
             current_body = proc.body
             i += 1
+            continue
+
+        # Inside a procedure body or at top-level
+        # Multiline python block fenced by lines containing only ```
+        if stripped == "```":
+            i += 1
+            block_lines: List[str] = []
+            while i < len(lines):
+                cur = lines[i]
+                cur_stripped = cur.strip()
+                if cur_stripped == "```":
+                    break
+                # Skip preprocess markers inside python blocks so they don't leak
+                if cur_stripped in (BEGIN, END):
+                    i += 1
+                    continue
+                block_lines.append(cur)
+                i += 1
+            if i >= len(lines) or lines[i].strip() != "```":
+                raise ValueError("Unterminated python block; expected closing ``` line")
+            # consume closing fence
+            i += 1
+
+            # Normalize indentation relative to minimal indent in block
+            # Keep original content otherwise
+            # Find minimal leading spaces among non-empty lines
+            def indent_of(s: str) -> int:
+                n = 0
+                for ch in s:
+                    if ch == " ":
+                        n += 1
+                    elif ch == "\t":
+                        n += 4
+                    else:
+                        break
+                return n
+
+            non_empty = [s for s in block_lines if s.strip() != ""]
+            min_indent = min((indent_of(s) for s in non_empty), default=0)
+            dedented = []
+            for s in block_lines:
+                # remove up to min_indent spaces/tabs-equivalent
+                j = 0
+                removed = 0
+                while j < len(s) and removed < min_indent:
+                    if s[j] == " ":
+                        removed += 1
+                        j += 1
+                    elif s[j] == "\t":
+                        removed += 4
+                        j += 1
+                    else:
+                        break
+                dedented.append(s[j:])
+
+            stmt_block = PythonBlock(code="\n".join(dedented))
+            if current_body is None:
+                # Top-level python block allowed: treat as no-op or future hook
+                pass
+            else:
+                current_body.append(stmt_block)
             continue
 
         # Inside a procedure body or at top-level

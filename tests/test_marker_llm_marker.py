@@ -4,6 +4,7 @@ import os
 import pytest
 
 from marker_pattern.lang import parse_program, compile_program
+from utils_llm import llm_retry
 
 
 requires_groq = pytest.mark.skipif(
@@ -14,6 +15,7 @@ requires_groq = pytest.mark.skipif(
 
 @requires_groq
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_marker_llm_paris_country() -> None:
     src = (
         "@get_country(city):\n"
@@ -29,6 +31,7 @@ def test_marker_llm_paris_country() -> None:
 
 @requires_groq
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_marker_llm_language_chain_bonjour() -> None:
     src = (
         "@get_country_info(city):\n"
@@ -45,12 +48,13 @@ def test_marker_llm_language_chain_bonjour() -> None:
     rt = compile_program(parse_program(src))
     out = rt.run_main()
     assert isinstance(out, str)
-    # tolerant assertion for greeting
-    assert out.strip().lower().startswith("bonjour") or out.strip().lower() in {"bonjour", "bon jour"}
+    low = out.strip().lower()
+    assert low.startswith("bonjour") or low in {"bonjour", "bon jour"}
 
 
 @requires_groq
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_marker_llm_word_chain_marker_file() -> None:
     with open("tests/markers/word_chain.marker", "r", encoding="utf-8") as f:
         src = f.read()

@@ -8,6 +8,7 @@ from .ast import (
     ProcedureDef,
     TemplateLine,
     ReturnStmt,
+    PythonBlock,
     Segment,
     TextSegment,
     InputSegment,
@@ -16,6 +17,7 @@ from .ast import (
     LiteralArg,
     VarArg,
     OutputSegment,
+    PythonExprSegment,
 )
 
 
@@ -26,6 +28,9 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
         if isinstance(a, LiteralArg) and hasattr(a, "__call_segment__"):
             nested: CallSegment = getattr(a, "__call_segment__")  # type: ignore[attr-defined]
             eval_args.append(_eval_call(rt, nested, local_env))
+        elif isinstance(a, LiteralArg) and hasattr(a, "__python_segment__"):
+            pyseg: PythonExprSegment = getattr(a, "__python_segment__")  # type: ignore[attr-defined]
+            eval_args.append(_eval_python_inline(rt, pyseg.code, local_env))
         elif isinstance(a, LiteralArg):
             eval_args.append(a.value)
         elif isinstance(a, VarArg):
@@ -45,21 +50,60 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
     return rt._invoke_procedure(callee, eval_args)  # type: ignore[attr-defined]
 
 
+def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]) -> tuple[list[Any], str]:
+    expr: list[Any] = []
+    parts: list[str] = []
+    for s in segments:
+        if isinstance(s, TextSegment):
+            expr.append(s.text)
+            parts.append(s.text)
+        elif isinstance(s, InputSegment):
+            expr.append(rt.i(s.name))
+            parts.append("" if s.name not in kwargs else str(kwargs[s.name]))
+        elif isinstance(s, CallSegment):
+            value = _eval_call(rt, s, kwargs)
+            expr.append(str(value))
+            parts.append(str(value))
+        elif isinstance(s, OutputSegment):
+            expr.append(rt.o(s.name))
+        elif isinstance(s, PythonExprSegment):
+            value = _eval_python_inline(rt, s.code, kwargs)
+            expr.append(str(value))
+            parts.append(str(value))
+    return expr, "".join(parts)
+
+
+def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
+    # Expose variables and procedures as callables
+    env: dict[str, Any] = {}
+    env.update(local_env)
+
+    # Wrap registered procedures to be callable from inline Python
+    for name, fn in rt._procedures.items():  # type: ignore[attr-defined]
+        def make_wrapper(proc_name: str):
+            def _callable(*args: Any):
+                callee = rt._get_proc(proc_name)  # type: ignore[attr-defined]
+                return rt._invoke_procedure(callee, list(args))  # type: ignore[attr-defined]
+            return _callable
+        env[name] = make_wrapper(name)
+
+    # Full Python builtins access as requested
+    import builtins as _builtins  # local import to avoid polluting env
+    env["__builtins__"] = _builtins.__dict__
+    return env
+
+
+def _eval_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, Any]) -> Any:
+    env = _build_python_env(rt, local_env)
+    try:
+        return eval(code, env, env)
+    except Exception as e:
+        raise RuntimeError(f"Inline Python error: {e}") from e
+
+
 def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
     def _fn(**kwargs: Any) -> Any:
-        # This helper composes an rt.m expression and executes it
-        expr: list[Any] = []
-        for s in tl.segments:
-            if isinstance(s, TextSegment):
-                expr.append(s.text)
-            elif isinstance(s, InputSegment):
-                expr.append(rt.i(s.name))
-            elif isinstance(s, CallSegment):
-                # Evaluate call to string and append
-                value = _eval_call(rt, s, kwargs)
-                expr.append(str(value))
-            elif isinstance(s, OutputSegment):
-                expr.append(rt.o(s.name))
+        expr, _ = _prepare_segments(rt, tl.segments, kwargs)
         return rt.m(expr)
 
     return _fn
@@ -67,30 +111,8 @@ def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
 
 def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
     def _fn(**kwargs: Any) -> Any:
-        # Build a string or a single value depending on segments
-        if len(ret.segments) == 1:
-            s = ret.segments[0]
-            if isinstance(s, TextSegment):
-                return s.text.strip()
-            if isinstance(s, InputSegment):
-                return kwargs.get(s.name)
-            if isinstance(s, CallSegment):
-                return _eval_call(rt, s, kwargs)
-
-        parts: list[str] = []
-        for s in ret.segments:
-            if isinstance(s, TextSegment):
-                parts.append(s.text)
-            elif isinstance(s, InputSegment):
-                val = kwargs.get(s.name)
-                parts.append("" if val is None else str(val))
-            elif isinstance(s, CallSegment):
-                parts.append(str(_eval_call(rt, s, kwargs)))
-            else:
-                # Outputs shouldn't appear in returns, ignore if present
-                continue
-        composed = "".join(parts).strip()
-        return composed
+        _, rendered = _prepare_segments(rt, ret.segments, kwargs)
+        return rendered.strip()
 
     return _fn
 
@@ -112,6 +134,18 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         if env:
                             for k, v in env.items():
                                 kwargs[k] = v
+                    elif isinstance(stmt, PythonBlock):
+                        # Execute user python code with env injection
+                        env_exec = _build_python_env(rt, kwargs)
+                        try:
+                            exec(stmt.code, env_exec, env_exec)
+                        except Exception as e:
+                            raise RuntimeError(f"Python block error: {e}") from e
+                        # sync back any modified/created names to kwargs
+                        for k, v in env_exec.items():
+                            if k.startswith("__"):
+                                continue
+                            kwargs[k] = v
                     elif isinstance(stmt, ReturnStmt):
                         last_return = _compile_return(rt, stmt)(**kwargs)
                 return last_return

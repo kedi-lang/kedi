@@ -4,6 +4,7 @@ import os
 import pytest
 
 from marker_pattern.core import MarkerRuntime
+from utils_llm import llm_retry
 
 
 requires_openai = pytest.mark.skipif(
@@ -14,6 +15,7 @@ requires_openai = pytest.mark.skipif(
 
 @requires_openai
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_llm_echo_ok() -> None:
     rt = MarkerRuntime()
 
@@ -33,6 +35,7 @@ def test_llm_echo_ok() -> None:
 
 @requires_openai
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_llm_paris_country() -> None:
     rt = MarkerRuntime()
 
@@ -52,6 +55,7 @@ def test_llm_paris_country() -> None:
 
 @requires_openai
 @pytest.mark.llm
+@llm_retry(tries=3, delay_s=0.5)
 def test_llm_word_chain() -> None:
     rt = MarkerRuntime()
 

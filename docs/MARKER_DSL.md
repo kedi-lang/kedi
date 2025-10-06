@@ -17,6 +17,23 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 ### Substitutions and Calls
 - `<name>` reads a variable by name.
 - `<name(args...)>` calls a procedure. Calls may be nested: `<outer(<inner(...)>)>`.
+- Inline Python expression: `<`code`>` executes a single-line Python expression and substitutes its string value.
+  - Example: `<x> + <y> is <`int(x)+int(y)`>`.
+  - Scope injection: All marker variables in scope and procedures are available as Python names and callables.
+  - Only allowed inside input context `<...>`; not permitted in `[...]` outputs.
+  - Full Python builtins are available; imports are permitted (e.g., `<`__import__('math').sqrt(16)`>`).
+
+### Multiline Python Blocks
+- Use fenced blocks with triple backticks on their own lines:
+```
+```
+python code...
+```
+```
+- The opening and closing fences must be the only content on their lines (no inline ```pythoncode```).
+- The code inherits the indentation level of its block; indentation is normalized (dedented) before execution.
+- Variables in scope and procedures are injected into the Python environment; changes to variables inside the block are reflected back.
+- Executed with full Python builtins, same as inline expressions.
 - Inside call arg lists:
   - Bare tokens are string literals (no quotes). Example: `<combine(x, <prep(y)>)>` → `combine("x", prep("y"))`.
   - Variables or nested calls must be wrapped in `<...>`, e.g. `<combine(<x>, <prep(<y>)>)>` → `combine(x, prep(y))`.
@@ -37,6 +54,7 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 ### Escaping Special Characters
 Double the character to treat it as a literal:
 - `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`.
+Backticks are only meaningful inside `<...>` for inline Python; no escaping is needed otherwise.
 
 ### Examples
 Procedure and call:

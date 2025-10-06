@@ -46,6 +46,11 @@ class OutputSegment(Segment):
     name: str
 
 
+@dataclass
+class PythonExprSegment(Segment):
+    code: str
+
+
 Expr = List[Segment]
 
 
@@ -63,6 +68,11 @@ class TemplateLine(Stmt):
 @dataclass
 class ReturnStmt(Stmt):
     segments: Expr
+
+
+@dataclass
+class PythonBlock(Stmt):
+    code: str
 
 
 @dataclass

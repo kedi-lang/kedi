@@ -1,9 +1,15 @@
 @word_chain(word):
+  <`print(f"word chain starts with {word}...")`>
   [word] is a word that starts with the last letter of <word>.
+  <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`print(word)`>
   [word] is a word that starts with the last letter of <word>.
+  <`print(f"word chain ends with {word}...")`>
   = <word>
 
 = <word_chain(apple)>
