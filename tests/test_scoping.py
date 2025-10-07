@@ -66,8 +66,8 @@ def test_python_block_modifies_existing_marker_var_only(monkeypatch: Any) -> Non
         "  = <x>-<`y`>\n\n"
         "= <p()>\n"
     )
-    out = _run(src)
-    assert out == "base-mod-"
+    with pytest.raises(RuntimeError):
+        _run(src)
 
 
 def test_new_python_names_do_not_leak_to_marker(monkeypatch: Any) -> None:
@@ -80,8 +80,8 @@ def test_new_python_names_do_not_leak_to_marker(monkeypatch: Any) -> None:
         "  = <z>\n\n"
         "= <p()>\n"
     )
-    out = _run(src)
-    assert out == ""
+    with pytest.raises(Exception):
+        _run(src)
 
 
 def test_inline_python_reads_globals_and_locals(monkeypatch: Any) -> None:
@@ -139,8 +139,8 @@ def test_inline_name_error_yields_empty(monkeypatch: Any) -> None:
     src = (
         "= A<`unknown_name`>B\n"
     )
-    out = _run(src)
-    assert out == "AB"
+    with pytest.raises(Exception):
+        _run(src)
 
 
 def test_assign_block_type_coercion(monkeypatch: Any) -> None:

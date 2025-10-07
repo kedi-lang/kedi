@@ -107,7 +107,7 @@ def _is_value_compatible(pytype: Any, value: Any) -> bool:
     return True
 
 
-def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]) -> tuple[list[Any], str]:
+def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str = "template") -> tuple[list[Any], str]:
     expr: list[Any] = []
     parts: list[str] = []
     for s in segments:
@@ -115,8 +115,21 @@ def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[s
             expr.append(s.text)
             parts.append(s.text)
         elif isinstance(s, InputSegment):
-            expr.append(rt.i(s.name))
-            parts.append("" if s.name not in kwargs else str(kwargs[s.name]))
+            if context == "template":
+                expr.append(rt.i(s.name))
+                # parts for template lines are not used; keep minimal placeholder
+                parts.append("")
+            else:
+                # Resolve from kwargs or current runtime env; raise if missing
+                if s.name in kwargs:
+                    value = kwargs[s.name]
+                else:
+                    env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if env and s.name in env:
+                        value = env[s.name]
+                    else:
+                        raise KeyError(f"Unknown variable: {s.name}")
+                parts.append(str(value))
         elif isinstance(s, CallSegment):
             value = _eval_call(rt, s, kwargs)
             expr.append(str(value))
@@ -151,7 +164,7 @@ def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs:
         return value, str(value)
 
     # Fallback to rendered string
-    _, rendered = _prepare_segments(rt, segments, kwargs)
+    _, rendered = _prepare_segments(rt, segments, kwargs, context="assign")
     return None, rendered
 
 
@@ -202,9 +215,7 @@ def _eval_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, Any])
         except Exception as e:
             raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
     except Exception as e:
-        # Missing names inside inline python should render as empty string rather than crash
-        if isinstance(e, NameError):
-            return ""
+        # Propagate errors including NameError; tests expect failure
         raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
 
 
@@ -269,7 +280,7 @@ def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
 
 def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
     def _fn(**kwargs: Any) -> Any:
-        _, rendered = _prepare_segments(rt, ret.segments, kwargs)
+        _, rendered = _prepare_segments(rt, ret.segments, kwargs, context="return")
         return rendered.strip()
 
     return _fn
@@ -282,6 +293,21 @@ def compile_program(prog: Program) -> MarkerRuntime:
     for proc in prog.procedures:
         def make_proc(p: ProcedureDef):  # capture
             def _body(**kwargs: Any) -> Any:
+                # Enforce parameter type annotations if provided
+                if p.param_type_annotations is not None:
+                    for param_name in p.params:
+                        expected = p.param_type_annotations.get(param_name)
+                        if expected:
+                            pytype = _resolve_pytype(expected)
+                        else:
+                            pytype = str  # default to string when unspecified
+                        # Retrieve provided value
+                        if param_name not in kwargs:
+                            raise TypeError(f"Missing parameter: {param_name}")
+                        provided = kwargs[param_name]
+                        # No conversions allowed: require exact type compatibility
+                        if pytype is not None and not _is_value_compatible(pytype, provided):
+                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
                 # Execute template lines in order; last return decides
                 last_return: Any = None
                 for stmt in p.body:

@@ -3,7 +3,7 @@
     <`print(f">{question}...")`>
     = <question>
 
-@generate_questions(number) -> list[str]:
+@generate_questions(number :int) -> list[str]:
     [questions: list[str]] = `[]`
     ```
     for i in range(number):
@@ -11,15 +11,20 @@
     ```
     = `questions`
 
-[x:int] = `16`
 
-@test_imports():
+@process_questions(questions :list[str]) -> list[str]:
+    [processed_questions: list[str]] = `[]`
     ```
-    import math as m
-    print(m.sqrt(x))
+    for question in questions:
+        processed_questions.append(process_question(question))
     ```
+    = `processed_questions`
 
+@process_question(question :str) -> str:
+    = <question> PROCESSED
 
 = ```
-print(test_imports())
+a = generate_questions(2)
+b = process_questions(a)
+print(b)
 ```

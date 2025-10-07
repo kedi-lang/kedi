@@ -106,6 +106,8 @@ class ProcedureDef:
     params: List[str]
     body: List[Stmt] = field(default_factory=list)
     return_type_annotation: Optional[str] = None
+    # Optional mapping of parameter name to type annotation string
+    param_type_annotations: Optional[dict[str, Optional[str]]] = None
 
 
 @dataclass

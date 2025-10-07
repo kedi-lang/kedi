@@ -141,8 +141,8 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "30",
     ),
     (
-        # Nested calls + inline python in args
-        "@add(a,b):\n  = <`int(a)+int(b)`>\n\n@chain(x):\n  = <add(<`int(x)*2`>, <add(3, 4)>)>\n\n= <chain(5)>\n",
+        # Nested calls + inline python in args with typed params and int return
+        "@add(a: int, b: int) -> int:\n  = `int(a)+int(b)`\n\n@chain(x):\n  = <add(<`int(x)*2`>, <add(<`3`>, <`4`>)>)>\n\n= <chain(5)>\n",
         "17",
     ),
     (
@@ -344,9 +344,9 @@ def test_python_block_modifies_existing_and_new_vars(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [x] = base\n  ```\n  x = x + '-mod'\n  y = 'new'\n  ```\n  = <x>-<`y`>\n\n= <p()>\n"
     )
-    # y is a pure Python variable; it should not leak into marker env
-    out = _run(monkeypatch, src)
-    assert out == "base-mod-"
+    # y is a pure Python variable; it should not leak or be available to inline python
+    with pytest.raises(RuntimeError):
+        _run(monkeypatch, src)
 
 
 def test_inline_python_backticks_nested_angles(monkeypatch: Any) -> None:
@@ -436,8 +436,9 @@ def test_unallowed_language_fence_inline(monkeypatch: Any) -> None:
 
 def test_call_with_multiple_mixed_arguments(monkeypatch: Any) -> None:
     src = (
-        "@f(a,b,c,d):\n  = <a>-<b>-<c>-<d>\n\n"
-        "= <f(one, <`2`>, <f(three, four, five, six)>, <`'-'.join(['x','y'])`>)>\n"
+        "@f(a, b: int, c, d):\n  = <a>-<`str(b)`>-<c>-<d>\n\n"
+        "@g(x,y,z,w):\n  = <x>-<y>-<z>-<w>\n\n"
+        "= <f(one, <`2`>, <g(three, four, five, six)>, <`'-'.join(['x','y'])`>)>\n"
     )
     out = _run(monkeypatch, src)
     assert out.startswith("one-2-") and out.endswith("-x-y")
@@ -688,9 +689,9 @@ def test_unmatched_end_marker_in_python_block_ignored(monkeypatch: Any) -> None:
     src = (
         "@p():\n  ```\n  # BEGIN/END-like tokens\n  text = 'ok'\n  ```\n  = <`text`>\n\n= <p()>\n"
     )
-    out = _run(monkeypatch, src)
-    # 'text' should not leak from python block to marker env
-    assert out == ""
+    # Inline python cannot access block-local names; expect error
+    with pytest.raises(RuntimeError):
+        _run(monkeypatch, src)
 
 
 def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:

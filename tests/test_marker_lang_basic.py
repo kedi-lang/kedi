@@ -263,14 +263,42 @@ def test_inline_python_with_variables(monkeypatch: Any) -> None:
     assert out == "5"
 
 
+def test_typed_params_basic_sum(monkeypatch: Any) -> None:
+    out = _run(
+        monkeypatch,
+        (
+            "@add(x: int, y: int):\n"
+            "  = <`x + y`>\n\n"
+            "= <add(<`2`>, <`3`>)>\n"
+        ),
+    )
+    assert out == "5"
+
+
+def test_typed_params_string_default_and_type_mismatch(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
+    rt = _compile(
+        "@concat(a, b):\n  = <`a + b`>\n\n= <concat(hello, world)>\n"
+    )
+    out = rt.run_main()
+    assert out == "helloworld"
+    # Now mismatch: passing int to int-typed param is ok; passing str to int-typed should raise
+    src = (
+        "@add(x: int, y: int):\n  = <`x + y`>\n\n= <add(alpha, 3)>\n"
+    )
+    rt2 = _compile(src)
+    with pytest.raises(TypeError):
+        rt2.run_main()
+
+
 def test_inline_python_with_procedure_calls(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
         (
-            "@times2(n):\n"
+            "@times2(n: int):\n"
             "  = <`int(n)*2`>\n\n"
             "@calc(a,b):\n"
-            "  double of <a> is <`times2(a)`> and sum is <`int(a)+int(b)`>\n"
+            "  double of <a> is <`times2(int(a))`> and sum is <`int(a)+int(b)`>\n"
             "  = result:<`times2(int(a)+int(b))`>\n\n"
             "= <calc(4, 5)>\n"
         ),
@@ -308,7 +336,7 @@ def test_inline_python_as_call_arguments(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
         (
-            "@concat(a,b):\n"
+            "@concat(a: int,b: int):\n"
             "  = <a>+<b>\n\n"
             "@sum_and_concat(x,y):\n"
             "  = <concat(<`int(x)+1`>, <`int(y)+2`>)>\n\n"

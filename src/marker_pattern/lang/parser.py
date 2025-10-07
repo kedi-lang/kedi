@@ -263,10 +263,21 @@ def parse_program(source: str) -> Program:
             if not params_src.endswith(")"):
                 raise ValueError("Procedure header malformed")
             params_csv = params_src[:-1]
-            params = [p.strip() for p in params_csv.split(",") if p.strip()]
+            params: List[str] = []
+            param_type_annos: dict[str, str | None] = {}
+            for p in [pp.strip() for pp in params_csv.split(",") if pp.strip()]:
+                if ":" in p:
+                    pname, pty = p.split(":", 1)
+                    pname = pname.strip()
+                    pty = pty.strip()
+                    params.append(pname)
+                    param_type_annos[pname] = pty
+                else:
+                    params.append(p)
+                    param_type_annos[p] = None
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Procedure name must be an identifier")
-            proc = ProcedureDef(name=name, params=params, return_type_annotation=ret_anno)
+            proc = ProcedureDef(name=name, params=params, return_type_annotation=ret_anno, param_type_annotations=param_type_annos)
             proc_stack.append(proc)
             current_body = proc.body
             i += 1
