@@ -11,13 +11,12 @@
     ```
     = `questions`
 
+[x:int] = `16`
+
 @test_imports():
     ```
     import math as m
-    ```
-
-    ```
-    print(m.sqrt(16))
+    print(m.sqrt(x))
     ```
 
 

@@ -158,6 +158,21 @@ def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs:
 def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
     # Expose variables and procedures as callables
     env: dict[str, Any] = {}
+    # Inject global/top-level environment if present
+    try:
+        globals_env = getattr(rt, "_globals_env")  # type: ignore[attr-defined]
+    except Exception:
+        globals_env = None
+    if isinstance(globals_env, dict):
+        env.update(globals_env)
+    # Inject current marker runtime environment (procedure locals)
+    try:
+        current_env = rt._current_env.get()  # type: ignore[attr-defined]
+    except Exception:
+        current_env = None
+    if current_env:
+        env.update(current_env)
+    # Then overlay with local_env (procedure/top-level kwargs passed in this call)
     env.update(local_env)
 
     # Wrap registered procedures to be callable from inline Python
@@ -374,6 +389,11 @@ def compile_program(prog: Program) -> MarkerRuntime:
         def _main() -> Any:
             # Execute top-level template lines and python blocks to populate env
             kwargs: dict[str, Any] = {}
+            # Expose top-level env to python blocks and called procedures
+            try:
+                setattr(rt, "_globals_env", kwargs)
+            except Exception:
+                pass
             for stmt in prog.toplevel_body:
                 if isinstance(stmt, TemplateLine):
                     _compile_template_line(rt, stmt)(**kwargs)
