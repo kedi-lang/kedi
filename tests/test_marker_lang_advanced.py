@@ -127,7 +127,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Assignment native value then used in prompt
-        "@p():\n  [nums: list[int]] = <`[1,2,3]`>\n  total is [s: int]\n  ```\n  s = sum(nums)\n  ```\n  = <`str(s)`>\n\n= <p()>\n",
+        "@p():\n  [nums: list[int]] = `[1,2,3]`\n  total is [s: int]\n  ```\n  s = sum(nums)\n  ```\n  = <`str(s)`>\n\n= <p()>\n",
         "6",
     ),
     (
@@ -405,7 +405,7 @@ def test_inline_python_imports_and_builtins(monkeypatch: Any) -> None:
 
 def test_assignment_type_coercion_to_int(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  [x: int] = <`'7'`>\n  = <`x*3`>\n\n= <p()>\n"
+        "@p():\n  [x:int] = `7`\n  = <`x*3`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "21"
@@ -413,7 +413,7 @@ def test_assignment_type_coercion_to_int(monkeypatch: Any) -> None:
 
 def test_assignment_list_int_type_coercion(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  [xs: list[int]] = <`['1','2','3']`>\n  = <`str(sum(int(v) for v in xs))`>\n\n= <p()>\n"
+        "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "6"
@@ -509,6 +509,22 @@ def test_value_returning_python_block_in_assignment_native_value(monkeypatch: An
     assert out == "10"
 
 
+def test_assign_block_requires_type_for_non_str(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [x] = ```\n  return 1+1\n  ```\n  = <`str(x)`>\n\n= <p()>\n"
+    )
+    with pytest.raises(TypeError):
+        _run(monkeypatch, src)
+
+
+def test_assign_block_str_with_wrong_annotation_raises(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [x: int] = ```\n  return 's'\n  ```\n  = <x>\n\n= <p()>\n"
+    )
+    with pytest.raises(TypeError):
+        _run(monkeypatch, src)
+
+
 def test_value_returning_python_block_in_assignment_expression(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [s] = ```\n  return 'hello' + ' world'\n  ```\n  = <s>\n\n= <p()>\n"
@@ -537,16 +553,16 @@ def test_backtick_assignment_native_int(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [x] = `1+1`\n  = <`x*2`>\n\n= <p()>\n"
     )
-    out = _run(monkeypatch, src)
-    assert out == "4"
+    with pytest.raises(TypeError):
+        _run(monkeypatch, src)
 
 
 def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [x: str] = `1+1`\n  = <x>\n\n= <p()>\n"
     )
-    out = _run(monkeypatch, src)
-    assert out == "2"
+    with pytest.raises(TypeError):
+        _run(monkeypatch, src)
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
@@ -559,16 +575,15 @@ def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  [a] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+str(b)`>\n\n= <p()>\n"
+        "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
-    # a is int 42, b is string "42"; the inline python must coerce b to str already
     assert out == "42-42"
 
 
 def test_backtick_assignment_list_and_use(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  [xs] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
+        "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "6"

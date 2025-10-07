@@ -25,31 +25,31 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 
 ### Multiline Python Blocks
 - Use fenced blocks with triple backticks on their own lines:
-```
+````
 ```
 python code...
 ```
-```
+````
 - The opening and closing fences must be the only content on their lines (no inline ```pythoncode```).
 - The code inherits the indentation level of its block; indentation is normalized (dedented) before execution.
 - Variables in scope and procedures are injected into the Python environment; changes to variables inside the block are reflected back.
 - Executed with full Python builtins, same as inline expressions.
-- Value-returning Python blocks (NEW):
+- Value-returning Python blocks:
   - Assignment with return value:
-    ```
-    [x] = ```
+    ````
+    [x : int] = ```
     return 2 + 3
     ```
-    ```
-    Optional type annotation coerces the returned value: `[x: int] = ``` ... ```.
+    ````
+    If the returned value is non-string, an explicit compatible type annotation on `[name: type]` is required; string returns may optionally annotate `str` and must not annotate non-`str` types.
   - Return with value:
-    ```
+    ````
     = ```
     return compute()
     ```
-    ```
+    ````
     The value of the last executed return in the block is converted to string for final output.
-  - Semantics: the block is wrapped into a function and executed; the Python `return` value becomes the assigned value or the final return respectively. If no value is returned, it is treated as empty string for `=` return and `None` for assignment.
+
 - Inside call arg lists:
   - Bare tokens are string literals (no quotes). Example: `<combine(x, <prep(y)>)>` → `combine("x", prep("y"))`.
   - Variables or nested calls must be wrapped in `<...>`, e.g. `<combine(<x>, <prep(<y>)>)>` → `combine(x, prep(y))`.
@@ -79,16 +79,16 @@ python code...
   - `[name(: type)] = ``` ... ```  # value-returning Python block`
   - Backtick inline Python for native value: `[name(: type)] = `expr``
     - Must be a single Python expression (no other text). Example:
-      - `[x] = `1+1`` sets `x` as int 2
+      - `[x:int] = `1+1`` sets `x` as int 2
       - `[x] = <`1+1`>` sets `x` to string "2"
       - `[x] = `1+1` and more` → treated as plain string (no native eval)
+    - Type rules:
+      - If the evaluated value is non-string, an explicit compatible type annotation is required (e.g., `[x: int] = `1+1``).
+      - String values must not be annotated with non-`str` types.
 - Example: `[prev] = <word>` assigns the current `word` into `prev`.
-- Typed examples:
-  - `[count: int] = <`1 + 1`>`
-  - `[items: list[str]] = <`["a", "b", "c"]`>`
 - The right-hand side is a full expression like a return: free text, `<var>`, `<call(...)>`, and inline Python `<`code`>` allowed.
 - The assigned variable is immediately usable in subsequent lines, LLM prompts, calls, and Python.
-- Semantics: if the RHS is a pure inline Python expression, its native Python value is assigned (e.g., a real `int` or `list[str]`). Otherwise, the rendered string is assigned.
+- Angle-inline pure `<`...`>` on RHS is always treated as string during assignment; annotating it as non-`str` is illegal.
 
 ### Escaping Special Characters
 Double the character to treat it as a literal:
@@ -119,11 +119,6 @@ Escaped commas and nesting:
 ```
 Semantics: `{foo("alpha, beta, gamma", bar(x))}    done` (ends trimmed only).
 
-Interleaving without internal space collapse:
-```
-=    Leading     <x>    and    <y>     combined    
-```
-Result: `Leading     {x}    and    {y}     combined`.
 
 ### Type Annotations
 Basic typed output in a template line:
@@ -137,39 +132,29 @@ Top cities: [cities: list[str]]
 = Count: <`len(cities)`>
 ```
 
-Typed assignment capturing native Python values via inline Python:
+Typed assignments:
+````
+[nums: list[int]] = `[1, 2, 3, 4]`
+[total: int] = ```
+return sum(nums)
 ```
-[nums: list[int]] = <`[1, 2, 3, 4]`>
-[total: int] = <`sum(nums)`>
-= Total: <total>
-```
+= Total: <`str(total)`>
+````
 
 Value-returning Python blocks:
-```
+````
 [x: int] = ```
 return 5
 ```
 = ```
 return x * 2
 ```
-```
+````
 
 Mix typed outputs and inline Python:
 ```
 <country> neighbors are [neigh: list[str]]
 = First: <`neigh[0] if neigh else ""`>
 ```
-
-### Error Conditions
-Implementations should raise descriptive errors for:
-- Unmatched `<` ... `>` or `[` ... `]` delimiters.
-- Output name not a valid identifier (e.g., `[42x]`, `[]`, `[foo(bar)]`).
-- Malformed procedure header (missing `(`, missing `)`, missing trailing `:`).
-- Unterminated call arg list.
-- Using an output expression inside a call (not supported).
-
-### Notes
-- Top-level may contain template lines and a final return that acts as `main`.
-- Outputs defined by template lines become variables for subsequent lines in the same scope.
 
 

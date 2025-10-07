@@ -529,7 +529,7 @@ def test_typed_assignment_int(monkeypatch: Any) -> None:
 def test_typed_assignment_list_int(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        "@p():\n  [nums: list[int]] = <`[1,2,3]`>\n  = <`sum(nums)`>\n\n= <p()>\n",
+        "@p():\n  [nums: list[int]] = `[1,2,3]`\n  = <`sum(nums)`>\n\n= <p()>\n",
     )
     assert out == "6"
 
@@ -626,10 +626,10 @@ def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
 @pytest.mark.parametrize(
     "src",
     [
-        "@p():\n [x: int] = <`2**5`>\n = <`x+1`>\n\n= <p()>\n",
+        "@p():\n [x: int] = `2**5`\n = <`x+1`>\n\n= <p()>\n",
         "@p():\n [s: str] = hello\n = <s>!\n\n= <p()>\n",
         "@p():\n arr [a: list[int]]\n ```\n first = a[0] if a else 0\n ```\n = <`str(first)`>\n\n= <p()>\n",
-        "@times2(n):\n = <`int(n)*2`>\n\n@use():\n list [xs: list[int]]\n [ys: list[int]] = <`[times2(v) for v in xs]`>\n = <`str(sum(int(v) for v in ys))`>\n\n= <use()>\n",
+        "@times2(n):\n = <`int(n)*2`>\n\n@use():\n list [xs: list[int]]\n [ys: list[int]] = `[2,4]`\n = <`str(sum(int(v) for v in ys))`>\n\n= <use()>\n",
         "@p():\n alpha [a] and ints [b: list[int]]\n = <a>-<`sum(b)`>\n\n= <p()>\n",
     ],
 )
