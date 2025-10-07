@@ -68,13 +68,22 @@ def _parse_segments(body: str) -> List[Segment]:
             i = end + 1
             continue
         if ch == "[":
-            # output
+            # output: [name] or [name: type]
             flush_text()
             end = _find_matching(body, i, "[", "]")
-            name = body[i + 1 : end].strip()
-            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-                raise ValueError("Output name must be an identifier")
-            segments.append(OutputSegment(name))
+            inner = body[i + 1 : end].strip()
+            if ":" in inner:
+                name_part, type_part = inner.split(":", 1)
+                name = name_part.strip()
+                type_anno = type_part.strip()
+                if not name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                    raise ValueError("Output name must be an identifier")
+                segments.append(OutputSegment(name=name, type_annotation=type_anno))
+            else:
+                name = inner
+                if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+                    raise ValueError("Output name must be an identifier")
+                segments.append(OutputSegment(name=name))
             i = end + 1
             continue
 
@@ -104,7 +113,8 @@ def _find_matching(s: str, start: int, open_ch: str, close_ch: str) -> int:
             continue
 
         if not in_backticks:
-            if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", ",,"):
+            # Do not treat '[[', ']]' as escapes when matching brackets; they may be nested types like list[str]
+            if ch + nxt in ("<<", ">>", "==", "@@", ",,"):
                 i += 2
                 continue
             if ch == open_ch:
@@ -310,18 +320,26 @@ def parse_program(source: str) -> Program:
             continue
 
         # Inside a procedure body or at top-level
-        # Assignment: [name] = expr
+        # Assignment: [name] = expr OR [name: type] = expr
         if stripped.startswith("[") and "]" in stripped and "=" in stripped:
-            close_br = stripped.find("]")
-            name = stripped[1:close_br].strip()
+            # Use matching to find the correct closing bracket (support nested type brackets inside)
+            close_br = _find_matching(stripped, 0, "[", "]")
+            target_inner = stripped[1:close_br].strip()
             rest = stripped[close_br + 1 :].lstrip()
             if not rest.startswith("="):
                 raise ValueError("Malformed assignment; expected '=' after [name]")
             rhs_src = rest[1:]
+            type_anno: str | None = None
+            if ":" in target_inner:
+                name_part, type_part = target_inner.split(":", 1)
+                name = name_part.strip()
+                type_anno = type_part.strip()
+            else:
+                name = target_inner
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Assignment target must be an identifier")
             rhs_segments = _parse_segments(rhs_src)
-            stmt_assign = AssignStmt(name=name, expr=rhs_segments)
+            stmt_assign = AssignStmt(name=name, expr=rhs_segments, type_annotation=type_anno)
             if current_body is None:
                 program.toplevel_body.append(stmt_assign)
             else:

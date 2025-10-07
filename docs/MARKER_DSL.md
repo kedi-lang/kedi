@@ -42,9 +42,14 @@ python code...
 
 ### Outputs
 - `[name]` is an output placeholder that must be filled by the LLM on that line.
-- Only identifiers are allowed in `[]`: `^[A-Za-z_][A-Za-z0-9_]*$`.
+- Typed outputs are supported via `[name: type]`. If omitted, type defaults to `str`.
+  - Examples:
+    - `Most visited country is [country: str]`
+    - `Top 3 cities are [cities: list[str]]`
+- Only identifiers are allowed for names in `[]`: `^[A-Za-z_][A-Za-z0-9_]*$`.
 - Procedure calls are not allowed in `[]`.
 - Multiple outputs per line are allowed; all will be requested and made available in scope.
+- Implementation note: When any typed outputs are present in a prompt, a Python `TypedDict` is constructed for the model output type; otherwise a generic `StructuredDict` schema of strings is used. The prompt `description` is preserved in both cases.
 
 ### Returns
 - A line starting with `=` returns the value of the expression that follows.
@@ -54,9 +59,14 @@ python code...
 ### Variable Initialization / Assignment
 - Assign a variable in the current scope using:
   - `[name] = expression`
+  - `[name: type] = expression`
 - Example: `[prev] = <word>` assigns the current `word` into `prev`.
+- Typed examples:
+  - `[count: int] = <`1 + 1`>`
+  - `[items: list[str]] = <`["a", "b", "c"]`>`
 - The right-hand side is a full expression like a return: free text, `<var>`, `<call(...)>`, and inline Python `<`code`>` allowed.
 - The assigned variable is immediately usable in subsequent lines, LLM prompts, calls, and Python.
+- Semantics: if the RHS is a pure inline Python expression, its native Python value is assigned (e.g., a real `int` or `list[str]`). Otherwise, the rendered string is assigned.
 
 ### Escaping Special Characters
 Double the character to treat it as a literal:
@@ -92,6 +102,31 @@ Interleaving without internal space collapse:
 =    Leading     <x>    and    <y>     combined    
 ```
 Result: `Leading     {x}    and    {y}     combined`.
+
+### Type Annotations
+Basic typed output in a template line:
+```
+Most visited country is [country: str]
+```
+
+Collect a list of strings from the LLM and use it:
+```
+Top cities: [cities: list[str]]
+= Count: <`len(cities)`>
+```
+
+Typed assignment capturing native Python values via inline Python:
+```
+[nums: list[int]] = <`[1, 2, 3, 4]`>
+[total: int] = <`sum(nums)`>
+= Total: <total>
+```
+
+Mix typed outputs and inline Python:
+```
+<country> neighbors are [neigh: list[str]]
+= First: <`neigh[0] if neigh else ""`>
+```
 
 ### Error Conditions
 Implementations should raise descriptive errors for:

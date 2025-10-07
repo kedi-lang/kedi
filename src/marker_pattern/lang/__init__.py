@@ -14,6 +14,7 @@ from .ast import (
 from .preprocess import preprocess_blocks
 from .parser import parse_program
 from .compiler import compile_program
+from .types import TypeValidator, ValidationResult
 
 __all__ = [
     "Program",
@@ -28,6 +29,8 @@ __all__ = [
     "preprocess_blocks",
     "parse_program",
     "compile_program",
+    "TypeValidator",
+    "ValidationResult",
 ]
 
 

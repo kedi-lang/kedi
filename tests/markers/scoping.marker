@@ -1,9 +1,10 @@
-Most visited country in the world is [country]
+[country] = France
 
 @foo(country):
   <country> has [population_count] number of people and its capital is [capital]
+  <`assert country == 'France'`>
   = <country> <population_count> <capital>
 
-[result] = <foo(country)>
+[result] = <foo(<country>)>
 <`assert result is not None`>
 = <country> <result>

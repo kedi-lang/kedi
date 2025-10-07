@@ -24,6 +24,7 @@ class InputExpr:
 @dataclass
 class OutputExpr:
     key: str
+    pytype: Optional[Any] = None
 
 
 @dataclass
@@ -39,8 +40,8 @@ def i(key: str) -> InputExpr:
     return InputExpr(key)
 
 
-def o(key: str) -> OutputExpr:
-    return OutputExpr(key)
+def o(key: str, pytype: Optional[Any] = None) -> OutputExpr:
+    return OutputExpr(key, pytype)
 
 
 def c(func_name: str, *args: Any) -> CallExpr:
@@ -62,8 +63,8 @@ class MarkerRuntime:
     def i(self, key: str) -> InputExpr:
         return i(key)
 
-    def o(self, key: str) -> OutputExpr:
-        return o(key)
+    def o(self, key: str, pytype: Optional[Any] = None) -> OutputExpr:
+        return o(key, pytype)
 
     def c(self, func_name: str, *args: Any) -> CallExpr:
         return c(func_name, *args)
@@ -162,21 +163,43 @@ class MarkerRuntime:
         if not required:
             return {}
 
-        out_type = StructuredDict(
-            {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-            name="result",
-            description=description,
-        )
-        try:
-            setattr(out_type, "description", description)
-        except Exception:
-            pass
+        # Determine if any outputs have typed annotations; build a TypedDict if so
+        typed_fields: Dict[str, Any] = {}
+        any_typed = False
+        for out in outputs:
+            if out.pytype is not None:
+                any_typed = True
+                typed_fields[out.key] = out.pytype
+            else:
+                typed_fields[out.key] = str
 
-        agent = Agent(self.model, output_type=out_type)
+        if any_typed:
+            try:
+                from typing import TypedDict as _TypedDict  # py311
+            except Exception:  # pragma: no cover
+                from typing_extensions import TypedDict as _TypedDict  # type: ignore
+
+            ResultType = _TypedDict("Result", typed_fields)  # type: ignore[valid-type]
+            try:
+                setattr(ResultType, "description", description)
+            except Exception:
+                pass
+            agent = Agent(self.model, output_type=ResultType)
+        else:
+            out_type = StructuredDict(
+                {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+                name="result",
+                description=description,
+            )
+            try:
+                setattr(out_type, "description", description)
+            except Exception:
+                pass
+            agent = Agent(self.model, output_type=out_type)
         # Keep question format stable for tests; append description after to preserve key parsing
         base_q = (
             f"Fill in the fields: [{required[0]}]."

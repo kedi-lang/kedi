@@ -44,6 +44,7 @@ class CallSegment(Segment):
 @dataclass
 class OutputSegment(Segment):
     name: str
+    type_annotation: Optional[str] = None
 
 
 @dataclass
@@ -79,6 +80,7 @@ class PythonBlock(Stmt):
 class AssignStmt(Stmt):
     name: str
     expr: Expr
+    type_annotation: Optional[str] = None
 
 
 @dataclass

@@ -20,6 +20,7 @@ from .ast import (
     OutputSegment,
     PythonExprSegment,
 )
+from .types import TypeValidator
 
 
 def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
@@ -51,6 +52,40 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
     return rt._invoke_procedure(callee, eval_args)  # type: ignore[attr-defined]
 
 
+def _resolve_pytype(type_annotation: str | None) -> Any | None:
+    if not type_annotation:
+        return None
+    try:
+        res = TypeValidator(type_annotation).validate_names()
+        return res.pytype if res.is_valid else None
+    except Exception:
+        return None
+
+
+def _coerce_value_to_type(value: Any, pytype: Any) -> Any:
+    # Best-effort coercion for simple builtins and list[...] cases
+    try:
+        origin = getattr(pytype, "__origin__", None)
+        args = getattr(pytype, "__args__", ())
+        if origin in (list, List):  # type: ignore[name-defined]
+            item_t = args[0] if args else Any
+            if isinstance(value, list):
+                def cast_item(v: Any) -> Any:
+                    try:
+                        if item_t in (int, float, str, bool):
+                            return item_t(v)
+                        return v
+                    except Exception:
+                        return v
+                return [cast_item(v) for v in value]
+            return value
+        if pytype in (int, float, str, bool):
+            return pytype(value)
+    except Exception:
+        pass
+    return value
+
+
 def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]) -> tuple[list[Any], str]:
     expr: list[Any] = []
     parts: list[str] = []
@@ -66,12 +101,31 @@ def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[s
             expr.append(str(value))
             parts.append(str(value))
         elif isinstance(s, OutputSegment):
-            expr.append(rt.o(s.name))
+            pytype = _resolve_pytype(s.type_annotation)
+            expr.append(rt.o(s.name, pytype))
         elif isinstance(s, PythonExprSegment):
             value = _eval_python_inline(rt, s.code, kwargs)
             expr.append(str(value))
             parts.append(str(value))
     return expr, "".join(parts)
+
+
+def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]) -> tuple[Any | None, str]:
+    # If RHS is a pure single python expression, return its native value
+    non_ws_segments: list[Segment] = []
+    for s in segments:
+        if isinstance(s, TextSegment) and s.text.strip() == "":
+            continue
+        non_ws_segments.append(s)
+
+    if len(non_ws_segments) == 1 and isinstance(non_ws_segments[0], PythonExprSegment):
+        value = _eval_python_inline(rt, non_ws_segments[0].code, kwargs)
+        # Rendered string representation too
+        return value, str(value)
+
+    # Fallback to rendered string
+    _, rendered = _prepare_segments(rt, segments, kwargs)
+    return None, rendered
 
 
 def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
@@ -155,10 +209,13 @@ def compile_program(prog: Program) -> MarkerRuntime:
                                 continue
                             kwargs[k] = v
                     elif isinstance(stmt, AssignStmt):
-                        # Evaluate the RHS expression into a string/value using the same rendering
-                        _, rendered = _prepare_segments(rt, stmt.expr, kwargs)
-                        # Trim ends, keep internal spaces
-                        value = rendered.strip()
+                        # Evaluate the RHS; if pure python expr, capture native value
+                        native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
+                        value = native if native is not None else rendered.strip()
+                        # Coerce to annotated type if provided
+                        pytype = _resolve_pytype(stmt.type_annotation)
+                        if pytype is not None:
+                            value = _coerce_value_to_type(value, pytype)
                         kwargs[stmt.name] = value
                         # Also update runtime env if present (so subsequent rt.m can see it)
                         env = rt._current_env.get()  # type: ignore[attr-defined]
@@ -209,8 +266,11 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             continue
                         kwargs[k] = v
                 elif isinstance(stmt, AssignStmt):
-                    _, rendered = _prepare_segments(rt, stmt.expr, kwargs)
-                    value = rendered.strip()
+                    native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
+                    value = native if native is not None else rendered.strip()
+                    pytype = _resolve_pytype(stmt.type_annotation)
+                    if pytype is not None:
+                        value = _coerce_value_to_type(value, pytype)
                     kwargs[stmt.name] = value
                     env = rt._current_env.get()  # type: ignore[attr-defined]
                     if env is not None:
