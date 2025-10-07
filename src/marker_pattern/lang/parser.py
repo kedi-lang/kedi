@@ -91,6 +91,12 @@ def _parse_segments(body: str) -> List[Segment]:
         if ch in ("]", ">"):
             raise ValueError(f"Unmatched closer '{ch}' in expression")
 
+        # Enforce escaping for literal '=' anywhere inside expressions/text
+        # Return lines are handled at the parser level (line starts with '=')
+        # so any '=' encountered here must be a literal and therefore escaped as '=='
+        if ch == "=" and nxt != "=":
+            raise ValueError("Literal '=' must be written as '==' in template or return expressions")
+
         buf.append(ch)
         i += 1
 
