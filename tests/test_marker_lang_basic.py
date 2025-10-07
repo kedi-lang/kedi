@@ -372,10 +372,8 @@ def test_python_block_sets_variables(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@calc(a,b):\n"
-            "  ```\n"
-            "  s = int(a) + int(b)\n"
-            "  t = int(a) * int(b)\n"
-            "  ```\n"
+            "  [s: int] = ```\n  return int(a) + int(b)\n  ```\n"
+            "  [t: int] = ```\n  return int(a) * int(b)\n  ```\n"
             "  = sum:<`s`> prod:<`t`>\n\n"
             "= <calc(6, 7)>\n"
         ),
@@ -390,10 +388,8 @@ def test_python_block_can_call_procedures(monkeypatch: Any) -> None:
             "@times2(n):\n"
             "  = <`int(n)*2`>\n\n"
             "@use(a):\n"
-            "  ```\n"
-            "  doubled = times2(a)\n"
-            "  tripled = int(a) * 3\n"
-            "  ```\n"
+            "  [doubled: int] = ```\n  return times2(a)\n  ```\n"
+            "  [tripled: int] = ```\n  return int(a) * 3\n  ```\n"
             "  = <`str(doubled)+'-'+str(tripled)`>\n\n"
             "= <use(5)>\n"
         ),
@@ -407,9 +403,7 @@ def test_python_block_with_llm_outputs(monkeypatch: Any) -> None:
         (
             "@pipeline(x):\n"
             "  from <x> we ask for [y]\n"
-            "  ```\n"
-            "  z = 'prefix-' + y\n"
-            "  ```\n"
+            "  [z: str] = ```\n  return 'prefix-' + y\n  ```\n"
             "  final [out] uses <`z`>\n"
             "  = <out>\n\n"
             "= <pipeline(alpha)>\n"
@@ -553,9 +547,7 @@ def test_typed_output_used_in_python_block(monkeypatch: Any) -> None:
         (
             "@p():\n"
             "  numbers [arr: list[int]]\n"
-            "  ```\n"
-            "  s = sum(arr)\n"
-            "  ```\n"
+            "  [s: int] = ```\n  return sum(arr)\n  ```\n"
             "  = <`str(s)`>\n\n"
             "= <p()>\n"
         ),
@@ -628,7 +620,7 @@ def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
     [
         "@p():\n [x: int] = `2**5`\n = <`x+1`>\n\n= <p()>\n",
         "@p():\n [s: str] = hello\n = <s>!\n\n= <p()>\n",
-        "@p():\n arr [a: list[int]]\n ```\n first = a[0] if a else 0\n ```\n = <`str(first)`>\n\n= <p()>\n",
+        "@p():\n arr [a: list[int]]\n [first: int] = ```\n return a[0] if a else 0\n ```\n = <`str(first)`>\n\n= <p()>\n",
         "@times2(n):\n = <`int(n)*2`>\n\n@use():\n list [xs: list[int]]\n [ys: list[int]] = `[2,4]`\n = <`str(sum(int(v) for v in ys))`>\n\n= <use()>\n",
         "@p():\n alpha [a] and ints [b: list[int]]\n = <a>-<`sum(b)`>\n\n= <p()>\n",
     ],

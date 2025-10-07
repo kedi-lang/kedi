@@ -97,7 +97,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "[8]",
     ),
     (
-        "@types():\n  list [xs: list[int]]\n  ```\n  doubled = [v*2 for v in xs]\n  ```\n  = <`str(sum(doubled))`>\n\n= <types()>\n",
+        "@types():\n  list [xs: list[int]]\n  [doubled: list[int]] = ```\n  return [v*2 for v in xs]\n  ```\n  = <`str(sum(doubled))`>\n\n= <types()>\n",
         "6",
     ),
     (
@@ -122,12 +122,12 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Python block with imports and procedure calls
-        "@times(n):\n  = <`int(n)*3`>\n\n@prog(x):\n  ```\n  import math\n  y = int(times(x))\n  z = int(math.sqrt(16)) + y\n  ```\n  = <`str(z)`>\n\n= <prog(5)>\n",
+        "@times(n):\n  = <`int(n)*3`>\n\n@prog(x):\n  [y: int] = ```\n  return int(times(x))\n  ```\n  [z: int] = ```\n  import math\n  return int(math.sqrt(16)) + y\n  ```\n  = <`str(z)`>\n\n= <prog(5)>\n",
         "19",
     ),
     (
         # Assignment native value then used in prompt
-        "@p():\n  [nums: list[int]] = `[1,2,3]`\n  total is [s: int]\n  ```\n  s = sum(nums)\n  ```\n  = <`str(s)`>\n\n= <p()>\n",
+        "@p():\n  [nums: list[int]] = `[1,2,3]`\n  [s: int] = ```\n  return sum(nums)\n  ```\n  = <`str(s)`>\n\n= <p()>\n",
         "6",
     ),
     (
@@ -137,7 +137,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Top-level python block before return
-        "```\nval = 10\n```\n= <`str(val*3)`>\n",
+        "[val: int] = ```\nreturn 10\n```\n= <`str(val*3)`>\n",
         "30",
     ),
     (
@@ -147,7 +147,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Shadowing builtins inside python block but still using other builtins
-        "@demo():\n  ```\n  len = 5\n  s = __import__('math').sqrt(25)\n  ```\n  = <`str(int(s)+len)`>\n\n= <demo()>\n",
+        "@demo():\n  [s: float] = ```\n  return __import__('math').sqrt(25)\n  ```\n  [L: int] = ```\n  return 5\n  ```\n  = <`str(int(s)+L)`>\n\n= <demo()>\n",
         "10",
     ),
     (
@@ -299,7 +299,7 @@ def test_nested_calls_and_args(monkeypatch: Any) -> None:
 
 def test_list_type_nested_and_python(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  matrix [m: list[list[int]]]\n  ```\n  flat = [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
+        "@p():\n  matrix [m: list[list[int]]]\n  [flat: list[int]] = ```\n  return [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     # Our fake agent returns [] for unknown nested typing; allow "0" or empty leading
@@ -342,10 +342,11 @@ def test_python_inline_can_call_procedure(monkeypatch: Any) -> None:
 
 def test_python_block_modifies_existing_and_new_vars(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  [x] = base\n  ```\n  x = x + '-mod'\n  y = 'new'\n  ```\n  = <x>-<y>\n\n= <p()>\n"
+        "@p():\n  [x] = base\n  ```\n  x = x + '-mod'\n  y = 'new'\n  ```\n  = <x>-<`y`>\n\n= <p()>\n"
     )
+    # y is a pure Python variable; it should not leak into marker env
     out = _run(monkeypatch, src)
-    assert out == "base-mod-new"
+    assert out == "base-mod-"
 
 
 def test_inline_python_backticks_nested_angles(monkeypatch: Any) -> None:
@@ -479,7 +480,7 @@ def test_backtick_toggles_in_matching(monkeypatch: Any) -> None:
 
 def test_multiple_python_blocks_and_sync_env(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  ```\n  a = 2\n  ```\n  ```\n  a = a * 5\n  b = a + 3\n  ```\n  = <`str(b)`>\n\n= <p()>\n"
+        "@p():\n  ```\n  a = 2\n  ```\n  [b: int] = ```\n  return (2 * 5) + 3\n  ```\n  = <`str(b)`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "13"
@@ -621,7 +622,7 @@ def test_assignment_then_reassignment(monkeypatch: Any) -> None:
 
 def test_output_then_python_block_consumes(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  need [v: int]\n  ```\n  w = v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
+        "@p():\n  need [v: int]\n  [w: int] = ```\n  return v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "168" or out.isdigit()
@@ -644,7 +645,7 @@ def test_literal_equals_must_be_escaped(monkeypatch: Any) -> None:
 
 def test_python_block_indent_normalization(monkeypatch: Any) -> None:
     src = (
-        "@p():\n  ```\n      a = 1\n      b = 2\n      c = a + b\n  ```\n  = <`str(c)`>\n\n= <p()>\n"
+        "@p():\n  [c: int] = ```\n      a = 1\n      b = 2\n      return a + b\n  ```\n  = <`str(c)`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "3"
@@ -688,7 +689,8 @@ def test_unmatched_end_marker_in_python_block_ignored(monkeypatch: Any) -> None:
         "@p():\n  ```\n  # BEGIN/END-like tokens\n  text = 'ok'\n  ```\n  = <`text`>\n\n= <p()>\n"
     )
     out = _run(monkeypatch, src)
-    assert out == "ok"
+    # 'text' should not leak from python block to marker env
+    assert out == ""
 
 
 def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:

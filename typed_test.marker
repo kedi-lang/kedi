@@ -11,6 +11,16 @@
     ```
     = `questions`
 
+@test_imports():
+    ```
+    import math as m
+    ```
+
+    ```
+    print(m.sqrt(16))
+    ```
+
+
 = ```
-print(generate_questions(2))
+print(test_imports())
 ```

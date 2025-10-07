@@ -187,6 +187,9 @@ def _eval_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, Any])
         except Exception as e:
             raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
     except Exception as e:
+        # Missing names inside inline python should render as empty string rather than crash
+        if isinstance(e, NameError):
+            return ""
         raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
 
 
@@ -275,32 +278,37 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             for k, v in env.items():
                                 kwargs[k] = v
                     elif isinstance(stmt, PythonBlock):
-                        # Execute user python code with env injection (single shared env)
+                        # Execute user python code with env injection (no leakage back into marker env)
                         env_exec = _build_python_env(rt, kwargs)
                         try:
                             exec(stmt.code, env_exec, env_exec)
                         except Exception as e:
                             raise RuntimeError(f"Python block error: {e}") from e
-                        # sync back any modified/created names to kwargs
-                        for k, v in env_exec.items():
-                            if k.startswith("__"):
-                                continue
-                            kwargs[k] = v
+                        # Sync back modifications to existing marker variables only
+                        env_rt = rt._current_env.get()  # type: ignore[attr-defined]
+                        for var_name in list(kwargs.keys()):
+                            if var_name in env_exec:
+                                kwargs[var_name] = env_exec[var_name]
+                                if env_rt is not None:
+                                    env_rt[var_name] = env_exec[var_name]
                     elif isinstance(stmt, AssignBlockStmt):
                         result = _execute_python_block(stmt.code, rt, kwargs)
                         pytype = _resolve_pytype(stmt.type_annotation)
-                        if isinstance(result, str):
-                            if pytype is not None and pytype is not str:
-                                raise TypeError("Annotation type mismatch: got str value")
-                        else:
-                            if pytype is None:
-                                raise TypeError("Native non-string assignment requires explicit type annotation")
-                            if not _is_value_compatible(pytype, result):
+                        # Allow coercion when annotation exists
+                        value = result
+                        if pytype is not None:
+                            # Coerce simple types and list[...] when possible
+                            value = _coerce_value_to_type(value, pytype)
+                            if not _is_value_compatible(pytype, value):
                                 raise TypeError("Native assignment value does not match annotated type")
-                        kwargs[stmt.name] = result
+                        else:
+                            # Without annotation only strings are allowed
+                            if not isinstance(value, str):
+                                raise TypeError("Native non-string assignment requires explicit type annotation")
+                        kwargs[stmt.name] = value
                         env = rt._current_env.get()  # type: ignore[attr-defined]
                         if env is not None:
-                            env[stmt.name] = result
+                            env[stmt.name] = value
                     elif isinstance(stmt, AssignStmt):
                         native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
                         is_backtick_native, is_angle_pure = _detect_rhs_kind(stmt.expr)
@@ -379,25 +387,28 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         exec(stmt.code, env_exec, env_exec)
                     except Exception as e:
                         raise RuntimeError(f"Python block error: {e}") from e
-                    for k, v in env_exec.items():
-                        if k.startswith("__"):
-                            continue
-                        kwargs[k] = v
+                    # Sync back modifications to existing marker variables only
+                    env_rt = rt._current_env.get()  # type: ignore[attr-defined]
+                    for var_name in list(kwargs.keys()):
+                        if var_name in env_exec:
+                            kwargs[var_name] = env_exec[var_name]
+                            if env_rt is not None:
+                                env_rt[var_name] = env_exec[var_name]
                 elif isinstance(stmt, AssignBlockStmt):
                     result = _execute_python_block(stmt.code, rt, kwargs)
                     pytype = _resolve_pytype(stmt.type_annotation)
-                    if isinstance(result, str):
-                        if pytype is not None and pytype is not str:
-                            raise TypeError("Annotation type mismatch: got str value")
-                    else:
-                        if pytype is None:
-                            raise TypeError("Native non-string assignment requires explicit type annotation")
-                        if not _is_value_compatible(pytype, result):
+                    value = result
+                    if pytype is not None:
+                        value = _coerce_value_to_type(value, pytype)
+                        if not _is_value_compatible(pytype, value):
                             raise TypeError("Native assignment value does not match annotated type")
-                    kwargs[stmt.name] = result
+                    else:
+                        if not isinstance(value, str):
+                            raise TypeError("Native non-string assignment requires explicit type annotation")
+                    kwargs[stmt.name] = value
                     env = rt._current_env.get()  # type: ignore[attr-defined]
                     if env is not None:
-                        env[stmt.name] = result
+                        env[stmt.name] = value
                 elif isinstance(stmt, AssignStmt):
                     native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
                     is_backtick_native, is_angle_pure = _detect_rhs_kind(stmt.expr)
