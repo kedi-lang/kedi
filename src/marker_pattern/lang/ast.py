@@ -52,6 +52,11 @@ class PythonExprSegment(Segment):
     code: str
 
 
+@dataclass
+class PythonExprNativeSegment(Segment):
+    code: str
+
+
 Expr = List[Segment]
 
 
@@ -77,6 +82,18 @@ class PythonBlock(Stmt):
 
 
 @dataclass
+class AssignBlockStmt(Stmt):
+    name: str
+    code: str
+    type_annotation: Optional[str] = None
+
+
+@dataclass
+class ReturnBlockStmt(Stmt):
+    code: str
+
+
+@dataclass
 class AssignStmt(Stmt):
     name: str
     expr: Expr
@@ -93,7 +110,7 @@ class ProcedureDef:
 @dataclass
 class Program:
     procedures: List[ProcedureDef] = field(default_factory=list)
-    toplevel_return: Optional[ReturnStmt] = None
+    toplevel_return: Optional[Union[ReturnStmt, ReturnBlockStmt]] = None
     toplevel_body: List[Stmt] = field(default_factory=list)
 
 

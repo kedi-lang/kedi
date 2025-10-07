@@ -10,6 +10,8 @@ from .ast import (
     TemplateLine,
     ReturnStmt,
     PythonBlock,
+    AssignBlockStmt,
+    ReturnBlockStmt,
     AssignStmt,
     Segment,
     TextSegment,
@@ -20,6 +22,7 @@ from .ast import (
     VarArg,
     OutputSegment,
     PythonExprSegment,
+    PythonExprNativeSegment,
 )
 from .preprocess import preprocess_blocks, BEGIN, END
 
@@ -344,6 +347,74 @@ def parse_program(source: str) -> Program:
                 name = target_inner
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Assignment target must be an identifier")
+            # Special case: value-returning python block assignment: [name(: type)] = ``` ... ```
+            if rhs_src.strip() == "```":
+                # parse block similar to above
+                # advance to next line to start collecting block contents
+                i += 1
+                block_lines: List[str] = []
+                while i < len(lines):
+                    cur = lines[i]
+                    cur_stripped = cur.strip()
+                    if cur_stripped == "```":
+                        break
+                    if cur_stripped in (BEGIN, END):
+                        i += 1
+                        continue
+                    block_lines.append(cur)
+                    i += 1
+                if i >= len(lines) or lines[i].strip() != "```":
+                    raise ValueError("Unterminated python block; expected closing ``` line")
+                # consume closing fence
+                i += 1
+
+                def indent_of(s: str) -> int:
+                    n = 0
+                    for ch in s:
+                        if ch == " ":
+                            n += 1
+                        elif ch == "\t":
+                            n += 4
+                        else:
+                            break
+                    return n
+
+                non_empty = [s for s in block_lines if s.strip() != ""]
+                min_indent = min((indent_of(s) for s in non_empty), default=0)
+                dedented = []
+                for s in block_lines:
+                    j = 0
+                    removed = 0
+                    while j < len(s) and removed < min_indent:
+                        if s[j] == " ":
+                            removed += 1
+                            j += 1
+                        elif s[j] == "\t":
+                            removed += 4
+                            j += 1
+                        else:
+                            break
+                    dedented.append(s[j:])
+
+                stmt_assign_block = AssignBlockStmt(name=name, code="\n".join(dedented), type_annotation=type_anno)
+                if current_body is None:
+                    program.toplevel_body.append(stmt_assign_block)
+                else:
+                    current_body.append(stmt_assign_block)
+                continue
+
+            # Special case: backtick-only inline python expression (native value assignment)
+            rhs_trim = rhs_src.strip()
+            if rhs_trim.startswith("`") and rhs_trim.endswith("`") and len(rhs_trim) >= 2 and rhs_trim.count("`") == 2:
+                code = rhs_trim[1:-1]
+                stmt_assign = AssignStmt(name=name, expr=[PythonExprNativeSegment(code=code)], type_annotation=type_anno)
+                if current_body is None:
+                    program.toplevel_body.append(stmt_assign)
+                else:
+                    current_body.append(stmt_assign)
+                i += 1
+                continue
+
             rhs_segments = _parse_segments(rhs_src)
             stmt_assign = AssignStmt(name=name, expr=rhs_segments, type_annotation=type_anno)
             if current_body is None:
@@ -356,6 +427,60 @@ def parse_program(source: str) -> Program:
         # Inside a procedure body or at top-level
         if stripped.startswith("="):
             expr_src = stripped[1:]
+            # Value-returning python block return: = ``` ... ```
+            if expr_src.strip() == "```":
+                block_lines: List[str] = []
+                i += 1
+                while i < len(lines):
+                    cur = lines[i]
+                    cur_stripped = cur.strip()
+                    if cur_stripped == "```":
+                        break
+                    if cur_stripped in (BEGIN, END):
+                        i += 1
+                        continue
+                    block_lines.append(cur)
+                    i += 1
+                if i >= len(lines) or lines[i].strip() != "```":
+                    raise ValueError("Unterminated python block; expected closing ``` line")
+                # consume closing fence
+                i += 1
+
+                def indent_of(s: str) -> int:
+                    n = 0
+                    for ch in s:
+                        if ch == " ":
+                            n += 1
+                        elif ch == "\t":
+                            n += 4
+                        else:
+                            break
+                    return n
+
+                non_empty = [s for s in block_lines if s.strip() != ""]
+                min_indent = min((indent_of(s) for s in non_empty), default=0)
+                dedented = []
+                for s in block_lines:
+                    j = 0
+                    removed = 0
+                    while j < len(s) and removed < min_indent:
+                        if s[j] == " ":
+                            removed += 1
+                            j += 1
+                        elif s[j] == "\t":
+                            removed += 4
+                            j += 1
+                        else:
+                            break
+                    dedented.append(s[j:])
+
+                ret_block = ReturnBlockStmt(code="\n".join(dedented))
+                if current_body is None:
+                    program.toplevel_return = ret_block
+                else:
+                    current_body.append(ret_block)
+                continue
+
             segments = _parse_segments(expr_src)
             ret = ReturnStmt(segments=segments)
             if current_body is None:

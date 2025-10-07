@@ -501,6 +501,79 @@ def test_call_return_value_used_as_arg(monkeypatch: Any) -> None:
     assert out == "11"
 
 
+def test_value_returning_python_block_in_assignment_native_value(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [x: int] = ```\n  return 2 + 3\n  ```\n  = <`x*2`>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "10"
+
+
+def test_value_returning_python_block_in_assignment_expression(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [s] = ```\n  return 'hello' + ' world'\n  ```\n  = <s>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "hello world"
+
+
+def test_value_returning_python_block_in_return(monkeypatch: Any) -> None:
+    src = (
+        "@p(a,b):\n  = ```\n  return int(a) + int(b)\n  ```\n\n= <p(7, 8)>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "15"
+
+
+def test_value_returning_python_block_in_return_expression(monkeypatch: Any) -> None:
+    src = (
+        "= ```\nreturn [1,2,3] + [4]\n```\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out.replace(' ', '') in ("[1,2,3,4]", "[1,2,3,4]")
+
+
+def test_backtick_assignment_native_int(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [x] = `1+1`\n  = <`x*2`>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "4"
+
+
+def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [x: str] = `1+1`\n  = <x>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "2"
+
+
+def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
+    src = (
+        "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out.startswith("`1+1` and more ok")
+
+
+def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [a] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+str(b)`>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    # a is int 42, b is string "42"; the inline python must coerce b to str already
+    assert out == "42-42"
+
+
+def test_backtick_assignment_list_and_use(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  [xs] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "6"
+
+
 def test_assignment_then_reassignment(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [x] = a\n  [x] = <`x+'b'`>\n  = <x>\n\n= <p()>\n"

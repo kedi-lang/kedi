@@ -9,6 +9,8 @@ from .ast import (
     TemplateLine,
     ReturnStmt,
     PythonBlock,
+    AssignBlockStmt,
+    ReturnBlockStmt,
     AssignStmt,
     Segment,
     TextSegment,
@@ -19,6 +21,7 @@ from .ast import (
     VarArg,
     OutputSegment,
     PythonExprSegment,
+    PythonExprNativeSegment,
 )
 from .types import TypeValidator
 
@@ -107,6 +110,11 @@ def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[s
             value = _eval_python_inline(rt, s.code, kwargs)
             expr.append(str(value))
             parts.append(str(value))
+        elif isinstance(s, PythonExprNativeSegment):
+            # Native value appears only in assignment-return detection; when rendering, coerce to str
+            value = _eval_python_inline(rt, s.code, kwargs)
+            expr.append(str(value))
+            parts.append(str(value))
     return expr, "".join(parts)
 
 
@@ -118,7 +126,7 @@ def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs:
             continue
         non_ws_segments.append(s)
 
-    if len(non_ws_segments) == 1 and isinstance(non_ws_segments[0], PythonExprSegment):
+    if len(non_ws_segments) == 1 and isinstance(non_ws_segments[0], (PythonExprSegment, PythonExprNativeSegment)):
         value = _eval_python_inline(rt, non_ws_segments[0].code, kwargs)
         # Rendered string representation too
         return value, str(value)
@@ -208,6 +216,27 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             if k.startswith("__"):
                                 continue
                             kwargs[k] = v
+                    elif isinstance(stmt, AssignBlockStmt):
+                        # Execute code and capture the return value by evaluating the last expression via a function
+                        env_exec = _build_python_env(rt, kwargs)
+                        # Build a wrapper to capture return value from user code
+                        wrapper_src = (
+                            "def __marker_block__():\n"
+                            + "\n".join("    " + line for line in stmt.code.splitlines())
+                        )
+                        try:
+                            exec(wrapper_src, env_exec, env_exec)
+                            result = env_exec["__marker_block__"]()
+                        except Exception as e:
+                            raise RuntimeError(f"Python block error: {e}") from e
+                        # Type coercion if annotated
+                        pytype = _resolve_pytype(stmt.type_annotation)
+                        if pytype is not None:
+                            result = _coerce_value_to_type(result, pytype)
+                        kwargs[stmt.name] = result
+                        env = rt._current_env.get()  # type: ignore[attr-defined]
+                        if env is not None:
+                            env[stmt.name] = result
                     elif isinstance(stmt, AssignStmt):
                         # Evaluate the RHS; if pure python expr, capture native value
                         native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
@@ -223,6 +252,18 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             env[stmt.name] = value
                     elif isinstance(stmt, ReturnStmt):
                         last_return = _compile_return(rt, stmt)(**kwargs)
+                    elif isinstance(stmt, ReturnBlockStmt):
+                        env_exec = _build_python_env(rt, kwargs)
+                        wrapper_src = (
+                            "def __marker_block__():\n"
+                            + "\n".join("    " + line for line in stmt.code.splitlines())
+                        )
+                        try:
+                            exec(wrapper_src, env_exec, env_exec)
+                            result = env_exec["__marker_block__"]()
+                        except Exception as e:
+                            raise RuntimeError(f"Python block error: {e}") from e
+                        last_return = "" if result is None else str(result)
                 return last_return
 
             # Dynamically create a function with the exact parameter names
@@ -265,6 +306,24 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         if k.startswith("__"):
                             continue
                         kwargs[k] = v
+                elif isinstance(stmt, AssignBlockStmt):
+                    env_exec = _build_python_env(rt, kwargs)
+                    wrapper_src = (
+                        "def __marker_block__():\n"
+                        + "\n".join("    " + line for line in stmt.code.splitlines())
+                    )
+                    try:
+                        exec(wrapper_src, env_exec, env_exec)
+                        result = env_exec["__marker_block__"]()
+                    except Exception as e:
+                        raise RuntimeError(f"Python block error: {e}") from e
+                    pytype = _resolve_pytype(stmt.type_annotation)
+                    if pytype is not None:
+                        result = _coerce_value_to_type(result, pytype)
+                    kwargs[stmt.name] = result
+                    env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if env is not None:
+                        env[stmt.name] = result
                 elif isinstance(stmt, AssignStmt):
                     native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
                     value = native if native is not None else rendered.strip()
@@ -276,7 +335,20 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     if env is not None:
                         env[stmt.name] = value
             # Now render the final return using the accumulated env
-            return _compile_return(rt, ret_stmt)(**kwargs)
+            if isinstance(ret_stmt, ReturnStmt):
+                return _compile_return(rt, ret_stmt)(**kwargs)
+            else:
+                env_exec = _build_python_env(rt, kwargs)
+                wrapper_src = (
+                    "def __marker_block__():\n"
+                    + "\n".join("    " + line for line in ret_stmt.code.splitlines())
+                )
+                try:
+                    exec(wrapper_src, env_exec, env_exec)
+                    result = env_exec["__marker_block__"]()
+                except Exception as e:
+                    raise RuntimeError(f"Python block error: {e}") from e
+                return "" if result is None else str(result)
 
     return rt
 

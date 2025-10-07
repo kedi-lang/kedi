@@ -34,6 +34,22 @@ python code...
 - The code inherits the indentation level of its block; indentation is normalized (dedented) before execution.
 - Variables in scope and procedures are injected into the Python environment; changes to variables inside the block are reflected back.
 - Executed with full Python builtins, same as inline expressions.
+- Value-returning Python blocks (NEW):
+  - Assignment with return value:
+    ```
+    [x] = ```
+    return 2 + 3
+    ```
+    ```
+    Optional type annotation coerces the returned value: `[x: int] = ``` ... ```.
+  - Return with value:
+    ```
+    = ```
+    return compute()
+    ```
+    ```
+    The value of the last executed return in the block is converted to string for final output.
+  - Semantics: the block is wrapped into a function and executed; the Python `return` value becomes the assigned value or the final return respectively. If no value is returned, it is treated as empty string for `=` return and `None` for assignment.
 - Inside call arg lists:
   - Bare tokens are string literals (no quotes). Example: `<combine(x, <prep(y)>)>` → `combine("x", prep("y"))`.
   - Variables or nested calls must be wrapped in `<...>`, e.g. `<combine(<x>, <prep(<y>)>)>` → `combine(x, prep(y))`.
@@ -60,6 +76,12 @@ python code...
 - Assign a variable in the current scope using:
   - `[name] = expression`
   - `[name: type] = expression`
+  - `[name(: type)] = ``` ... ```  # value-returning Python block`
+  - Backtick inline Python for native value: `[name(: type)] = `expr``
+    - Must be a single Python expression (no other text). Example:
+      - `[x] = `1+1`` sets `x` as int 2
+      - `[x] = <`1+1`>` sets `x` to string "2"
+      - `[x] = `1+1` and more` → treated as plain string (no native eval)
 - Example: `[prev] = <word>` assigns the current `word` into `prev`.
 - Typed examples:
   - `[count: int] = <`1 + 1`>`
@@ -120,6 +142,16 @@ Typed assignment capturing native Python values via inline Python:
 [nums: list[int]] = <`[1, 2, 3, 4]`>
 [total: int] = <`sum(nums)`>
 = Total: <total>
+```
+
+Value-returning Python blocks:
+```
+[x: int] = ```
+return 5
+```
+= ```
+return x * 2
+```
 ```
 
 Mix typed outputs and inline Python:
