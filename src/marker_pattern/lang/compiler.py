@@ -325,8 +325,22 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     elif isinstance(stmt, ReturnStmt):
                         last_return = _compile_return(rt, stmt)(**kwargs)
                     elif isinstance(stmt, ReturnBlockStmt):
-                        result = _execute_python_block(stmt.code, rt, kwargs)
-                        last_return = "" if result is None else str(result)
+                        # Execute wrapper if code is a block or contains 'return'; else eval inline expr
+                        if ("\n" in stmt.code) or stmt.code.strip().startswith("return"):
+                            result = _execute_python_block(stmt.code, rt, kwargs)
+                            last_return = result
+                        else:
+                            last_return = _eval_python_inline(rt, stmt.code, kwargs)
+                # Enforce return type at end based on procedure annotation
+                anno = _resolve_pytype(p.return_type_annotation)
+                if anno is None:
+                    # default to str: non-string native returns are illegal
+                    if last_return is not None and not isinstance(last_return, str):
+                        raise TypeError("Return value must be str; annotate function to return non-string")
+                    return "" if last_return is None else str(last_return)
+                # annotated non-str: allow native returns; validate type
+                if not _is_value_compatible(anno, last_return):
+                    raise TypeError("Return value does not match annotated type")
                 return last_return
 
             # Dynamically create a function with the exact parameter names
@@ -409,8 +423,12 @@ def compile_program(prog: Program) -> MarkerRuntime:
             if isinstance(ret_stmt, ReturnStmt):
                 return _compile_return(rt, ret_stmt)(**kwargs)
             else:
-                result = _execute_python_block(ret_stmt.code, rt, kwargs)
-                return "" if result is None else str(result)
+                # Top-level: always return string rendering for native returns
+                if ("\n" in ret_stmt.code) or ret_stmt.code.strip().startswith("return"):
+                    result = _execute_python_block(ret_stmt.code, rt, kwargs)
+                    return "" if result is None else str(result)
+                value = _eval_python_inline(rt, ret_stmt.code, kwargs)
+                return "" if value is None else str(value)
 
     return rt
 

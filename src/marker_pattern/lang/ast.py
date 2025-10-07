@@ -105,6 +105,7 @@ class ProcedureDef:
     name: str
     params: List[str]
     body: List[Stmt] = field(default_factory=list)
+    return_type_annotation: Optional[str] = None
 
 
 @dataclass

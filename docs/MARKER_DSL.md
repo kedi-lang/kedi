@@ -121,6 +121,21 @@ Semantics: `{foo("alpha, beta, gamma", bar(x))}    done` (ends trimmed only).
 
 
 ### Type Annotations
+#### Procedure return types
+- Syntax: `@name(params) -> type:` to declare a non-string return type.
+- If omitted, return type defaults to `str`.
+- Returning non-string values requires an annotation and must use native Python returns:
+```
+@bar() -> list[str]:
+  = `[]`
+```
+The above returns an empty list object.
+
+```
+@bar():
+  = `[]`
+```
+This is invalid and will raise a TypeError because the default return type is `str`.
 Basic typed output in a template line:
 ```
 Most visited country is [country: str]

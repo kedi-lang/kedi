@@ -1,0 +1,16 @@
+@generate_question():
+    [question] is a challenging trivia question.
+    <`print(f">{question}...")`>
+    = <question>
+
+@generate_questions(number) -> list[str]:
+    [questions: list[str]] = `[]`
+    ```
+    for i in range(number):
+        questions.append(generate_question())
+    ```
+    = `questions`
+
+= ```
+print(generate_questions(2))
+```

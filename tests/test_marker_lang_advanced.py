@@ -535,7 +535,7 @@ def test_value_returning_python_block_in_assignment_expression(monkeypatch: Any)
 
 def test_value_returning_python_block_in_return(monkeypatch: Any) -> None:
     src = (
-        "@p(a,b):\n  = ```\n  return int(a) + int(b)\n  ```\n\n= <p(7, 8)>\n"
+        "@p(a,b) -> int:\n  = ```\n  return int(a) + int(b)\n  ```\n\n= <p(7, 8)>\n"
     )
     out = _run(monkeypatch, src)
     assert out == "15"
@@ -549,6 +549,28 @@ def test_value_returning_python_block_in_return_expression(monkeypatch: Any) -> 
     assert out.replace(' ', '') in ("[1,2,3,4]", "[1,2,3,4]")
 
 
+def test_procedure_return_type_annotation_native_return(monkeypatch: Any) -> None:
+    src = (
+        "@make() -> list[int]:\n  = `[]`\n\n@use():\n  = <`str(len(make()))`>\n\n= <use()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "0"
+
+
+def test_procedure_default_return_str(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  = hello\n\n= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out == "hello"
+
+
+def test_procedure_inline_python_return_requires_annotation(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n  = `[]`\n\n= <p()>\n"
+    )
+    with pytest.raises(TypeError):
+        _run(monkeypatch, src)
 def test_backtick_assignment_native_int(monkeypatch: Any) -> None:
     src = (
         "@p():\n  [x] = `1+1`\n  = <`x*2`>\n\n= <p()>\n"

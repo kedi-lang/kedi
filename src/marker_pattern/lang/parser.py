@@ -250,6 +250,11 @@ def parse_program(source: str) -> Program:
             if not stripped.endswith(":"):
                 raise ValueError("Procedure header must end with ':'")
             header = stripped[1:-1]
+            # Support optional return type: name(params) -> type
+            ret_anno: str | None = None
+            if "->" in header:
+                header, ret_anno_src = header.split("->", 1)
+                ret_anno = ret_anno_src.strip()
             if "(" not in header:
                 raise ValueError("Procedure header missing '('")
             name, params_src = header.split("(", 1)
@@ -261,7 +266,7 @@ def parse_program(source: str) -> Program:
             params = [p.strip() for p in params_csv.split(",") if p.strip()]
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Procedure name must be an identifier")
-            proc = ProcedureDef(name=name, params=params)
+            proc = ProcedureDef(name=name, params=params, return_type_annotation=ret_anno)
             proc_stack.append(proc)
             current_body = proc.body
             i += 1
@@ -427,6 +432,17 @@ def parse_program(source: str) -> Program:
         # Inside a procedure body or at top-level
         if stripped.startswith("="):
             expr_src = stripped[1:]
+            # Inline python native return: = `expr`
+            expr_trim = expr_src.strip()
+            if expr_trim.startswith("`") and expr_trim.endswith("`") and len(expr_trim) >= 2 and expr_trim.count("`") == 2:
+                code = expr_trim[1:-1]
+                ret_block = ReturnBlockStmt(code=code)
+                if current_body is None:
+                    program.toplevel_return = ret_block
+                else:
+                    current_body.append(ret_block)
+                i += 1
+                continue
             # Value-returning python block return: = ``` ... ```
             if expr_src.strip() == "```":
                 block_lines: List[str] = []
