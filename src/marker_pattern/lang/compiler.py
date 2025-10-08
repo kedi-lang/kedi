@@ -22,6 +22,7 @@ from .ast import (
     OutputSegment,
     PythonExprSegment,
     PythonExprNativeSegment,
+    ProcDefStmt,
 )
 from .types import TypeValidator
 
@@ -379,6 +380,10 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         # No conversions allowed: require exact type compatibility
                         if pytype is not None and not _is_value_compatible(pytype, provided):
                             raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                # Scoped nested procedure registration management
+                _saved_procs: dict[str, Any] = {}
+                _new_names: list[str] = []
+
                 # Execute template lines in order; last return decides
                 last_return: Any = None
                 for stmt in p.body:
@@ -389,6 +394,18 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         if env:
                             for k, v in env.items():
                                 kwargs[k] = v
+                    elif isinstance(stmt, ProcDefStmt):
+                        # Nested procedure definitions already appear as ProcDefStmt in the collected body
+                        # Register with scoped behavior
+                        name = stmt.proc.name
+                        fn_nested = make_proc(stmt.proc)
+                        procs = rt._procedures  # type: ignore[attr-defined]
+                        if name in procs and name not in _saved_procs:
+                            _saved_procs[name] = procs[name]
+                            procs[name] = fn_nested
+                        elif name not in procs:
+                            procs[name] = fn_nested
+                            _new_names.append(name)
                     elif isinstance(stmt, PythonBlock):
                         # Execute user python code with env injection (no leakage back into marker env)
                         env_exec = _build_python_env(rt, kwargs)
@@ -451,17 +468,29 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             last_return = result
                         else:
                             last_return = _eval_python_inline(rt, stmt.code, kwargs)
-                # Enforce return type at end based on procedure annotation
-                anno = _resolve_pytype(p.return_type_annotation)
-                if anno is None:
-                    # default to str: non-string native returns are illegal
-                    if last_return is not None and not isinstance(last_return, str):
-                        raise TypeError("Return value must be str; annotate function to return non-string")
-                    return "" if last_return is None else str(last_return)
-                # annotated non-str: allow native returns; validate type
-                if not _is_value_compatible(anno, last_return):
-                    raise TypeError("Return value does not match annotated type")
-                return last_return
+                try:
+                    # Enforce return type at end based on procedure annotation
+                    anno = _resolve_pytype(p.return_type_annotation)
+                    if anno is None:
+                        # default to str: non-string native returns are illegal
+                        if last_return is not None and not isinstance(last_return, str):
+                            raise TypeError("Return value must be str; annotate function to return non-string")
+                        return "" if last_return is None else str(last_return)
+                    # annotated non-str: allow native returns; validate type
+                    if not _is_value_compatible(anno, last_return):
+                        raise TypeError("Return value does not match annotated type")
+                    return last_return
+                finally:
+                    # Restore scoped nested procedures
+                    procs = rt._procedures  # type: ignore[attr-defined]
+                    for n in _new_names:
+                        if n in procs and n not in _saved_procs:
+                            try:
+                                del procs[n]
+                            except Exception:
+                                pass
+                    for n, old in _saved_procs.items():
+                        procs[n] = old
 
             # Dynamically create a function with the exact parameter names
             param_list = ", ".join(p.params)
@@ -498,6 +527,8 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     if env:
                         for k, v in env.items():
                             kwargs[k] = v
+                elif isinstance(stmt, ProcDefStmt):
+                    rt.procedure(make_proc(stmt.proc))
                 elif isinstance(stmt, PythonBlock):
                     env_exec = _build_python_env(rt, kwargs)
                     try:

@@ -22,12 +22,6 @@
   ```
 
 
-@random_guess():
-  <`print("random_guess")`>
-  propose a simple polynomial in variable x (use ** for powers) as [guess: str]
-  = <guess>
-
-
 @plot_compare(expr: str):
   <`print("plot_compare")`>
   <`print(f"expr {expr}")`>
@@ -54,6 +48,7 @@
   plt.savefig('function_search.png')
   ```
   = done
+
 
 
 @propose_initial() -> list[str]:
@@ -118,4 +113,5 @@
   plot result for <g> (err==<`str(err)`>)
   = <plot_compare(`g`)>
 
+<`print(foo())`>
 = <start()>

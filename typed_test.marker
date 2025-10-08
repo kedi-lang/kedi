@@ -31,5 +31,11 @@
 <`print(category)`>
 [mylist: list[int]] = `[1,2,3]`
 
+@goo():
+  [x] = `2`
+  @bar():
+    = `x`
+  = <bar()>
 
+<`print(goo())`>
 = <foo( `[1,2,3]`  , apple is a [category])>

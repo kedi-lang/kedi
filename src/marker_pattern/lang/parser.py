@@ -23,6 +23,7 @@ from .ast import (
     OutputSegment,
     PythonExprSegment,
     PythonExprNativeSegment,
+    ProcDefStmt,
 )
 from .preprocess import preprocess_blocks, BEGIN, END
 
@@ -294,10 +295,12 @@ def parse_program(source: str) -> Program:
                 proc = proc_stack.pop()
                 if not proc_stack:
                     program.procedures.append(proc)
+                    current_body = None
                 else:
-                    # Nested blocks are not expected beyond procedure scope for now
-                    pass
-                current_body = proc_stack[-1].body if proc_stack else None
+                    # Nested procedure: append to parent's body as a ProcDefStmt
+                    parent = proc_stack[-1]
+                    parent.body.append(ProcDefStmt(proc=proc))
+                    current_body = parent.body
             i += 1
             continue
 
@@ -333,6 +336,7 @@ def parse_program(source: str) -> Program:
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Procedure name must be an identifier")
             proc = ProcedureDef(name=name, params=params, return_type_annotation=ret_anno, param_type_annotations=param_type_annos)
+            # Push this procedure (top-level or nested). Body will be collected until matching END.
             proc_stack.append(proc)
             current_body = proc.body
             i += 1

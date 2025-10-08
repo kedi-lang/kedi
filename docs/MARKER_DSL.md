@@ -32,7 +32,19 @@ python code...
 ```
 ````
 - The opening and closing fences must be the only content on their lines (no inline ```pythoncode```).
-- The code inherits the indentation level of its block; indentation is normalized (dedented) before execution.
+- The code must be indented to the same level as the surrounding Marker block. The code inherits the block's indentation and is normalized (dedented) relative to that level before execution.
+- Correct vs incorrect indentation inside a procedure:
+  ````
+  @foo():
+    = ```
+    print("correct")
+    ```
+
+  @bar():
+    = ```
+  print("incorrect")
+    ```
+  ````
 - Variables in scope and procedures are injected into the Python environment; changes to variables inside the block are reflected back.
 - Executed with full Python builtins, same as inline expressions.
 - Value-returning Python blocks:
