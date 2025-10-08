@@ -1,0 +1,121 @@
+@poly(x: float) -> float:
+  = `0.5*(x**3) - 2*(x**2) + x + 3`
+
+
+@evaluate(expr: str) -> float:
+  <`print("evaluate")`>
+  = ```
+  import numpy as np
+
+  # sample points in [-5, 5]
+  xs = [i/2 for i in range(-10, 11)]
+  errs = []
+  for xv in xs:
+    try:
+      y_true = poly(xv)
+      y_guess = eval(expr, {"__builtins__": {}}, {"x": xv, "np": np})
+      errs.append((y_true - y_guess)**2)
+    except Exception:
+      errs.append(1e6)
+
+  return sum(errs)/len(errs)
+  ```
+
+
+@random_guess():
+  <`print("random_guess")`>
+  propose a simple polynomial in variable x (use ** for powers) as [guess: str]
+  = <guess>
+
+
+@plot_compare(expr: str):
+  <`print("plot_compare")`>
+  <`print(f"expr {expr}")`>
+  ```
+  import numpy as np
+  import matplotlib.pyplot as plt
+
+  xs = [i/10 for i in range(-50, 51)]
+  y_true = [poly(xv) for xv in xs]
+  try:
+    x = np.array(xs)
+    y_guess = list(eval(expr, {"__builtins__": {}}, {"x": x, "np": np}))
+  except Exception:
+    y_guess = [0 for _ in xs]
+
+  plt.figure(figsize=(6,4))
+  plt.plot(xs, y_true, label='P(x) true')
+  plt.plot(xs, y_guess, label='guess', linestyle='--')
+  plt.legend()
+  plt.xlabel('x')
+  plt.ylabel('y')
+  plt.title('Function search: true vs guess')
+  plt.tight_layout()
+  plt.savefig('function_search.png')
+  ```
+  = done
+
+
+@propose_initial() -> list[str]:
+  <`print("propose_initial")`>
+  Propose 5 simple polynomial expressions in variable x (use ** for powers) as [candidates: list[str]]
+  = `candidates`
+
+
+@propose_mutations(best: str, reason: str) -> list[str]:
+  <`print("propose_mutations")`>
+  Given current best polynomial: <best> and reasoning: <reason> propose 5 mutated candidate polynomials (keep variable as x, use ** for powers) as [candidates: list[str]]
+  <`print(f"candidates {candidates}")`>
+  = `candidates`
+
+
+@analyze_results(cands: list[str], scores: list[float]) -> str:
+  <`print("analyze_results")`>
+  Given best (candidate,error): <`str(sorted(zip(cands, scores), key=lambda p: p[1])[:3])`> and worst: <`str(sorted(zip(cands, scores), key=lambda p: p[1], reverse=True)[:3])`> Return only [why: str] with exactly one short sentence (no lists, no brackets, no numbering).
+  = <why>
+
+
+@analyze_results_safe(cands: list[str], scores: list[float]) -> str:
+  <`print("analyze_results_safe")`>
+  [why: str] = ```
+  try:
+    return analyze_results(cands, scores)
+  except Exception:
+    pairs = list(zip(cands, scores))
+    if pairs:
+      best = min(pairs, key=lambda p: p[1])
+      worst = max(pairs, key=lambda p: p[1])
+      return f"Lower L2 is better; best {best[0]} (err={best[1]:.3f}), worst {worst[0]} (err={worst[1]:.3f})."
+    return "Lower L2 is better; insufficient data."
+  ```
+  <`print(f"why: {why}")`>
+  = <why>
+
+
+@evolve(rounds: int) -> str:
+  <`print("evolve")`>
+  = ```
+  best_expr = None
+  cands = propose_initial()
+  for _ in range(int(rounds)):
+    scores = [evaluate(c) for c in cands]
+    best_idx = min(range(len(scores)), key=lambda i: scores[i]) if scores else 0
+    best_expr = cands[best_idx] if cands else "x"
+    reason = analyze_results_safe(cands, scores)
+    cands = propose_mutations(best_expr, reason)
+  return best_expr if best_expr is not None else "x"
+  ```
+
+
+@start():
+  <`print("start")`>
+  [g: str] = ```
+  return evolve(2)
+  ```
+  [err: float] = ```
+  return evaluate(g)
+  ```
+  plot result for <g> (err==<`str(err)`>)
+  = <plot_compare(`g`)>
+
+= <start()>
