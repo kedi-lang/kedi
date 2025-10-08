@@ -390,10 +390,10 @@ def test_call_with_empty_literals_and_vars(monkeypatch: Any) -> None:
 
 
 def test_output_in_return_is_ignored_textually(monkeypatch: Any) -> None:
-    # Although odd, current implementation ignores output placeholders in returns when rendering
+    # Outputs in returns are now honored and filled before rendering
     src = "= prefix [x] suffix\n"
     out = _run(monkeypatch, src)
-    assert out == "prefix  suffix"
+    assert out.startswith("prefix ") and out.endswith(" suffix") and "x-value" in out
 
 
 def test_inline_python_imports_and_builtins(monkeypatch: Any) -> None:
