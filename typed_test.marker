@@ -26,6 +26,10 @@
 @foo(mylist: list[int], mystr: str):
     = <mylist><mystr>
 
-[a] = hello world
+[a] = apple is a [category]
+<`print(a)`>
+<`print(category)`>
 [mylist: list[int]] = `[1,2,3]`
-= <foo( `[1,2,3]`  , alpha <a> beta)>
+
+
+= <foo( `[1,2,3]`  , apple is a [category])>

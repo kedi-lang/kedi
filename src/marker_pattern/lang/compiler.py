@@ -35,8 +35,8 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
             eval_args.append(_eval_python_inline(rt, code, local_env))
         elif isinstance(a, LiteralArg) and hasattr(a, "__render_segments__"):
             segs: list[Segment] = getattr(a, "__render_segments__")  # type: ignore[attr-defined]
-            # Render segments to string using current env
-            _, rendered = _prepare_segments(rt, segs, local_env, context="return")
+            # Render segments to string using current env, honoring outputs
+            rendered = _render_expression(rt, segs, local_env, context="return")
             eval_args.append(rendered)
         elif isinstance(a, LiteralArg) and hasattr(a, "__call_segment__"):
             nested: CallSegment = getattr(a, "__call_segment__")  # type: ignore[attr-defined]
@@ -171,9 +171,72 @@ def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs:
         # Rendered string representation too
         return value, str(value)
 
-    # Fallback to rendered string
-    _, rendered = _prepare_segments(rt, segments, kwargs, context="assign")
+    # Fallback to rendered string (with outputs filled)
+    rendered = _render_expression(rt, segments, kwargs, context="assign")
     return None, rendered
+
+
+def _segments_have_outputs(segments: list[Segment]) -> bool:
+    for s in segments:
+        if isinstance(s, OutputSegment):
+            return True
+    return False
+
+
+def _stringify_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str) -> str:
+    parts: list[str] = []
+    for s in segments:
+        if isinstance(s, TextSegment):
+            parts.append(s.text)
+        elif isinstance(s, InputSegment):
+            # Strict resolution in non-template contexts
+            if s.name in kwargs:
+                parts.append(str(kwargs[s.name]))
+            else:
+                env = rt._current_env.get()  # type: ignore[attr-defined]
+                if env and s.name in env:
+                    parts.append(str(env[s.name]))
+                else:
+                    raise KeyError(f"Unknown variable: {s.name}")
+        elif isinstance(s, CallSegment):
+            value = _eval_call(rt, s, kwargs)
+            parts.append(str(value))
+        elif isinstance(s, OutputSegment):
+            # After rt.m(), outputs live in env/kwargs
+            if s.name in kwargs:
+                parts.append(str(kwargs[s.name]))
+            else:
+                env = rt._current_env.get()  # type: ignore[attr-defined]
+                if env and s.name in env:
+                    parts.append(str(env[s.name]))
+                else:
+                    parts.append("")
+        elif isinstance(s, PythonExprSegment):
+            value = _eval_python_inline(rt, s.code, kwargs)
+            parts.append(str(value))
+        elif isinstance(s, PythonExprNativeSegment):
+            value = _eval_python_inline(rt, s.code, kwargs)
+            parts.append(str(value))
+    return "".join(parts)
+
+
+def _render_expression(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str) -> str:
+    # Build expr for potential rt.m() and detect outputs
+    expr, _ = _prepare_segments(rt, segments, kwargs, context=context)
+    if _segments_have_outputs(segments):
+        # Ensure current env is set during m()
+        token = rt._current_env.set(kwargs)
+        try:
+            rt.m(expr)
+            # Sync kwargs with env
+            env = rt._current_env.get()  # type: ignore[attr-defined]
+            if env:
+                for k, v in env.items():
+                    kwargs[k] = v
+        finally:
+            rt._current_env.reset(token)
+    # Now stringify with outputs substituted
+    return _stringify_segments(rt, segments, kwargs, context=context)
 
 
 def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
@@ -288,7 +351,7 @@ def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
 
 def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
     def _fn(**kwargs: Any) -> Any:
-        _, rendered = _prepare_segments(rt, ret.segments, kwargs, context="return")
+        rendered = _render_expression(rt, ret.segments, kwargs, context="return")
         return rendered.strip()
 
     return _fn
@@ -492,6 +555,7 @@ def compile_program(prog: Program) -> MarkerRuntime:
                 if ("\n" in ret_stmt.code) or ret_stmt.code.strip().startswith("return"):
                     result = _execute_python_block(ret_stmt.code, rt, kwargs)
                     return "" if result is None else str(result)
+                # Inline python native return
                 value = _eval_python_inline(rt, ret_stmt.code, kwargs)
                 return "" if value is None else str(value)
 
