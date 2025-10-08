@@ -17,8 +17,9 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 ### Substitutions and Calls
 - `<name>` reads a variable by name.
 - `<name(args...)>` calls a procedure. Calls may be nested: `<outer(<inner(...)>)>`.
-- Inline Python expression: `<`code`>` executes a single-line Python expression and substitutes its string value.
-  - Example: `<x> + <y> is <`int(x)+int(y)`>`.
+- Inline Python expression: `<`code`>` executes a single-line Python expression.
+  - In template/return expressions, its value is converted to string and substituted into the output: `<x> + <y> is <`int(x)+int(y)`>`.
+  - In call argument lists, a single backtick expression used as the entire argument (see below) passes the native value as the argument.
   - Scope injection: All marker variables in scope and procedures are available as Python names and callables.
   - Only allowed inside input context `<...>`; not permitted in `[...]` outputs.
   - Full Python builtins are available; imports are permitted (e.g., `<`__import__('math').sqrt(16)`>`).
@@ -50,11 +51,26 @@ python code...
     ````
     The value of the last executed return in the block is converted to string for final output.
 
-- Inside call arg lists:
-  - Bare tokens are string literals (no quotes). Example: `<combine(x, <prep(y)>)>` → `combine("x", prep("y"))`.
-  - Variables or nested calls must be wrapped in `<...>`, e.g. `<combine(<x>, <prep(<y>)>)>` → `combine(x, prep(y))`.
-  - Multiple literal args separated by commas.
-  - Commas inside a single literal must be escaped by doubling: `,,`.
+### Procedure Call Arguments
+- Each argument is parsed as one of two forms:
+  1) Single backtick Python expression: `` `expr` ``
+     - The Python expression is evaluated and the native value is passed to the callee.
+     - Examples: `` `2` `` (int 2), `` `[1,2,3]` `` (list[int]), `` `int(x)+1` `` (int), `` `add(3, 4)` `` (uses a procedure callable in Python).
+  2) Rendered mini‑template string: any other text segment (may include `<var>`, nested `<call(...)>`, inline Python `<`...`>`, and escaped commas `,,`). The result is rendered to a string and passed as a `str`.
+     - Examples: `alpha`, `alpha <x> beta`, `<outer(<inner(y)>)>`, `count=<`len(items)`>`.
+
+- Commas separate arguments; escape commas within a single argument by doubling: `,,`.
+- Consequences:
+  - To pass native typed values into typed parameters, use the single‑backtick form per argument.
+  - Mixing text and substitutions in an argument creates a string argument.
+
+Examples:
+```
+@foo(nums: list[int], label: str):
+  = <`str(sum(nums))`>-<label>
+
+= <foo(` [1,2,3] `, total:<`3`>)>     # passes list[int] and string "total:3"
+```
 
 ### Outputs
 - `[name]` is an output placeholder that must be filled by the LLM on that line.
@@ -121,6 +137,29 @@ Semantics: `{foo("alpha, beta, gamma", bar(x))}    done` (ends trimmed only).
 
 
 ### Type Annotations
+#### Procedure parameter types
+- Syntax: in `@name(params):`, each parameter may annotate its type: `param: type`. Unannotated parameters default to `str`.
+- Supported types: `str`, `int`, `float`, `bool`, and `list[T]` (e.g., `list[int]`, `list[str]`). Invalid type names are rejected.
+- Enforcement at call time (no implicit conversions):
+  - The value supplied for each parameter must already be of the expected type.
+  - Use the single‑backtick argument form to pass native values (e.g., `` `2` ``, `` `[1,2]` ``). Any argument that is not exactly a single backtick expression is rendered to a string and thus only satisfies `str` parameters.
+  - Nested procedure calls used inside a backtick Python expression (e.g., `` `add(3, 4)` ``) pass the callee’s native return value if it has an annotated return type; otherwise the callee returns `str`.
+
+Examples:
+```
+@add(x: int, y: int):
+  = <`str(x + y)`>
+
+= <add(`2`, `3`)>             # OK → "5"
+= <add(2, 3)>                 # ERROR: unannotated literals are string args
+```
+
+```
+@wrap(xs: list[int]) -> list[int]:
+  = ` [v*2 for v in xs] `
+
+= <`str(len(wrap([1,2,3])))`>  # OK: backtick arg supplies native list to wrap
+```
 #### Procedure return types
 - Syntax: `@name(params) -> type:` to declare a non-string return type.
 - If omitted, return type defaults to `str`.

@@ -148,7 +148,62 @@ def _parse_angle(inner: str) -> Segment:
         name, args_src = inner.split("(", 1)
         name = name.strip()
         args_src = args_src[:-1]  # drop closing )
-        args = _parse_args(args_src)
+        # NEW ARG PARSING: split into raw argument elements
+        def _split_args(src: str) -> List[str]:
+            parts: List[str] = []
+            buf: List[str] = []
+            i = 0
+            in_backticks = False
+            depth_angle = 0
+            while i < len(src):
+                ch = src[i]
+                nxt = src[i + 1] if i + 1 < len(src) else ""
+                if ch + nxt == ",,":
+                    buf.append(",")
+                    i += 2
+                    continue
+                if ch == "`":
+                    in_backticks = not in_backticks
+                    buf.append(ch)
+                    i += 1
+                    continue
+                if not in_backticks and ch == "<":
+                    # copy entire <...> block verbatim
+                    end = _find_matching(src, i, "<", ">")
+                    buf.append(src[i : end + 1])
+                    i = end + 1
+                    continue
+                if not in_backticks and ch == "," and depth_angle == 0:
+                    parts.append("".join(buf).strip())
+                    buf.clear()
+                    i += 1
+                    continue
+                if not in_backticks and ch == "<":
+                    depth_angle += 1
+                elif not in_backticks and ch == ">" and depth_angle > 0:
+                    depth_angle -= 1
+                buf.append(ch)
+                i += 1
+            if buf:
+                parts.append("".join(buf).strip())
+            return [p for p in parts if p != ""]
+
+        raw_args = _split_args(args_src)
+        args: List[CallArg] = []
+        for raw in raw_args:
+            # Single backtick-native => native argument
+            raw_trim = raw.strip()
+            if raw_trim.startswith("`") and raw_trim.endswith("`") and raw_trim.count("`") == 2:
+                code = raw_trim[1:-1]
+                lit = LiteralArg("__NATIVE_BACKTICK__")
+                setattr(lit, "__native_backtick__", code)  # type: ignore[attr-defined]
+                args.append(lit)
+                continue
+            # Otherwise treat as string-rendered mini-template
+            segs = _parse_segments(raw)
+            lit = LiteralArg("__RENDER__")
+            setattr(lit, "__render_segments__", segs)  # type: ignore[attr-defined]
+            args.append(lit)
         return CallSegment(name=name, args=args)
     # variable
     name = inner.strip()

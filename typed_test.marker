@@ -23,8 +23,9 @@
 @process_question(question :str) -> str:
     = <question> PROCESSED
 
-= ```
-a = generate_questions(2)
-b = process_questions(a)
-print(b)
-```
+@foo(mylist: list[int], mystr: str):
+    = <mylist><mystr>
+
+[a] = hello world
+[mylist: list[int]] = `[1,2,3]`
+= <foo( `[1,2,3]`  , alpha <a> beta)>

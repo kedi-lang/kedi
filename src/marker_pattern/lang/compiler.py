@@ -30,7 +30,15 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
     # Evaluate args: literals stay as strings, variables read from env, nested calls evaluated recursively
     eval_args: List[Any] = []
     for a in seg.args:
-        if isinstance(a, LiteralArg) and hasattr(a, "__call_segment__"):
+        if isinstance(a, LiteralArg) and hasattr(a, "__native_backtick__"):
+            code = getattr(a, "__native_backtick__")  # type: ignore[attr-defined]
+            eval_args.append(_eval_python_inline(rt, code, local_env))
+        elif isinstance(a, LiteralArg) and hasattr(a, "__render_segments__"):
+            segs: list[Segment] = getattr(a, "__render_segments__")  # type: ignore[attr-defined]
+            # Render segments to string using current env
+            _, rendered = _prepare_segments(rt, segs, local_env, context="return")
+            eval_args.append(rendered)
+        elif isinstance(a, LiteralArg) and hasattr(a, "__call_segment__"):
             nested: CallSegment = getattr(a, "__call_segment__")  # type: ignore[attr-defined]
             eval_args.append(_eval_call(rt, nested, local_env))
         elif isinstance(a, LiteralArg) and hasattr(a, "__python_segment__"):

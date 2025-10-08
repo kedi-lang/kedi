@@ -269,7 +269,7 @@ def test_typed_params_basic_sum(monkeypatch: Any) -> None:
         (
             "@add(x: int, y: int):\n"
             "  = <`x + y`>\n\n"
-            "= <add(<`2`>, <`3`>)>\n"
+            "= <add(`2`, `3`)>\n"
         ),
     )
     assert out == "5"
@@ -339,7 +339,7 @@ def test_inline_python_as_call_arguments(monkeypatch: Any) -> None:
             "@concat(a: int,b: int):\n"
             "  = <a>+<b>\n\n"
             "@sum_and_concat(x,y):\n"
-            "  = <concat(<`int(x)+1`>, <`int(y)+2`>)>\n\n"
+            "  = <concat(`int(x)+1`, `int(y)+2`)>\n\n"
             "= <sum_and_concat(5, 7)>\n"
         ),
     )

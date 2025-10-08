@@ -141,8 +141,8 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "30",
     ),
     (
-        # Nested calls + inline python in args with typed params and int return
-        "@add(a: int, b: int) -> int:\n  = `int(a)+int(b)`\n\n@chain(x):\n  = <add(<`int(x)*2`>, <add(<`3`>, <`4`>)>)>\n\n= <chain(5)>\n",
+        # Nested value passed via single inline-python arg; nested call invoked inside python
+        "@add(a: int, b: int) -> int:\n  = `int(a)+int(b)`\n\n@chain(x):\n  = <add(`int(x)*2`, `add(3, 4)`) >\n\n= <chain(5)>\n",
         "17",
     ),
     (
@@ -438,7 +438,7 @@ def test_call_with_multiple_mixed_arguments(monkeypatch: Any) -> None:
     src = (
         "@f(a, b: int, c, d):\n  = <a>-<`str(b)`>-<c>-<d>\n\n"
         "@g(x,y,z,w):\n  = <x>-<y>-<z>-<w>\n\n"
-        "= <f(one, <`2`>, <g(three, four, five, six)>, <`'-'.join(['x','y'])`>)>\n"
+        "= <f(one, `2`, <g(three, four, five, six)>, `'-'.join(['x','y'])`)>\n"
     )
     out = _run(monkeypatch, src)
     assert out.startswith("one-2-") and out.endswith("-x-y")
