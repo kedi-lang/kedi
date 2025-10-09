@@ -1,12 +1,14 @@
+```
+import numpy as np
+import matplotlib.pyplot as plt
+```
+  
 @poly(x: float) -> float:
   = `0.5*(x**3) - 2*(x**2) + x + 3`
-
 
 @evaluate(expr: str) -> float:
   <`print("evaluate")`>
   = ```
-  import numpy as np
-
   # sample points in [-5, 5]
   xs = [i/2 for i in range(-10, 11)]
   errs = []
@@ -26,9 +28,6 @@
   <`print("plot_compare")`>
   <`print(f"expr {expr}")`>
   ```
-  import numpy as np
-  import matplotlib.pyplot as plt
-
   xs = [i/10 for i in range(-50, 51)]
   y_true = [poly(xv) for xv in xs]
   try:
@@ -57,14 +56,18 @@
 
 @propose_mutations(best: str, reason: str) -> list[str]:
   <`print("propose_mutations")`>
-  Given current best polynomial: <best> and reasoning: <reason> propose 10 mutated candidate polynomials (keep variable as x, use ** for powers) as [candidates: list[str]]
+  Given current best polynomial: <best> and reasoning: <reason> \
+  propose 10 mutated candidate polynomials (keep variable as x, use ** for powers) \
+  as [candidates: list[str]]
   <`print(f"candidates {candidates}")`>
   = `candidates`
 
 
 @analyze_results(cands: list[str], scores: list[float]) -> str:
   <`print("analyze_results")`>
-  Given best (candidate,error): <`str(sorted(zip(cands, scores), key=lambda p: p[1])[:3])`> and worst: <`str(sorted(zip(cands, scores), key=lambda p: p[1], reverse=True)[:3])`> Return only [why: str] with exactly one short sentence (no lists, no brackets, no numbering).
+  Given best (candidate,error): <`str(sorted(zip(cands, scores), key=lambda p: p[1])[:3])`> \
+  and worst: <`str(sorted(zip(cands, scores), key=lambda p: p[1], reverse=True)[:3])`> \
+  Return only [why: str] with exactly one short sentence (no lists, no brackets, no numbering).
   = <why>
 
 @analyze_results_safe(cands: list[str], scores: list[float]) -> str:
