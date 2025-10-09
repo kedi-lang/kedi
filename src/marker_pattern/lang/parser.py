@@ -38,6 +38,8 @@ def _unescape(text: str) -> str:
     text = text.replace("==", "=").replace("@@", "@")
     # ',,' is handled in arg parsing; keep here for plain text
     text = text.replace(",,", ",")
+    # backslash escape for literal '\\'
+    text = text.replace("\\\\", "\\")
     return text
 
 
@@ -56,7 +58,7 @@ def _parse_segments(body: str) -> List[Segment]:
         nxt = body[i + 1] if i + 1 < len(body) else ""
 
         # Handle escaped doubles in plain text
-        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@"):
+        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", "\\\\"):
             buf.append(ch)  # leave as doubled for _unescape to process
             buf.append(nxt)
             i += 2
@@ -108,6 +110,38 @@ def _parse_segments(body: str) -> List[Segment]:
     return segments
 
 
+def _merge_line_continuations(source: str) -> str:
+    raw = source.splitlines()
+    merged: List[str] = []
+    i = 0
+    while i < len(raw):
+        cur = raw[i]
+        # Detect unescaped trailing backslash for continuation
+        s = cur.rstrip()
+        if s.endswith("\\") and not s.endswith("\\\\"):
+            # remove backslash and any trailing spaces
+            current = s[:-1]
+            j = i + 1
+            # pull following lines while they also continue
+            while j < len(raw):
+                nxt = raw[j]
+                s2 = nxt.lstrip()
+                t = nxt.rstrip()
+                if t.endswith("\\") and not t.endswith("\\\\"):
+                    current = (current.rstrip() + " " + s2.rstrip()[:-1].lstrip())
+                    j += 1
+                    continue
+                # last line in the continuation
+                current = (current.rstrip() + " " + s2.lstrip())
+                break
+            merged.append(current)
+            i = j + 1
+            continue
+        merged.append(cur)
+        i += 1
+    return "\n".join(merged)
+
+
 def _find_matching(s: str, start: int, open_ch: str, close_ch: str) -> int:
     depth = 0
     i = start
@@ -124,7 +158,7 @@ def _find_matching(s: str, start: int, open_ch: str, close_ch: str) -> int:
 
         if not in_backticks:
             # Do not treat '[[', ']]' as escapes when matching brackets; they may be nested types like list[str]
-            if ch + nxt in ("<<", ">>", "==", "@@", ",,"):
+            if ch + nxt in ("<<", ">>", "==", "@@", ",,", "\\\\"):
                 i += 2
                 continue
             if ch == open_ch:
@@ -270,7 +304,9 @@ def _parse_args(src: str) -> List[CallArg]:
 
 
 def parse_program(source: str) -> Program:
-    pre = preprocess_blocks(source)
+    # Merge continuations before preprocessing so BEGIN/END markers aren't inserted mid-line
+    merged_src = _merge_line_continuations(source)
+    pre = preprocess_blocks(merged_src)
     lines = pre.splitlines()
 
     program = Program()

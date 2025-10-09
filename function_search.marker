@@ -21,7 +21,7 @@
   return sum(errs)/len(errs)
   ```
 
-
+#
 @plot_compare(expr: str):
   <`print("plot_compare")`>
   <`print(f"expr {expr}")`>
@@ -50,16 +50,14 @@
   = done
 
 
-
 @propose_initial() -> list[str]:
   <`print("propose_initial")`>
-  Propose 5 simple polynomial expressions in variable x (use ** for powers) as [candidates: list[str]]
+  Propose 10 simple polynomial expressions in variable x (use ** for powers) as [candidates: list[str]]
   = `candidates`
-
 
 @propose_mutations(best: str, reason: str) -> list[str]:
   <`print("propose_mutations")`>
-  Given current best polynomial: <best> and reasoning: <reason> propose 5 mutated candidate polynomials (keep variable as x, use ** for powers) as [candidates: list[str]]
+  Given current best polynomial: <best> and reasoning: <reason> propose 10 mutated candidate polynomials (keep variable as x, use ** for powers) as [candidates: list[str]]
   <`print(f"candidates {candidates}")`>
   = `candidates`
 
@@ -68,7 +66,6 @@
   <`print("analyze_results")`>
   Given best (candidate,error): <`str(sorted(zip(cands, scores), key=lambda p: p[1])[:3])`> and worst: <`str(sorted(zip(cands, scores), key=lambda p: p[1], reverse=True)[:3])`> Return only [why: str] with exactly one short sentence (no lists, no brackets, no numbering).
   = <why>
-
 
 @analyze_results_safe(cands: list[str], scores: list[float]) -> str:
   <`print("analyze_results_safe")`>
@@ -105,7 +102,7 @@
 @start():
   <`print("start")`>
   [g: str] = ```
-  return evolve(2)
+  return evolve(5)
   ```
   [err: float] = ```
   return evaluate(g)
@@ -113,5 +110,4 @@
   plot result for <g> (err==<`str(err)`>)
   = <plot_compare(`g`)>
 
-<`print(foo())`>
 = <start()>

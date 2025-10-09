@@ -15,6 +15,16 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 - Tabs count as width 4 for indentation comparison.
 
 ### Substitutions and Calls
+- Multiline marker strings:
+  - Any template or return line can be continued by ending the line with a single unescaped backslash `\`. Whitespace between the backslash and newline is ignored, and the following line's content is concatenated as if it were the same line.
+  - To render a literal backslash, escape it as `\\`.
+  - Example:
+    ````
+    = Start \
+      middle \
+      end
+    ````
+    renders as `Start middle end`.
 - `<name>` reads a variable by name.
 - `<name(args...)>` calls a procedure. Calls may be nested: `<outer(<inner(...)>)>`.
 - Inline Python expression: `<`code`>` executes a single-line Python expression.
@@ -120,7 +130,7 @@ Examples:
 
 ### Escaping Special Characters
 Double the character to treat it as a literal:
-- `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`.
+- `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`, `\\` → `\`.
 Backticks are only meaningful inside `<...>` for inline Python; no escaping is needed otherwise.
 
 ### Examples
