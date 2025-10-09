@@ -438,7 +438,15 @@ def parse_program(source: str) -> Program:
             stmt_block = PythonBlock(code="\n".join(dedented))
             if current_body is None:
                 # Top-level python block accumulates into program.toplevel_body
-                program.toplevel_body.append(stmt_block)
+                if (
+                    program.prelude is None
+                    and not program.toplevel_body
+                    and program.toplevel_return is None
+                    and not program.procedures
+                ):
+                    program.prelude = stmt_block.code
+                else:
+                    program.toplevel_body.append(stmt_block)
             else:
                 current_body.append(stmt_block)
             continue

@@ -246,6 +246,9 @@ def _render_expression(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[
 def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
     # Expose variables and procedures as callables
     env: dict[str, Any] = {}
+    prelude_env = getattr(rt, "_prelude_env", None)
+    if isinstance(prelude_env, dict):
+        env.update(prelude_env)
     # Inject global/top-level environment if present
     try:
         globals_env = getattr(rt, "_globals_env")  # type: ignore[attr-defined]
@@ -363,6 +366,16 @@ def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
 
 def compile_program(prog: Program) -> MarkerRuntime:
     rt = MarkerRuntime()
+
+    # Execute prelude if present
+    if prog.prelude is not None:
+        prelude_kwargs: dict[str, Any] = {}
+        env_exec = _build_python_env(rt, prelude_kwargs)
+        try:
+            exec(prog.prelude, env_exec, env_exec)
+        except Exception as e:
+            raise RuntimeError(f"Python prelude error: {e}") from e
+        setattr(rt, "_prelude_env", env_exec)
 
     # Register procedures
     for proc in prog.procedures:

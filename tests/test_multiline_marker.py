@@ -110,3 +110,71 @@ def test_misplaced_backslash_in_template_raises(monkeypatch: Any) -> None:
         parse_program(src)
 
 
+def test_prelude_allows_imports(monkeypatch: Any) -> None:
+    src = (
+        "```\n"
+        "import math\n"
+        "PI = math.pi\n"
+        "def triple(x):\n"
+        "    return x * 3\n"
+        "```\n"
+        "= <`round(triple(math.sqrt(4)) + PI, 2)`>\n"
+    )
+    out = _run(src)
+    assert out == "9.14"
+
+
+def test_prelude_overrides_global_for_python_blocks(monkeypatch: Any) -> None:
+    src = (
+        "```\n"
+        "GLOBAL = 10\n"
+        "def add_two(n):\n"
+        "    return n + 2\n"
+        "```\n"
+        "[x:int] = ```\n"
+        "return add_two(GLOBAL)\n"
+        "```\n"
+        "= <`x + GLOBAL`>\n"
+    )
+    out = _run(src)
+    assert out == "22"
+
+
+def test_only_first_block_is_prelude(monkeypatch: Any) -> None:
+    src = (
+        "```\n"
+        "VALUE = 5\n"
+        "```\n"
+        "```\n"
+        "VALUE = 7\n"
+        "```\n"
+        "= <`VALUE`>\n"
+    )
+    out = _run(src)
+    assert out == "5"
+
+def test_math_import_success(monkeypatch: Any) -> None:
+    src = (
+        "```\n"
+        "import math\n"
+        "```\n"
+        "= <`int(math.sqrt(9))`>\n"
+    )
+    out = _run(src)
+    assert out == "3"
+
+def test_math_import_failure(monkeypatch: Any) -> None:
+    src = (
+        "```\n"
+        "# dummy\n"
+        "```\n"
+
+        "```\n"
+        "import math\n"
+        "```\n"
+
+        "= <`math.sqrt(9)`>\n"
+    )
+    with pytest.raises(Exception):
+        _run(src)
+

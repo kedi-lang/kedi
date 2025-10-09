@@ -120,5 +120,6 @@ class Program:
     procedures: List[ProcedureDef] = field(default_factory=list)
     toplevel_return: Optional[Union[ReturnStmt, ReturnBlockStmt]] = None
     toplevel_body: List[Stmt] = field(default_factory=list)
+    prelude: Optional[str] = None
 
 

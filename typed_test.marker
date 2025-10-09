@@ -1,3 +1,8 @@
+
+```
+    import math
+```
+
 @generate_question():
     [question] is a challenging trivia question.
     <`print(f">{question}...")`>
@@ -32,10 +37,14 @@
 [mylist: list[int]] = `[1,2,3]`
 
 @goo():
-  [x] = `2`
-  @bar():
+  [x:int] = `2`
+  @bar() -> int:
     = `x`
   = <bar()>
 
+
+
+<`print(math.sqrt(9))`>
 <`print(goo())`>
+
 = <foo( `[1,2,3]`  , apple is a [category])>

@@ -57,6 +57,10 @@ python code...
   ````
 - Variables in scope and procedures are injected into the Python environment; changes to variables inside the block are reflected back.
 - Executed with full Python builtins, same as inline expressions.
+- **Prelude block (file-level python bootstrap):** If the very first meaningful content in the file is a multiline Python block, it is treated as a *prelude*.
+  - The prelude executes before any Marker code and its resulting Python globals (imports, functions, variables, etc.) are injected into every inline python expression and multiline python block that follows.
+  - Subsequent top-level python blocks execute normally and do not replace the prelude; only the first block gets this special treatment.
+  - Prelude code runs exactly once when the program is compiled; failures raise `RuntimeError("Python prelude error: ...")`.
 - Value-returning Python blocks:
   - Assignment with return value:
     ````
