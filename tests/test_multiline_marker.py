@@ -93,3 +93,20 @@ def test_multiline_with_nested_calls(monkeypatch: Any) -> None:
     assert out == "[ [ A and B    ] ]"
 
 
+def test_misplaced_backslash_in_return_raises(monkeypatch: Any) -> None:
+    # Single backslash in the middle of a line must be escaped as \\
+    with pytest.raises(Exception):
+        parse_program("= hello \\ world\n")
+
+
+def test_misplaced_backslash_in_template_raises(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n"
+        "  text \\ here\n"
+        "  = ok\n\n"
+        "= <p()>\n"
+    )
+    with pytest.raises(Exception):
+        parse_program(src)
+
+

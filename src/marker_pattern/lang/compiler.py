@@ -222,9 +222,10 @@ def _stringify_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict
 
 
 def _render_expression(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str) -> str:
-    # Build expr for potential rt.m() and detect outputs
-    expr, _ = _prepare_segments(rt, segments, kwargs, context=context)
+    # Only build and invoke rt.m() when outputs are present; otherwise avoid
+    # prematurely evaluating calls twice.
     if _segments_have_outputs(segments):
+        expr, _ = _prepare_segments(rt, segments, kwargs, context=context)
         # Ensure current env is set during m()
         token = rt._current_env.set(kwargs)
         try:
@@ -236,7 +237,9 @@ def _render_expression(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[
                     kwargs[k] = v
         finally:
             rt._current_env.reset(token)
-    # Now stringify with outputs substituted
+        # Now stringify with outputs substituted
+        return _stringify_segments(rt, segments, kwargs, context=context)
+    # No outputs: directly stringify (single evaluation of calls)
     return _stringify_segments(rt, segments, kwargs, context=context)
 
 
