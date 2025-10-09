@@ -64,6 +64,10 @@ def _parse_segments(body: str) -> List[Segment]:
             i += 2
             continue
 
+        # Misplaced single backslash in plain text (not end-of-line continuation)
+        if ch == "\\":
+            raise ValueError("Misplaced backslash: use '\\\\' for a literal backslash or place a single \\ only at end-of-line for continuation")
+
         if ch == "<":
             # substitution or call
             flush_text()

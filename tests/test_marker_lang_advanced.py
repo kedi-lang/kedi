@@ -167,7 +167,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Mix escaped specials in text and args
-        "@esc(s):\n  = <s>\n\n= Use <<tag>> and [[br]] and @@at and eq == and comma \\, plus <esc(a,,b)>\n",
+        "@esc(s):\n  = <s>\n\n= Use <<tag>> and [[br]] and @@at and eq == and comma \\\\, plus <esc(a,,b)>\n",
         "Use <tag> and [br] and @at and eq = and comma \\, plus a,b",
     ),
     (
