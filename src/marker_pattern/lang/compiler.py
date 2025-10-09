@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, List, Iterable
 
 from ..core import MarkerRuntime
 from .ast import (
@@ -345,6 +345,32 @@ def _execute_python_block(stmt_code: str, rt: MarkerRuntime, kwargs: dict[str, A
 
 
 # -----------------------------
+# Scope helpers
+# -----------------------------
+
+
+class _ScopedDict(dict[str, Any]):
+    def __init__(
+        self,
+        initial: dict[str, Any] | None = None,
+        *,
+        closure: dict[str, Any] | None = None,
+        readonly: Iterable[str] | None = None,
+    ) -> None:
+        super().__init__()
+        self._closure = closure
+        self._readonly = set(readonly or ())
+        if initial:
+            for k, v in initial.items():
+                super().__setitem__(k, v)
+
+    def __setitem__(self, key: str, value: Any) -> None:  # type: ignore[override]
+        super().__setitem__(key, value)
+        if self._closure is not None and key not in self._readonly:
+            self._closure[key] = value
+
+
+# -----------------------------
 # Compiler entry points
 # -----------------------------
 
@@ -381,6 +407,13 @@ def compile_program(prog: Program) -> MarkerRuntime:
     for proc in prog.procedures:
         def make_proc(p: ProcedureDef):  # capture
             def _body(**kwargs: Any) -> Any:
+                # Merge lexical environment if present
+                lexical_env = getattr(p, "lexical_env", None)
+                parent_env: dict[str, Any] = {}
+                if lexical_env:
+                    parent_env = dict(lexical_env)
+                    for k, v in parent_env.items():
+                        kwargs.setdefault(k, v)
                 # Enforce parameter type annotations if provided
                 if p.param_type_annotations is not None:
                     for param_name in p.params:
@@ -402,19 +435,23 @@ def compile_program(prog: Program) -> MarkerRuntime:
 
                 # Execute template lines in order; last return decides
                 last_return: Any = None
+                closure_env = _ScopedDict(kwargs, readonly=p.params, closure=parent_env)
                 for stmt in p.body:
                     if isinstance(stmt, TemplateLine):
-                        _compile_template_line(rt, stmt)(**kwargs)
+                        _compile_template_line(rt, stmt)(**closure_env)
                         # Sync kwargs with current runtime env (capturing outputs)
                         env = rt._current_env.get()  # type: ignore[attr-defined]
                         if env:
                             for k, v in env.items():
-                                kwargs[k] = v
+                                closure_env[k] = v
                     elif isinstance(stmt, ProcDefStmt):
                         # Nested procedure definitions already appear as ProcDefStmt in the collected body
-                        # Register with scoped behavior
+                        # Register with scoped behavior including lexical environment capture
                         name = stmt.proc.name
-                        fn_nested = make_proc(stmt.proc)
+                        child_proc = stmt.proc
+                        fn_nested = make_proc(child_proc)
+                        # Capture lexical environment for child
+                        child_proc.lexical_env = dict(closure_env)
                         procs = rt._procedures  # type: ignore[attr-defined]
                         if name in procs and name not in _saved_procs:
                             _saved_procs[name] = procs[name]
@@ -424,20 +461,20 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             _new_names.append(name)
                     elif isinstance(stmt, PythonBlock):
                         # Execute user python code with env injection (no leakage back into marker env)
-                        env_exec = _build_python_env(rt, kwargs)
+                        env_exec = _build_python_env(rt, closure_env)
                         try:
                             exec(stmt.code, env_exec, env_exec)
                         except Exception as e:
                             raise RuntimeError(f"Python block error: {e}") from e
                         # Sync back modifications to existing marker variables only
                         env_rt = rt._current_env.get()  # type: ignore[attr-defined]
-                        for var_name in list(kwargs.keys()):
+                        for var_name in list(closure_env.keys()):
                             if var_name in env_exec:
-                                kwargs[var_name] = env_exec[var_name]
+                                closure_env[var_name] = env_exec[var_name]
                                 if env_rt is not None:
                                     env_rt[var_name] = env_exec[var_name]
                     elif isinstance(stmt, AssignBlockStmt):
-                        result = _execute_python_block(stmt.code, rt, kwargs)
+                        result = _execute_python_block(stmt.code, rt, closure_env)
                         pytype = _resolve_pytype(stmt.type_annotation)
                         # Allow coercion when annotation exists
                         value = result
@@ -450,12 +487,12 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             # Without annotation only strings are allowed
                             if not isinstance(value, str):
                                 raise TypeError("Native non-string assignment requires explicit type annotation")
-                        kwargs[stmt.name] = value
+                        closure_env[stmt.name] = value
                         env = rt._current_env.get()  # type: ignore[attr-defined]
                         if env is not None:
                             env[stmt.name] = value
                     elif isinstance(stmt, AssignStmt):
-                        native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
+                        native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, closure_env)
                         is_backtick_native, is_angle_pure = _detect_rhs_kind(stmt.expr)
                         pytype = _resolve_pytype(stmt.type_annotation)
                         if native is not None:
@@ -471,19 +508,19 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             value = rendered.strip()
                             if pytype is not None:
                                 value = _coerce_value_to_type(value, pytype)
-                        kwargs[stmt.name] = value
+                        closure_env[stmt.name] = value
                         env = rt._current_env.get()  # type: ignore[attr-defined]
                         if env is not None:
                             env[stmt.name] = value
                     elif isinstance(stmt, ReturnStmt):
-                        last_return = _compile_return(rt, stmt)(**kwargs)
+                        last_return = _compile_return(rt, stmt)(**closure_env)
                     elif isinstance(stmt, ReturnBlockStmt):
                         # Execute wrapper if code is a block or contains 'return'; else eval inline expr
                         if ("\n" in stmt.code) or stmt.code.strip().startswith("return"):
-                            result = _execute_python_block(stmt.code, rt, kwargs)
+                            result = _execute_python_block(stmt.code, rt, closure_env)
                             last_return = result
                         else:
-                            last_return = _eval_python_inline(rt, stmt.code, kwargs)
+                            last_return = _eval_python_inline(rt, stmt.code, closure_env)
                 try:
                     # Enforce return type at end based on procedure annotation
                     anno = _resolve_pytype(p.return_type_annotation)

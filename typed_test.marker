@@ -1,6 +1,6 @@
 
 ```
-    import math
+import math # preamble test
 ```
 
 @generate_question():
@@ -41,7 +41,6 @@
   @bar() -> int:
     = `x`
   = <bar()>
-
 
 
 <`print(math.sqrt(9))`>

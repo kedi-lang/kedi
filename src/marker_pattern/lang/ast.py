@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 
 # Segments used inside template/return expressions
@@ -108,6 +108,7 @@ class ProcedureDef:
     return_type_annotation: Optional[str] = None
     # Optional mapping of parameter name to type annotation string
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
+    lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

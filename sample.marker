@@ -3,6 +3,7 @@
 # Marker Language Example
 # This file demonstrates various Marker DSL features
 
+
 @get_country(city):
   <city> is located in [country: str].
   = <country>

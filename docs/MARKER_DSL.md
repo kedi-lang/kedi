@@ -61,6 +61,9 @@ python code...
   - The prelude executes before any Marker code and its resulting Python globals (imports, functions, variables, etc.) are injected into every inline python expression and multiline python block that follows.
   - Subsequent top-level python blocks execute normally and do not replace the prelude; only the first block gets this special treatment.
   - Prelude code runs exactly once when the program is compiled; failures raise `RuntimeError("Python prelude error: ...")`.
+- **Lexical closures for nested procedures:** When you define a procedure inside another procedure, the inner procedure captures the outer procedure’s local environment (including variables assigned via `[name] = ...`, outputs, python blocks, and parameters).
+  - Captured values are shared by reference; if the outer scope mutates a variable before or after the nested definition, the inner procedure observes the latest value.
+  - Shadowing still applies: re-assigning the same name inside inner scopes hides the outer binding for that scope and deeper nested scopes.
 - Value-returning Python blocks:
   - Assignment with return value:
     ````

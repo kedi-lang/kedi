@@ -5,12 +5,11 @@ from typing import Any
 import pytest
 
 from marker_pattern.lang import parse_program, compile_program
-import marker_pattern.core as core
-
 
 def _run(src: str) -> str:
     rt = compile_program(parse_program(src))
     out = rt.run_main()
+
     assert isinstance(out, str)
     return out
 
@@ -81,33 +80,6 @@ def test_multiple_nested_procedures(monkeypatch: Any) -> None:
     out = _run(src)
     assert out == "AB"
 
-
-def test_inner_cannot_see_outer_param_without_pass(monkeypatch: Any) -> None:
-    # Inner references outer x without receiving it -> NameError in inline python
-    src = (
-        "@foo(x):\n"
-        "  @inner():\n"
-        "    = <`int(x)`>\n"
-        "  = <inner()>\n\n"
-        "= <foo(7)>\n"
-    )
-    with pytest.raises(Exception):
-        _run(src)
-
-
-def test_inner_cannot_see_outer_assigned_var(monkeypatch: Any) -> None:
-    src = (
-        "@foo():\n"
-        "  [y] = hello\n"
-        "  @inner():\n"
-        "    = <y>\n"
-        "  = <inner()>\n\n"
-        "= <foo()>\n"
-    )
-    with pytest.raises(Exception):
-        _run(src)
-
-
 def test_shadow_param_names(monkeypatch: Any) -> None:
     src = (
         "@foo(x):\n"
@@ -118,6 +90,31 @@ def test_shadow_param_names(monkeypatch: Any) -> None:
     )
     out = _run(src)
     assert out == "12"
+
+
+def test_outer_cannot_see_inner_param(monkeypatch: Any) -> None:
+    src = (
+        "@foo(x):\n"
+        "  @inner(n):\n"
+        "    = <n>\n"
+        "  = <`int(n)`>\n\n"
+        "= <foo(7)>\n"
+    )
+    with pytest.raises(Exception):
+        _run(src)
+
+
+def test_outer_cannot_see_inner_assignment(monkeypatch: Any) -> None:
+    src = (
+        "@foo():\n"
+        "  @inner():\n"
+        "    [secret] = value\n"
+        "    = <secret>\n"
+        "  = <`secret`>\n\n"
+        "= <foo()>\n"
+    )
+    with pytest.raises(Exception):
+        _run(src)
 
 
 def test_outer_cannot_use_inner_param_name(monkeypatch: Any) -> None:
@@ -144,5 +141,102 @@ def test_two_level_nested_params(monkeypatch: Any) -> None:
     )
     out = _run(src)
     assert out == "11"
+
+
+def test_lexical_closure_reads_assignment(monkeypatch: Any) -> None:
+    src = (
+        "@goo():\n"
+        "  [x:int] = `2`\n"
+        "  @bar() -> int:\n"
+        "    = `x`\n"
+        "  = <`bar()`>\n\n"
+        "= <goo()>\n"
+    )
+    out = _run(src)
+    assert out == "2"
+
+
+def test_lexical_closure_updates_outer_assignment(monkeypatch: Any) -> None:
+    src = (
+        "@outer():\n"
+        "  [val:int] = `1`\n"
+        "  @mid():\n"
+        "    [val] = bump\n"
+        "    @inner():\n"
+        "      = <val>\n"
+        "    = <inner()>\n"
+        "  = <mid()>\n\n"
+        "= <outer()>\n"
+    )
+    out = _run(src)
+    assert out == "bump"
+
+
+def test_closure_chain_across_multiple_levels(monkeypatch: Any) -> None:
+    src = (
+        "@top():\n"
+        "  [a:int] = `1`\n"
+        "  @level1():\n"
+        "    [b:int] = `a + 1`\n"
+        "    @level2():\n"
+        "      [c:int] = `b + 1`\n"
+        "      @level3():\n"
+        "        = <`c + a`>\n"
+        "      = <level3()>\n"
+        "    = <level2()>\n"
+        "  = <level1()>\n\n"
+        "= <top()>\n"
+    )
+    out = _run(src)
+    assert out == "4"
+
+
+def test_closure_preserves_runtime_inputs(monkeypatch: Any) -> None:
+    src = (
+        "@outer(base):\n"
+        "  @adder(delta):\n"
+        "    @inner():\n"
+        "      = <`int(base) + int(delta)`>\n"
+        "    = <inner()>\n"
+        "  = <adder(3)>\n\n"
+        "= <outer(7)>\n"
+    )
+    out = _run(src)
+    assert out == "10"
+
+
+def test_closure_allows_python_block_mutation(monkeypatch: Any) -> None:
+    src = (
+        "@outer():\n"
+        "  [counter:int] = `0`\n"
+        "  ```\n"
+        "  counter += 5\n"
+        "  ```\n"
+        "  @inner():\n"
+        "    ```\n"
+        "    counter += 7\n"
+        "    ```\n"
+        "    = <`counter`>\n"
+        "  = <inner()>\n\n"
+        "= <outer()>\n"
+    )
+    out = _run(src)
+    assert out == "12"
+
+
+def test_closure_shadowing_parameter(monkeypatch: Any) -> None:
+    src = (
+        "@outer(x:int):\n"
+        "  [x:int] = `x + 1`\n"
+        "  @inner():\n"
+        "    [x:int] = `x + 1`\n"
+        "    @deep():\n"
+        "      = <`x`>\n"
+        "    = <deep()>\n"
+        "  = <inner()>\n\n"
+        "= <outer(`1`)>\n"
+    )
+    out = _run(src)
+    assert out == "3"
 
 
