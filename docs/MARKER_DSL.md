@@ -9,6 +9,7 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 - Substitutions (R-values): `<var>` or `<call(args...)>`.
 - Outputs (L-values): `[name]` within a template line; signals the LLM must produce this value.
 - Return lines: `= expression` returns from the current procedure or top-level.
+- Custom types: `~TypeName(field[: type], ...)` declares a Pydantic-compatible model available to the current scope.
 - Comments:
   - Inline: everything after a single `#` on a line is ignored. Use `##` to escape a literal `#`.
   - Block: lines containing only `###` (after trimming whitespace) start and end block comments. `###` is not allowed anywhere else and must appear in matching pairs. Block comment delimiters may not appear inside python fences.
@@ -137,10 +138,31 @@ Examples:
 - The right-hand side is a full expression like a return: free text, `<var>`, `<call(...)>`, and inline Python `<`code`>` allowed.
 - The assigned variable is immediately usable in subsequent lines, LLM prompts, calls, and Python.
 - Angle-inline pure `<`...`>` on RHS is always treated as string during assignment; annotating it as non-`str` is illegal.
+- Custom types defined with `~TypeName` in scope may be used as annotations. Fields without a declared type default to `str`.
+
+### Custom Types (`~TypeName`)
+- Syntax: `~TypeName(field[: type], ...)`.
+- Fields must be identifiers; optional type annotations use the same syntax as other Marker types. Unannotated fields default to `str`.
+- The type definition creates a Pydantic `BaseModel` subclass injected into the current scope.
+- Type visibility follows Marker scoping rules:
+  - Top-level type definitions are visible everywhere.
+  - Types declared inside a procedure are visible within that procedure and nested procedures but do not leak outward.
+  - Types declared inside block comments are ignored.
+- The type environment is available to inline and multiline Python; Python blocks do not leak newly created types back into Marker (except for the prelude).
+- Literal `~` must be escaped as `~~` in Marker expressions.
+- Example:
+  ```
+  ~Person(age:int, name)
+  @show():
+    [p: Person] = ```
+    return Person(age=30, name='Ada')
+    ```
+    = <p.name>
+  ```
 
 ### Escaping Special Characters
 Double the character to treat it as a literal:
-- `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`, `\\` → `\`.
+- `<<` → `<`, `>>` → `>`, `[[` → `[`, `]]` → `]`, `==` → `=`, `@@` → `@`, `,,` → `,`, `\` → `\`, `##` → `#`, `~~` → `~`.
 Backticks are only meaningful inside `<...>` for inline Python; no escaping is needed otherwise.
 
 ### Examples

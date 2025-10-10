@@ -101,6 +101,18 @@ class AssignStmt(Stmt):
 
 
 @dataclass
+class TypeField:
+    name: str
+    type_annotation: Optional[str] = None
+
+
+@dataclass
+class TypeDef:
+    name: str
+    fields: List[TypeField]
+
+
+@dataclass
 class ProcedureDef:
     name: str
     params: List[str]
@@ -117,10 +129,16 @@ class ProcDefStmt(Stmt):
 
 
 @dataclass
+class TypeDefStmt(Stmt):
+    typedef: TypeDef
+
+
+@dataclass
 class Program:
     procedures: List[ProcedureDef] = field(default_factory=list)
     toplevel_return: Optional[Union[ReturnStmt, ReturnBlockStmt]] = None
     toplevel_body: List[Stmt] = field(default_factory=list)
     prelude: Optional[str] = None
+    type_defs: List[TypeDef] = field(default_factory=list)
 
 

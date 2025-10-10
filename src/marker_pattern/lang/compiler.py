@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import builtins
+import re
+import shlex
 from typing import Any, Iterable, List
 import typing
 import typing_extensions
+
+from pydantic import BaseModel
 
 from ..core import MarkerRuntime
 from .ast import (
@@ -26,6 +30,9 @@ from .ast import (
     PythonExprSegment,
     PythonExprNativeSegment,
     ProcDefStmt,
+    TypeDef,
+    TypeField,
+    TypeDefStmt,
 )
 from .types import TypeValidator
 
@@ -95,6 +102,11 @@ def _build_type_eval_env(rt: MarkerRuntime, local_env: dict[str, Any] | None) ->
                 except AttributeError:
                     continue
 
+    stack = getattr(rt, "_type_env_stack", None)
+    if isinstance(stack, list) and stack:
+        for layer in stack:
+            env.update(layer)
+
     prelude_env = getattr(rt, "_prelude_env", None)
     if isinstance(prelude_env, dict):
         env.update(prelude_env)
@@ -131,7 +143,72 @@ def _resolve_pytype(rt: MarkerRuntime, type_annotation: str | None, *, env: dict
             return None
 
 
+def _convert_basic_literal(raw: str, typ: Any) -> Any:
+    try:
+        if typ in (int, float, str):
+            return typ(raw)
+        if typ is bool:
+            if raw.lower() in {"true", "1", "yes"}:
+                return True
+            if raw.lower() in {"false", "0", "no"}:
+                return False
+            return bool(raw)
+    except Exception:
+        return raw
+    return raw
+
+
+def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | None:
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return None
+    data: dict[str, Any] = {}
+    fields = getattr(model, "model_fields", {})
+    for token in tokens:
+        if "=" not in token:
+            return None
+        name, raw = token.split("=", 1)
+        if name not in fields:
+            return None
+        field = fields[name]
+        annotation = getattr(field, "annotation", str) or str
+        data[name] = _convert_basic_literal(raw, annotation)
+    return data
+
+
+def _coerce_model_value(pytype: Any, value: Any) -> Any:
+    if not (isinstance(pytype, type) and issubclass(pytype, BaseModel)):
+        return value
+    if isinstance(value, pytype):
+        return value
+    if isinstance(value, dict):
+        try:
+            return pytype.model_validate(value)
+        except Exception:
+            return value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            if text.startswith("{") and text.endswith("}"):
+                return pytype.model_validate_json(text)
+        except Exception:
+            pass
+        parsed = _parse_model_repr(text, pytype)
+        if parsed is not None:
+            try:
+                return pytype.model_validate(parsed)
+            except Exception:
+                return value
+    return value
+
+
 def _coerce_value_to_type(value: Any, pytype: Any) -> Any:
+    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+        return _coerce_model_value(pytype, value)
     # Best-effort coercion for simple builtins and list[...] cases
     try:
         origin = getattr(pytype, "__origin__", None)
@@ -156,6 +233,8 @@ def _coerce_value_to_type(value: Any, pytype: Any) -> Any:
 
 
 def _is_value_compatible(pytype: Any, value: Any) -> bool:
+    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+        return isinstance(value, pytype)
     try:
         origin = getattr(pytype, "__origin__", None)
         args = getattr(pytype, "__args__", ())
@@ -314,6 +393,22 @@ def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str,
     # Then overlay with local_env (procedure/top-level kwargs passed in this call)
     env.update(local_env)
 
+    stack = getattr(rt, "_type_env_stack", None)
+    if isinstance(stack, list) and stack:
+        type_env: dict[str, Any] = {}
+        for layer in stack:
+            type_env.update(layer)
+        env.update(type_env)
+        for key, val in list(local_env.items()):
+            parts = key.split('.')
+            base = parts[0]
+            if base in type_env and isinstance(val, str):
+                model = type_env.get(base)
+                if isinstance(model, type) and issubclass(model, BaseModel):
+                    wrapped = _coerce_model_value(model, val)
+                    local_env[key] = wrapped
+                    env[key] = wrapped
+
     # Wrap registered procedures to be callable from inline Python
     for name, fn in rt._procedures.items():  # type: ignore[attr-defined]
         def make_wrapper(proc_name: str):
@@ -365,6 +460,11 @@ def _assign_value_from_native(native: Any, pytype: Any | None, *, strict_native:
     # strict_native=True for backtick-native; False for angle-inline pure
     if strict_native:
         # backtick-native strict typing
+        if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+            coerced = _coerce_model_value(pytype, native)
+            if not isinstance(coerced, pytype):
+                raise TypeError("Native assignment value does not match annotated type")
+            return coerced
         if isinstance(native, str):
             if pytype is not None and pytype is not str:
                 raise TypeError("Annotation type mismatch: got str value")
@@ -439,8 +539,70 @@ def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
     return _fn
 
 
+def _register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
+    annotations: dict[str, Any] = {}
+    namespace: dict[str, Any] = {}
+    for field in typedef.fields:
+        anno = field.type_annotation or "str"
+        resolved = _resolve_pytype(rt, anno, env=type_env)
+        if resolved is None:
+            raise TypeError(f"Unknown type annotation '{anno}' in type {typedef.name}")
+        annotations[field.name] = resolved
+    namespace['__annotations__'] = annotations
+
+    field_order = [field.name for field in typedef.fields]
+
+    def _make_init(order: List[str]):
+        def _init(self, *args: Any, **kwargs: Any) -> None:  # type: ignore[override]
+            if args:
+                if len(args) > len(order):
+                    raise TypeError(f"Too many positional arguments for {typedef.name}")
+                for name, value in zip(order, args):
+                    if name in kwargs:
+                        raise TypeError(f"Multiple values for field '{name}' in {typedef.name}")
+                    kwargs[name] = value
+            super(new_model, self).__init__(**kwargs)
+        return _init
+
+    new_model = type(typedef.name, (BaseModel,), namespace)
+    setattr(new_model, '__init__', _make_init(field_order))
+    model = new_model
+    type_env[typedef.name] = model
+    type_env[f"__{typedef.name}_fields__"] = annotations
+
+
+def _wrap_if_model(type_env: dict[str, Any], name: str, value: Any) -> Any:
+    key = f"__{name}_fields__"
+    if key in type_env and isinstance(value, str):
+        model = type_env.get(name)
+        if model is not None:
+            try:
+                return model.model_validate_json(value)
+            except Exception:
+                pass
+    return value
+
+
+def _push_type_env(rt: MarkerRuntime) -> dict[str, Any]:
+    stack = getattr(rt, "_type_env_stack", None)
+    if stack is None:
+        stack = []
+        setattr(rt, "_type_env_stack", stack)
+    new_env: dict[str, Any] = {}
+    stack.append(new_env)
+    return new_env
+
+
+def _pop_type_env(rt: MarkerRuntime) -> None:
+    stack = getattr(rt, "_type_env_stack", None)
+    if isinstance(stack, list) and stack:
+        stack.pop()
+
+
 def compile_program(prog: Program) -> MarkerRuntime:
     rt = MarkerRuntime()
+
+    setattr(rt, "_type_env_stack", [{}])
 
     # Execute prelude if present
     if prog.prelude is not None:
@@ -451,6 +613,9 @@ def compile_program(prog: Program) -> MarkerRuntime:
         except Exception as e:
             raise RuntimeError(f"Python prelude error: {e}") from e
         setattr(rt, "_prelude_env", env_exec)
+
+    for typedef in prog.type_defs:
+        _register_type(rt, typedef, getattr(rt, "_type_env_stack")[0])
 
     # Register procedures
     for proc in prog.procedures:
@@ -474,7 +639,8 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         # Retrieve provided value
                         if param_name not in kwargs:
                             raise TypeError(f"Missing parameter: {param_name}")
-                        provided = kwargs[param_name]
+                        provided = _coerce_model_value(pytype, kwargs[param_name]) if pytype is not None else kwargs[param_name]
+                        kwargs[param_name] = provided
                         # No conversions allowed: require exact type compatibility
                         if pytype is not None and not _is_value_compatible(pytype, provided):
                             raise TypeError(f"Parameter '{param_name}' does not match annotated type")
@@ -485,96 +651,105 @@ def compile_program(prog: Program) -> MarkerRuntime:
                 # Execute template lines in order; last return decides
                 last_return: Any = None
                 closure_env = _ScopedDict(kwargs, readonly=p.params, closure=parent_env)
-                for stmt in p.body:
-                    if isinstance(stmt, TemplateLine):
-                        _compile_template_line(rt, stmt)(**closure_env)
-                        # Sync kwargs with current runtime env (capturing outputs)
-                        env = rt._current_env.get()  # type: ignore[attr-defined]
-                        if env:
-                            for k, v in env.items():
-                                closure_env[k] = v
-                    elif isinstance(stmt, ProcDefStmt):
-                        # Nested procedure definitions already appear as ProcDefStmt in the collected body
-                        # Register with scoped behavior including lexical environment capture
-                        name = stmt.proc.name
-                        child_proc = stmt.proc
-                        fn_nested = make_proc(child_proc)
-                        # Capture lexical environment for child
-                        child_proc.lexical_env = dict(closure_env)
-                        procs = rt._procedures  # type: ignore[attr-defined]
-                        if name in procs and name not in _saved_procs:
-                            _saved_procs[name] = procs[name]
-                            procs[name] = fn_nested
-                        elif name not in procs:
-                            procs[name] = fn_nested
-                            _new_names.append(name)
-                    elif isinstance(stmt, PythonBlock):
-                        # Execute user python code with env injection (no leakage back into marker env)
-                        env_exec = _build_python_env(rt, closure_env)
-                        try:
-                            exec(stmt.code, env_exec, env_exec)
-                        except Exception as e:
-                            raise RuntimeError(f"Python block error: {e}") from e
-                        # Sync back modifications to existing marker variables only
-                        env_rt = rt._current_env.get()  # type: ignore[attr-defined]
-                        for var_name in list(closure_env.keys()):
-                            if var_name in env_exec:
-                                closure_env[var_name] = env_exec[var_name]
-                                if env_rt is not None:
-                                    env_rt[var_name] = env_exec[var_name]
-                    elif isinstance(stmt, AssignBlockStmt):
-                        result = _execute_python_block(stmt.code, rt, closure_env)
-                        pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
-                        # Allow coercion when annotation exists
-                        value = result
-                        if pytype is not None:
-                            # Coerce simple types and list[...] when possible
-                            value = _coerce_value_to_type(value, pytype)
-                            if not _is_value_compatible(pytype, value):
-                                raise TypeError("Native assignment value does not match annotated type")
-                        else:
-                            # Without annotation only strings are allowed
-                            if not isinstance(value, str):
-                                raise TypeError("Native non-string assignment requires explicit type annotation")
-                        closure_env[stmt.name] = value
-                        env = rt._current_env.get()  # type: ignore[attr-defined]
-                        if env is not None:
-                            env[stmt.name] = value
-                    elif isinstance(stmt, AssignStmt):
-                        native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, closure_env)
-                        is_backtick_native, is_angle_pure, is_call_only = _detect_rhs_kind(stmt.expr)
-                        pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
-                        if native is not None:
-                            if is_backtick_native:
-                                value = _assign_value_from_native(native, pytype, strict_native=True)
-                            elif is_angle_pure:
-                                value = _assign_value_from_native(native, pytype, strict_native=False)
-                            elif is_call_only:
-                                value = native
-                            else:
-                                value = rendered.strip()
-                                if pytype is not None:
-                                    value = _coerce_value_to_type(value, pytype)
-                        else:
-                            if is_call_only:
-                                value = native
-                            else:
-                                value = rendered.strip()
-                                if pytype is not None:
-                                    value = _coerce_value_to_type(value, pytype)
-                        closure_env[stmt.name] = value
-                        env = rt._current_env.get()  # type: ignore[attr-defined]
-                        if env is not None:
-                            env[stmt.name] = value
-                    elif isinstance(stmt, ReturnStmt):
-                        last_return = _compile_return(rt, stmt)(**closure_env)
-                    elif isinstance(stmt, ReturnBlockStmt):
-                        # Execute wrapper if code is a block or contains 'return'; else eval inline expr
-                        if ("\n" in stmt.code) or stmt.code.strip().startswith("return"):
+                type_scope = _push_type_env(rt)
+                parent_type_env = getattr(rt, "_type_env_stack", None)
+                if isinstance(parent_type_env, list) and len(parent_type_env) >= 2:
+                    type_scope.update(parent_type_env[-2])
+                try:
+                    for stmt in p.body:
+                        if isinstance(stmt, TemplateLine):
+                            _compile_template_line(rt, stmt)(**closure_env)
+                            # Sync kwargs with current runtime env (capturing outputs)
+                            env = rt._current_env.get()  # type: ignore[attr-defined]
+                            if env:
+                                for k, v in env.items():
+                                    closure_env[k] = v
+                        elif isinstance(stmt, ProcDefStmt):
+                            # Nested procedure definitions already appear as ProcDefStmt in the collected body
+                            # Register with scoped behavior including lexical environment capture
+                            name = stmt.proc.name
+                            child_proc = stmt.proc
+                            fn_nested = make_proc(child_proc)
+                            # Capture lexical environment for child
+                            child_proc.lexical_env = dict(closure_env)
+                            procs = rt._procedures  # type: ignore[attr-defined]
+                            if name in procs and name not in _saved_procs:
+                                _saved_procs[name] = procs[name]
+                                procs[name] = fn_nested
+                            elif name not in procs:
+                                procs[name] = fn_nested
+                                _new_names.append(name)
+                        elif isinstance(stmt, TypeDefStmt):
+                            _register_type(rt, stmt.typedef, type_scope)
+                        elif isinstance(stmt, PythonBlock):
+                            # Execute user python code with env injection (no leakage back into marker env)
+                            env_exec = _build_python_env(rt, closure_env)
+                            try:
+                                exec(stmt.code, env_exec, env_exec)
+                            except Exception as e:
+                                raise RuntimeError(f"Python block error: {e}") from e
+                            # Sync back modifications to existing marker variables only
+                            env_rt = rt._current_env.get()  # type: ignore[attr-defined]
+                            for var_name in list(closure_env.keys()):
+                                if var_name in env_exec:
+                                    closure_env[var_name] = env_exec[var_name]
+                                    if env_rt is not None:
+                                        env_rt[var_name] = env_exec[var_name]
+                        elif isinstance(stmt, AssignBlockStmt):
                             result = _execute_python_block(stmt.code, rt, closure_env)
-                            last_return = result
-                        else:
-                            last_return = _eval_python_inline(rt, stmt.code, closure_env)
+                            pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
+                            # Allow coercion when annotation exists
+                            value = result
+                            if pytype is not None:
+                                # Coerce simple types and list[...] when possible
+                                value = _coerce_value_to_type(value, pytype)
+                                if not _is_value_compatible(pytype, value):
+                                    raise TypeError("Native assignment value does not match annotated type")
+                            else:
+                                # Without annotation only strings are allowed
+                                if not isinstance(value, str):
+                                    raise TypeError("Native non-string assignment requires explicit type annotation")
+                            closure_env[stmt.name] = value
+                            env = rt._current_env.get()  # type: ignore[attr-defined]
+                            if env is not None:
+                                env[stmt.name] = value
+                        elif isinstance(stmt, AssignStmt):
+                            native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, closure_env)
+                            is_backtick_native, is_angle_pure, is_call_only = _detect_rhs_kind(stmt.expr)
+                            pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
+                            if native is not None:
+                                if is_backtick_native:
+                                    value = _assign_value_from_native(native, pytype, strict_native=True)
+                                elif is_angle_pure:
+                                    value = _assign_value_from_native(native, pytype, strict_native=False)
+                                elif is_call_only:
+                                    value = native
+                                else:
+                                    value = rendered.strip()
+                                    if pytype is not None:
+                                        value = _coerce_value_to_type(value, pytype)
+                            else:
+                                if is_call_only:
+                                    value = native
+                                else:
+                                    value = rendered.strip()
+                                    if pytype is not None:
+                                        value = _coerce_value_to_type(value, pytype)
+                            closure_env[stmt.name] = value
+                            env = rt._current_env.get()  # type: ignore[attr-defined]
+                            if env is not None:
+                                env[stmt.name] = value
+                        elif isinstance(stmt, ReturnStmt):
+                            last_return = _compile_return(rt, stmt)(**closure_env)
+                        elif isinstance(stmt, ReturnBlockStmt):
+                            # Execute wrapper if code is a block or contains 'return'; else eval inline expr
+                            if ("\n" in stmt.code) or stmt.code.strip().startswith("return"):
+                                result = _execute_python_block(stmt.code, rt, closure_env)
+                                last_return = result
+                            else:
+                                last_return = _eval_python_inline(rt, stmt.code, closure_env)
+                finally:
+                    _pop_type_env(rt)
                 try:
                     # Enforce return type at end based on procedure annotation
                     anno = _resolve_pytype(rt, p.return_type_annotation, env=closure_env)

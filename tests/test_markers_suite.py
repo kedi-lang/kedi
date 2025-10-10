@@ -7,7 +7,7 @@ from typing import Iterable
 import pytest
 
 from marker_pattern.lang import parse_program, compile_program
-from utils_llm import llm_retry
+from tests.utils_llm import llm_retry
 
 
 def _iter_marker_files() -> Iterable[Path]:

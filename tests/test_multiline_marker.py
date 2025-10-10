@@ -162,7 +162,7 @@ def test_hash_inside_block_comment_raises(monkeypatch: Any) -> None:
         parse_program(src)
 
 
-def test_triple_hash_inside_python_block_raises(monkeypatch: Any) -> None:
+def test_triple_hash_inside_python_block_allowed(monkeypatch: Any) -> None:
     src = (
         "@p():\n"
         "  = ```\n"
@@ -171,8 +171,8 @@ def test_triple_hash_inside_python_block_raises(monkeypatch: Any) -> None:
         "  ```\n\n"
         "= <p()>\n"
     )
-    with pytest.raises(Exception):
-        parse_program(src)
+    out = _run(src)
+    assert out == ""
 
 
 def test_comment_with_whitespace_prefix(monkeypatch: Any) -> None:

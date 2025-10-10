@@ -1,15 +1,7 @@
-```
-class City:
-    def __init__(self, name: str, history: str, economy: str, cuisine: str):
-        self.name = name
-        self.history = history
-        self.economy = economy
-        self.cuisine = cuisine
-```
+~City(name, history, economy, cuisine)
 
 @get_city_info(city) -> City:
     Paragraphs [history], [economy], and [cuisine] describe <city> in different aspects.
-    
     = `City(city, history, economy, cuisine)`
 
 @get_cities_in(country) -> list[str]:
@@ -28,7 +20,7 @@ class City:
     ```
     = <markdown>
 
-[country] = Turkey
+[country] = Singapore
 [cities_info : list[City]] = `[get_city_info(city) for city in get_cities_in(country)]`
 [markdown] = `consolidate_city_info_as_markdown(cities_info, country)`
 

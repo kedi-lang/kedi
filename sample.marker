@@ -15,14 +15,19 @@ Some marker string
 
 # Procedure using inline Python
 @translate_greeting(language: str):
-  'Hello' in <language> is [greeting: str]
+  'Hello' in <language> is [greeting: str] #sdf
   <`print(f"Translating to {language}...")`>
-  = <greeting>
+  = <greeting> # sdjkhbvkdfsv
+  
+###
+dfkvsjnlkjnsdfv
+sdfv
+###
 
 # Procedure with assignment
 @analyze_city(city: str):
-  [country: str] = <get_country(<city>)>
-  [language: str] = <get_language(<country>)>
+  [country: str] = <get_country(<city>)> #klfdjvnkjsdfv
+  [language: str] = <get_language(<country>)> # dfkjvbdsfv
   = City: <city>, Country: <country>, Language: <language>
 
 # Procedure with Python block
@@ -51,7 +56,33 @@ Some marker string
   - Is capital: [is_capital: bool]
   - Famous landmarks: [landmarks: list[str]]
   = City <city> has <population> people in <area> km²
- 
+
+###
+COMMENT
+COMMENT
+###
+
+@foo(a: int, b: int):
+  = <`a + b`>
+
+= <foo(1, 2)>
+
+~Person(a, b:int, c)
+
+[a:int] Marker string starts with output field
+
+# COMMENT
+@foo(): # COMMENT
+  @bar():
+    # COMMENT
+    Marker text <some_in> # COMMENT
+    Marker text [some_out: int] Text # COMMENT
+    [a:int] Marker string starts with output field
+    <a> Marker string that starts with a substitution
+    Normal marker string
+    = <`'bar'`>
+    # COMMENT
+  = <`'foo'`> # COMMENT
 
 @show_escapes():
   Use <<angle brackets>> [x: int] [[unescaped]] @@at symbol and == equals 
@@ -86,4 +117,4 @@ pi_approx = math.pi
 [y] = `a*2`
 
 # Top-level execution with nested calls
-= <translate_greeting(<get_language(<get_country(Paris, <a>, `x*2`)>)>)>
+= <translate_greeting(<get_language(<get_country(Paris, <a>, `x*2`)>)>)> # fdskvjhbsdfv

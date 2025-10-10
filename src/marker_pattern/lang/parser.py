@@ -24,11 +24,14 @@ from .ast import (
     PythonExprSegment,
     PythonExprNativeSegment,
     ProcDefStmt,
+    TypeDef,
+    TypeField,
+    TypeDefStmt,
 )
 from .preprocess import preprocess_blocks, BEGIN, END
 
 
-SPECIALS = {"<", ">", "[", "]", "=", "@", ","}
+SPECIALS = {"<", ">", "[", "]", "=", "@", ",", "~"}
 
 
 def _unescape(text: str) -> str:
@@ -37,6 +40,7 @@ def _unescape(text: str) -> str:
     text = text.replace("[[", "[").replace("]]", "]")
     text = text.replace("==", "=").replace("@@", "@")
     text = text.replace("##", "#")
+    text = text.replace("~~", "~")
     # ',,' is handled in arg parsing; keep here for plain text
     text = text.replace(",,", ",")
     # backslash escape for literal '\\'
@@ -47,36 +51,33 @@ def _unescape(text: str) -> str:
 def _strip_comments(source: str) -> str:
     lines = source.splitlines()
     result: List[str] = []
-    in_block = False
+    block_stack: List[str] = []
     in_python = False
 
     for idx, line in enumerate(lines, start=1):
         stripped = line.strip()
 
-        if stripped == "```":
-            if in_block:
-                raise ValueError("Block comment cannot include python fence")
+        if stripped.endswith("```"):
             result.append(line)
             in_python = not in_python
             continue
 
         if in_python:
-            if "###" in stripped:
-                raise ValueError("'###' is not allowed inside python blocks")
             result.append(line)
             continue
 
-        if in_block:
-            if stripped == "###":
-                in_block = False
-                continue
+        if stripped == "###":
+            if block_stack and block_stack[-1] == "###":
+                block_stack.pop()
+            else:
+                block_stack.append("###")
+            continue
+
+        if block_stack:
             if "###" in stripped:
                 raise ValueError("Invalid use of '###' inside block comment")
             continue
 
-        if stripped == "###":
-            in_block = True
-            continue
         if "###" in stripped:
             raise ValueError("'###' must occupy an entire line for block comments")
 
@@ -91,14 +92,107 @@ def _strip_comments(source: str) -> str:
                     i += 2
                     continue
                 break
+            if ch == "~":
+                nxt = line[i + 1] if i + 1 < len(line) else ""
+                if nxt == "~":
+                    processed.append("~")
+                    i += 2
+                    continue
+                if line[:i].strip() == "" and line[i:].lstrip().startswith("~"):
+                    processed.append(ch)
+                    i += 1
+                    continue
+                raise ValueError("Literal '~' must be escaped as '~~' or start a type definition")
             processed.append(ch)
             i += 1
         result.append("".join(processed))
 
-    if in_block:
+    if block_stack:
         raise ValueError("Unterminated block comment (missing closing '###')")
 
     return "\n".join(result)
+
+
+def _split_type_fields(src: str) -> List[str]:
+    fields: List[str] = []
+    buf: List[str] = []
+    depth_paren = depth_bracket = depth_brace = 0
+    in_string: str | None = None
+    i = 0
+    while i < len(src):
+        ch = src[i]
+        if ch in ('"', "'"):
+            if in_string == ch:
+                in_string = None
+            elif in_string is None:
+                in_string = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if in_string is not None:
+            buf.append(ch)
+            i += 1
+            continue
+        if ch == '(':
+            depth_paren += 1
+        elif ch == ')':
+            depth_paren = max(0, depth_paren - 1)
+        elif ch == '[':
+            depth_bracket += 1
+        elif ch == ']':
+            depth_bracket = max(0, depth_bracket - 1)
+        elif ch == '{':
+            depth_brace += 1
+        elif ch == '}':
+            depth_brace = max(0, depth_brace - 1)
+        if ch == ',' and depth_paren == depth_bracket == depth_brace == 0:
+            field = "".join(buf).strip()
+            if field == "":
+                raise ValueError("Empty field in type definition")
+            fields.append(field)
+            buf.clear()
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    if buf:
+        field = "".join(buf).strip()
+        if field == "":
+            raise ValueError("Empty field in type definition")
+        fields.append(field)
+    return fields
+
+
+def _parse_type_definition(line: str) -> TypeDef:
+    if not re.match(r"^~[A-Za-z_][A-Za-z0-9_]*\(.*\)$", line):
+        raise ValueError("Type definition must follow syntax ~Name(field, ...)")
+    name_part, rest = line[1:].split("(", 1)
+    name = name_part.strip()
+    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+        raise ValueError("Type name must be an identifier")
+    if not rest.endswith(")"):
+        raise ValueError("Type definition must end with ')'")
+    fields_src = rest[:-1].strip()
+    fields: List[TypeField] = []
+    seen: set[str] = set()
+    if fields_src:
+        for raw in _split_type_fields(fields_src):
+            if ":" in raw:
+                fname_part, ftype_part = raw.split(":", 1)
+                fname = fname_part.strip()
+                ftype = ftype_part.strip()
+                if ftype == "":
+                    raise ValueError("Field type annotation cannot be empty")
+            else:
+                fname = raw.strip()
+                ftype = None
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", fname):
+                raise ValueError("Field name must be an identifier")
+            if fname in seen:
+                raise ValueError(f"Duplicate field '{fname}' in type definition")
+            seen.add(fname)
+            fields.append(TypeField(name=fname, type_annotation=ftype))
+    return TypeDef(name=name, fields=fields)
 
 
 def _parse_segments(body: str) -> List[Segment]:
@@ -116,7 +210,7 @@ def _parse_segments(body: str) -> List[Segment]:
         nxt = body[i + 1] if i + 1 < len(body) else ""
 
         # Handle escaped doubles in plain text
-        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", "\\\\"):
+        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", "\\\\", "~~"):
             buf.append(ch)  # leave as doubled for _unescape to process
             buf.append(nxt)
             i += 2
@@ -438,6 +532,15 @@ def parse_program(source: str) -> Program:
             # Push this procedure (top-level or nested). Body will be collected until matching END.
             proc_stack.append(proc)
             current_body = proc.body
+            i += 1
+            continue
+
+        if stripped.startswith("~"):
+            typedef = _parse_type_definition(stripped)
+            if current_body is None:
+                program.type_defs.append(typedef)
+            else:
+                current_body.append(TypeDefStmt(typedef=typedef))
             i += 1
             continue
 
