@@ -155,3 +155,27 @@ def test_assign_block_type_coercion(monkeypatch: Any) -> None:
     )
     out = _run(src)
     assert out == "10"
+
+
+def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
+    src = (
+        "[seed] = outer\n"
+        "@inner():\n"
+        "  = <seed>\n\n"
+        "@outer():\n"
+        "  = <inner()>\n\n"
+        "= <outer()>\n"
+    )
+    out = _run(src)
+    assert out == "outer"
+
+
+def test_inline_substitution_reads_globals(monkeypatch: Any) -> None:
+    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
+    src = (
+        "[x] = value\n"
+        "= <x>\n"
+    )
+    out = _run(src)
+    assert out == "value"

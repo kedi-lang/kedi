@@ -36,11 +36,69 @@ def _unescape(text: str) -> str:
     text = text.replace("<<", "<").replace(">>", ">")
     text = text.replace("[[", "[").replace("]]", "]")
     text = text.replace("==", "=").replace("@@", "@")
+    text = text.replace("##", "#")
     # ',,' is handled in arg parsing; keep here for plain text
     text = text.replace(",,", ",")
     # backslash escape for literal '\\'
     text = text.replace("\\\\", "\\")
     return text
+
+
+def _strip_comments(source: str) -> str:
+    lines = source.splitlines()
+    result: List[str] = []
+    in_block = False
+    in_python = False
+
+    for idx, line in enumerate(lines, start=1):
+        stripped = line.strip()
+
+        if stripped == "```":
+            if in_block:
+                raise ValueError("Block comment cannot include python fence")
+            result.append(line)
+            in_python = not in_python
+            continue
+
+        if in_python:
+            if "###" in stripped:
+                raise ValueError("'###' is not allowed inside python blocks")
+            result.append(line)
+            continue
+
+        if in_block:
+            if stripped == "###":
+                in_block = False
+                continue
+            if "###" in stripped:
+                raise ValueError("Invalid use of '###' inside block comment")
+            continue
+
+        if stripped == "###":
+            in_block = True
+            continue
+        if "###" in stripped:
+            raise ValueError("'###' must occupy an entire line for block comments")
+
+        processed: List[str] = []
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if ch == "#":
+                nxt = line[i + 1] if i + 1 < len(line) else ""
+                if nxt == "#":
+                    processed.append("#")
+                    i += 2
+                    continue
+                break
+            processed.append(ch)
+            i += 1
+        result.append("".join(processed))
+
+    if in_block:
+        raise ValueError("Unterminated block comment (missing closing '###')")
+
+    return "\n".join(result)
 
 
 def _parse_segments(body: str) -> List[Segment]:
@@ -308,8 +366,9 @@ def _parse_args(src: str) -> List[CallArg]:
 
 
 def parse_program(source: str) -> Program:
+    source_no_comments = _strip_comments(source)
     # Merge continuations before preprocessing so BEGIN/END markers aren't inserted mid-line
-    merged_src = _merge_line_continuations(source)
+    merged_src = _merge_line_continuations(source_no_comments)
     pre = preprocess_blocks(merged_src)
     lines = pre.splitlines()
 

@@ -30,6 +30,24 @@ from .ast import (
 from .types import TypeValidator
 
 
+def _lookup_env_value(rt: MarkerRuntime, name: str, local_env: dict[str, Any]) -> Any:
+    if name in local_env:
+        return local_env[name]
+    try:
+        current_env = rt._current_env.get()  # type: ignore[attr-defined]
+    except Exception:
+        current_env = None
+    if isinstance(current_env, dict) and name in current_env:
+        return current_env[name]
+    globals_env = getattr(rt, "_globals_env", None)
+    if isinstance(globals_env, dict) and name in globals_env:
+        return globals_env[name]
+    prelude_env = getattr(rt, "_prelude_env", None)
+    if isinstance(prelude_env, dict) and name in prelude_env:
+        return prelude_env[name]
+    raise KeyError(f"Unknown variable: {name}")
+
+
 def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
     # Evaluate args: literals stay as strings, variables read from env, nested calls evaluated recursively
     eval_args: List[Any] = []
@@ -51,15 +69,7 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
         elif isinstance(a, LiteralArg):
             eval_args.append(a.value)
         elif isinstance(a, VarArg):
-            if a.name in local_env:
-                eval_args.append(local_env[a.name])
-            else:
-                # Try reading from runtime environment
-                env = rt._current_env.get()  # type: ignore[attr-defined]
-                if env and a.name in env:
-                    eval_args.append(env[a.name])
-                else:
-                    raise KeyError(f"Unknown variable: {a.name}")
+            eval_args.append(_lookup_env_value(rt, a.name, local_env))
         else:
             raise ValueError("Unknown argument type")
 
@@ -176,15 +186,8 @@ def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[s
                 # parts for template lines are not used; keep minimal placeholder
                 parts.append("")
             else:
-                # Resolve from kwargs or current runtime env; raise if missing
-                if s.name in kwargs:
-                    value = kwargs[s.name]
-                else:
-                    env = rt._current_env.get()  # type: ignore[attr-defined]
-                    if env and s.name in env:
-                        value = env[s.name]
-                    else:
-                        raise KeyError(f"Unknown variable: {s.name}")
+                # Resolve from kwargs, runtime, or global environments; raise if missing
+                value = _lookup_env_value(rt, s.name, kwargs)
                 parts.append(str(value))
         elif isinstance(s, CallSegment):
             value = _eval_call(rt, s, kwargs)
@@ -242,14 +245,8 @@ def _stringify_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict
             parts.append(s.text)
         elif isinstance(s, InputSegment):
             # Strict resolution in non-template contexts
-            if s.name in kwargs:
-                parts.append(str(kwargs[s.name]))
-            else:
-                env = rt._current_env.get()  # type: ignore[attr-defined]
-                if env and s.name in env:
-                    parts.append(str(env[s.name]))
-                else:
-                    raise KeyError(f"Unknown variable: {s.name}")
+            value = _lookup_env_value(rt, s.name, kwargs)
+            parts.append(str(value))
         elif isinstance(s, CallSegment):
             value = _eval_call(rt, s, kwargs)
             parts.append(str(value))

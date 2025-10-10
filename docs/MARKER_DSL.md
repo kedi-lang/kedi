@@ -9,6 +9,9 @@ Marker is a lightweight DSL to orchestrate LLM interactions using indentation-sc
 - Substitutions (R-values): `<var>` or `<call(args...)>`.
 - Outputs (L-values): `[name]` within a template line; signals the LLM must produce this value.
 - Return lines: `= expression` returns from the current procedure or top-level.
+- Comments:
+  - Inline: everything after a single `#` on a line is ignored. Use `##` to escape a literal `#`.
+  - Block: lines containing only `###` (after trimming whitespace) start and end block comments. `###` is not allowed anywhere else and must appear in matching pairs. Block comment delimiters may not appear inside python fences.
 
 ### Indentation and Preprocessing
 - Indentation defines block scope; the preprocessor inserts virtual BEGIN/END markers on indentation changes for parsing.
