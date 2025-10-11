@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sys
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
-from contextvars import ContextVar
 
-from pydantic_ai import Agent
 from pydantic_ai.output import StructuredDict
+
+from .agent_adapter.src import DSPyAdapter, PydanticAdapter
+from .settings import settings
 
 # -----------------------------
 # Marker runtime implementation
@@ -51,8 +54,10 @@ def c(func_name: str, *args: Any) -> CallExpr:
 class MarkerRuntime:
     """Isolated marker runtime with its own registry and environment."""
 
-    def __init__(self, model: str = "groq:qwen/qwen3-32b") -> None:
-        self.model = model
+    def __init__(self, model: str | None = None) -> None:
+        self.model = model or settings.model_name
+        if settings.adapter == "dspy":
+            self.model = self.model.replace(":", "/", 1)
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
@@ -100,7 +105,9 @@ class MarkerRuntime:
         except KeyError as e:
             raise KeyError(f"Unknown procedure: {name}") from e
 
-    def _evaluate_expression(self, expr: Expression, env: ValueEnv) -> Tuple[Optional[str], Optional[OutputExpr]]:
+    def _evaluate_expression(
+        self, expr: Expression, env: ValueEnv
+    ) -> Tuple[Optional[str], Optional[OutputExpr]]:
         if isinstance(expr, str):
             return expr, None
         if isinstance(expr, InputExpr):
@@ -142,9 +149,15 @@ class MarkerRuntime:
         finally:
             self._current_env.reset(token)
 
-        return self._evaluate_value(result, local_env) if isinstance(result, (InputExpr, CallExpr)) else result
+        return (
+            self._evaluate_value(result, local_env)
+            if isinstance(result, (InputExpr, CallExpr))
+            else result
+        )
 
-    def _marker_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
+    def _marker_run(
+        self, expressions: Sequence[Expression], env: ValueEnv
+    ) -> Dict[str, Any]:
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
         for expr in expressions:
@@ -174,19 +187,18 @@ class MarkerRuntime:
                 typed_fields[out.key] = str
 
         if any_typed:
-            try:
-                from typing import TypedDict as _TypedDict  # py311
-            except Exception:  # pragma: no cover
-                from typing_extensions import TypedDict as _TypedDict  # type: ignore
+            if sys.version_info >= (3, 12):
+                from typing import TypedDict as _TypedDict
+            else:
+                from typing_extensions import TypedDict as _TypedDict
 
             ResultType = _TypedDict("Result", typed_fields)  # type: ignore[valid-type]
             try:
                 setattr(ResultType, "description", description)
             except Exception:
                 pass
-            agent = Agent(self.model, output_type=ResultType)
         else:
-            out_type = StructuredDict(
+            ResultType = StructuredDict(
                 {
                     "type": "object",
                     "properties": properties,
@@ -196,10 +208,9 @@ class MarkerRuntime:
                 description=description,
             )
             try:
-                setattr(out_type, "description", description)
+                setattr(ResultType, "description", description)
             except Exception:
                 pass
-            agent = Agent(self.model, output_type=out_type)
         # Keep question format stable for tests; append description after to preserve key parsing
         base_q = (
             f"Fill in the fields: [{required[0]}]."
@@ -208,18 +219,28 @@ class MarkerRuntime:
         )
         # Provide the full description as guidance for better tool performance
         question = base_q + "\n" + description
-        result = agent.run_sync(question)
-        
-        #print(f"description: {description}")
-        #print(f"question: {question}")
-        #print(f"result: {result}")
-        data = result.output
-        if hasattr(data, "model_dump"):
-            data_dict: Dict[str, Any] = data.model_dump()
-        elif isinstance(data, dict):
-            data_dict = data
+
+        if settings.adapter == "dspy":
+            adapter = DSPyAdapter(model=self.model)
+            result = adapter.produce_sync(template=question, output_schema=typed_fields)
+        elif settings.adapter == "pydantic":
+            adapter = PydanticAdapter(model=self.model)
+            result = adapter.produce_sync(template=question, output_type=ResultType)
         else:
-            data_dict = dict(data)
+            raise NotImplementedError(
+                f"Adapter {settings.adapter!r} not implemented yet."
+            )
+        if settings.debug:
+            print(f"description: {description}")
+            print(f"question: {question}")
+            print(f"result: {result}")
+
+        if hasattr(result, "model_dump"):
+            data_dict: Dict[str, Any] = result.model_dump()
+        elif isinstance(result, dict):
+            data_dict = result
+        else:
+            data_dict = dict(result)
 
         for key in required:
             if key not in data_dict:
@@ -230,4 +251,3 @@ class MarkerRuntime:
 
 
 # No default runtime instance; users should create their own `MarkerRuntime()`
-

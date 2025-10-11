@@ -4,19 +4,30 @@ import argparse
 import os
 import sys
 
+import dotenv
+
+dotenv.load_dotenv()
+
 # Ensure local 'src' is on sys.path when running from repo root
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(THIS_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from marker_pattern.lang import parse_program, compile_program
+from marker_pattern.lang import compile_program, parse_program
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a .marker program with MarkerRuntime (real LLM)")
+    parser = argparse.ArgumentParser(
+        description="Run a .marker program with MarkerRuntime (real LLM)"
+    )
     parser.add_argument("source", help="Path to .marker source file")
-    parser.add_argument("--model", dest="model", default=None, help="Override model id (e.g. groq:qwen/qwen3-32b)")
+    parser.add_argument(
+        "--model",
+        dest="model",
+        default=None,
+        help="Override model id (e.g. groq:qwen/qwen3-32b)",
+    )
     args = parser.parse_args()
 
     try:
@@ -45,5 +56,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

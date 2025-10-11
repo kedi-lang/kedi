@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from marker_pattern.lang import parse_program, compile_program
+from marker_pattern.lang import compile_program, parse_program
 from tests.utils_llm import run_without_llm
 
 
@@ -89,27 +89,19 @@ def test_custom_type_referencing_other():
 
 
 def test_inline_python_sees_type():
-    src = (
-        "~Box(size:int)\n"
-        "= <`Box(size=9).model_dump()['size']`>\n"
-    )
+    src = "~Box(size:int)\n" "= <`Box(size=9).model_dump()['size']`>\n"
     out = _run(src)
     assert out == "9"
 
 
 def test_type_definition_with_inline_comment():
-    src = (
-        "~Person(age:int, name)  # comment\n"
-        "= <`Person(age=5, name='kid').age`>\n"
-    )
+    src = "~Person(age:int, name)  # comment\n" "= <`Person(age=5, name='kid').age`>\n"
     out = _run(src)
     assert out == "5"
 
 
 def test_tilde_escape_in_text():
-    src = (
-        "= literal ~~Person string\n"
-    )
+    src = "= literal ~~Person string\n"
     out = _run(src)
     assert out == "literal ~Person string"
 
@@ -262,10 +254,3 @@ def test_mixed_positional_and_keyword_args():
     )
     out = _run(src)
     assert out == "30"
-
-
-
-
-
-
-

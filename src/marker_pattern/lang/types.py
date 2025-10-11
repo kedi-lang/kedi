@@ -8,7 +8,6 @@ import typing
 import typing_extensions
 from pydantic import BaseModel
 
-
 BUILTIN_NAMESPACES = ("builtins", "typing", "typing_extensions")
 
 
@@ -140,5 +139,3 @@ class TypeValidator:
                 errors=errors,
                 invalid_names=invalid_names,
             )
-
-

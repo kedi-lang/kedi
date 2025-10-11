@@ -1,0 +1,3 @@
+[submodule "src/marker_pattern/agent_adapter"]
+	path = src/marker_pattern/agent_adapter
+	url = https://github.com/marker-lang/agent_adapter

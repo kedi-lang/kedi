@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import marker_pattern.core as core
 import pytest
-from marker_pattern.lang import parse_program, compile_program
+
+import marker_pattern.core as core
+from marker_pattern.lang import compile_program, parse_program
 
 
 class _SingleFakeRunResult:
@@ -13,7 +14,9 @@ class _SingleFakeRunResult:
 
 
 class _SingleFakeAgent:
-    def __init__(self, model: str | None = None, *, output_type: Any = None, **_: Any) -> None:
+    def __init__(
+        self, model: str | None = None, *, output_type: Any = None, **_: Any
+    ) -> None:
         self.output_type = output_type
 
     def run_sync(self, prompt: str) -> _SingleFakeRunResult:  # type: ignore[override]
@@ -138,32 +141,77 @@ CASES: List[tuple[str, str]] = [
     ("= Paris\n", "Paris"),
     ("@echo(x):\n  = <x>\n\n= <echo(alpha)>\n", "alpha"),
     ("@p(x):\n  generate [y] from <x>\n  = <y>\n\n= <p(foo)>\n", "y-value"),
-    ("@p(x):\n  generate [a], [b] for <x>\n  = <a>-<b>\n\n= <p(z)>\n", "a-value-b-value"),
-    ("@inner(x):\n  = <x>\n\n@outer(y):\n  = P(<y>)\n\n= <outer(<inner(beta)>)>\n", "P(beta)"),
-    ("@title(name):\n  = Dr. <name>\n\n=   Report:   <title(who)>   \n", "Report:   Dr. who"),
+    (
+        "@p(x):\n  generate [a], [b] for <x>\n  = <a>-<b>\n\n= <p(z)>\n",
+        "a-value-b-value",
+    ),
+    (
+        "@inner(x):\n  = <x>\n\n@outer(y):\n  = P(<y>)\n\n= <outer(<inner(beta)>)>\n",
+        "P(beta)",
+    ),
+    (
+        "@title(name):\n  = Dr. <name>\n\n=   Report:   <title(who)>   \n",
+        "Report:   Dr. who",
+    ),
     ("= Use <<hello>> literally\n", "Use <hello> literally"),
     ("= Avoid [[square]] here\n", "Avoid [square] here"),
     ("= not an == assignment\n", "not an = assignment"),
     ("= mention @@symbol\n", "mention @symbol"),
-    ("@concat(s):\n  = <s>\n\n= <concat(alpha,, beta,, gamma)>\n", "alpha, beta, gamma"),
+    (
+        "@concat(s):\n  = <s>\n\n= <concat(alpha,, beta,, gamma)>\n",
+        "alpha, beta, gamma",
+    ),
     ("@pair(a,b):\n  = <a>|<b>\n\n= <pair(foo,bar)>\n", "foo|bar"),
     ("@q(c):\n  <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n", "r-value"),
-    ("@chain(s):\n  make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n", "y-value"),
+    (
+        "@chain(s):\n  make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n",
+        "y-value",
+    ),
     ("=    A     B   C     \n", "A     B   C"),
-    ("@r(a,b):\n  =  left   <a>   mid   <b>   right   \n\n= <r(x, y)>\n", "left   x   mid   y   right"),
-    ("@mk():\n  produce [v]\n  = <v>\n\n@use():\n  = pre-<mk()>-post\n\n= <use()>\n", "pre-v-value-post"),
-    ("@make():\n  [a] and [b]\n  = <a>/<b>\n\n@use():\n  = (<make()>)\n\n= <use()>\n", "(a-value/b-value)"),
+    (
+        "@r(a,b):\n  =  left   <a>   mid   <b>   right   \n\n= <r(x, y)>\n",
+        "left   x   mid   y   right",
+    ),
+    (
+        "@mk():\n  produce [v]\n  = <v>\n\n@use():\n  = pre-<mk()>-post\n\n= <use()>\n",
+        "pre-v-value-post",
+    ),
+    (
+        "@make():\n  [a] and [b]\n  = <a>/<b>\n\n@use():\n  = (<make()>)\n\n= <use()>\n",
+        "(a-value/b-value)",
+    ),
     ("@id(x):\n  = <x>\n\n@wrap(x):\n  = [[<x>]]\n\n= <wrap(<id(num)>)>\n", "[num]"),
-    ("@calc(a,b):\n  get [sum] from <a> and <b>\n  get [prod] from <a> and <b>\n  = <sum>-<prod>\n\n= <calc(2,3)>\n", "sum-value-prod-value"),
-    ("= angle << and bracket [[ and at @@ and eq == and comma \\\\ ,\n", "angle < and bracket [ and at @ and eq = and comma \ ,"),
-    ("@inner(x):\n  = <x>!\n\n@outer(a,b):\n  = <a>-<b>\n\n= <outer(alpha, <inner(beta)>)>\n", "alpha-beta!"),
-    ("@proc(s):\n  prepare [out] from <s>\n  using <out> now\n  = done <out>\n\n= <proc(z)>\n", "done out-value"),
-    ("@f1(x):\n  = <x>1\n\n@f2(x):\n  = <x>2\n\n@f3(x):\n  = <x>3\n\n= <f3(<f2(<f1(a)>)>)>\n", "a123"),
-    ("@e(s):\n  = <s>\n\n= <e(alice,, bob,, and charlie)>\n", "alice, bob, and charlie"),
-    ("@g():\n  = one\n  = two\n\n= <g()>\n", "two"), 
+    (
+        "@calc(a,b):\n  get [sum] from <a> and <b>\n  get [prod] from <a> and <b>\n  = <sum>-<prod>\n\n= <calc(2,3)>\n",
+        "sum-value-prod-value",
+    ),
+    (
+        "= angle << and bracket [[ and at @@ and eq == and comma \\\\ ,\n",
+        "angle < and bracket [ and at @ and eq = and comma \ ,",
+    ),
+    (
+        "@inner(x):\n  = <x>!\n\n@outer(a,b):\n  = <a>-<b>\n\n= <outer(alpha, <inner(beta)>)>\n",
+        "alpha-beta!",
+    ),
+    (
+        "@proc(s):\n  prepare [out] from <s>\n  using <out> now\n  = done <out>\n\n= <proc(z)>\n",
+        "done out-value",
+    ),
+    (
+        "@f1(x):\n  = <x>1\n\n@f2(x):\n  = <x>2\n\n@f3(x):\n  = <x>3\n\n= <f3(<f2(<f1(a)>)>)>\n",
+        "a123",
+    ),
+    (
+        "@e(s):\n  = <s>\n\n= <e(alice,, bob,, and charlie)>\n",
+        "alice, bob, and charlie",
+    ),
+    ("@g():\n  = one\n  = two\n\n= <g()>\n", "two"),
     ("@h():\n  set [a]\n  set [b]\n  = <b>\n\n= <h()>\n", "b-value"),
     ("@s(x):\n  override [x]\n  = <x>\n\n= <s(orig)>\n", "x-value"),
-    ("@k(a,b):\n  = <a>+<b>\n\n@z(x):\n  = <k(alpha, <x>)>\n\n= <z(beta)>\n", "alpha+beta"),
+    (
+        "@k(a,b):\n  = <a>+<b>\n\n@z(x):\n  = <k(alpha, <x>)>\n\n= <z(beta)>\n",
+        "alpha+beta",
+    ),
     ("=   hello   world    \n", "hello   world"),
     ("@m():\n  A [x] B [y] C\n  = <x>|<y>\n\n= <m()>\n", "x-value|y-value"),
     ("@q(x):\n  = (<x>)\n\n= result:<q(ok)>\n", "result:(ok)"),
@@ -266,26 +314,18 @@ def test_inline_python_with_variables(monkeypatch: Any) -> None:
 def test_typed_params_basic_sum(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@add(x: int, y: int):\n"
-            "  = <`x + y`>\n\n"
-            "= <add(`2`, `3`)>\n"
-        ),
+        ("@add(x: int, y: int):\n" "  = <`x + y`>\n\n" "= <add(`2`, `3`)>\n"),
     )
     assert out == "5"
 
 
 def test_typed_params_string_default_and_type_mismatch(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    rt = _compile(
-        "@concat(a, b):\n  = <`a + b`>\n\n= <concat(hello, world)>\n"
-    )
+    rt = _compile("@concat(a, b):\n  = <`a + b`>\n\n= <concat(hello, world)>\n")
     out = rt.run_main()
     assert out == "helloworld"
     # Now mismatch: passing int to int-typed param is ok; passing str to int-typed should raise
-    src = (
-        "@add(x: int, y: int):\n  = <`x + y`>\n\n= <add(alpha, 3)>\n"
-    )
+    src = "@add(x: int, y: int):\n  = <`x + y`>\n\n= <add(alpha, 3)>\n"
     rt2 = _compile(src)
     with pytest.raises(TypeError):
         rt2.run_main()
@@ -363,11 +403,7 @@ def test_inline_python_nested_call_arguments(monkeypatch: Any) -> None:
 def test_inline_python_with_comparison_and_assert(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@f():\n"
-            "  = <`1 + 1`>\n\n"
-            "= <`assert 5 > 3`>\n"
-        ),
+        ("@f():\n" "  = <`1 + 1`>\n\n" "= <`assert 5 > 3`>\n"),
     )
     assert out == ""
 
@@ -381,12 +417,7 @@ def test_inline_python_assert_failure_in_return(monkeypatch: Any) -> None:
 
 def test_inline_python_assert_failure_in_template_line(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "@p():\n"
-        "  <`assert False`>\n"
-        "  = ok\n\n"
-        "= <p()>\n"
-    )
+    src = "@p():\n" "  <`assert False`>\n" "  = ok\n\n" "= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()
@@ -446,12 +477,7 @@ def test_python_block_with_llm_outputs(monkeypatch: Any) -> None:
 def test_assign_basic(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p(x):\n"
-            "  [y] = <x>\n"
-            "  = <y>\n\n"
-            "= <p(alpha)>\n"
-        ),
+        ("@p(x):\n" "  [y] = <x>\n" "  = <y>\n\n" "= <p(alpha)>\n"),
     )
     assert out == "alpha"
 
@@ -459,9 +485,7 @@ def test_assign_basic(monkeypatch: Any) -> None:
 def test_assign_with_call(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@id(x):\n  = <x>\n\n@p():\n  [v] = <id(beta)>\n  = <v>\n\n= <p()>\n"
-        ),
+        ("@id(x):\n  = <x>\n\n@p():\n  [v] = <id(beta)>\n  = <v>\n\n= <p()>\n"),
     )
     assert out == "beta"
 
@@ -483,9 +507,7 @@ def test_assign_then_llm(monkeypatch: Any) -> None:
 def test_assign_overwrite(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n  [x] = alpha\n  [x] = beta\n  = <x>\n\n= <p()>\n"
-        ),
+        ("@p():\n  [x] = alpha\n  [x] = beta\n  = <x>\n\n= <p()>\n"),
     )
     assert out == "beta"
 
@@ -493,9 +515,7 @@ def test_assign_overwrite(monkeypatch: Any) -> None:
 def test_assign_inline_python_rhs(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p(a,b):\n  [s] = <`str(a)+str(b)`>\n  = <s>\n\n= <p(1, 2)>\n"
-        ),
+        ("@p(a,b):\n  [s] = <`str(a)+str(b)`>\n  = <s>\n\n= <p(1, 2)>\n"),
     )
     assert out == "12"
 
@@ -503,9 +523,7 @@ def test_assign_inline_python_rhs(monkeypatch: Any) -> None:
 def test_assign_works_before_return(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n  [x] = hello\n  = world <x>\n\n= <p()>\n"
-        ),
+        ("@p():\n  [x] = hello\n  = world <x>\n\n= <p()>\n"),
     )
     assert out == "world hello"
 
@@ -513,9 +531,7 @@ def test_assign_works_before_return(monkeypatch: Any) -> None:
 def test_assign_interacts_with_outputs(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n  gain [a]\n  [b] = <a>\n  = <b>\n\n= <p()>\n"
-        ),
+        ("@p():\n  gain [a]\n  [b] = <a>\n  = <b>\n\n= <p()>\n"),
     )
     assert out == "a-value"
 
@@ -636,9 +652,7 @@ def test_typed_output_in_return_context(monkeypatch: Any) -> None:
 def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n  value [x: NotARealType]\n  = <x>\n\n= <p()>\n"
-        ),
+        ("@p():\n  value [x: NotARealType]\n  = <x>\n\n= <p()>\n"),
     )
     assert isinstance(out, str)
 
@@ -656,5 +670,3 @@ def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
 def test_parametrized_typed_snippets(monkeypatch: Any, src: str) -> None:
     out = _run(monkeypatch, src)
     assert isinstance(out, str)
-
-

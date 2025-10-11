@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import functools
 import time
-from typing import Callable, TypeVar, Any
+from typing import Any, Callable, TypeVar
 
-from marker_pattern.lang import parse_program, compile_program
 import marker_pattern.core as core
-
+from marker_pattern.lang import compile_program, parse_program
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -53,4 +52,3 @@ def run_without_llm(src: str) -> Any:
         return runtime.run_main()
     finally:
         core.Agent = original_agent  # type: ignore[assignment]
-
