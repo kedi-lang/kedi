@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from pydantic_ai.output import StructuredDict
 
-from .adapters.src import DSPyAdapter, PydanticAdapter
+from .agent_adapter import DSPyAdapter, PydanticAdapter
 from .settings import settings
 
 # -----------------------------
