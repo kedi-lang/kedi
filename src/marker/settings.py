@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = False
-        extra = "forbid"
+        extra = "allow"
         # env_prefix = "MARKER_"
 
 
