@@ -3,19 +3,37 @@ from __future__ import annotations
 import builtins
 import re
 import shlex
-import typing
 from typing import Any, Iterable, List
-
+import typing
 import typing_extensions
+
 from pydantic import BaseModel
 
 from ..core import MarkerRuntime
-from .ast import (AssignBlockStmt, AssignStmt, CallArg, CallSegment,
-                  InputSegment, LiteralArg, OutputSegment, ProcDefStmt,
-                  ProcedureDef, Program, PythonBlock, PythonExprNativeSegment,
-                  PythonExprSegment, ReturnBlockStmt, ReturnStmt, Segment,
-                  TemplateLine, TextSegment, TypeDef, TypeDefStmt, TypeField,
-                  VarArg)
+from .ast import (
+    Program,
+    ProcedureDef,
+    TemplateLine,
+    ReturnStmt,
+    PythonBlock,
+    AssignBlockStmt,
+    ReturnBlockStmt,
+    AssignStmt,
+    Segment,
+    TextSegment,
+    InputSegment,
+    CallSegment,
+    CallArg,
+    LiteralArg,
+    VarArg,
+    OutputSegment,
+    PythonExprSegment,
+    PythonExprNativeSegment,
+    ProcDefStmt,
+    TypeDef,
+    TypeField,
+    TypeDefStmt,
+)
 from .types import TypeValidator
 
 
@@ -66,9 +84,7 @@ def _eval_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -
     return rt._invoke_procedure(callee, eval_args)  # type: ignore[attr-defined]
 
 
-def _build_type_eval_env(
-    rt: MarkerRuntime, local_env: dict[str, Any] | None
-) -> dict[str, Any]:
+def _build_type_eval_env(rt: MarkerRuntime, local_env: dict[str, Any] | None) -> dict[str, Any]:
     env: dict[str, Any] = {
         "__builtins__": builtins.__dict__,
         "builtins": builtins,
@@ -112,9 +128,7 @@ def _build_type_eval_env(
     return env
 
 
-def _resolve_pytype(
-    rt: MarkerRuntime, type_annotation: str | None, *, env: dict[str, Any] | None = None
-) -> Any | None:
+def _resolve_pytype(rt: MarkerRuntime, type_annotation: str | None, *, env: dict[str, Any] | None = None) -> Any | None:
     if not type_annotation:
         return None
 
@@ -202,7 +216,6 @@ def _coerce_value_to_type(value: Any, pytype: Any) -> Any:
         if origin in (list, List):  # type: ignore[name-defined]
             item_t = args[0] if args else Any
             if isinstance(value, list):
-
                 def cast_item(v: Any) -> Any:
                     try:
                         if item_t in (int, float, str, bool):
@@ -210,7 +223,6 @@ def _coerce_value_to_type(value: Any, pytype: Any) -> Any:
                         return v
                     except Exception:
                         return v
-
                 return [cast_item(v) for v in value]
             return value
         if pytype in (int, float, str, bool):
@@ -240,13 +252,7 @@ def _is_value_compatible(pytype: Any, value: Any) -> bool:
     return True
 
 
-def _prepare_segments(
-    rt: MarkerRuntime,
-    segments: list[Segment],
-    kwargs: dict[str, Any],
-    *,
-    context: str = "template",
-) -> tuple[list[Any], str]:
+def _prepare_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str = "template") -> tuple[list[Any], str]:
     expr: list[Any] = []
     parts: list[str] = []
     for s in segments:
@@ -281,9 +287,7 @@ def _prepare_segments(
     return expr, "".join(parts)
 
 
-def _evaluate_assignment_rhs(
-    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]
-) -> tuple[Any | None, str]:
+def _evaluate_assignment_rhs(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]) -> tuple[Any | None, str]:
     # If RHS is a pure single python expression, return its native value
     non_ws_segments: list[Segment] = []
     for s in segments:
@@ -313,9 +317,7 @@ def _segments_have_outputs(segments: list[Segment]) -> bool:
     return False
 
 
-def _stringify_segments(
-    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str
-) -> str:
+def _stringify_segments(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str) -> str:
     parts: list[str] = []
     for s in segments:
         if isinstance(s, TextSegment):
@@ -346,9 +348,7 @@ def _stringify_segments(
     return "".join(parts)
 
 
-def _render_expression(
-    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str
-) -> str:
+def _render_expression(rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str) -> str:
     # Only build and invoke rt.m() when outputs are present; otherwise avoid
     # prematurely evaluating calls twice.
     if _segments_have_outputs(segments):
@@ -400,7 +400,7 @@ def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str,
             type_env.update(layer)
         env.update(type_env)
         for key, val in list(local_env.items()):
-            parts = key.split(".")
+            parts = key.split('.')
             base = parts[0]
             if base in type_env and isinstance(val, str):
                 model = type_env.get(base)
@@ -411,19 +411,15 @@ def _build_python_env(rt: MarkerRuntime, local_env: dict[str, Any]) -> dict[str,
 
     # Wrap registered procedures to be callable from inline Python
     for name, fn in rt._procedures.items():  # type: ignore[attr-defined]
-
         def make_wrapper(proc_name: str):
             def _callable(*args: Any):
                 callee = rt._get_proc(proc_name)  # type: ignore[attr-defined]
                 return rt._invoke_procedure(callee, list(args))  # type: ignore[attr-defined]
-
             return _callable
-
         env[name] = make_wrapper(name)
 
     # Full Python builtins access as requested
     import builtins as _builtins  # local import to avoid polluting env
-
     env["__builtins__"] = _builtins.__dict__
     return env
 
@@ -448,24 +444,19 @@ def _eval_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, Any])
 # New helpers to reduce duplication
 # ------------------------
 
-
 def _detect_rhs_kind(segments: list[Segment]) -> tuple[bool, bool, bool]:
     non_ws: list[Segment] = []
     for s in segments:
         if isinstance(s, TextSegment) and s.text.strip() == "":
             continue
         non_ws.append(s)
-    is_backtick_native = len(non_ws) == 1 and isinstance(
-        non_ws[0], PythonExprNativeSegment
-    )
+    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
     is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
     return is_backtick_native, is_angle_pure, is_call_only
 
 
-def _assign_value_from_native(
-    native: Any, pytype: Any | None, *, strict_native: bool
-) -> Any:
+def _assign_value_from_native(native: Any, pytype: Any | None, *, strict_native: bool) -> Any:
     # strict_native=True for backtick-native; False for angle-inline pure
     if strict_native:
         # backtick-native strict typing
@@ -480,9 +471,7 @@ def _assign_value_from_native(
             return native
         # non-str requires explicit and compatible annotation
         if pytype is None:
-            raise TypeError(
-                "Native non-string assignment requires explicit type annotation"
-            )
+            raise TypeError("Native non-string assignment requires explicit type annotation")
         if not _is_value_compatible(pytype, native):
             raise TypeError("Native assignment value does not match annotated type")
         return native
@@ -492,12 +481,10 @@ def _assign_value_from_native(
     return str(native)
 
 
-def _execute_python_block(
-    stmt_code: str, rt: MarkerRuntime, kwargs: dict[str, Any]
-) -> Any:
+def _execute_python_block(stmt_code: str, rt: MarkerRuntime, kwargs: dict[str, Any]) -> Any:
     env_exec = _build_python_env(rt, kwargs)
-    wrapper_src = "def __marker_block__():\n" + "\n".join(
-        "    " + line for line in stmt_code.splitlines()
+    wrapper_src = (
+        "def __marker_block__():\n" + "\n".join("    " + line for line in stmt_code.splitlines())
     )
     try:
         exec(wrapper_src, env_exec, env_exec)
@@ -536,7 +523,6 @@ class _ScopedDict(dict[str, Any]):
 # Compiler entry points
 # -----------------------------
 
-
 def _compile_template_line(rt: MarkerRuntime, tl: TemplateLine):
     def _fn(**kwargs: Any) -> Any:
         expr, _ = _prepare_segments(rt, tl.segments, kwargs)
@@ -553,9 +539,7 @@ def _compile_return(rt: MarkerRuntime, ret: ReturnStmt):
     return _fn
 
 
-def _register_type(
-    rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any]
-) -> None:
+def _register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {}
     for field in typedef.fields:
@@ -564,7 +548,7 @@ def _register_type(
         if resolved is None:
             raise TypeError(f"Unknown type annotation '{anno}' in type {typedef.name}")
         annotations[field.name] = resolved
-    namespace["__annotations__"] = annotations
+    namespace['__annotations__'] = annotations
 
     field_order = [field.name for field in typedef.fields]
 
@@ -575,16 +559,13 @@ def _register_type(
                     raise TypeError(f"Too many positional arguments for {typedef.name}")
                 for name, value in zip(order, args):
                     if name in kwargs:
-                        raise TypeError(
-                            f"Multiple values for field '{name}' in {typedef.name}"
-                        )
+                        raise TypeError(f"Multiple values for field '{name}' in {typedef.name}")
                     kwargs[name] = value
             super(new_model, self).__init__(**kwargs)
-
         return _init
 
     new_model = type(typedef.name, (BaseModel,), namespace)
-    setattr(new_model, "__init__", _make_init(field_order))
+    setattr(new_model, '__init__', _make_init(field_order))
     model = new_model
     type_env[typedef.name] = model
     type_env[f"__{typedef.name}_fields__"] = annotations
@@ -638,7 +619,6 @@ def compile_program(prog: Program) -> MarkerRuntime:
 
     # Register procedures
     for proc in prog.procedures:
-
         def make_proc(p: ProcedureDef):  # capture
             def _body(**kwargs: Any) -> Any:
                 # Merge lexical environment if present
@@ -648,6 +628,19 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     parent_env = dict(lexical_env)
                     for k, v in parent_env.items():
                         kwargs.setdefault(k, v)
+                # Inject global environment bindings so procedures can access
+                # top-level assignments without needing explicit parameters.
+                try:
+                    globals_env = getattr(rt, "_globals_env")  # type: ignore[attr-defined]
+                except Exception:
+                    globals_env = None
+                if isinstance(globals_env, dict):
+                    for gk, gv in globals_env.items():
+                        kwargs.setdefault(gk, gv)
+                    current_env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if isinstance(current_env, dict):
+                        for gk, gv in globals_env.items():
+                            current_env.setdefault(gk, gv)
                 # Enforce parameter type annotations if provided
                 if p.param_type_annotations is not None:
                     for param_name in p.params:
@@ -659,19 +652,11 @@ def compile_program(prog: Program) -> MarkerRuntime:
                         # Retrieve provided value
                         if param_name not in kwargs:
                             raise TypeError(f"Missing parameter: {param_name}")
-                        provided = (
-                            _coerce_model_value(pytype, kwargs[param_name])
-                            if pytype is not None
-                            else kwargs[param_name]
-                        )
+                        provided = _coerce_model_value(pytype, kwargs[param_name]) if pytype is not None else kwargs[param_name]
                         kwargs[param_name] = provided
                         # No conversions allowed: require exact type compatibility
-                        if pytype is not None and not _is_value_compatible(
-                            pytype, provided
-                        ):
-                            raise TypeError(
-                                f"Parameter '{param_name}' does not match annotated type"
-                            )
+                        if pytype is not None and not _is_value_compatible(pytype, provided):
+                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
                 # Scoped nested procedure registration management
                 _saved_procs: dict[str, Any] = {}
                 _new_names: list[str] = []
@@ -725,47 +710,31 @@ def compile_program(prog: Program) -> MarkerRuntime:
                                         env_rt[var_name] = env_exec[var_name]
                         elif isinstance(stmt, AssignBlockStmt):
                             result = _execute_python_block(stmt.code, rt, closure_env)
-                            pytype = _resolve_pytype(
-                                rt, stmt.type_annotation, env=closure_env
-                            )
+                            pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
                             # Allow coercion when annotation exists
                             value = result
                             if pytype is not None:
                                 # Coerce simple types and list[...] when possible
                                 value = _coerce_value_to_type(value, pytype)
                                 if not _is_value_compatible(pytype, value):
-                                    raise TypeError(
-                                        "Native assignment value does not match annotated type"
-                                    )
+                                    raise TypeError("Native assignment value does not match annotated type")
                             else:
                                 # Without annotation only strings are allowed
                                 if not isinstance(value, str):
-                                    raise TypeError(
-                                        "Native non-string assignment requires explicit type annotation"
-                                    )
+                                    raise TypeError("Native non-string assignment requires explicit type annotation")
                             closure_env[stmt.name] = value
                             env = rt._current_env.get()  # type: ignore[attr-defined]
                             if env is not None:
                                 env[stmt.name] = value
                         elif isinstance(stmt, AssignStmt):
-                            native, rendered = _evaluate_assignment_rhs(
-                                rt, stmt.expr, closure_env
-                            )
-                            is_backtick_native, is_angle_pure, is_call_only = (
-                                _detect_rhs_kind(stmt.expr)
-                            )
-                            pytype = _resolve_pytype(
-                                rt, stmt.type_annotation, env=closure_env
-                            )
+                            native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, closure_env)
+                            is_backtick_native, is_angle_pure, is_call_only = _detect_rhs_kind(stmt.expr)
+                            pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
                             if native is not None:
                                 if is_backtick_native:
-                                    value = _assign_value_from_native(
-                                        native, pytype, strict_native=True
-                                    )
+                                    value = _assign_value_from_native(native, pytype, strict_native=True)
                                 elif is_angle_pure:
-                                    value = _assign_value_from_native(
-                                        native, pytype, strict_native=False
-                                    )
+                                    value = _assign_value_from_native(native, pytype, strict_native=False)
                                 elif is_call_only:
                                     value = native
                                 else:
@@ -787,30 +756,20 @@ def compile_program(prog: Program) -> MarkerRuntime:
                             last_return = _compile_return(rt, stmt)(**closure_env)
                         elif isinstance(stmt, ReturnBlockStmt):
                             # Execute wrapper if code is a block or contains 'return'; else eval inline expr
-                            if ("\n" in stmt.code) or stmt.code.strip().startswith(
-                                "return"
-                            ):
-                                result = _execute_python_block(
-                                    stmt.code, rt, closure_env
-                                )
+                            if ("\n" in stmt.code) or stmt.code.strip().startswith("return"):
+                                result = _execute_python_block(stmt.code, rt, closure_env)
                                 last_return = result
                             else:
-                                last_return = _eval_python_inline(
-                                    rt, stmt.code, closure_env
-                                )
+                                last_return = _eval_python_inline(rt, stmt.code, closure_env)
                 finally:
                     _pop_type_env(rt)
                 try:
                     # Enforce return type at end based on procedure annotation
-                    anno = _resolve_pytype(
-                        rt, p.return_type_annotation, env=closure_env
-                    )
+                    anno = _resolve_pytype(rt, p.return_type_annotation, env=closure_env)
                     if anno is None:
                         # default to str: non-string native returns are illegal
                         if last_return is not None and not isinstance(last_return, str):
-                            raise TypeError(
-                                "Return value must be str; annotate function to return non-string"
-                            )
+                            raise TypeError("Return value must be str; annotate function to return non-string")
                         return "" if last_return is None else str(last_return)
                     # annotated non-str: allow native returns; validate type
                     if not _is_value_compatible(anno, last_return):
@@ -885,33 +844,23 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     if pytype is not None:
                         value = _coerce_value_to_type(value, pytype)
                         if not _is_value_compatible(pytype, value):
-                            raise TypeError(
-                                "Native assignment value does not match annotated type"
-                            )
+                            raise TypeError("Native assignment value does not match annotated type")
                     else:
                         if not isinstance(value, str):
-                            raise TypeError(
-                                "Native non-string assignment requires explicit type annotation"
-                            )
+                            raise TypeError("Native non-string assignment requires explicit type annotation")
                     kwargs[stmt.name] = value
                     env = rt._current_env.get()  # type: ignore[attr-defined]
                     if env is not None:
                         env[stmt.name] = value
                 elif isinstance(stmt, AssignStmt):
                     native, rendered = _evaluate_assignment_rhs(rt, stmt.expr, kwargs)
-                    is_backtick_native, is_angle_pure, is_call_only = _detect_rhs_kind(
-                        stmt.expr
-                    )
+                    is_backtick_native, is_angle_pure, is_call_only = _detect_rhs_kind(stmt.expr)
                     pytype = _resolve_pytype(rt, stmt.type_annotation, env=kwargs)
                     if native is not None:
                         if is_backtick_native:
-                            value = _assign_value_from_native(
-                                native, pytype, strict_native=True
-                            )
+                            value = _assign_value_from_native(native, pytype, strict_native=True)
                         elif is_angle_pure:
-                            value = _assign_value_from_native(
-                                native, pytype, strict_native=False
-                            )
+                            value = _assign_value_from_native(native, pytype, strict_native=False)
                         elif is_call_only:
                             value = native
                         else:
@@ -934,9 +883,7 @@ def compile_program(prog: Program) -> MarkerRuntime:
                 return _compile_return(rt, ret_stmt)(**kwargs)
             else:
                 # Top-level: always return string rendering for native returns
-                if ("\n" in ret_stmt.code) or ret_stmt.code.strip().startswith(
-                    "return"
-                ):
+                if ("\n" in ret_stmt.code) or ret_stmt.code.strip().startswith("return"):
                     result = _execute_python_block(ret_stmt.code, rt, kwargs)
                     return "" if result is None else str(result)
                 # Inline python native return
