@@ -1,26 +1,41 @@
 ```
 import numpy as np
 import matplotlib.pyplot as plt
+import random
 ```
-  
-@poly(x: float) -> float:
-  = `0.5*(x**3) - 2*(x**2) + x + 3`
 
+[x_min: float] = `-1.0`
+[x_max: float] = `1.0`
+[n_eval_points: int] = `1000`
+[n_plot_points: int] = `1000`
+
+@eval_expr(expr: str, x: np.ndarray) -> any:
+  = `eval(expr, {"__builtins__": {}}, {"x": x, "np": np})`
+
+@rank_candidates(cands: list[str], scores: list[float]) -> list[tuple]:
+  = `sorted(zip(cands, scores), key=lambda p: p[1])`
+
+@generate_sinusoidal_expression() -> str:
+  [expr] = ```
+  terms = []
+  for _ in range(5):
+    A = random.uniform(-1, 1)
+    B = random.uniform(0.5, 6)
+    C = random.uniform(0, 2*np.pi)
+    terms.append(f"{A:.3f}*np.sin({B:.3f}*x+{C:.3f})")
+
+  return "+".join(terms)
+  ```
+  <`print(f"expr: {expr}")`>
+  = `expr`
+
+[target_expr: str] = `generate_sinusoidal_expression()`
 @evaluate(expr: str) -> float:
-  <`print("evaluate")`>
   = ```
-  # sample points in [-5, 5]
-  xs = [i/2 for i in range(-10, 11)]
-  errs = []
-  for xv in xs:
-    try:
-      y_true = poly(xv)
-      y_guess = eval(expr, {"__builtins__": {}}, {"x": xv, "np": np})
-      errs.append((y_true - y_guess)**2)
-    except Exception:
-      errs.append(1e6)
-
-  return sum(errs)/len(errs)
+  x = np.linspace(x_min, x_max, n_eval_points)
+  y_true = eval_expr(target_expr, x)
+  y_guess = eval_expr(expr, x)
+  return float(np.mean((y_true - y_guess)**4))
   ```
 
 #
@@ -28,17 +43,17 @@ import matplotlib.pyplot as plt
   <`print("plot_compare")`>
   <`print(f"expr {expr}")`>
   ```
-  xs = [i/10 for i in range(-50, 51)]
-  y_true = [poly(xv) for xv in xs]
+  x = np.linspace(x_min, x_max, n_plot_points)
   try:
-    x = np.array(xs)
-    y_guess = list(eval(expr, {"__builtins__": {}}, {"x": x, "np": np}))
+    y_true = eval_expr(target_expr, x)
+    y_guess = eval_expr(expr, x)
   except Exception:
-    y_guess = [0 for _ in xs]
+    y_true = eval_expr(target_expr, x)
+    y_guess = np.zeros_like(x)
 
   plt.figure(figsize=(6,4))
-  plt.plot(xs, y_true, label='P(x) true')
-  plt.plot(xs, y_guess, label='guess', linestyle='--')
+  plt.plot(x, y_true, label='target')
+  plt.plot(x, y_guess, label='candidate', linestyle='--')
   plt.legend()
   plt.xlabel('x')
   plt.ylabel('y')
@@ -51,61 +66,88 @@ import matplotlib.pyplot as plt
 
 @propose_initial() -> list[str]:
   <`print("propose_initial")`>
-  Propose 10 simple polynomial expressions in variable x (use ** for powers) as [candidates: list[str]]
+  Propose <num_cands> simple polynomial expressions in variable x. \
+  IMPORTANT: Use valid Python syntax with explicit multiplication (e.g., 2*x, not 2x) and ** for powers. \
+  Examples: "x**2 + 3*x - 1", "0.5*x**3 - 2*x**2 + x + 3". \
+  Return as [candidates: list[str]]
   = `candidates`
 
 @propose_mutations(best: str, reason: str) -> list[str]:
   <`print("propose_mutations")`>
-  Given current best polynomial: <best> and reasoning: <reason> \
-  propose 10 mutated candidate polynomials (keep variable as x, use ** for powers) \
-  as [candidates: list[str]]
+  Given current best polynomial: <best> and reasoning: <reason>, \
+  propose <num_cands> mutated candidate polynomials. \
+  Try to balance variation and optimization in the new generation to avoid being stuck in the local optima. \
+  IMPORTANT: Use valid Python syntax with explicit multiplication (e.g., 2*x, not 2x) and ** for powers. \
+  Keep variable as x. Return as [candidates: list[str]]
   <`print(f"candidates {candidates}")`>
   = `candidates`
 
 
 @analyze_results(cands: list[str], scores: list[float]) -> str:
   <`print("analyze_results")`>
-  Given best (candidate,error): <`str(sorted(zip(cands, scores), key=lambda p: p[1])[:3])`> \
-  and worst: <`str(sorted(zip(cands, scores), key=lambda p: p[1], reverse=True)[:3])`> \
-  Return only [why: str] with exactly one short sentence (no lists, no brackets, no numbering).
+  [ranked: list] = `rank_candidates(cands, scores)`
+  Given the following candidate polynomials ranked by error (lower is better): <ranked> \
+  Provide a paragraph explaining why some candidates outperform others. \
+  In your rationale, when referring to polynomials, directly use the expression string. \
+  Rationale: [why: str]
   = <why>
 
 @analyze_results_safe(cands: list[str], scores: list[float]) -> str:
   <`print("analyze_results_safe")`>
   [why: str] = ```
-  try:
-    return analyze_results(cands, scores)
-  except Exception:
-    pairs = list(zip(cands, scores))
-    if pairs:
-      best = min(pairs, key=lambda p: p[1])
-      worst = max(pairs, key=lambda p: p[1])
-      return f"Lower L2 is better; best {best[0]} (err={best[1]:.3f}), worst {worst[0]} (err={worst[1]:.3f})."
-    return "Lower L2 is better; insufficient data."
+  retries_left = 3
+  while retries_left > 0:
+    try:
+      return analyze_results(cands, scores)
+    except Exception as exc:
+      retries_left -= 1
+  return None
   ```
   <`print(f"why: {why}")`>
-  = <why>
+  [ranked: list] = `rank_candidates(cands, scores)`
+  [top: str] = <`str(ranked[:top_n])`>
+  [bottom: str] = <`str(ranked[-top_n:][::-1])`>
+  = Top <top_n> candidates: <top>, Bottom <top_n> candidates: <bottom>, Rationale: <why>
 
+@plot_error_history(errors: list[float]):
+  ```
+  plt.figure(figsize=(8,5))
+  plt.plot(range(1, len(errors)+1), errors, marker='o', linestyle='-', linewidth=2)
+  plt.xlabel('Iteration')
+  plt.ylabel('Best Error (MSE)')
+  plt.title('Error Evolution Over Iterations')
+  plt.grid(True, alpha=0.3)
+  plt.tight_layout()
+  plt.savefig('error_plot.png')
+  plt.close()
+  ```
+  = done
 
 @evolve(rounds: int) -> str:
   <`print("evolve")`>
   = ```
   best_expr = None
   cands = propose_initial()
+  error_history = []
   for _ in range(int(rounds)):
     scores = [evaluate(c) for c in cands]
     best_idx = min(range(len(scores)), key=lambda i: scores[i]) if scores else 0
     best_expr = cands[best_idx] if cands else "x"
+    error_history.append(scores[best_idx])
     reason = analyze_results_safe(cands, scores)
     cands = propose_mutations(best_expr, reason)
+    plot_error_history(error_history)
   return best_expr if best_expr is not None else "x"
   ```
 
+[rounds: int] = `5`
+[num_cands: int] = `30`
+[top_n: int] = `5`
 
 @start():
   <`print("start")`>
   [g: str] = ```
-  return evolve(5)
+  return evolve(rounds)
   ```
   [err: float] = ```
   return evaluate(g)

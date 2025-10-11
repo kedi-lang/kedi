@@ -628,6 +628,19 @@ def compile_program(prog: Program) -> MarkerRuntime:
                     parent_env = dict(lexical_env)
                     for k, v in parent_env.items():
                         kwargs.setdefault(k, v)
+                # Inject global environment bindings so procedures can access
+                # top-level assignments without needing explicit parameters.
+                try:
+                    globals_env = getattr(rt, "_globals_env")  # type: ignore[attr-defined]
+                except Exception:
+                    globals_env = None
+                if isinstance(globals_env, dict):
+                    for gk, gv in globals_env.items():
+                        kwargs.setdefault(gk, gv)
+                    current_env = rt._current_env.get()  # type: ignore[attr-defined]
+                    if isinstance(current_env, dict):
+                        for gk, gv in globals_env.items():
+                            current_env.setdefault(gk, gv)
                 # Enforce parameter type annotations if provided
                 if p.param_type_annotations is not None:
                     for param_name in p.params:
