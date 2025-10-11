@@ -20,7 +20,7 @@
     ```
     = <markdown>
 
-[country] = Singapore
+[country] = France
 [cities_info : list[City]] = `[get_city_info(city) for city in get_cities_in(country)]`
 [markdown] = `consolidate_city_info_as_markdown(cities_info, country)`
 
