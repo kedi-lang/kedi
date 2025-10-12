@@ -18,7 +18,10 @@ class MockAdapter:
         if start != -1 and end != -1:
             keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
         annotations: Dict[str, Any] = {}
-        if output_type is not None:
+        # Prefer explicit schema if provided (new adapter contract)
+        if isinstance(output_schema, dict) and output_schema:
+            annotations = dict(output_schema)
+        elif output_type is not None:
             try:
                 if isinstance(getattr(output_type, "__annotations__", None), dict):
                     annotations = getattr(output_type, "__annotations__")  # type: ignore[assignment]
