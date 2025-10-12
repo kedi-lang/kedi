@@ -1,0 +1,41 @@
+name: Run Tests on Pull Request to Stable
+
+on:
+  pull_request:
+    branches: [ stable ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies with uv
+        run: |
+          if [ -f pyproject.toml ]; then
+            uv sync --all-extras --dev
+          elif [ -f requirements.txt ]; then
+            uv pip install -r requirements.txt
+          else
+            echo "No dependency file found, skipping install."
+          fi
+
+      - name: Export GROQ_API_KEY
+        run: |
+          echo "GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}" >> $GITHUB_ENV
+
+      - name: Run all tests
+        run: |
+          pytest tests -v --disable-warnings
