@@ -4,8 +4,7 @@ import functools
 import time
 from typing import Any, Callable, TypeVar
 
-import marker_pattern.core as core
-from marker_pattern.lang import compile_program, parse_program
+from marker.lang import compile_program, parse_program
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -37,18 +36,5 @@ def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
 
 
 def run_without_llm(src: str) -> Any:
-    original_agent = core.Agent
-
-    class _Agent(original_agent):  # type: ignore[misc]
-        def __init__(self, model: str | None = None, *, output_type: Any = None, **_: Any) -> None:  # type: ignore[no-untyped-def]
-            super().__init__(model=model, output_type=output_type, **_)
-
-        def run_sync(self, prompt: str):  # type: ignore[override]
-            return type("R", (), {"output": {}})()
-
-    try:
-        core.Agent = _Agent  # type: ignore[assignment]
-        runtime = compile_program(parse_program(src))
-        return runtime.run_main()
-    finally:
-        core.Agent = original_agent  # type: ignore[assignment]
+    runtime = compile_program(parse_program(src))
+    return runtime.run_main()

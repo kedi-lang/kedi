@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-import marker_pattern.core as core
-from marker_pattern.lang import compile_program, parse_program
+import marker.core as core
+from marker.lang import compile_program, parse_program
 
 
 class _SingleFakeAgent(core.Agent):  # type: ignore[misc]

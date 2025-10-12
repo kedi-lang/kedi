@@ -4,8 +4,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-import marker_pattern.core as core
-from marker_pattern.lang import compile_program, parse_program
+import marker.core as core
+from marker.lang import compile_program, parse_program
 
 
 class _SingleFakeRunResult:
@@ -84,7 +84,7 @@ def _run(monkeypatch: Any, src: str) -> Any:
 # MarkerRuntime core API
 # ----------------------
 def test_runtime_city_country(monkeypatch: Any) -> None:
-    import marker_pattern.core as core_mod
+    import marker.core as core_mod
 
     monkeypatch.setattr(core_mod, "Agent", _SingleFakeAgent, raising=True)
 
@@ -105,7 +105,7 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
 
 
 def test_runtime_nested_calls(monkeypatch: Any) -> None:
-    import marker_pattern.core as core_mod
+    import marker.core as core_mod
 
     monkeypatch.setattr(core_mod, "Agent", _SingleFakeAgent, raising=True)
     rt = core.MarkerRuntime()
@@ -187,7 +187,7 @@ CASES: List[tuple[str, str]] = [
     ),
     (
         "= angle << and bracket [[ and at @@ and eq == and comma \\\\ ,\n",
-        "angle < and bracket [ and at @ and eq = and comma \ ,",
+        "angle < and bracket [ and at @ and eq = and comma \\ ,",
     ),
     (
         "@inner(x):\n  = <x>!\n\n@outer(a,b):\n  = <a>-<b>\n\n= <outer(alpha, <inner(beta)>)>\n",

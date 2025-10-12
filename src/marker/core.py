@@ -3,12 +3,9 @@ from __future__ import annotations
 import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union
 
 from pydantic_ai.output import StructuredDict
-
-from .agent_adapter import DSPyAdapter, PydanticAdapter
-from .settings import settings
 
 # -----------------------------
 # Marker runtime implementation
@@ -51,13 +48,23 @@ def c(func_name: str, *args: Any) -> CallExpr:
     return CallExpr(func_name=func_name, args=tuple(args))
 
 
+class AdapterProtocol(Protocol):
+    def produce_sync(
+        self,
+        *,
+        template: str,
+        output_schema: Dict[str, type] | None = None,
+        output_type: Any | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        ...
+
+
 class MarkerRuntime:
     """Isolated marker runtime with its own registry and environment."""
 
-    def __init__(self, model: str | None = None) -> None:
-        self.model = model or settings.model_name
-        if settings.adapter == "dspy":
-            self.model = self.model.replace(":", "/", 1)
+    def __init__(self, *, adapter: AdapterProtocol | None = None) -> None:
+        self.adapter = adapter
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
@@ -220,20 +227,17 @@ class MarkerRuntime:
         # Provide the full description as guidance for better tool performance
         question = base_q + "\n" + description
 
-        if settings.adapter == "dspy":
-            adapter = DSPyAdapter(model=self.model)
-            result = adapter.produce_sync(template=question, output_schema=typed_fields)
-        elif settings.adapter == "pydantic":
-            adapter = PydanticAdapter(model=self.model)
-            result = adapter.produce_sync(template=question, output_type=ResultType)
-        else:
-            raise NotImplementedError(
-                f"Adapter {settings.adapter!r} not implemented yet."
+        if self.adapter is None:
+            raise RuntimeError("No adapter provided to MarkerRuntime")
+
+        if any_typed:
+            result = self.adapter.produce_sync(
+                template=question, output_type=ResultType
             )
-        if settings.debug:
-            print(f"description: {description}")
-            print(f"question: {question}")
-            print(f"result: {result}")
+        else:
+            result = self.adapter.produce_sync(
+                template=question, output_schema=typed_fields
+            )
 
         if hasattr(result, "model_dump"):
             data_dict: Dict[str, Any] = result.model_dump()
@@ -251,3 +255,16 @@ class MarkerRuntime:
 
 
 # No default runtime instance; users should create their own `MarkerRuntime()`
+
+
+class Agent:
+    """Legacy placeholder for tests that monkeypatch `marker.core.Agent`.
+
+    Runtime does not use this class; tests can safely set attributes on it.
+    """
+
+    def __init__(self, *_: Any, **__: Any) -> None:
+        pass
+
+    def run_sync(self, *_: Any, **__: Any) -> Any:  # pragma: no cover
+        return type("R", (), {"output": {}})()

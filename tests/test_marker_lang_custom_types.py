@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from marker_pattern.lang import compile_program, parse_program
+from marker.lang import compile_program, parse_program
 from tests.utils_llm import run_without_llm
 
 

@@ -1,35 +1,73 @@
-# marker-pattern
+# Marker 
+## a typed reasoning layer for LLM orchestration
 
-Minimal Python package scaffold with pytest.
+Marker is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
 
-## Requirements
-- Python 3.9+
-- macOS/Linux/Windows
+### A quick taste (10–20 lines)
+````py
+~City(name, history, economy, cuisine)
 
-## Setup (virtual environment)
-```bash
-python3 -m venv .venv
-. .venv/bin/activate  # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+@get_city_info(city) -> City:
+    Paragraphs [history], [economy], and [cuisine] describe <city> in different aspects.
+    = `City(city, history, economy, cuisine)`
 
-## Run tests
-```bash
-pytest
-```
+@get_cities_in(country) -> list[str]:
+    All cities in <country> are [cities: list[str]].
+    = `cities`
 
-## Using the package
-```python
-from marker_pattern import add
-print(add(2, 3))  # 5
-```
+@consolidate_city_info_as_markdown(cities: list[City], country) -> str:
+    [markdown: str] = ```
+    markdown = f"# Cities Information in {country}\n\n"
+    for city in cities:
+        markdown += f"\n## {city.name}\n\n"
+        markdown += f"### History\n{city.history}\n\n"
+        markdown += f"### Economy\n{city.economy}\n\n" 
+        markdown += f"### Cuisine\n{city.cuisine}\n\n"
+    return markdown
+    ```
+    = <markdown>
 
-## Project layout
-- `src/marker_pattern/` package code
-- `tests/` test suite
-- `requirements.txt` minimal dependencies
-- `pytest.ini` pytest configuration
+[country] = France
+[cities_info : list[City]] = `[get_city_info(city) for city in get_cities_in(country)]`
+[markdown] = `consolidate_city_info_as_markdown(cities_info, country)`
 
-## Notes
-- You can later add packaging metadata (`setup.cfg`/`pyproject.toml`) if needed.
+= <markdown>
+````
+
+### Run it
+- Install deps: 
+`pip install -r requirements.txt`
+- Execute a program: 
+`python marker_run.py your_program.marker`
+- Override model (optional): 
+`python marker_run.py your_program.marker --model groq:qwen/qwen3-32b`
+
+The runner loads the source, compiles it, optionally applies `--model`, and executes the top‑level program via `run_main()`.
+
+### Core syntax in 30 seconds
+- **Procedures**: `@name(param[: type], ...) -> ret_type:` then an indented block.
+  - Types: `str`, `int`, `float`, `bool`, `list[T]`. Omitted types default to `str`.
+- **Template lines and outputs**: prompt the model and capture typed fields.
+  - Example: `Top cities are [cities: list[str]]`
+- **Substitutions**: use values and calls inline.
+  - `<var>`, `<call(arg1, arg2)>`, nested: `<outer(<inner(x)>)>`
+  - Inline Python: `<`len(xs)`>` renders as string in templates/returns.
+- **Arguments and native types**: pass native values with single backticks per arg.
+  - Example: `<add(`2`, `3`)>` where `add(x: int, y: int)`.
+- **Multiline Python blocks**: fence with triple backticks on their own lines.
+  - Assign value: 
+    ````py
+    [x: int] = ```
+    return 40 + 2
+    ```
+    ````
+  - Return native values from procedures by annotating the return type and using Python expressions/blocks: `@wrap() -> list[int]: = `[1,2,3]``
+- **Variables and assignment**: `[name(: type)] = expression` then reuse anywhere.
+- **Custom types**: `~TypeName(field[: type], ...)` creates a Pydantic model in scope.
+- **Returns**: a line starting with `=` returns a value (string by default).
+- **Line continuation**: end a line with `\` to continue on the next line.
+- **Escaping specials**: double them, e.g., `<<`→`<`, `>>`→`>`, `[[`→`[`, `]]`→`]`, `==`→`=`, `,,`→`,`, `\`→`\\`, `##`→`#`, `~~`→`~`.
+
+See `docs/MARKER_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
+
+

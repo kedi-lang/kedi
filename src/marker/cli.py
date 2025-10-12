@@ -14,7 +14,8 @@ SRC_DIR = os.path.join(THIS_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from marker_pattern.lang import compile_program, parse_program
+from marker.lang import compile_program, parse_program
+from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 
 
 def main() -> int:
@@ -22,12 +23,8 @@ def main() -> int:
         description="Run a .marker program with MarkerRuntime (real LLM)"
     )
     parser.add_argument("source", help="Path to .marker source file")
-    parser.add_argument(
-        "--model",
-        dest="model",
-        default=None,
-        help="Override model id (e.g. groq:qwen/qwen3-32b)",
-    )
+    parser.add_argument("--adapter", choices=["pydantic", "dspy"], default=os.environ.get("MARKER_ADAPTER", "pydantic"), help="Backend adapter to use")
+    parser.add_argument("--model", dest="model", default=os.environ.get("MODEL_NAME", os.environ.get("GROQ_MODEL", None)), help="Model id for the chosen adapter (if applicable)")
     args = parser.parse_args()
 
     try:
@@ -39,10 +36,13 @@ def main() -> int:
 
     try:
         program = parse_program(src)
-        runtime = compile_program(program)
-        if args.model:
-            # Override the model after compilation; procedures will use it at call time
-            runtime.model = args.model
+        # Instantiate adapter per flags
+        adapter = (
+            DSPyAdapter(model=args.model or "groq:qwen/qwen3-32b")
+            if args.adapter == "dspy"
+            else PydanticAdapter(model=args.model or "groq:qwen/qwen3-32b")
+        )
+        runtime = compile_program(program, adapter=adapter)
         result = runtime.run_main()
         if result is None:
             print("")
