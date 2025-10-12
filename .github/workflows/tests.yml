@@ -2,6 +2,8 @@ name: Run Tests on Pull Request to Stable
 on:
   pull_request:
     branches: [ stable ]
+  push:
+    branches: [ stable ]
 jobs:
   test:
     runs-on: ubuntu-latest
