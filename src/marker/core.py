@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 from marker.agent_adapter import AgentAdapter
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 # -----------------------------
 # Marker runtime implementation
@@ -161,7 +161,6 @@ class MarkerRuntime:
                 prompt_parts.append(text)
 
         description = "".join(prompt_parts)
-        properties = {out.key: {"type": "string"} for out in outputs}
         required = [out.key for out in outputs]
 
         # If there are no required outputs, there's nothing to ask the LLM.
@@ -169,15 +168,10 @@ class MarkerRuntime:
         if not required:
             return {}
 
-        # Determine if any outputs have typed annotations; build a TypedDict if so
-        typed_fields: Dict[str, Any] = {}
-        any_typed = False
-        for out in outputs:
-            if out.pytype is not None:
-                any_typed = True
-                typed_fields[out.key] = out.pytype
-            else:
-                typed_fields[out.key] = str
+        # Build output schema mapping (default to str when unspecified)
+        typed_fields: Dict[str, Any] = {
+            out.key: (out.pytype if out.pytype is not None else str) for out in outputs
+        }
         # Keep question format stable for tests; append description after to preserve key parsing
         base_q = (
             f"Fill in the fields: [{required[0]}]."

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from marker.agent_adapter import AgentAdapter
 
 
-class MockAdapter:
+class MockAdapter(AgentAdapter[Dict[str, Any]]):
+    async def produce(
+        self,
+        *,
+        template: str,
+        output_schema: Dict[str, type],
+        **_: Any,
+    ) -> Dict[str, Any]:
+        # Simple async facade around the synchronous implementation
+        return self.produce_sync(template=template, output_schema=output_schema)
+
     def produce_sync(
         self,
         *,
         template: str,
         output_schema: Dict[str, type] | None = None,
-        output_type: Any | None = None,
         **_: Any,
     ) -> Dict[str, Any]:
         start = template.find("[")
@@ -17,16 +27,7 @@ class MockAdapter:
         keys: List[str] = []
         if start != -1 and end != -1:
             keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
-        annotations: Dict[str, Any] = {}
-        # Prefer explicit schema if provided (new adapter contract)
-        if isinstance(output_schema, dict) and output_schema:
-            annotations = dict(output_schema)
-        elif output_type is not None:
-            try:
-                if isinstance(getattr(output_type, "__annotations__", None), dict):
-                    annotations = getattr(output_type, "__annotations__")  # type: ignore[assignment]
-            except Exception:
-                annotations = {}
+        annotations: Dict[str, Any] = dict(output_schema or {})
         data: Dict[str, Any] = {}
         for k in keys:
             ann = annotations.get(k)
