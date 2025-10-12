@@ -9,7 +9,7 @@ import typing_extensions
 
 from pydantic import BaseModel
 
-from ..core import MarkerRuntime, AdapterProtocol
+from ..core import MarkerRuntime, AgentAdapter
 from .ast import (
     Program,
     ProcedureDef,
@@ -599,7 +599,7 @@ def _pop_type_env(rt: MarkerRuntime) -> None:
         stack.pop()
 
 
-def compile_program(prog: Program, *, adapter: AdapterProtocol | None = None) -> MarkerRuntime:
+def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> MarkerRuntime:
     rt = MarkerRuntime(adapter=adapter)
 
     setattr(rt, "_type_env_stack", [{}])
