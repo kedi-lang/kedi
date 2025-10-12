@@ -14,7 +14,6 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from marker.lang import compile_program, parse_program
-from marker.agent_adapter import AgentAdapter
 from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 
 
