@@ -37,6 +37,10 @@ Marker is a compact DSL that lets you compose multi‑step LLM workflows with st
 ### Run it
 - Install deps: 
 `pip install -r requirements.txt`
+- Local install:
+`pip install -e .`
+- After install:
+`marker <source> [OPTIONS]`
 - Execute a program: 
 `python marker_run.py your_program.marker`
 - Override model (optional): 
