@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
+from marker.agent_adapter import AgentAdapter
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union
 
 # -----------------------------
@@ -45,22 +46,10 @@ def c(func_name: str, *args: Any) -> CallExpr:
     return CallExpr(func_name=func_name, args=tuple(args))
 
 
-class AdapterProtocol(Protocol):
-    def produce_sync(
-        self,
-        *,
-        template: str,
-        output_schema: Dict[str, type] | None = None,
-        output_type: Any | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        ...
-
-
 class MarkerRuntime:
     """Isolated marker runtime with its own registry and environment."""
 
-    def __init__(self, *, adapter: AdapterProtocol | None = None) -> None:
+    def __init__(self, *, adapter: AgentAdapter | None = None) -> None:
         self.adapter = adapter
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
