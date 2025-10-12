@@ -6,11 +6,12 @@ import pytest
 
 import marker.core as core
 from marker.lang import compile_program, parse_program
+from tests.mock_adapter import MockAdapter
 
 
 
 def _compile(src: str):
-    return compile_program(parse_program(src))
+    return compile_program(parse_program(src), adapter=MockAdapter())
 
 
 def _run(monkeypatch: Any, src: str) -> Any:
@@ -26,7 +27,7 @@ def _run(monkeypatch: Any, src: str) -> Any:
 def test_runtime_city_country(monkeypatch: Any) -> None:
     import marker.core as core_mod
 
-    rt = core.MarkerRuntime()
+    rt = core.MarkerRuntime(adapter=MockAdapter())
 
     @rt.procedure
     def foo(city: str):  # type: ignore[no-redef]
@@ -45,7 +46,7 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
 def test_runtime_nested_calls(monkeypatch: Any) -> None:
     import marker.core as core_mod
 
-    rt = core.MarkerRuntime()
+    rt = core.MarkerRuntime(adapter=MockAdapter())
 
     @rt.procedure
     def get_country_info(city: str):  # type: ignore[no-redef]

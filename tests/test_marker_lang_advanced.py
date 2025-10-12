@@ -5,12 +5,13 @@ from typing import Any, Dict, List
 import pytest
 
 from marker.lang import compile_program, parse_program
+from tests.mock_adapter import MockAdapter
 
 
 
 
 def _compile(src: str):
-    return compile_program(parse_program(src))
+    return compile_program(parse_program(src), adapter=MockAdapter())
 
 
 def _run(monkeypatch: Any, src: str) -> Any:

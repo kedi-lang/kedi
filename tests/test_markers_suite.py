@@ -7,6 +7,7 @@ from typing import Iterable
 import pytest
 
 from marker.lang import compile_program, parse_program
+from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 from tests.utils_llm import llm_retry
 
 
@@ -29,6 +30,10 @@ requires_groq = pytest.mark.skipif(
 @llm_retry(tries=3, delay_s=0.5)
 def test_marker_programs(marker_path: Path) -> None:
     src = marker_path.read_text(encoding="utf-8")
-    rt = compile_program(parse_program(src))
+    # Build real adapter like CLI does
+    adapter_name = os.environ.get("MARKER_ADAPTER", "pydantic").lower()
+    model_name = os.environ.get("MODEL_NAME", os.environ.get("GROQ_MODEL", "groq:qwen/qwen3-32b"))
+    adapter = DSPyAdapter(model=model_name) if adapter_name == "dspy" else PydanticAdapter(model=model_name)
+    rt = compile_program(parse_program(src), adapter=adapter)
     out = rt.run_main()
     assert isinstance(out, str)

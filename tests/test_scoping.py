@@ -5,10 +5,11 @@ from typing import Any
 import pytest
 
 from marker.lang import compile_program, parse_program
+from tests.mock_adapter import MockAdapter
 
 
 def _run(src: str) -> str:
-    rt = compile_program(parse_program(src))
+    rt = compile_program(parse_program(src), adapter=MockAdapter())
     out = rt.run_main()
     assert isinstance(out, str)
     return out

@@ -5,6 +5,7 @@ import time
 from typing import Any, Callable, TypeVar
 
 from marker.lang import compile_program, parse_program
+from tests.mock_adapter import MockAdapter
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -36,5 +37,5 @@ def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
 
 
 def run_without_llm(src: str) -> Any:
-    runtime = compile_program(parse_program(src))
+    runtime = compile_program(parse_program(src), adapter=MockAdapter())
     return runtime.run_main()
