@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "markerdsl"
+version = "0.1.0"
+description = "Marker DSL"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "dspy",
+    "click",
+    "pytest>=8.2",
+    "pydantic>=2",
+    "python-dotenv",
+    "pydantic-settings",
+    "pydantic-ai>=1.0.17",
+    "antlr4-python3-runtime>=4.13"
+]
+authors = [
+    {name = "Mert Sirakaya", email = "mert@marker-lang.org"},
+    {name = "Yiğit Polat", email = "yigit@marker-lang.org"}
+]
+maintainers = [
+    {name = "Mert Sirakaya", email = "mert@marker-lang.org"},
+    {name = "Yiğit Polat", email = "yigit@marker-lang.org"}
+]
+license = {text = "Apache-2.0"}
+keywords = ["marker", "llm", "orchestration", "dsl", "workflow"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Documentation = "https://docs.marker-lang.org/"
+Source = "https://github.com/marker-lang/marker"
+Tracker = "https://github.com/marker-lang/marker/issues"
+
+[project.scripts]
+marker = "marker.cli:main"
+
+[tool.hatch.build]
+packages = ["src/marker"]
+include-package-data = true
