@@ -8,13 +8,13 @@ import dotenv
 
 dotenv.load_dotenv()
 
-# Ensure local 'src' is on sys.path when running from repo root
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(THIS_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from marker.lang import compile_program, parse_program
+from marker.agent_adapter import AgentAdapter
 from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 
 
@@ -38,7 +38,7 @@ def main() -> int:
         program = parse_program(src)
         # Instantiate adapter per flags
         adapter = (
-            DSPyAdapter(model=args.model or "groq:qwen/qwen3-32b")
+            DSPyAdapter(model=args.model or "groq/qwen/qwen3-32b")
             if args.adapter == "dspy"
             else PydanticAdapter(model=args.model or "groq:qwen/qwen3-32b")
         )
