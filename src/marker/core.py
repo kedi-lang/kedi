@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import sys
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple, Union
-
-from pydantic_ai.output import StructuredDict
 
 # -----------------------------
 # Marker runtime implementation
@@ -192,32 +189,6 @@ class MarkerRuntime:
                 typed_fields[out.key] = out.pytype
             else:
                 typed_fields[out.key] = str
-
-        if any_typed:
-            if sys.version_info >= (3, 12):
-                from typing import TypedDict as _TypedDict
-            else:
-                from typing_extensions import TypedDict as _TypedDict
-
-            ResultType = _TypedDict("Result", typed_fields)  # type: ignore[valid-type]
-            try:
-                setattr(ResultType, "description", description)
-            except Exception:
-                pass
-        else:
-            ResultType = StructuredDict(
-                {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                },
-                name="result",
-                description=description,
-            )
-            try:
-                setattr(ResultType, "description", description)
-            except Exception:
-                pass
         # Keep question format stable for tests; append description after to preserve key parsing
         base_q = (
             f"Fill in the fields: [{required[0]}]."
@@ -229,15 +200,10 @@ class MarkerRuntime:
 
         if self.adapter is None:
             raise RuntimeError("No adapter provided to MarkerRuntime")
-
-        if any_typed:
-            result = self.adapter.produce_sync(
-                template=question, output_type=ResultType
-            )
-        else:
-            result = self.adapter.produce_sync(
-                template=question, output_schema=typed_fields
-            )
+            
+        result = self.adapter.produce_sync(
+            template=question, output_schema=typed_fields
+        )
 
         if hasattr(result, "model_dump"):
             data_dict: Dict[str, Any] = result.model_dump()
@@ -252,7 +218,3 @@ class MarkerRuntime:
             env[key] = data_dict[key]
 
         return {k: env[k] for k in required}
-
-
-# No default runtime instance; users should create their own `MarkerRuntime()`
-
