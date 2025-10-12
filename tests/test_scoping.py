@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-import marker_pattern.core as core
-from marker_pattern.lang import parse_program, compile_program
+import marker.core as core
+from marker.lang import compile_program, parse_program
 
 
 class _SingleFakeAgent(core.Agent):  # type: ignore[misc]
@@ -14,7 +14,7 @@ class _SingleFakeAgent(core.Agent):  # type: ignore[misc]
 
     def run_sync(self, prompt: str):  # type: ignore[override]
         # Very simple agent: return all requested fields as deterministic placeholders
-        from typing import List, Dict
+        from typing import Dict, List
 
         data: Dict[str, Any] = {}
         # discover requested keys like [x, y]
@@ -23,9 +23,11 @@ class _SingleFakeAgent(core.Agent):  # type: ignore[misc]
         keys: List[str] = []
         if start != -1 and end != -1:
             keys = [k.strip() for k in prompt[start + 1 : end].split(",") if k.strip()]
+
         class R:
             def __init__(self, d: Dict[str, Any]):
                 self.output = d
+
         for k in keys:
             data[k] = f"{k}-value"
         return R(data)
@@ -72,26 +74,14 @@ def test_python_block_modifies_existing_marker_var_only(monkeypatch: Any) -> Non
 
 def test_new_python_names_do_not_leak_to_marker(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "@p():\n"
-        "  ```\n"
-        "  z = 'new'\n"
-        "  ```\n"
-        "  = <z>\n\n"
-        "= <p()>\n"
-    )
+    src = "@p():\n" "  ```\n" "  z = 'new'\n" "  ```\n" "  = <z>\n\n" "= <p()>\n"
     with pytest.raises(Exception):
         _run(src)
 
 
 def test_inline_python_reads_globals_and_locals(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "[g: int] = `2`\n"
-        "@p(x):\n"
-        "  = <`str(g + int(x))`>\n\n"
-        "= <p(5)>\n"
-    )
+    src = "[g: int] = `2`\n" "@p(x):\n" "  = <`str(g + int(x))`>\n\n" "= <p(5)>\n"
     out = _run(src)
     assert out == "7"
 
@@ -136,9 +126,7 @@ def test_nested_procedure_can_see_globals(monkeypatch: Any) -> None:
 
 def test_inline_name_error_yields_empty(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "= A<`unknown_name`>B\n"
-    )
+    src = "= A<`unknown_name`>B\n"
     with pytest.raises(Exception):
         _run(src)
 
@@ -173,9 +161,6 @@ def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:
 
 def test_inline_substitution_reads_globals(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "[x] = value\n"
-        "= <x>\n"
-    )
+    src = "[x] = value\n" "= <x>\n"
     out = _run(src)
     assert out == "value"

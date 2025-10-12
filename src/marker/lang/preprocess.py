@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import List
 
-
 BEGIN = "__BEGIN__"
 END = "__END__"
 
@@ -54,5 +53,3 @@ def preprocess_blocks(source: str) -> str:
         out.append(END)
 
     return "\n".join(out)
-
-

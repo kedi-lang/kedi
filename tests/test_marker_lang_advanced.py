@@ -4,8 +4,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-import marker_pattern.core as core
-from marker_pattern.lang import parse_program, compile_program
+import marker.core as core
+from marker.lang import compile_program, parse_program
 
 
 class _SingleFakeRunResult:
@@ -14,7 +14,9 @@ class _SingleFakeRunResult:
 
 
 class _SingleFakeAgent:
-    def __init__(self, model: str | None = None, *, output_type: Any = None, **_: Any) -> None:
+    def __init__(
+        self, model: str | None = None, *, output_type: Any = None, **_: Any
+    ) -> None:
         self.output_type = output_type
 
     def run_sync(self, prompt: str) -> _SingleFakeRunResult:  # type: ignore[override]
@@ -298,9 +300,7 @@ def test_nested_calls_and_args(monkeypatch: Any) -> None:
 
 
 def test_list_type_nested_and_python(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  matrix [m: list[list[int]]]\n  [flat: list[int]] = ```\n  return [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  matrix [m: list[list[int]]]\n  [flat: list[int]] = ```\n  return [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     # Our fake agent returns [] for unknown nested typing; allow "0" or empty leading
     assert out == "0" or out.startswith("")
@@ -317,60 +317,48 @@ def test_escaped_commas_and_nested_calls(monkeypatch: Any) -> None:
 
 
 def test_assignment_string_render_when_not_pure_python(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x] = hello <`1+1`> world\n  = <x>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x] = hello <`1+1`> world\n  = <x>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.startswith("hello") and "world" in out
 
 
 def test_output_updates_env_for_later_use(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  color is [color]\n  = <`color.upper()`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  color is [color]\n  = <`color.upper()`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.isupper()
 
 
 def test_python_inline_can_call_procedure(monkeypatch: Any) -> None:
-    src = (
-        "@double(n):\n  = <`int(n)*2`>\n\n@use(x):\n  = <`int(double(x))+1`>\n\n= <use(7)>\n"
-    )
+    src = "@double(n):\n  = <`int(n)*2`>\n\n@use(x):\n  = <`int(double(x))+1`>\n\n= <use(7)>\n"
     out = _run(monkeypatch, src)
     assert out == "15"
 
 
 def test_python_block_modifies_existing_and_new_vars(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x] = base\n  ```\n  x = x + '-mod'\n  y = 'new'\n  ```\n  = <x>-<`y`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x] = base\n  ```\n  x = x + '-mod'\n  y = 'new'\n  ```\n  = <x>-<`y`>\n\n= <p()>\n"
     # y is a pure Python variable; it should not leak or be available to inline python
     with pytest.raises(RuntimeError):
         _run(monkeypatch, src)
 
 
 def test_inline_python_backticks_nested_angles(monkeypatch: Any) -> None:
-    src = (
-        "= <`len([i for i in range(3)])`>\n"
-    )
+    src = "= <`len([i for i in range(3)])`>\n"
     out = _run(monkeypatch, src)
     assert out == "3"
 
 
 def test_mixed_whitespace_preserved(monkeypatch: Any) -> None:
-    src = (
-        "@p(x,y):\n  =   left   <x>   mid   <y>   right   \n\n= <p(a, b)>\n"
-    )
+    src = "@p(x,y):\n  =   left   <x>   mid   <y>   right   \n\n= <p(a, b)>\n"
     out = _run(monkeypatch, src)
     assert out == "left   a   mid   b   right"
 
 
-def test_nested_procedure_definition_is_ignored_and_call_fails(monkeypatch: Any) -> None:
+def test_nested_procedure_definition_is_ignored_and_call_fails(
+    monkeypatch: Any,
+) -> None:
     # Nested procedure is parsed but not registered; calling it should fail
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "@outer():\n  text\n  @inner():\n    = hi\n  = done\n\n= <inner()>\n"
-    )
+    src = "@outer():\n  text\n  @inner():\n    = hi\n  = done\n\n= <inner()>\n"
     rt = _compile(src)
     with pytest.raises(KeyError):
         rt.run_main()
@@ -382,9 +370,7 @@ def test_unmatched_closers_in_template_raise(monkeypatch: Any) -> None:
 
 
 def test_call_with_empty_literals_and_vars(monkeypatch: Any) -> None:
-    src = (
-        "@p(a,b):\n  = <a>|<b>\n\n= <p(<`'L'`>, R)>\n"
-    )
+    src = "@p(a,b):\n  = <a>|<b>\n\n= <p(<`'L'`>, R)>\n"
     out = _run(monkeypatch, src)
     assert out == "L|R"
 
@@ -397,33 +383,25 @@ def test_output_in_return_is_ignored_textually(monkeypatch: Any) -> None:
 
 
 def test_inline_python_imports_and_builtins(monkeypatch: Any) -> None:
-    src = (
-        "= <`__import__('math').sqrt(81)`>-<`len([1,2,3,4])`>\n"
-    )
+    src = "= <`__import__('math').sqrt(81)`>-<`len([1,2,3,4])`>\n"
     out = _run(monkeypatch, src)
     assert out.startswith("9.0-4")
 
 
 def test_assignment_type_coercion_to_int(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x:int] = `7`\n  = <`x*3`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x:int] = `7`\n  = <`x*3`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "21"
 
 
 def test_assignment_list_int_type_coercion(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "6"
 
 
 def test_inline_python_exec_statement_returns_empty_string(monkeypatch: Any) -> None:
-    src = (
-        "= <`a=5`>done\n"
-    )
+    src = "= <`a=5`>done\n"
     out = _run(monkeypatch, src)
     assert out.endswith("done")
 
@@ -445,154 +423,122 @@ def test_call_with_multiple_mixed_arguments(monkeypatch: Any) -> None:
 
 
 def test_return_trims_only_ends(monkeypatch: Any) -> None:
-    src = (
-        "=   a   <`'b'`>   c   \n"
-    )
+    src = "=   a   <`'b'`>   c   \n"
     out = _run(monkeypatch, src)
     assert out == "a   b   c"
 
 
 def test_unknown_var_in_python_block_raises(monkeypatch: Any) -> None:
     monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
-    src = (
-        "@p():\n  ```\n  non_existing += 1\n  ```\n  = ok\n\n= <p()>\n"
-    )
+    src = "@p():\n  ```\n  non_existing += 1\n  ```\n  = ok\n\n= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()
 
 
 def test_assign_and_then_output(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [seed] = base\n  using <seed> we need [out]\n  = <out>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [seed] = base\n  using <seed> we need [out]\n  = <out>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "out-value"
 
 
 def test_backtick_toggles_in_matching(monkeypatch: Any) -> None:
     # ensure matching ignores delimiters inside backticks
-    src = (
-        "= <`']]' + '<<' + '[['`>\n"
-    )
+    src = "= <`']]' + '<<' + '[['`>\n"
     out = _run(monkeypatch, src)
     assert "]]" in out and "[[" in out and "<<" in out
 
 
 def test_multiple_python_blocks_and_sync_env(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  ```\n  a = 2\n  ```\n  [b: int] = ```\n  return (2 * 5) + 3\n  ```\n  = <`str(b)`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  ```\n  a = 2\n  ```\n  [b: int] = ```\n  return (2 * 5) + 3\n  ```\n  = <`str(b)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "13"
 
 
 def test_inline_python_complex_expression(monkeypatch: Any) -> None:
-    src = (
-        "= <`'-'.join(str(i*i) for i in range(5))`>\n"
-    )
+    src = "= <`'-'.join(str(i*i) for i in range(5))`>\n"
     out = _run(monkeypatch, src)
     assert out.startswith("0-1-4-9-16")
 
 
 def test_call_return_value_used_as_arg(monkeypatch: Any) -> None:
-    src = (
-        "@inc(n):\n  = <`int(n)+1`>\n\n@sum2(a,b):\n  = <`int(a)+int(b)`>\n\n= <sum2(<inc(4)>, <inc(5)>)>\n"
-    )
+    src = "@inc(n):\n  = <`int(n)+1`>\n\n@sum2(a,b):\n  = <`int(a)+int(b)`>\n\n= <sum2(<inc(4)>, <inc(5)>)>\n"
     out = _run(monkeypatch, src)
     assert out == "11"
 
 
-def test_value_returning_python_block_in_assignment_native_value(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x: int] = ```\n  return 2 + 3\n  ```\n  = <`x*2`>\n\n= <p()>\n"
-    )
+def test_value_returning_python_block_in_assignment_native_value(
+    monkeypatch: Any,
+) -> None:
+    src = "@p():\n  [x: int] = ```\n  return 2 + 3\n  ```\n  = <`x*2`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "10"
 
 
 def test_assign_block_requires_type_for_non_str(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x] = ```\n  return 1+1\n  ```\n  = <`str(x)`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x] = ```\n  return 1+1\n  ```\n  = <`str(x)`>\n\n= <p()>\n"
     with pytest.raises(TypeError):
         _run(monkeypatch, src)
 
 
 def test_assign_block_str_with_wrong_annotation_raises(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x: int] = ```\n  return 's'\n  ```\n  = <x>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x: int] = ```\n  return 's'\n  ```\n  = <x>\n\n= <p()>\n"
     with pytest.raises(TypeError):
         _run(monkeypatch, src)
 
 
-def test_value_returning_python_block_in_assignment_expression(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [s] = ```\n  return 'hello' + ' world'\n  ```\n  = <s>\n\n= <p()>\n"
-    )
+def test_value_returning_python_block_in_assignment_expression(
+    monkeypatch: Any,
+) -> None:
+    src = "@p():\n  [s] = ```\n  return 'hello' + ' world'\n  ```\n  = <s>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "hello world"
 
 
 def test_value_returning_python_block_in_return(monkeypatch: Any) -> None:
-    src = (
-        "@p(a,b) -> int:\n  = ```\n  return int(a) + int(b)\n  ```\n\n= <p(7, 8)>\n"
-    )
+    src = "@p(a,b) -> int:\n  = ```\n  return int(a) + int(b)\n  ```\n\n= <p(7, 8)>\n"
     out = _run(monkeypatch, src)
     assert out == "15"
 
 
 def test_value_returning_python_block_in_return_expression(monkeypatch: Any) -> None:
-    src = (
-        "= ```\nreturn [1,2,3] + [4]\n```\n"
-    )
+    src = "= ```\nreturn [1,2,3] + [4]\n```\n"
     out = _run(monkeypatch, src)
-    assert out.replace(' ', '') in ("[1,2,3,4]", "[1,2,3,4]")
+    assert out.replace(" ", "") in ("[1,2,3,4]", "[1,2,3,4]")
 
 
 def test_procedure_return_type_annotation_native_return(monkeypatch: Any) -> None:
-    src = (
-        "@make() -> list[int]:\n  = `[]`\n\n@use():\n  = <`str(len(make()))`>\n\n= <use()>\n"
-    )
+    src = "@make() -> list[int]:\n  = `[]`\n\n@use():\n  = <`str(len(make()))`>\n\n= <use()>\n"
     out = _run(monkeypatch, src)
     assert out == "0"
 
 
 def test_procedure_default_return_str(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  = hello\n\n= <p()>\n"
-    )
+    src = "@p():\n  = hello\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "hello"
 
 
 def test_procedure_inline_python_return_requires_annotation(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  = `[]`\n\n= <p()>\n"
-    )
+    src = "@p():\n  = `[]`\n\n= <p()>\n"
     with pytest.raises(TypeError):
         _run(monkeypatch, src)
+
+
 def test_backtick_assignment_native_int(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x] = `1+1`\n  = <`x*2`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x] = `1+1`\n  = <`x*2`>\n\n= <p()>\n"
     with pytest.raises(TypeError):
         _run(monkeypatch, src)
 
 
 def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x: str] = `1+1`\n  = <x>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x: str] = `1+1`\n  = <x>\n\n= <p()>\n"
     with pytest.raises(TypeError):
         _run(monkeypatch, src)
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
-    src = (
-        "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
-    )
+    src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
     out = _run(monkeypatch, src)
     assert out.startswith("`1+1` and more ok")
 
@@ -606,25 +552,19 @@ def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
 
 
 def test_backtick_assignment_list_and_use(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [xs: list[int]] = `[1,2,3]`\n  = <`str(sum(xs))`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "6"
 
 
 def test_assignment_then_reassignment(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [x] = a\n  [x] = <`x+'b'`>\n  = <x>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [x] = a\n  [x] = <`x+'b'`>\n  = <x>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "ab"
 
 
 def test_output_then_python_block_consumes(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  need [v: int]\n  [w: int] = ```\n  return v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  need [v: int]\n  [w: int] = ```\n  return v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "168" or out.isdigit()
 
@@ -645,33 +585,25 @@ def test_literal_equals_must_be_escaped(monkeypatch: Any) -> None:
 
 
 def test_python_block_indent_normalization(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [c: int] = ```\n      a = 1\n      b = 2\n      return a + b\n  ```\n  = <`str(c)`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [c: int] = ```\n      a = 1\n      b = 2\n      return a + b\n  ```\n  = <`str(c)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "3"
 
 
 def test_inline_python_statement_then_value(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  <`assert 3>2`>\n  = <`str(10)`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  <`assert 3>2`>\n  = <`str(10)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "10"
 
 
 def test_nested_list_type_output_then_use(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  mat [m: list[list[str]]]\n  = <`str(sum(len(row) for row in m))`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  mat [m: list[list[str]]]\n  = <`str(sum(len(row) for row in m))`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "0" or out.isdigit()
 
 
 def test_return_with_nested_calls_and_text(monkeypatch: Any) -> None:
-    src = (
-        "@id(x):\n  = <x>\n\n= result:<id(<id(ok)>)>!\n"
-    )
+    src = "@id(x):\n  = <x>\n\n= result:<id(<id(ok)>)>!\n"
     out = _run(monkeypatch, src)
     assert out == "result:ok!"
 
@@ -686,20 +618,13 @@ def test_inline_python_errors_reported(monkeypatch: Any) -> None:
 
 def test_unmatched_end_marker_in_python_block_ignored(monkeypatch: Any) -> None:
     # BEGIN/END markers inside python block should be skipped
-    src = (
-        "@p():\n  ```\n  # BEGIN/END-like tokens\n  text = 'ok'\n  ```\n  = <`text`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  ```\n  # BEGIN/END-like tokens\n  text = 'ok'\n  ```\n  = <`text`>\n\n= <p()>\n"
     # Inline python cannot access block-local names; expect error
     with pytest.raises(RuntimeError):
         _run(monkeypatch, src)
 
 
 def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
-    src = (
-        "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = <`len(v)`>\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
-    )
+    src = "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = <`len(v)`>\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
     out = _run(monkeypatch, src)
     assert "|" in out
-
-
-

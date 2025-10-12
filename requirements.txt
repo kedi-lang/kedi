@@ -1,4 +1,7 @@
+dspy
 pytest>=8.2
-pydantic-ai
-antlr4-python3-runtime>=4.13
 pydantic>=2
+pydantic-ai
+python-dotenv
+pydantic-settings
+antlr4-python3-runtime>=4.13

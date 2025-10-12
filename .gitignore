@@ -5,6 +5,7 @@ __pycache__/
 
 # Trash
 .DS_Store
+.vscode
 
 # C extensions
 *.so

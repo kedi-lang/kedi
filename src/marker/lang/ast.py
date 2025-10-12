@@ -120,7 +120,9 @@ class ProcedureDef:
     return_type_annotation: Optional[str] = None
     # Optional mapping of parameter name to type annotation string
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
-    lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
+    lexical_env: Optional[dict[str, Any]] = field(
+        default=None, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -140,5 +142,3 @@ class Program:
     toplevel_body: List[Stmt] = field(default_factory=list)
     prelude: Optional[str] = None
     type_defs: List[TypeDef] = field(default_factory=list)
-
-

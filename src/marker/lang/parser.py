@@ -3,33 +3,13 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-from .ast import (
-    Program,
-    ProcedureDef,
-    Stmt,
-    TemplateLine,
-    ReturnStmt,
-    PythonBlock,
-    AssignBlockStmt,
-    ReturnBlockStmt,
-    AssignStmt,
-    Segment,
-    TextSegment,
-    InputSegment,
-    CallSegment,
-    CallArg,
-    LiteralArg,
-    VarArg,
-    OutputSegment,
-    PythonExprSegment,
-    PythonExprNativeSegment,
-    ProcDefStmt,
-    TypeDef,
-    TypeField,
-    TypeDefStmt,
-)
-from .preprocess import preprocess_blocks, BEGIN, END
-
+from .ast import (AssignBlockStmt, AssignStmt, CallArg, CallSegment,
+                  InputSegment, LiteralArg, OutputSegment, ProcDefStmt,
+                  ProcedureDef, Program, PythonBlock, PythonExprNativeSegment,
+                  PythonExprSegment, ReturnBlockStmt, ReturnStmt, Segment,
+                  Stmt, TemplateLine, TextSegment, TypeDef, TypeDefStmt,
+                  TypeField, VarArg)
+from .preprocess import BEGIN, END, preprocess_blocks
 
 SPECIALS = {"<", ">", "[", "]", "=", "@", ",", "~"}
 
@@ -102,7 +82,9 @@ def _strip_comments(source: str) -> str:
                     processed.append(ch)
                     i += 1
                     continue
-                raise ValueError("Literal '~' must be escaped as '~~' or start a type definition")
+                raise ValueError(
+                    "Literal '~' must be escaped as '~~' or start a type definition"
+                )
             processed.append(ch)
             i += 1
         result.append("".join(processed))
@@ -133,19 +115,19 @@ def _split_type_fields(src: str) -> List[str]:
             buf.append(ch)
             i += 1
             continue
-        if ch == '(':
+        if ch == "(":
             depth_paren += 1
-        elif ch == ')':
+        elif ch == ")":
             depth_paren = max(0, depth_paren - 1)
-        elif ch == '[':
+        elif ch == "[":
             depth_bracket += 1
-        elif ch == ']':
+        elif ch == "]":
             depth_bracket = max(0, depth_bracket - 1)
-        elif ch == '{':
+        elif ch == "{":
             depth_brace += 1
-        elif ch == '}':
+        elif ch == "}":
             depth_brace = max(0, depth_brace - 1)
-        if ch == ',' and depth_paren == depth_bracket == depth_brace == 0:
+        if ch == "," and depth_paren == depth_bracket == depth_brace == 0:
             field = "".join(buf).strip()
             if field == "":
                 raise ValueError("Empty field in type definition")
@@ -218,7 +200,9 @@ def _parse_segments(body: str) -> List[Segment]:
 
         # Misplaced single backslash in plain text (not end-of-line continuation)
         if ch == "\\":
-            raise ValueError("Misplaced backslash: use '\\\\' for a literal backslash or place a single \\ only at end-of-line for continuation")
+            raise ValueError(
+                "Misplaced backslash: use '\\\\' for a literal backslash or place a single \\ only at end-of-line for continuation"
+            )
 
         if ch == "<":
             # substitution or call
@@ -257,7 +241,9 @@ def _parse_segments(body: str) -> List[Segment]:
         # Return lines are handled at the parser level (line starts with '=')
         # so any '=' encountered here must be a literal and therefore escaped as '=='
         if ch == "=" and nxt != "=":
-            raise ValueError("Literal '=' must be written as '==' in template or return expressions")
+            raise ValueError(
+                "Literal '=' must be written as '==' in template or return expressions"
+            )
 
         buf.append(ch)
         i += 1
@@ -284,11 +270,11 @@ def _merge_line_continuations(source: str) -> str:
                 s2 = nxt.lstrip()
                 t = nxt.rstrip()
                 if t.endswith("\\") and not t.endswith("\\\\"):
-                    current = (current.rstrip() + " " + s2.rstrip()[:-1].lstrip())
+                    current = current.rstrip() + " " + s2.rstrip()[:-1].lstrip()
                     j += 1
                     continue
                 # last line in the continuation
-                current = (current.rstrip() + " " + s2.lstrip())
+                current = current.rstrip() + " " + s2.lstrip()
                 break
             merged.append(current)
             i = j + 1
@@ -339,6 +325,7 @@ def _parse_angle(inner: str) -> Segment:
         name, args_src = inner.split("(", 1)
         name = name.strip()
         args_src = args_src[:-1]  # drop closing )
+
         # NEW ARG PARSING: split into raw argument elements
         def _split_args(src: str) -> List[str]:
             parts: List[str] = []
@@ -384,7 +371,11 @@ def _parse_angle(inner: str) -> Segment:
         for raw in raw_args:
             # Single backtick-native => native argument
             raw_trim = raw.strip()
-            if raw_trim.startswith("`") and raw_trim.endswith("`") and raw_trim.count("`") == 2:
+            if (
+                raw_trim.startswith("`")
+                and raw_trim.endswith("`")
+                and raw_trim.count("`") == 2
+            ):
                 code = raw_trim[1:-1]
                 lit = LiteralArg("__NATIVE_BACKTICK__")
                 setattr(lit, "__native_backtick__", code)  # type: ignore[attr-defined]
@@ -528,7 +519,12 @@ def parse_program(source: str) -> Program:
                     param_type_annos[p] = None
             if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
                 raise ValueError("Procedure name must be an identifier")
-            proc = ProcedureDef(name=name, params=params, return_type_annotation=ret_anno, param_type_annotations=param_type_annos)
+            proc = ProcedureDef(
+                name=name,
+                params=params,
+                return_type_annotation=ret_anno,
+                param_type_annotations=param_type_annos,
+            )
             # Push this procedure (top-level or nested). Body will be collected until matching END.
             proc_stack.append(proc)
             current_body = proc.body
@@ -649,7 +645,9 @@ def parse_program(source: str) -> Program:
                     block_lines.append(cur)
                     i += 1
                 if i >= len(lines) or lines[i].strip() != "```":
-                    raise ValueError("Unterminated python block; expected closing ``` line")
+                    raise ValueError(
+                        "Unterminated python block; expected closing ``` line"
+                    )
                 # consume closing fence
                 i += 1
 
@@ -681,7 +679,9 @@ def parse_program(source: str) -> Program:
                             break
                     dedented.append(s[j:])
 
-                stmt_assign_block = AssignBlockStmt(name=name, code="\n".join(dedented), type_annotation=type_anno)
+                stmt_assign_block = AssignBlockStmt(
+                    name=name, code="\n".join(dedented), type_annotation=type_anno
+                )
                 if current_body is None:
                     program.toplevel_body.append(stmt_assign_block)
                 else:
@@ -690,9 +690,18 @@ def parse_program(source: str) -> Program:
 
             # Special case: backtick-only inline python expression (native value assignment)
             rhs_trim = rhs_src.strip()
-            if rhs_trim.startswith("`") and rhs_trim.endswith("`") and len(rhs_trim) >= 2 and rhs_trim.count("`") == 2:
+            if (
+                rhs_trim.startswith("`")
+                and rhs_trim.endswith("`")
+                and len(rhs_trim) >= 2
+                and rhs_trim.count("`") == 2
+            ):
                 code = rhs_trim[1:-1]
-                stmt_assign = AssignStmt(name=name, expr=[PythonExprNativeSegment(code=code)], type_annotation=type_anno)
+                stmt_assign = AssignStmt(
+                    name=name,
+                    expr=[PythonExprNativeSegment(code=code)],
+                    type_annotation=type_anno,
+                )
                 if current_body is None:
                     program.toplevel_body.append(stmt_assign)
                 else:
@@ -701,7 +710,9 @@ def parse_program(source: str) -> Program:
                 continue
 
             rhs_segments = _parse_segments(rhs_src)
-            stmt_assign = AssignStmt(name=name, expr=rhs_segments, type_annotation=type_anno)
+            stmt_assign = AssignStmt(
+                name=name, expr=rhs_segments, type_annotation=type_anno
+            )
             if current_body is None:
                 program.toplevel_body.append(stmt_assign)
             else:
@@ -714,7 +725,12 @@ def parse_program(source: str) -> Program:
             expr_src = stripped[1:]
             # Inline python native return: = `expr`
             expr_trim = expr_src.strip()
-            if expr_trim.startswith("`") and expr_trim.endswith("`") and len(expr_trim) >= 2 and expr_trim.count("`") == 2:
+            if (
+                expr_trim.startswith("`")
+                and expr_trim.endswith("`")
+                and len(expr_trim) >= 2
+                and expr_trim.count("`") == 2
+            ):
                 code = expr_trim[1:-1]
                 ret_block = ReturnBlockStmt(code=code)
                 if current_body is None:
@@ -738,7 +754,9 @@ def parse_program(source: str) -> Program:
                     block_lines.append(cur)
                     i += 1
                 if i >= len(lines) or lines[i].strip() != "```":
-                    raise ValueError("Unterminated python block; expected closing ``` line")
+                    raise ValueError(
+                        "Unterminated python block; expected closing ``` line"
+                    )
                 # consume closing fence
                 i += 1
 
@@ -801,5 +819,3 @@ def parse_program(source: str) -> Program:
         program.procedures.append(proc_stack.pop())
 
     return program
-
-

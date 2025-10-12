@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 
-from marker_pattern.lang import parse_program, compile_program
+from marker.lang import compile_program, parse_program
+
 
 def _run(src: str) -> str:
     rt = compile_program(parse_program(src))
@@ -16,13 +17,7 @@ def _run(src: str) -> str:
 
 def test_nested_simple_definition(monkeypatch: Any) -> None:
     # Define @bar inside @foo and call it
-    src = (
-        "@foo():\n"
-        "  @bar():\n"
-        "    = hi\n"
-        "  = <bar()>\n\n"
-        "= <foo()>\n"
-    )
+    src = "@foo():\n" "  @bar():\n" "    = hi\n" "  = <bar()>\n\n" "= <foo()>\n"
     out = _run(src)
     assert out == "hi"
 
@@ -56,13 +51,7 @@ def test_nested_call_chain(monkeypatch: Any) -> None:
 
 
 def test_nested_defined_then_used_in_python(monkeypatch: Any) -> None:
-    src = (
-        "@foo():\n"
-        "  @hello():\n"
-        "    = hi\n"
-        "  = <`hello()`>\n\n"
-        "= <foo()>\n"
-    )
+    src = "@foo():\n" "  @hello():\n" "    = hi\n" "  = <`hello()`>\n\n" "= <foo()>\n"
     out = _run(src)
     assert out == "hi"
 
@@ -80,6 +69,7 @@ def test_multiple_nested_procedures(monkeypatch: Any) -> None:
     out = _run(src)
     assert out == "AB"
 
+
 def test_shadow_param_names(monkeypatch: Any) -> None:
     src = (
         "@foo(x):\n"
@@ -94,11 +84,7 @@ def test_shadow_param_names(monkeypatch: Any) -> None:
 
 def test_outer_cannot_see_inner_param(monkeypatch: Any) -> None:
     src = (
-        "@foo(x):\n"
-        "  @inner(n):\n"
-        "    = <n>\n"
-        "  = <`int(n)`>\n\n"
-        "= <foo(7)>\n"
+        "@foo(x):\n" "  @inner(n):\n" "    = <n>\n" "  = <`int(n)`>\n\n" "= <foo(7)>\n"
     )
     with pytest.raises(Exception):
         _run(src)
@@ -118,13 +104,7 @@ def test_outer_cannot_see_inner_assignment(monkeypatch: Any) -> None:
 
 
 def test_outer_cannot_use_inner_param_name(monkeypatch: Any) -> None:
-    src = (
-        "@foo():\n"
-        "  @bar(n):\n"
-        "    = <n>\n"
-        "  = <`int(n)`>\n\n"
-        "= <foo()>\n"
-    )
+    src = "@foo():\n" "  @bar(n):\n" "    = <n>\n" "  = <`int(n)`>\n\n" "= <foo()>\n"
     with pytest.raises(Exception):
         _run(src)
 
@@ -238,5 +218,3 @@ def test_closure_shadowing_parameter(monkeypatch: Any) -> None:
     )
     out = _run(src)
     assert out == "3"
-
-
