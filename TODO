@@ -1,4 +1,4 @@
 - Restrict stable to allow only PR merges that passes all tests
 - Documentation
 - More tests
-- Improve codebase
+- Improve codebase and examples
