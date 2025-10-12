@@ -4,24 +4,10 @@ from typing import Any
 
 import pytest
 
-import marker.core as core
 from marker.lang import compile_program, parse_program
 
 
-class _SingleFakeAgent:  # type: ignore[misc]
-    def __init__(self, model: str | None = None, *, output_type: Any = None, **_: Any) -> None:  # type: ignore[no-untyped-def]
-        self.output_type = output_type
-
-    def run_sync(self, prompt: str):  # type: ignore[override]
-        class R:
-            def __init__(self) -> None:
-                self.output: dict[str, Any] = {}
-
-        return R()
-
-
 def _run(src: str) -> str:
-    core.Agent = _SingleFakeAgent  # type: ignore[assignment]
     rt = compile_program(parse_program(src))
     out = rt.run_main()
     assert isinstance(out, str)

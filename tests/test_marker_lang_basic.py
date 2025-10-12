@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, List
 
 import pytest
 
@@ -8,72 +8,12 @@ import marker.core as core
 from marker.lang import compile_program, parse_program
 
 
-class _SingleFakeRunResult:
-    def __init__(self, output: Dict[str, Any]):
-        self.output = output
-
-
-class _SingleFakeAgent:
-    def __init__(
-        self, model: str | None = None, *, output_type: Any = None, **_: Any
-    ) -> None:
-        self.output_type = output_type
-
-    def run_sync(self, prompt: str) -> _SingleFakeRunResult:  # type: ignore[override]
-        data: Dict[str, Any] = {}
-
-        # TypedDict-aware filling
-        annotations: Dict[str, Any] = {}
-        ty = self.output_type
-        if hasattr(ty, "__annotations__") and isinstance(ty.__annotations__, dict):  # type: ignore[attr-defined]
-            annotations = ty.__annotations__  # type: ignore[attr-defined]
-
-        # Parse required keys from question prompt
-        start = prompt.find("[")
-        end = prompt.find("]", start + 1)
-        keys: List[str] = []
-        if start != -1 and end != -1:
-            keys = [k.strip() for k in prompt[start + 1 : end].split(",") if k.strip()]
-
-        # No description heuristics; tests rely on required keys only
-
-        for k in keys:
-            ann = annotations.get(k)
-            if ann is None:
-                data.setdefault(k, f"{k}-value")
-                continue
-            try:
-                origin = getattr(ann, "__origin__", None)
-            except Exception:
-                origin = None
-            if ann is str:
-                data[k] = f"{k}-value"
-            elif ann is int:
-                data[k] = 42
-            elif ann is float:
-                data[k] = 3.14
-            elif ann is bool:
-                data[k] = True
-            elif origin in (list, List):
-                arg = getattr(ann, "__args__", (str,))[0]
-                if arg is str:
-                    data[k] = [f"{k}-a", f"{k}-b"]
-                elif arg is int:
-                    data[k] = [1, 2]
-                else:
-                    data[k] = []
-            else:
-                data[k] = f"{k}-value"
-
-        return _SingleFakeRunResult(output=data)
-
 
 def _compile(src: str):
     return compile_program(parse_program(src))
 
 
 def _run(monkeypatch: Any, src: str) -> Any:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     rt = _compile(src)
     out = rt.run_main()
     assert isinstance(out, str)
@@ -85,8 +25,6 @@ def _run(monkeypatch: Any, src: str) -> Any:
 # ----------------------
 def test_runtime_city_country(monkeypatch: Any) -> None:
     import marker.core as core_mod
-
-    monkeypatch.setattr(core_mod, "Agent", _SingleFakeAgent, raising=True)
 
     rt = core.MarkerRuntime()
 
@@ -107,7 +45,6 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
 def test_runtime_nested_calls(monkeypatch: Any) -> None:
     import marker.core as core_mod
 
-    monkeypatch.setattr(core_mod, "Agent", _SingleFakeAgent, raising=True)
     rt = core.MarkerRuntime()
 
     @rt.procedure
@@ -320,7 +257,6 @@ def test_typed_params_basic_sum(monkeypatch: Any) -> None:
 
 
 def test_typed_params_string_default_and_type_mismatch(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     rt = _compile("@concat(a, b):\n  = <`a + b`>\n\n= <concat(hello, world)>\n")
     out = rt.run_main()
     assert out == "helloworld"
@@ -409,14 +345,12 @@ def test_inline_python_with_comparison_and_assert(monkeypatch: Any) -> None:
 
 
 def test_inline_python_assert_failure_in_return(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     rt = _compile("= <`assert False`>\n")
     with pytest.raises(RuntimeError):
         rt.run_main()
 
 
 def test_inline_python_assert_failure_in_template_line(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     src = "@p():\n" "  <`assert False`>\n" "  = ok\n\n" "= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):

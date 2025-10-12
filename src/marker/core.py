@@ -256,15 +256,3 @@ class MarkerRuntime:
 
 # No default runtime instance; users should create their own `MarkerRuntime()`
 
-
-class Agent:
-    """Legacy placeholder for tests that monkeypatch `marker.core.Agent`.
-
-    Runtime does not use this class; tests can safely set attributes on it.
-    """
-
-    def __init__(self, *_: Any, **__: Any) -> None:
-        pass
-
-    def run_sync(self, *_: Any, **__: Any) -> Any:  # pragma: no cover
-        return type("R", (), {"output": {}})()

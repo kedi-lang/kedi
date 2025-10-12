@@ -4,64 +4,9 @@ from typing import Any, Dict, List
 
 import pytest
 
-import marker.core as core
 from marker.lang import compile_program, parse_program
 
 
-class _SingleFakeRunResult:
-    def __init__(self, output: Dict[str, Any]):
-        self.output = output
-
-
-class _SingleFakeAgent:
-    def __init__(
-        self, model: str | None = None, *, output_type: Any = None, **_: Any
-    ) -> None:
-        self.output_type = output_type
-
-    def run_sync(self, prompt: str) -> _SingleFakeRunResult:  # type: ignore[override]
-        data: Dict[str, Any] = {}
-
-        annotations: Dict[str, Any] = {}
-        ty = self.output_type
-        if hasattr(ty, "__annotations__") and isinstance(ty.__annotations__, dict):  # type: ignore[attr-defined]
-            annotations = ty.__annotations__  # type: ignore[attr-defined]
-
-        start = prompt.find("[")
-        end = prompt.find("]", start + 1)
-        keys: List[str] = []
-        if start != -1 and end != -1:
-            keys = [k.strip() for k in prompt[start + 1 : end].split(",") if k.strip()]
-
-        for k in keys:
-            ann = annotations.get(k)
-            if ann is None:
-                data.setdefault(k, f"{k}-value")
-                continue
-            try:
-                origin = getattr(ann, "__origin__", None)
-            except Exception:
-                origin = None
-            if ann is str:
-                data[k] = f"{k}-value"
-            elif ann is int:
-                data[k] = 42
-            elif ann is float:
-                data[k] = 3.14
-            elif ann is bool:
-                data[k] = True
-            elif origin in (list, List):
-                arg = getattr(ann, "__args__", (str,))[0]
-                if arg is str:
-                    data[k] = [f"{k}-a", f"{k}-b"]
-                elif arg is int:
-                    data[k] = [1, 2]
-                else:
-                    data[k] = []
-            else:
-                data[k] = f"{k}-value"
-
-        return _SingleFakeRunResult(output=data)
 
 
 def _compile(src: str):
@@ -69,7 +14,6 @@ def _compile(src: str):
 
 
 def _run(monkeypatch: Any, src: str) -> Any:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     rt = _compile(src)
     out = rt.run_main()
     assert isinstance(out, str)
@@ -216,7 +160,7 @@ INVALID_PARSE_SOURCES = [
     "= text ]",  # stray ']'
     "[]",  # empty name
     "[call(<x>)]",  # invalid output name containing '('
-    "@p():\n  ```\n  no end fence",  # unterminated python block
+    "@p():\n  ```\n  no end fence",
     "= 1+1 = 2",  # unescaped '=' inside expression
     # Note: '==' is a literal '=' and is allowed; do not include here
 ]
@@ -264,7 +208,6 @@ RUNTIME_ERROR_CASES = [
 
 @pytest.mark.parametrize("src,exc", RUNTIME_ERROR_CASES)
 def test_runtime_errors(monkeypatch: Any, src: str, exc: type[BaseException]) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     if "not_defined()" in src:
         # compile ok, run fails due to unknown proc
         rt = _compile(src)
@@ -276,7 +219,6 @@ def test_runtime_errors(monkeypatch: Any, src: str, exc: type[BaseException]) ->
 
 
 def test_no_main_defined_raises(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     src = "@p(x):\n  = <x>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
@@ -357,7 +299,6 @@ def test_nested_procedure_definition_is_ignored_and_call_fails(
     monkeypatch: Any,
 ) -> None:
     # Nested procedure is parsed but not registered; calling it should fail
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     src = "@outer():\n  text\n  @inner():\n    = hi\n  = done\n\n= <inner()>\n"
     rt = _compile(src)
     with pytest.raises(KeyError):
@@ -429,7 +370,6 @@ def test_return_trims_only_ends(monkeypatch: Any) -> None:
 
 
 def test_unknown_var_in_python_block_raises(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     src = "@p():\n  ```\n  non_existing += 1\n  ```\n  = ok\n\n= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
@@ -444,7 +384,7 @@ def test_assign_and_then_output(monkeypatch: Any) -> None:
 
 def test_backtick_toggles_in_matching(monkeypatch: Any) -> None:
     # ensure matching ignores delimiters inside backticks
-    src = "= <`']]' + '<<' + '[['`>\n"
+    src = "= <`']]'+ '<<' + '[['`>\n"
     out = _run(monkeypatch, src)
     assert "]]" in out and "[[" in out and "<<" in out
 
@@ -609,7 +549,6 @@ def test_return_with_nested_calls_and_text(monkeypatch: Any) -> None:
 
 
 def test_inline_python_errors_reported(monkeypatch: Any) -> None:
-    monkeypatch.setattr(core, "Agent", _SingleFakeAgent, raising=True)
     src = "= <`1/0`>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
