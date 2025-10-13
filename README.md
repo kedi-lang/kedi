@@ -1,5 +1,5 @@
 # Marker 
-## a typed reasoning layer for LLM orchestration
+## A typed reasoning layer for LLM orchestration
 
 Marker is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
 
