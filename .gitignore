@@ -12,9 +12,8 @@ __pycache__/
 
 # Dev files
 Makefile
-
 *.test.py
-
+test.marker
 markers.md
 
 # Distribution / packaging
