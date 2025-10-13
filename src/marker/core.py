@@ -69,8 +69,9 @@ class MarkerRuntime:
 
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        # Allow re-registration for AI-generated procedures from cache
         if fn.__name__ in self._procedures:
-            raise ValueError(f"Procedure already registered: {fn.__name__}")
+            pass  # Silently replace
         self._procedures[fn.__name__] = fn
         return fn
 

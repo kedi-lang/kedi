@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from ..core import MarkerRuntime, AgentAdapter
 from .ast import (
     Program,
+    ProgramWithValidation,
     ProcedureDef,
     TemplateLine,
     ReturnStmt,
@@ -33,6 +34,7 @@ from .ast import (
     TypeDef,
     TypeField,
     TypeDefStmt,
+    BacktickLineStmt,
 )
 from .types import TypeValidator
 
@@ -483,14 +485,41 @@ def _assign_value_from_native(native: Any, pytype: Any | None, *, strict_native:
 
 def _execute_python_block(stmt_code: str, rt: MarkerRuntime, kwargs: dict[str, Any]) -> Any:
     env_exec = _build_python_env(rt, kwargs)
+    
+    # Pass kwargs as actual function parameters to avoid Python scoping issues
+    # when the code modifies parameters (e.g., n //= d)
+    param_names = list(kwargs.keys())
+    params_str = ", ".join(param_names)
     wrapper_src = (
-        "def __marker_block__():\n" + "\n".join("    " + line for line in stmt_code.splitlines())
+        f"def __marker_block__({params_str}):\n" + 
+        "\n".join("    " + line for line in stmt_code.splitlines())
     )
+    
     try:
         exec(wrapper_src, env_exec, env_exec)
-        return env_exec["__marker_block__"]()
+        # Pass kwargs values as arguments
+        return env_exec["__marker_block__"](**kwargs)
     except Exception as e:
         raise RuntimeError(f"Python block error: {e}") from e
+
+
+def _exec_inline_side_effects(rt: MarkerRuntime, code: str, env_map: dict[str, Any]) -> None:
+    """Execute a one-line python snippet for side effects, syncing back only existing vars.
+
+    Mirrors PythonBlock semantics: do not leak brand new names into marker env; only update
+    variables that already exist in the given env_map.
+    """
+    env_exec = _build_python_env(rt, env_map)
+    try:
+        exec(code, env_exec, env_exec)
+    except Exception as e:
+        raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
+    env_rt = rt._current_env.get()  # type: ignore[attr-defined]
+    for var_name in list(env_map.keys()):
+        if var_name in env_exec:
+            env_map[var_name] = env_exec[var_name]
+            if env_rt is not None:
+                env_rt[var_name] = env_exec[var_name]
 
 
 # -----------------------------
@@ -619,6 +648,9 @@ def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> Ma
 
     # Register procedures
     for proc in prog.procedures:
+        # Skip AI-prompted placeholder procedures entirely; implementations come from cache
+        if getattr(proc, "ai_prompt", None):
+            continue
         def make_proc(p: ProcedureDef):  # capture
             def _body(**kwargs: Any) -> Any:
                 # Merge lexical environment if present
@@ -708,6 +740,9 @@ def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> Ma
                                     closure_env[var_name] = env_exec[var_name]
                                     if env_rt is not None:
                                         env_rt[var_name] = env_exec[var_name]
+                        elif isinstance(stmt, BacktickLineStmt):
+                            # Execute inline side-effect-only python; update existing vars only
+                            _exec_inline_side_effects(rt, stmt.code, closure_env)
                         elif isinstance(stmt, AssignBlockStmt):
                             result = _execute_python_block(stmt.code, rt, closure_env)
                             pytype = _resolve_pytype(rt, stmt.type_annotation, env=closure_env)
@@ -802,6 +837,14 @@ def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> Ma
 
         rt.procedure(make_proc(proc))
 
+    # Attach validation suites to runtime if present (for runners)
+    tests = getattr(prog, "_validation_tests", None)
+    evals = getattr(prog, "_validation_evals", None)
+    if tests is not None:
+        setattr(rt, "_validation_tests", tests)
+    if evals is not None:
+        setattr(rt, "_validation_evals", evals)
+
     # Top-level main: execute accumulated top-level statements before rendering return
     if prog.toplevel_return is not None:
         ret_stmt = prog.toplevel_return
@@ -837,6 +880,8 @@ def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> Ma
                             kwargs[var_name] = env_exec[var_name]
                             if env_rt is not None:
                                 env_rt[var_name] = env_exec[var_name]
+                elif isinstance(stmt, BacktickLineStmt):
+                    _exec_inline_side_effects(rt, stmt.code, kwargs)
                 elif isinstance(stmt, AssignBlockStmt):
                     result = _execute_python_block(stmt.code, rt, kwargs)
                     pytype = _resolve_pytype(rt, stmt.type_annotation, env=kwargs)

@@ -3,12 +3,13 @@ from __future__ import annotations
 import re
 from typing import List, Tuple
 
-from .ast import (AssignBlockStmt, AssignStmt, CallArg, CallSegment,
-                  InputSegment, LiteralArg, OutputSegment, ProcDefStmt,
-                  ProcedureDef, Program, PythonBlock, PythonExprNativeSegment,
+from .ast import (AssignBlockStmt, AssignStmt, BacktickLineStmt, CallArg,
+                  CallSegment, EvalMetric, EvalSuite, InputSegment,
+                  LiteralArg, OutputSegment, ProcDefStmt, ProcedureDef,
+                  Program, PythonBlock, PythonExprNativeSegment,
                   PythonExprSegment, ReturnBlockStmt, ReturnStmt, Segment,
-                  Stmt, TemplateLine, TextSegment, TypeDef, TypeDefStmt,
-                  TypeField, VarArg)
+                  Stmt, TemplateLine, TestCase, TestSuite, TextSegment,
+                  TypeDef, TypeDefStmt, TypeField, VarArg)
 from .preprocess import BEGIN, END, preprocess_blocks
 
 SPECIALS = {"<", ">", "[", "]", "=", "@", ",", "~"}
@@ -36,6 +37,11 @@ def _strip_comments(source: str) -> str:
 
     for idx, line in enumerate(lines, start=1):
         stripped = line.strip()
+
+        # Check for line comments first (before checking for ```)
+        if stripped.startswith("#") and not stripped.startswith("##"):
+            # This is a single-line comment, skip it entirely
+            continue
 
         if stripped.endswith("```"):
             result.append(line)
@@ -458,6 +464,8 @@ def parse_program(source: str) -> Program:
     lines = pre.splitlines()
 
     program = Program()
+    tests: list[TestSuite] = []
+    evals: list[EvalSuite] = []
     proc_stack: List[ProcedureDef] = []
     current_body: List[Stmt] | None = None
 
@@ -489,6 +497,128 @@ def parse_program(source: str) -> Program:
             continue
 
         if stripped.startswith("@"):
+            # Handle validation suites: @test: name: / @eval: name:
+            if stripped.startswith("@test:") or stripped.startswith("@eval:"):
+                # parse header
+                header = stripped[1:-1]  # drop leading @ and trailing ':'
+                kind, rest = header.split(":", 1)
+                kind = kind.strip()
+                target_name = rest.strip()
+                # Expect a BEGIN on next non-empty line
+                i += 1
+                if i >= len(lines) or lines[i].strip() != BEGIN:
+                    raise ValueError("Validation block must start with an indented block")
+                i += 1
+                # Collect until matching END at same level (track nested begins)
+                items: list[tuple[str, list[str]]] = []
+                item_name: str | None = None
+                item_body: list[str] = []
+                depth = 0
+                while i < len(lines):
+                    cur = lines[i]
+                    cur_s = cur.strip()
+                    if cur_s == BEGIN:
+                        depth += 1
+                        # do not include markers in body
+                        i += 1
+                        continue
+                    if cur_s == END:
+                        if depth == 0:
+                            # flush last case at suite end
+                            if item_name is not None:
+                                items.append((item_name, item_body))
+                            break
+                        else:
+                            depth -= 1
+                            i += 1
+                            continue
+                    # case/metric header lines start with '>' at suite level (depth == 0)
+                    if depth == 0 and cur_s.startswith(">"):
+                        # flush previous
+                        if item_name is not None:
+                            items.append((item_name, item_body))
+                            item_body = []
+                        # parse name: "> case: name:" or "> metric: name:"
+                        if ":" not in cur_s:
+                            raise ValueError("Invalid validation item header")
+                        arrow, rest2 = cur_s.split(":", 1)
+                        if ":" not in rest2:
+                            raise ValueError("Invalid validation item header")
+                        label, name_part = rest2.split(":", 1)
+                        item_name = name_part.strip()
+                        if item_name.endswith(":"):
+                            item_name = item_name[:-1].strip()
+                        i += 1
+                        continue
+                    # otherwise accumulate body lines
+                    item_body.append(cur)
+                    i += 1
+                # consume END
+                i += 1
+                if kind == "test":
+                    suite = TestSuite(procedure_name=target_name)
+                    for nm, body_lines in items:
+                        # Determine body kind
+                        # strip leading/trailing empty lines
+                        bl = [b for b in body_lines if b.strip() != "" and b.strip() not in (BEGIN, END)]
+                        if not bl:
+                            raise ValueError("Empty test case body")
+                        first = bl[0].strip()
+                        if first.startswith("`") and first.endswith("`") and first.count("`") == 2:
+                            code = first[1:-1]
+                            suite.cases.append(TestCase(name=nm, code=code, is_block=False))
+                        elif first == "```":
+                            # collect until closing fence
+                            j = 1
+                            block_lines: list[str] = []
+                            while j < len(bl):
+                                if bl[j].strip() == "```":
+                                    break
+                                # skip preprocess markers if leaked
+                                if bl[j].strip() in (BEGIN, END):
+                                    j += 1
+                                    continue
+                                block_lines.append(bl[j])
+                                j += 1
+                            suite.cases.append(TestCase(name=nm, code="\n".join(block_lines), is_block=True))
+                        else:
+                            raise ValueError("Test case must be backtick line or fenced python block")
+                    tests.append(suite)
+                else:
+                    suite = EvalSuite(procedure_name=target_name)
+                    for nm, body_lines in items:
+                        bl = [b for b in body_lines if b.strip() != "" and b.strip() not in (BEGIN, END)]
+                        if not bl:
+                            raise ValueError("Empty metric body")
+                        first = bl[0].strip()
+                        if first.startswith("="):
+                            expr = first[1:].strip()
+                            # allow inline backtick python: = `expr`
+                            if (
+                                expr.startswith("`") and expr.endswith("`") and expr.count("`") == 2
+                            ):
+                                expr = expr[1:-1]
+                            if expr == "```":
+                                # block metric
+                                # collect subsequent lines until closing fence
+                                block_lines: list[str] = []
+                                for k in range(1, len(bl)):
+                                    if bl[k].strip() == "```":
+                                        break
+                                    if bl[k].strip() in (BEGIN, END):
+                                        continue
+                                    block_lines.append(bl[k])
+                                suite.metrics.append(EvalMetric(name=nm, code="\n".join(block_lines), is_block=True))
+                            else:
+                                # inline expression
+                                suite.metrics.append(EvalMetric(name=nm, code=expr, is_block=False))
+                        else:
+                            raise ValueError("Metric must start with '=' followed by expression or fenced block")
+                    evals.append(suite)
+                # attach and continue
+                setattr(program, "_validation_tests", tests)
+                setattr(program, "_validation_evals", evals)
+                continue
             if not stripped.endswith(":"):
                 raise ValueError("Procedure header must end with ':'")
             header = stripped[1:-1]
@@ -607,6 +737,22 @@ def parse_program(source: str) -> Program:
                     program.toplevel_body.append(stmt_block)
             else:
                 current_body.append(stmt_block)
+            continue
+
+        # Standalone single-backtick inline Python line: executes side effects only
+        if (
+            stripped.startswith("`")
+            and stripped.endswith("`")
+            and len(stripped) >= 2
+            and stripped.count("`") == 2
+        ):
+            code = stripped[1:-1]
+            stmt_bt = BacktickLineStmt(code=code)
+            if current_body is None:
+                program.toplevel_body.append(stmt_bt)
+            else:
+                current_body.append(stmt_bt)
+            i += 1
             continue
 
         # Inside a procedure body or at top-level
@@ -802,6 +948,28 @@ def parse_program(source: str) -> Program:
             else:
                 current_body.append(ret)
             i += 1
+            continue
+
+        # AI generation prompt lines: start with '>' at the first content of a proc body
+        if stripped.startswith(">") and current_body is not None and proc_stack:
+            # Accumulate contiguous '>' prompt lines into the procedure's ai_prompt
+            prompt_lines: list[str] = []
+            while i < len(lines):
+                cur = lines[i]
+                cur_s = cur.strip()
+                if cur_s.startswith(">"):
+                    # strip leading '>' and one space if present
+                    text = cur.lstrip()
+                    if text.startswith(">"):
+                        text = text[1:]
+                        if text.startswith(" "):
+                            text = text[1:]
+                    prompt_lines.append(text)
+                    i += 1
+                    continue
+                break
+            # Attach to the innermost procedure
+            proc_stack[-1].ai_prompt = "\n".join(prompt_lines)
             continue
 
         # Template line

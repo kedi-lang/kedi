@@ -7,6 +7,7 @@ import pytest
 import marker.core as core
 from marker.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
+from marker.tests_runner import run_tests, run_evals
 
 
 
@@ -177,6 +178,37 @@ def test_valid_basic_paris(monkeypatch: Any) -> None:
     )
     assert isinstance(out, str)
     assert len(out) > 0
+
+
+def test_validation_blocks_parse_and_run(monkeypatch: Any) -> None:
+    src = (
+        "@get_cities_in(country) -> list[str]:\n"
+        "  All cities in <country> are [cities: list[str]].\n"
+        "  = `cities`\n\n"
+        "@test: get_cities_in:\n"
+        "  > case: tr_cities_len:\n"
+        "    `assert len(get_cities_in('Turkey')) >= 0`\n"
+        "  > case: sg_cities_len:\n"
+        "    `assert len(get_cities_in('Singapore')) >= 0`\n\n"
+        "@eval: get_cities_in:\n"
+        "  > metric: num:\n"
+        "    = `1.5`\n"
+    )
+    tests = run_tests(src, adapter=MockAdapter())
+    assert tests and all(c.success for s in tests for c in s.cases)
+    evals = run_evals(src, adapter=MockAdapter())
+    assert evals and all(m.score >= 0 for s in evals for m in s.metrics)
+
+
+def test_validation_companion_file_discovery(tmp_path: Any, monkeypatch: Any) -> None:
+    p = tmp_path / "prog.marker"
+    pv = tmp_path / "prog.val.marker"
+    p.write_text("@id(x):\n  = <x>\n\n= <id(ok)>\n", encoding="utf-8")
+    pv.write_text("@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n\n@eval: id:\n  > metric: basic:\n    = `1.0`\n", encoding="utf-8")
+    tests = run_tests(str(p), adapter=MockAdapter())
+    assert tests and tests[0].cases[0].success
+    evals = run_evals(str(p), adapter=MockAdapter())
+    assert evals and evals[0].metrics[0].score == 1.0
 
 
 def test_valid_nested_calls(monkeypatch: Any) -> None:

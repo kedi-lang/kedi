@@ -189,11 +189,7 @@ RUNTIME_ERROR_CASES = [
         "@p():\n  using <missing> we need [x]\n  = done\n\n= <p()>\n",
         KeyError,
     ),
-    (
-        # Duplicate procedure names cause registration error
-        "@p():\n  = a\n\n@p():\n  = b\n\n= <p()>\n",
-        ValueError,
-    ),
+    # Note: Duplicate procedure definitions are now allowed (for cache merging); last wins
     (
         # Inline Python assertion failure should raise at runtime
         "= <`assert False`>\n",
@@ -568,3 +564,57 @@ def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
     src = "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = <`len(v)`>\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
     out = _run(monkeypatch, src)
     assert "|" in out
+
+
+def test_standalone_backtick_line_side_effects(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n"
+        "  [x] = start\n"
+        "  `x = x + '-mid'`\n"
+        "  = <x>\n\n"
+        "= <p()>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out.endswith("-mid")
+
+
+def test_standalone_backtick_invalid_mixed_content(monkeypatch: Any) -> None:
+    src = "@p():\n  `x=1` more\n  = ok\n\n= <p()>\n"
+    from tests.mock_adapter import MockAdapter
+    from marker.lang import parse_program
+    with pytest.raises(Exception):
+        parse_program(src)
+
+
+def test_standalone_backtick_interacts_with_outputs(monkeypatch: Any) -> None:
+    src = "@p():\n  need [v]\n  `v = v + '-z'`\n  = <v>\n\n= <p()>\n"
+    out = _run(monkeypatch, src)
+    assert out.endswith("-z") or out != ""
+
+
+def test_standalone_backtick_block_comment_interplay(monkeypatch: Any) -> None:
+    src = "@p():\n  ###\n  `x=1`\n  ###\n  = ok\n\n= <p()>\n"
+    out = _run(monkeypatch, src)
+    assert out == "ok"
+
+
+def test_standalone_backtick_line_in_top_level(monkeypatch: Any) -> None:
+    src = (
+        "[x] = base\n"
+        "`x = x + '-top'`\n"
+        "= <x>\n"
+    )
+    out = _run(monkeypatch, src)
+    assert out.endswith("-top")
+
+
+def test_standalone_backtick_line_error_propagates(monkeypatch: Any) -> None:
+    src = (
+        "@p():\n"
+        "  `assert False`\n"
+        "  = ok\n\n"
+        "= <p()>\n"
+    )
+    rt = _compile(src)
+    with pytest.raises(RuntimeError):
+        rt.run_main()

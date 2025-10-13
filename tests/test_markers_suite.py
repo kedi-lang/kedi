@@ -8,6 +8,7 @@ import pytest
 
 from marker.lang import compile_program, parse_program
 from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
+from marker.cli import main as cli_main
 from tests.utils_llm import llm_retry
 
 
@@ -37,3 +38,17 @@ def test_marker_programs(marker_path: Path) -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     out = rt.run_main()
     assert isinstance(out, str)
+
+
+def test_cli_test_and_eval(tmp_path: Path) -> None:
+    srcp = tmp_path / "x.marker"
+    valp = tmp_path / "x.val.marker"
+    srcp.write_text("@f():\n  = ok\n\n= <f()>\n", encoding="utf-8")
+    valp.write_text("@test: f:\n  > case: ok:\n    `assert f() == 'ok'`\n\n@eval: f:\n  > metric: s:\n    = `0.5`\n", encoding="utf-8")
+    import sys
+    sys.argv = ["marker", str(srcp), "--test"]
+    rc = cli_main()
+    assert rc == 0
+    sys.argv = ["marker", str(srcp), "--eval"]
+    rc2 = cli_main()
+    assert rc2 == 0

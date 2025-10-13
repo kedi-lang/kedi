@@ -1,0 +1,22 @@
+@test: consolidate_city_info_as_markdown:
+    > case: normal_case_2:
+      ```
+          city1 = City(
+              name="City A",
+              history="History A",
+              economy="Economy A",
+              cuisine="Cuisine A"
+          )
+          city2 = City(
+              name="City B",
+              history="History B",
+              economy="Economy B",
+              cuisine="Cuisine B"
+          )
+          cities = [city1, city2]
+          result = consolidate_city_info_as_markdown(cities, "Country X")
+          assert result is not None, f"Expected non-None result, got {result}"
+          assert city1.name in result, f"Expected city name {city1.name} in result, got: {result}"
+          assert city2.name in result, f"Expected city name {city2.name} in result, got: {result}"
+      # Edge Case: Test with an empty list of cities
+      ```

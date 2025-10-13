@@ -1,0 +1,42 @@
+@is_prime(n: int) -> bool:
+  = `n>1 and all(n%i for i in range(2,int(n**0.5)+1))`
+
+@fib(n: int) -> int:
+  = `0 if n==0 else 1 if n==1 else fib(n-1)+fib(n-2)`
+
+@prime_factors(n: int) -> list[int]:
+  = ```
+  factors = []
+  d = 2
+  while n > 1:
+      while n % d == 0:
+          factors.append(d)
+          n //= d
+      d += 1
+  return factors
+  ```
+
+@test: is_prime:
+  > case: small:
+    `assert is_prime(13)`
+  > case: composite:
+    `assert not is_prime(21)`
+
+@test: fib:
+  > case: basics:
+    `assert fib(10) == 55`
+
+@eval: prime_factors:
+  > metric: correctness:
+    = ```
+    data = {6:[2,3], 28:[2,2,7], 35:[5,7]}
+    score = 0
+    for k,v in data.items():
+        if prime_factors(k)==v:
+            score += 1
+    return score/len(data)
+    ```
+
+= <is_prime(`13`)>
+
+

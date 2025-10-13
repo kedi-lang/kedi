@@ -82,6 +82,11 @@ class PythonBlock(Stmt):
 
 
 @dataclass
+class BacktickLineStmt(Stmt):
+    code: str
+
+
+@dataclass
 class AssignBlockStmt(Stmt):
     name: str
     code: str
@@ -123,6 +128,8 @@ class ProcedureDef:
     lexical_env: Optional[dict[str, Any]] = field(
         default=None, repr=False, compare=False
     )
+    # If present, this procedure is an AI-prompt-only spec
+    ai_prompt: Optional[str] = None
 
 
 @dataclass
@@ -142,3 +149,38 @@ class Program:
     toplevel_body: List[Stmt] = field(default_factory=list)
     prelude: Optional[str] = None
     type_defs: List[TypeDef] = field(default_factory=list)
+
+
+# --- Testing and Evaluation AST nodes ---
+
+
+@dataclass
+class TestCase:
+    name: str
+    code: str
+    is_block: bool = False
+
+
+@dataclass
+class TestSuite:
+    procedure_name: str
+    cases: List[TestCase] = field(default_factory=list)
+
+
+@dataclass
+class EvalMetric:
+    name: str
+    code: str
+    is_block: bool = False
+
+
+@dataclass
+class EvalSuite:
+    procedure_name: str
+    metrics: List[EvalMetric] = field(default_factory=list)
+
+
+@dataclass
+class ProgramWithValidation(Program):
+    tests: List[TestSuite] = field(default_factory=list)
+    evals: List[EvalSuite] = field(default_factory=list)
