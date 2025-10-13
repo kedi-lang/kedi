@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import Any, Callable
+from pydantic import BaseModel
 from ..ast import ProcedureDef, ProcDefStmt
 from ...core import MarkerRuntime
 from .environment import ScopedDict
 from .statement_compiler import StatementExecutor
-from .type_system import resolve_type, is_value_compatible, coerce_model_value
+from .type_system import MarkerType, is_value_compatible, coerce_model_value, coerce_value_to_type
 
 
 class ProcedureCompiler:
@@ -84,19 +85,23 @@ class ProcedureCompiler:
         
         for param_name in proc.params:
             expected = proc.param_type_annotations.get(param_name)
-            if expected:
-                pytype = resolve_type(self.rt, expected)
-            else:
-                pytype = str  # default to string
+            marker_type = MarkerType(expected if expected else "str")
             
             if param_name not in kwargs:
                 raise TypeError(f"Missing parameter: {param_name}")
             
-            provided = coerce_model_value(pytype, kwargs[param_name]) if pytype is not None else kwargs[param_name]
-            kwargs[param_name] = provided
+            provided = kwargs[param_name]
             
-            if pytype is not None and not is_value_compatible(pytype, provided):
-                raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+            # Strict validation for parameters: no coercion
+            if not marker_type.is_none():
+                pytype = marker_type.resolve(self.rt)
+                if pytype is not None:
+                    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+                        if not isinstance(provided, pytype):
+                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                    else:
+                        if not is_value_compatible(marker_type, provided, self.rt):
+                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
     
     def _enforce_return_type(
         self,
@@ -105,18 +110,19 @@ class ProcedureCompiler:
         env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
-        anno = resolve_type(self.rt, proc.return_type_annotation, env=env)
-        
-        if anno is None:
+        marker_type = MarkerType(proc.return_type_annotation)
+
+        if marker_type.is_none():
             # Default to str: non-string native returns are illegal
             if last_return is not None and not isinstance(last_return, str):
                 raise TypeError("Return value must be str; annotate function to return non-string")
             return "" if last_return is None else str(last_return)
         
-        # Annotated non-str: allow native returns; validate type
-        if not is_value_compatible(anno, last_return):
+        # Annotated non-str: allow native returns; validate type (coerce then check)
+        coerced = coerce_value_to_type(last_return, marker_type, self.rt, env)
+        if not is_value_compatible(marker_type, coerced, self.rt, env):
             raise TypeError("Return value does not match annotated type")
-        return last_return
+        return coerced
     
     @contextmanager
     def _nested_procedure_scope(self, proc: ProcedureDef, closure_env: dict):

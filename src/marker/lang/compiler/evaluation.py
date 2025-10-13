@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ...core import MarkerRuntime
 from .environment import lookup_value, build_python_env
+from .type_system import MarkerType
 
 
 def evaluate_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
@@ -96,8 +97,8 @@ def prepare_segments(
             expr.append(str(value))
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
-            from .type_system import resolve_type
-            pytype = resolve_type(rt, seg.type_annotation, env=kwargs)
+            marker_type = MarkerType(seg.type_annotation)
+            pytype = marker_type.resolve(rt, env=kwargs)
             expr.append(rt.o(seg.name, pytype))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = evaluate_python_inline(rt, seg.code, kwargs)

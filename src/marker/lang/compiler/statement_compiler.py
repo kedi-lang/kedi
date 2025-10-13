@@ -12,7 +12,7 @@ from .evaluation import (
     execute_python_block, execute_inline_side_effects, evaluate_python_inline
 )
 from .type_system import (
-    resolve_type, coerce_value_to_type, is_value_compatible,
+    MarkerType, coerce_value_to_type, is_value_compatible,
     assign_value_from_native, detect_rhs_kind
 )
 
@@ -52,23 +52,23 @@ class StatementCompiler:
         """Execute an assignment statement."""
         native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
-        pytype = resolve_type(self.rt, stmt.type_annotation, env=closure_env)
+        marker_type = MarkerType(stmt.type_annotation)
         
         if native is not None:
             if is_backtick:
-                value = assign_value_from_native(native, pytype, strict_native=True)
+                value = assign_value_from_native(native, marker_type, self.rt, closure_env, strict_native=True)
             elif is_angle:
-                value = assign_value_from_native(native, pytype, strict_native=False)
+                value = assign_value_from_native(native, marker_type, self.rt, closure_env, strict_native=False)
             elif is_call:
                 value = native
             else:
                 value = rendered.strip()
-                if pytype is not None:
-                    value = coerce_value_to_type(value, pytype)
+                if not marker_type.is_none():
+                    value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
         else:
             value = rendered.strip()
-            if pytype is not None:
-                value = coerce_value_to_type(value, pytype)
+            if not marker_type.is_none():
+                value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
         
         self._set_value(stmt.name, value, closure_env)
     
@@ -79,12 +79,13 @@ class StatementCompiler:
     ) -> None:
         """Execute an assignment with Python block RHS."""
         result = execute_python_block(stmt.code, self.rt, closure_env)
-        pytype = resolve_type(self.rt, stmt.type_annotation, env=closure_env)
+        marker_type = MarkerType(stmt.type_annotation)
         
         value = result
-        if pytype is not None:
-            value = coerce_value_to_type(value, pytype)
-            if not is_value_compatible(pytype, value):
+        if not marker_type.is_none():
+            # Coerce then validate for annotated assignments
+            value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
+            if not is_value_compatible(marker_type, value, self.rt, closure_env):
                 raise TypeError("Native assignment value does not match annotated type")
         else:
             if not isinstance(value, str):
@@ -200,7 +201,12 @@ class StatementExecutor:
                     self.compiler.execute_assignment(stmt, closure_env)
                 
                 elif isinstance(stmt, ReturnStmt):
-                    last_return = self.compiler.compile_return(stmt)(**closure_env)
+                    # For typed procedures, preserve native value if resolvable; otherwise render to string
+                    if getattr(proc, "return_type_annotation", None):
+                        native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
+                        last_return = native if native is not None else rendered.strip()
+                    else:
+                        last_return = self.compiler.compile_return(stmt)(**closure_env)
                 
                 elif isinstance(stmt, ReturnBlockStmt):
                     last_return = self.compiler.compile_return_block(stmt, closure_env)

@@ -103,9 +103,20 @@ def parse_call_arguments(args_src: str) -> list[CallArg]:
             args.append(lit)
             continue
         
-        # String-rendered template
-        segs = parse_segments(raw)
+        # Parse generic segments; if it's a single pure python or call, preserve natively
+        segs = parse_segments(raw_trim)
         lit = LiteralArg("__RENDER__")
+        if len(segs) == 1:
+            only = segs[0]
+            from ..ast import PythonExprSegment, CallSegment
+            if isinstance(only, PythonExprSegment):
+                setattr(lit, "__python_segment__", only)
+                args.append(lit)
+                continue
+            if isinstance(only, CallSegment):
+                setattr(lit, "__call_segment__", only)
+                args.append(lit)
+                continue
         setattr(lit, "__render_segments__", segs)
         args.append(lit)
     
