@@ -4,7 +4,7 @@ from .ast import (CallSegment, InputSegment, OutputSegment, ProcedureDef,
                   Program, ReturnStmt, Segment, TemplateLine, TextSegment)
 from .compiler import compile_program
 from .parser import parse_program
-from .preprocess import preprocess_blocks
+from .parser.preprocessing import preprocess_blocks
 from .types import TypeValidator, ValidationResult
 
 __all__ = [

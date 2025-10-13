@@ -1,0 +1,267 @@
+"""Type system for Marker compiler.
+
+Handles type resolution, coercion, and validation.
+"""
+from __future__ import annotations
+
+import re
+import shlex
+from typing import Any, List
+from pydantic import BaseModel
+
+from ...core import MarkerRuntime
+from ..ast import TypeDef, TypeField
+from .environment import build_type_env
+
+
+def resolve_type(
+    rt: MarkerRuntime,
+    type_annotation: str | None,
+    *,
+    env: dict[str, Any] | None = None
+) -> Any | None:
+    """Resolve a type annotation string to a Python type."""
+    if not type_annotation:
+        return None
+    
+    try:
+        type_env = build_type_env(rt, env)
+        return eval(type_annotation, type_env, type_env)
+    except Exception:
+        try:
+            from ..types import TypeValidator
+            res = TypeValidator(type_annotation).validate_names()
+            return res.pytype if res.is_valid else None
+        except Exception:
+            return None
+
+
+def coerce_value_to_type(value: Any, pytype: Any) -> Any:
+    """Coerce a value to match the expected type."""
+    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+        return coerce_model_value(pytype, value)
+    
+    # Handle list[T] and basic types
+    try:
+        origin = getattr(pytype, "__origin__", None)
+        args = getattr(pytype, "__args__", ())
+        
+        if origin in (list, List):
+            item_t = args[0] if args else Any
+            if isinstance(value, list):
+                return [_cast_item(v, item_t) for v in value]
+            return value
+        
+        if pytype in (int, float, str, bool):
+            return pytype(value)
+    except Exception:
+        pass
+    
+    return value
+
+
+def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
+    """Coerce a value to a Pydantic model."""
+    if isinstance(value, model):
+        return value
+    
+    if isinstance(value, dict):
+        try:
+            return model.model_validate(value)
+        except Exception:
+            return value
+    
+    if isinstance(value, str):
+        text = value.strip()
+        # Try JSON
+        try:
+            if text.startswith("{") and text.endswith("}"):
+                return model.model_validate_json(text)
+        except Exception:
+            pass
+        
+        # Try key=value format
+        parsed = _parse_model_repr(text, model)
+        if parsed is not None:
+            try:
+                return model.model_validate(parsed)
+            except Exception:
+                return value
+    
+    return value
+
+
+def is_value_compatible(pytype: Any, value: Any) -> bool:
+    """Check if a value is compatible with a type."""
+    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+        return isinstance(value, pytype)
+    
+    try:
+        origin = getattr(pytype, "__origin__", None)
+        args = getattr(pytype, "__args__", ())
+        
+        if origin in (list, List):
+            if not isinstance(value, list):
+                return False
+            item_t = args[0] if args else Any
+            if item_t in (int, float, str, bool):
+                return all(isinstance(v, item_t) for v in value)
+            return True
+        
+        if pytype in (int, float, str, bool):
+            return isinstance(value, pytype)
+    except Exception:
+        return True
+    
+    return True
+
+
+def register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
+    """Register a custom type definition as a Pydantic model."""
+    annotations: dict[str, Any] = {}
+    namespace: dict[str, Any] = {}
+    
+    for field in typedef.fields:
+        anno = field.type_annotation or "str"
+        resolved = resolve_type(rt, anno, env=type_env)
+        if resolved is None:
+            raise TypeError(f"Unknown type annotation '{anno}' in type {typedef.name}")
+        annotations[field.name] = resolved
+    
+    namespace['__annotations__'] = annotations
+    field_order = [field.name for field in typedef.fields]
+    
+    # Create model class
+    new_model = type(typedef.name, (BaseModel,), namespace)
+    setattr(new_model, '__init__', _make_init(typedef.name, field_order, new_model))
+    
+    type_env[typedef.name] = new_model
+    type_env[f"__{typedef.name}_fields__"] = annotations
+
+
+def assign_value_from_native(native: Any, pytype: Any | None, *, strict_native: bool) -> Any:
+    """Assign a value from native Python, applying type rules."""
+    if strict_native:
+        # Backtick-native: strict typing
+        if isinstance(pytype, type) and issubclass(pytype, BaseModel):
+            coerced = coerce_model_value(pytype, native)
+            if not isinstance(coerced, pytype):
+                raise TypeError("Native assignment value does not match annotated type")
+            return coerced
+        
+        if isinstance(native, str):
+            if pytype is not None and pytype is not str:
+                raise TypeError("Annotation type mismatch: got str value")
+            return native
+        
+        # Non-string requires explicit annotation
+        if pytype is None:
+            raise TypeError("Native non-string assignment requires explicit type annotation")
+        if not is_value_compatible(pytype, native):
+            raise TypeError("Native assignment value does not match annotated type")
+        return native
+    else:
+        # Angle-inline: always string
+        if pytype is not None:
+            raise TypeError("Angle-inline pure python cannot have a non-str annotation")
+        return str(native)
+
+
+def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
+    """Detect the kind of RHS expression."""
+    from ..ast import TextSegment, PythonExprNativeSegment, PythonExprSegment, CallSegment
+    
+    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    
+    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
+    is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
+    is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
+    
+    return is_backtick_native, is_angle_pure, is_call_only
+
+
+# Private helpers
+
+def _cast_item(v: Any, item_t: Any) -> Any:
+    """Cast a single item to the expected type."""
+    try:
+        if item_t in (int, float, str, bool):
+            return item_t(v)
+        return v
+    except Exception:
+        return v
+
+
+def _convert_basic_literal(raw: str, typ: Any) -> Any:
+    """Convert a string to a basic literal type."""
+    try:
+        if typ in (int, float, str):
+            return typ(raw)
+        if typ is bool:
+            if raw.lower() in {"true", "1", "yes"}:
+                return True
+            if raw.lower() in {"false", "0", "no"}:
+                return False
+            return bool(raw)
+    except Exception:
+        return raw
+    return raw
+
+
+def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | None:
+    """Parse key=value format into dict for model."""
+    text = value.strip()
+    if not text:
+        return None
+    
+    try:
+        tokens = shlex.split(text)
+    except ValueError:
+        return None
+    
+    data: dict[str, Any] = {}
+    fields = getattr(model, "model_fields", {})
+    
+    for token in tokens:
+        if "=" not in token:
+            return None
+        name, raw = token.split("=", 1)
+        if name not in fields:
+            return None
+        field = fields[name]
+        annotation = getattr(field, "annotation", str) or str
+        data[name] = _convert_basic_literal(raw, annotation)
+    
+    return data
+
+
+def _make_init(type_name: str, field_order: list[str], model_class: type[BaseModel]):
+    """Create an __init__ that accepts positional args in field order."""
+    def _init(self, *args: Any, **kwargs: Any) -> None:
+        if args:
+            if len(args) > len(field_order):
+                raise TypeError(f"Too many positional arguments for {type_name}")
+            for name, value in zip(field_order, args):
+                if name in kwargs:
+                    raise TypeError(f"Multiple values for field '{name}' in {type_name}")
+                kwargs[name] = value
+        super(model_class, self).__init__(**kwargs)
+    return _init
+
+
+def push_type_env(rt: MarkerRuntime) -> dict[str, Any]:
+    """Push a new type environment layer."""
+    stack = getattr(rt, "_type_env_stack", None)
+    if stack is None:
+        stack = []
+        setattr(rt, "_type_env_stack", stack)
+    new_env: dict[str, Any] = {}
+    stack.append(new_env)
+    return new_env
+
+
+def pop_type_env(rt: MarkerRuntime) -> None:
+    """Pop the current type environment layer."""
+    stack = getattr(rt, "_type_env_stack", None)
+    if isinstance(stack, list) and stack:
+        stack.pop()
