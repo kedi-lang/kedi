@@ -561,7 +561,7 @@ def test_unmatched_end_marker_in_python_block_ignored(monkeypatch: Any) -> None:
 
 
 def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
-    src = "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = <`len(v)`>\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
+    src = "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = `len(v)`\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
     out = _run(monkeypatch, src)
     assert "|" in out
 

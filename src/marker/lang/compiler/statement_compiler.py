@@ -12,7 +12,7 @@ from .evaluation import (
     execute_python_block, execute_inline_side_effects, evaluate_python_inline
 )
 from .type_system import (
-    MarkerType, coerce_value_to_type, is_value_compatible,
+    MarkerType,
     assign_value_from_native, detect_rhs_kind
 )
 
@@ -64,11 +64,17 @@ class StatementCompiler:
             else:
                 value = rendered.strip()
                 if not marker_type.is_none():
-                    value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
+                    try:
+                        value = marker_type.validate(self.rt, closure_env, value)
+                    except Exception:
+                        raise TypeError("Native assignment value does not match annotated type")
         else:
             value = rendered.strip()
             if not marker_type.is_none():
-                value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
+                try:
+                    value = marker_type.validate(self.rt, closure_env, value)
+                except Exception:
+                    raise TypeError("Native assignment value does not match annotated type")
         
         self._set_value(stmt.name, value, closure_env)
     
@@ -83,9 +89,10 @@ class StatementCompiler:
         
         value = result
         if not marker_type.is_none():
-            # Coerce then validate for annotated assignments
-            value = coerce_value_to_type(value, marker_type, self.rt, closure_env)
-            if not is_value_compatible(marker_type, value, self.rt, closure_env):
+            # Strict validation with TypeAdapter
+            try:
+                value = marker_type.validate(self.rt, closure_env, value)
+            except Exception:
                 raise TypeError("Native assignment value does not match annotated type")
         else:
             if not isinstance(value, str):

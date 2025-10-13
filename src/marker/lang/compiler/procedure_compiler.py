@@ -8,7 +8,7 @@ from ..ast import ProcedureDef, ProcDefStmt
 from ...core import MarkerRuntime
 from .environment import ScopedDict
 from .statement_compiler import StatementExecutor
-from .type_system import MarkerType, is_value_compatible, coerce_model_value, coerce_value_to_type
+from .type_system import MarkerType
 
 
 class ProcedureCompiler:
@@ -92,16 +92,13 @@ class ProcedureCompiler:
             
             provided = kwargs[param_name]
             
-            # Strict validation for parameters: no coercion
+            # Strict validation for parameters using TypeAdapter
             if not marker_type.is_none():
-                pytype = marker_type.resolve(self.rt)
-                if pytype is not None:
-                    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
-                        if not isinstance(provided, pytype):
-                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
-                    else:
-                        if not is_value_compatible(marker_type, provided, self.rt):
-                            raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                try:
+                    validated = marker_type.validate(self.rt, None, provided, allow_str_coercion=False)
+                except Exception:
+                    raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                kwargs[param_name] = validated
     
     def _enforce_return_type(
         self,
@@ -118,11 +115,12 @@ class ProcedureCompiler:
                 raise TypeError("Return value must be str; annotate function to return non-string")
             return "" if last_return is None else str(last_return)
         
-        # Annotated non-str: allow native returns; validate type (coerce then check)
-        coerced = coerce_value_to_type(last_return, marker_type, self.rt, env)
-        if not is_value_compatible(marker_type, coerced, self.rt, env):
+        # Annotated return: strict validate and return validated value
+        try:
+            # Do not allow string literal coercion for returns
+            return marker_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+        except Exception:
             raise TypeError("Return value does not match annotated type")
-        return coerced
     
     @contextmanager
     def _nested_procedure_scope(self, proc: ProcedureDef, closure_env: dict):

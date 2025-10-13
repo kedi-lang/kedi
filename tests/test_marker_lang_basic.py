@@ -411,8 +411,8 @@ def test_python_block_can_call_procedures(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
         (
-            "@times2(n):\n"
-            "  = <`int(n)*2`>\n\n"
+            "@times2(n) -> int:\n"
+            "  = `int(n)*2`\n\n"
             "@use(a):\n"
             "  [doubled: int] = ```\n  return times2(a)\n  ```\n"
             "  [tripled: int] = ```\n  return int(a) * 3\n  ```\n"
@@ -526,7 +526,7 @@ def test_typed_output_list_of_str(monkeypatch: Any) -> None:
 def test_typed_assignment_int(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        "@p():\n  [x: int] = <`1+2+3`>\n  = <`x*2`>\n\n= <p()>\n",
+        "@p():\n  [x: int] = `1+2+3`\n  = <`x*2`>\n\n= <p()>\n",
     )
     assert out == "12"
 
@@ -571,7 +571,7 @@ def test_typed_list_cross_call_and_inline(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@id(x):\n  = <x>\n\n"
-            "@p():\n  items [xs: list[str]] from <id(seed)>\n  [ys: list[str]] = <`[v+'!' for v in xs]`>\n  = <`'-'.join(ys)`>\n\n"
+            "@p():\n  items [xs: list[str]] from <id(seed)>\n  [ys: list[str]] = `[v+'!' for v in xs]`\n  = <`'-'.join(ys)`>\n\n"
             "= <p()>\n"
         ),
     )

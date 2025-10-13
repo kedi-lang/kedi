@@ -8,6 +8,7 @@ import re
 import shlex
 from typing import Any, List
 from pydantic import BaseModel, TypeAdapter
+import ast
 
 from ...core import MarkerRuntime
 from ..ast import TypeDef, TypeField
@@ -15,23 +16,16 @@ from .environment import build_type_env
 
 
 class MarkerType:
-    """Represents a type annotation in Marker DSL.
-    
-    Preserves the annotation string and can resolve it to a Python type
-    using the runtime's type environment.
-    """
-    
+    """Represents a type annotation in Marker DSL and provides strict validation."""
+
     def __init__(self, annotation: str | None):
-        """Create a MarkerType from an annotation string."""
         self.annotation = annotation
-    
+
     def resolve(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> Any | None:
-        """Resolve the annotation to a Python type using the runtime environment."""
         if not self.annotation:
             return None
-        
+        type_env = build_type_env(rt, env)
         try:
-            type_env = build_type_env(rt, env)
             return eval(self.annotation, type_env, type_env)
         except Exception:
             try:
@@ -40,51 +34,49 @@ class MarkerType:
                 return res.pytype if res.is_valid else None
             except Exception:
                 return None
-    
+
     def is_none(self) -> bool:
-        """Check if this represents an untyped value."""
         return self.annotation is None
-    
-    def get_type_adapter(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> TypeAdapter | None:
-        """Create a Pydantic TypeAdapter using the annotation string."""
+
+    def get_adapter(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> TypeAdapter | None:
+        """Build a strict TypeAdapter via eval("TypeAdapter(<annotation>, config=CONFIG)")."""
         if not self.annotation:
             return None
-        
+        ns = build_type_env(rt, env)
+        ns.update({
+            'TypeAdapter': TypeAdapter,
+            'CONFIG': {'strict': True, 'arbitrary_types_allowed': True},
+        })
         try:
-            # Create adapter with the annotation string directly
-            return TypeAdapter(self.annotation, config={'arbitrary_types_allowed': True})
+            expr = f"TypeAdapter({self.annotation}, config=CONFIG)"
+            return eval(expr, ns, ns)
         except Exception:
-            # Fallback: try resolving and creating adapter from resolved type
-            resolved = self.resolve(rt, env)
-            if resolved is not None:
-                try:
-                    return TypeAdapter(resolved, config={'arbitrary_types_allowed': True})
-                except Exception:
-                    return None
-            return None
-    
+            # Fallback to resolved type
+            typ = self.resolve(rt, env)
+            if typ is None:
+                return None
+            try:
+                return TypeAdapter(typ, config={'strict': True, 'arbitrary_types_allowed': True})
+            except Exception:
+                return None
+
+    def validate(self, rt: MarkerRuntime, env: dict[str, Any] | None, value: Any, *, allow_str_coercion: bool = False) -> Any:
+        adapter = self.get_adapter(rt, env)
+        if adapter is None:
+            return value
+        try:
+            return adapter.validate_python(value)
+        except Exception:
+            raise
+
     def __repr__(self) -> str:
         return f"MarkerType({self.annotation!r})"
-    
+
     def __str__(self) -> str:
         return self.annotation or "Any"
 
 
-def coerce_value_to_type(
-    value: Any,
-    marker_type: MarkerType,
-    rt: MarkerRuntime,
-    env: dict[str, Any] | None = None
-) -> Any:
-    """Coerce a value to match the expected type."""
-    if marker_type.is_none():
-        return value
-    
-    pytype = marker_type.resolve(rt, env)
-    if pytype is None:
-        return value
-    
-    return _coerce_by_pytype(value, pytype)
+"""Minimal helpers kept below; complex coercion/compatibility removed in favor of TypeAdapter."""
 
 
 def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
@@ -118,21 +110,12 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     return value
 
 
-def is_value_compatible(
-    marker_type: MarkerType,
-    value: Any,
-    rt: MarkerRuntime,
-    env: dict[str, Any] | None = None
-) -> bool:
-    """Check if a value is compatible with a type."""
-    if marker_type.is_none():
+def is_value_compatible(marker_type: MarkerType, value: Any, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> bool:
+    try:
+        marker_type.validate(rt, env, value)
         return True
-    
-    pytype = marker_type.resolve(rt, env)
-    if pytype is None:
-        return True
-    
-    return _is_compatible_by_pytype(value, pytype)
+    except Exception:
+        return False
 
 
 def register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
@@ -159,39 +142,24 @@ def register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any])
     type_env[f"__{typedef.name}_fields__"] = annotations
 
 
-def assign_value_from_native(
-    native: Any,
-    marker_type: MarkerType,
-    rt: MarkerRuntime,
-    env: dict[str, Any] | None,
-    *,
-    strict_native: bool
-) -> Any:
-    """Assign a value from native Python, applying type rules."""
-    pytype = marker_type.resolve(rt, env) if not marker_type.is_none() else None
-    
+def assign_value_from_native(native: Any, marker_type: MarkerType, rt: MarkerRuntime, env: dict[str, Any] | None, *, strict_native: bool) -> Any:
     if strict_native:
-        # Backtick-native: strict typing
-        if isinstance(pytype, type) and issubclass(pytype, BaseModel):
-            coerced = coerce_model_value(pytype, native)
-            if not isinstance(coerced, pytype):
-                raise TypeError("Native assignment value does not match annotated type")
-            return coerced
-        
-        if isinstance(native, str):
-            if pytype is not None and pytype is not str:
-                raise TypeError("Annotation type mismatch: got str value")
-            return native
-        
-        # Non-string requires explicit annotation
-        if pytype is None:
+        if marker_type.is_none():
+            if isinstance(native, str):
+                return native
             raise TypeError("Native non-string assignment requires explicit type annotation")
-        if not is_value_compatible(marker_type, native, rt, env):
+        # Preserve legacy message for str vs non-str annotation mismatch
+        if isinstance(native, str):
+            try_typ = marker_type.resolve(rt, env)
+            if try_typ is not None and try_typ is not str:
+                raise TypeError("Annotation type mismatch: got str value")
+        try:
+            return marker_type.validate(rt, env, native)
+        except Exception:
             raise TypeError("Native assignment value does not match annotated type")
-        return native
     else:
-        # Angle-inline: always string
-        if pytype is not None:
+        # Angle-inline: always string unless annotated
+        if not marker_type.is_none():
             raise TypeError("Angle-inline pure python cannot have a non-str annotation")
         return str(native)
 
@@ -207,23 +175,6 @@ def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
     
     return is_backtick_native, is_angle_pure, is_call_only
-
-
-# Private helpers
-
-def _cast_item(v: Any, item_t: Any) -> Any:
-    """Cast a single item to the expected type."""
-    try:
-        if _is_list_type(item_t):
-            inner = getattr(item_t, "__args__", (Any,))[0] if getattr(item_t, "__args__", ()) else Any
-            return _coerce_list(v, inner)
-        if isinstance(item_t, type) and issubclass(item_t, BaseModel):
-            return coerce_model_value(item_t, v)
-        if item_t in (int, float, str, bool):
-            return item_t(v)
-        return v
-    except Exception:
-        return v
 
 
 def _convert_basic_literal(raw: str, typ: Any) -> Any:
@@ -283,74 +234,7 @@ def _make_init(type_name: str, field_order: list[str], model_class: type[BaseMod
     return _init
 
 
-# --- Internal helpers for nested/collection types ---
-
-def _is_list_type(typ: Any) -> bool:
-    origin = getattr(typ, "__origin__", None)
-    return origin in (list, List)
-
-
-def _coerce_by_pytype(value: Any, pytype: Any) -> Any:
-    if isinstance(pytype, type) and issubclass(pytype, BaseModel):
-        return coerce_model_value(pytype, value)
-    try:
-        if _is_list_type(pytype):
-            if not isinstance(value, list):
-                return value
-            item_t = getattr(pytype, "__args__", (Any,))[0] if getattr(pytype, "__args__", ()) else Any
-            return [_coerce_element(v, item_t) for v in value]
-        if pytype in (int, float, str, bool):
-            return pytype(value)
-    except Exception:
-        return value
-    return value
-
-
-def _coerce_element(v: Any, item_t: Any) -> Any:
-    if _is_list_type(item_t):
-        inner = getattr(item_t, "__args__", (Any,))[0] if getattr(item_t, "__args__", ()) else Any
-        return _coerce_list(v, inner)
-    if isinstance(item_t, type) and issubclass(item_t, BaseModel):
-        return coerce_model_value(item_t, v)
-    if item_t in (int, float, str, bool):
-        try:
-            return item_t(v)
-        except Exception:
-            return v
-    return v
-
-
-def _coerce_list(value: Any, item_t: Any) -> Any:
-    if not isinstance(value, list):
-        return value
-    return [_coerce_element(v, item_t) for v in value]
-
-
-def _is_compatible_by_pytype(value: Any, pytype: Any) -> bool:
-    try:
-        if isinstance(pytype, type) and issubclass(pytype, BaseModel):
-            return isinstance(value, pytype)
-        if _is_list_type(pytype):
-            if not isinstance(value, list):
-                return False
-            item_t = getattr(pytype, "__args__", (Any,))[0] if getattr(pytype, "__args__", ()) else Any
-            for v in value:
-                if _is_list_type(item_t):
-                    inner = getattr(item_t, "__args__", (Any,))[0] if getattr(item_t, "__args__", ()) else Any
-                    if not _is_compatible_by_pytype(v, item_t):
-                        return False
-                elif isinstance(item_t, type) and issubclass(item_t, BaseModel):
-                    if not isinstance(v, item_t):
-                        return False
-                elif item_t in (int, float, str, bool):
-                    if not isinstance(v, item_t):
-                        return False
-            return True
-        if pytype in (int, float, str, bool):
-            return isinstance(value, pytype)
-    except Exception:
-        return True
-    return True
+# Complex list coercion/compatibility helpers removed
 
 
 def push_type_env(rt: MarkerRuntime) -> dict[str, Any]:
