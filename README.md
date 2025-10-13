@@ -3,7 +3,7 @@
 
 Marker is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
 
-### A quick taste (10–20 lines)
+### DIVE IN !
 ````py
 ~City(name, history, economy, cuisine)
 
@@ -15,19 +15,15 @@ Marker is a compact DSL that lets you compose multi‑step LLM workflows with st
     All cities in <country> are [cities: list[str]].
     = `cities`
 
+# AI-generated procedure !
 @consolidate_city_info_as_markdown(cities: list[City], country) -> str:
-    [markdown: str] = ```
-    markdown = f"# Cities Information in {country}\n\n"
-    for city in cities:
-        markdown += f"\n## {city.name}\n\n"
-        markdown += f"### History\n{city.history}\n\n"
-        markdown += f"### Economy\n{city.economy}\n\n" 
-        markdown += f"### Cuisine\n{city.cuisine}\n\n"
-    return markdown
-    ```
-    = <markdown>
-
-[country] = France
+    > This is a procedure that takes a list of City objects of cities in \
+    the country (given in the country parameter) and \
+    with the information about their history, economy and cuisine. \
+    The procedure will consolidate the information into a markdown \
+    string and return it for an informative report.  
+    
+[country] = Singapore
 [cities_info : list[City]] = `[get_city_info(city) for city in get_cities_in(country)]`
 [markdown] = `consolidate_city_info_as_markdown(cities_info, country)`
 
@@ -35,8 +31,6 @@ Marker is a compact DSL that lets you compose multi‑step LLM workflows with st
 ````
 
 ### Run it
-- Install deps: 
-`pip install -r requirements.txt`
 - Local install:
 `pip install -e .`
 - After install:
