@@ -40,7 +40,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "out-value",
     ),
     (
-        "@deep(a):\n  = <`str(int(a)*2)`>\n\n@wrap(x):\n  = [[<x>]]\n\n= <wrap(<deep(<deep(2)>)>)>\n",
+        "@deep(a):\n  = <`str(int(a)*2)`>\n\n@wrap(x):\n  = \\[<x>\\]\n\n= <wrap(<deep(<deep(2)>)>)>\n",
         "[8]",
     ),
     (
@@ -54,7 +54,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Complex commas and escapes in args
-        "@join(a,b,c):\n  = <a>|<b>|<c>\n\n= <join(alpha,, beta,, gamma, delta, <`'x,,y'.replace(',,', ',')`>)>\n",
+        "@join(a,b,c):\n  = <a>|<b>|<c>\n\n= <join(alpha\\, beta\\, gamma, delta, <`'x,y'`>)>\n",
         "alpha, beta, gamma|delta|x,y",
     ),
     (
@@ -114,8 +114,8 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Mix escaped specials in text and args
-        "@esc(s):\n  = <s>\n\n= Use <<tag>> and [[br]] and @@at and eq == and comma \\\\, plus <esc(a,,b)>\n",
-        "Use <tag> and [br] and @at and eq = and comma \\, plus a,b",
+        "@esc(s):\n  = <s>\n\n= Use \\<tag\\> and \\[br\\] and \\@at and eq \\= and comma \\\\, plus <esc(a\\,b)>\n",
+        "Use <tag> and [br] and @at and eq = and comma \, plus a,b",
     ),
     (
         # TypedDict path when any typed output exists
@@ -248,7 +248,7 @@ def test_list_type_nested_and_python(monkeypatch: Any) -> None:
 def test_escaped_commas_and_nested_calls(monkeypatch: Any) -> None:
     src = (
         "@cat(a,b,c):\n  = <a>:<b>:<c>\n\n"
-        "@use():\n  = <cat(a,,b,,c, <cat(d,,e, f, g)>, <`','.join(['x', 'y'])`>)>\n\n"
+        "@use():\n  = <cat(a\\,b\\,c, <cat(d\\,e, f, g)>, <`','.join(['x', 'y'])`>)>\n\n"
         "= <use()>\n"
     )
     out = _run(monkeypatch, src)

@@ -92,12 +92,12 @@ CASES: List[tuple[str, str]] = [
         "@title(name):\n  = Dr. <name>\n\n=   Report:   <title(who)>   \n",
         "Report:   Dr. who",
     ),
-    ("= Use <<hello>> literally\n", "Use <hello> literally"),
-    ("= Avoid [[square]] here\n", "Avoid [square] here"),
-    ("= not an == assignment\n", "not an = assignment"),
-    ("= mention @@symbol\n", "mention @symbol"),
+    ("= Use \\<hello\\> literally\n", "Use <hello> literally"),
+    ("= Avoid \\[square\\] here\n", "Avoid [square] here"),
+    ("= not an \\= assignment\n", "not an = assignment"),
+    ("= mention \\@symbol\n", "mention @symbol"),
     (
-        "@concat(s):\n  = <s>\n\n= <concat(alpha,, beta,, gamma)>\n",
+        "@concat(s):\n  = <s>\n\n= <concat(alpha\\, beta\\, gamma)>\n",
         "alpha, beta, gamma",
     ),
     ("@pair(a,b):\n  = <a>|<b>\n\n= <pair(foo,bar)>\n", "foo|bar"),
@@ -119,14 +119,14 @@ CASES: List[tuple[str, str]] = [
         "@make():\n  [a] and [b]\n  = <a>/<b>\n\n@use():\n  = (<make()>)\n\n= <use()>\n",
         "(a-value/b-value)",
     ),
-    ("@id(x):\n  = <x>\n\n@wrap(x):\n  = [[<x>]]\n\n= <wrap(<id(num)>)>\n", "[num]"),
+    ("@id(x):\n  = <x>\n\n@wrap(x):\n  = \\[<x>\\]\n\n= <wrap(<id(num)>)>\n", "[num]"),
     (
         "@calc(a,b):\n  get [sum] from <a> and <b>\n  get [prod] from <a> and <b>\n  = <sum>-<prod>\n\n= <calc(2,3)>\n",
         "sum-value-prod-value",
     ),
     (
-        "= angle << and bracket [[ and at @@ and eq == and comma \\\\ ,\n",
-        "angle < and bracket [ and at @ and eq = and comma \\ ,",
+        "= angle \\<tag\\> and bracket \\[br\\] and at \\@ and eq \\= and comma \\\\ ,\n",
+        "angle <tag> and bracket [br] and at @ and eq = and comma \\ ,",
     ),
     (
         "@inner(x):\n  = <x>!\n\n@outer(a,b):\n  = <a>-<b>\n\n= <outer(alpha, <inner(beta)>)>\n",
@@ -141,7 +141,7 @@ CASES: List[tuple[str, str]] = [
         "a123",
     ),
     (
-        "@e(s):\n  = <s>\n\n= <e(alice,, bob,, and charlie)>\n",
+        "@e(s):\n  = <s>\n\n= <e(alice\\, bob\\, and charlie)>\n",
         "alice, bob, and charlie",
     ),
     ("@g():\n  = one\n  = two\n\n= <g()>\n", "two"),
@@ -360,7 +360,7 @@ def test_inline_python_nested_call_arguments(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@wrap(v):\n"
-            "  = [[<v>]]\n\n"
+            "  = \\[<v>\\]\n\n"
             "@compose(a,b):\n"
             "  = <wrap(<`str(int(a)*int(b))`>)>\n\n"
             "= <compose(3, 4)>\n"

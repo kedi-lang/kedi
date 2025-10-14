@@ -65,7 +65,8 @@ The runner loads the source, compiles it, optionally applies `--model`, and exec
 - **Custom types**: `~TypeName(field[: type], ...)` creates a Pydantic model in scope.
 - **Returns**: a line starting with `=` returns a value (string by default).
 - **Line continuation**: end a line with `\` to continue on the next line.
-- **Escaping specials**: double them, e.g., `<<`→`<`, `>>`→`>`, `[[`→`[`, `]]`→`]`, `==`→`=`, `,,`→`,`, `\`→`\\`, `##`→`#`, `~~`→`~`.
+- **Escaping specials**: use backslash before special chars. Escapable: `<`, `>`, `[`, `]`, `=`, `@`, `,`, `\\`, `#`, `~`, `` ` ``, `(`, `)`.
+  - Examples: `\<`, `\>`, `\[`, `\]`, `\\`, `\,`, `\=`, `\@`, `\#`, `\~`, `` \` ``, `\(`, `\)`.
 
 See `docs/MARKER_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
 

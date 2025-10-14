@@ -21,14 +21,14 @@ def test_inline_comments_basic(monkeypatch: Any) -> None:
         "# comment only\n"
         "@p(x):  # inline comment\n"
         "  = <x>\n\n"
-        "= <p(value ## still data,, has hash)> # trailing comment\n"
+        "= <p(value \\# still data\\, has hash)> # trailing comment\n"
     )
     out = _run(src)
     assert out == "value # still data, has hash"
 
 
 def test_inline_comments_escape(monkeypatch: Any) -> None:
-    src = "text ## not comment\n" "= done\n"
+    src = "text \\# not comment\n" "= done\n"
     out = _run(src)
     assert out == "done"
 
@@ -162,8 +162,8 @@ def test_multiline_inside_template_line(monkeypatch: Any) -> None:
 def test_multiline_with_nested_calls(monkeypatch: Any) -> None:
     src = (
         "@id(x):\n  = <x>\n\n"
-        "= [[ [[ <id(A)>    \\   \n"  # ignore whitespaces after \, but not before
-        "and <id(B)>    ]] ]]\n"
+        "= \\[ \\[ <id(A)>    \\   \n"  # ignore whitespaces after \, but not before
+        "and <id(B)>    \\] \\]\n"
     )
     out = _run(src)
     assert out == "[ [ A and B    ] ]"

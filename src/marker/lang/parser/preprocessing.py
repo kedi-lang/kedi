@@ -22,8 +22,8 @@ def strip_comments(source: str) -> str:
     for line in lines:
         stripped = line.strip()
         
-        # Check for line comments first
-        if stripped.startswith("#") and not stripped.startswith("##"):
+        # Check for line comments first (must start with '#' and not be block '###')
+        if stripped.startswith("#") and not stripped.startswith("##") and stripped != "###":
             continue
         
         # Track Python blocks
@@ -97,18 +97,28 @@ def merge_line_continuations(source: str) -> str:
 
 
 def unescape_text(text: str) -> str:
-    """Unescape doubled special characters."""
-    text = text.replace("<<", "<").replace(">>", ">")
-    text = text.replace("[[", "[").replace("]]", "]")
-    text = text.replace("==", "=").replace("@@", "@")
-    text = text.replace("##", "#").replace("~~", "~")
-    text = text.replace(",,", ",")
-    text = text.replace("\\\\", "\\")
-    return text
+    """Unescape backslash-escaped characters in plain text segments.
+
+    Recognized escapes: \\ < > [ ] = @ , \\ # ~ ` ( )
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if ch == "\\":
+            if nxt in ("<", ">", "[", "]", "=", "@", ",", "\\", "#", "~", "`", "(", ")"):
+                out.append(nxt)
+                i += 2
+                continue
+            raise ValueError("Invalid escape sequence in text")
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _strip_inline_comment(line: str) -> str:
-    """Strip inline comment from a line."""
+    """Strip inline comment from a line, honoring backslash escapes for '#' and '~'."""
     processed: list[str] = []
     i = 0
     
@@ -116,24 +126,27 @@ def _strip_inline_comment(line: str) -> str:
         ch = line[i]
         nxt = line[i + 1] if i + 1 < len(line) else ""
         
+        # Handle escapes for '#' and '~'
+        if ch == "\\" and nxt in ("#", "~"):
+            processed.append(nxt)
+            i += 2
+            continue
+        
         if ch == "#":
-            if nxt == "#":
-                processed.append("#")
-                i += 2
-                continue
             break  # Rest is comment
         
         if ch == "~":
-            if nxt == "~":
-                processed.append("~")
-                i += 2
-                continue
             # Check if it's a type definition start
             if line[:i].strip() == "" and line[i:].lstrip().startswith("~"):
                 processed.append(ch)
                 i += 1
                 continue
-            raise ValueError("Literal '~' must be escaped as '~~'")
+            # Literal '~' in text must be escaped as '\~' (legacy '~~' also allowed for backward-compat)
+            if nxt == "~":
+                processed.append("~")
+                i += 2
+                continue
+            raise ValueError("Literal '~' must be escaped as '\\~' or '~~'")
         
         processed.append(ch)
         i += 1

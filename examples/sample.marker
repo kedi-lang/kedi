@@ -85,8 +85,8 @@ COMMENT
   = <`'foo'`> # COMMENT
 
 @show_escapes():
-  Use <<angle brackets>> [x: int] [[unescaped]] @@at symbol and == equals 
-  = Use <<angle brackets>> [x: int] [[unescaped]] @@at symbol and == equals 
+  Use \<angle brackets\> [x: int] \[\[unescaped\] \@at symbol and \= equals\,
+  = Use \<angle brackets\> [x: int] \[unescaped\] \@at symbol and \= equals 
 
 # Complex nested calls
 @trip_planner(start_city: str):
@@ -110,6 +110,7 @@ COMMENT
 # fdskjnbf
 import math
 radius = 6371  # Earth radius in km >>
+# (note: '>>' was a literal closer in legacy; kept inside python block)
 pi_approx = math.pi
 ```
 

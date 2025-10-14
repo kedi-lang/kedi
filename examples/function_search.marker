@@ -152,7 +152,7 @@ import random
   [err: float] = ```
   return evaluate(g)
   ```
-  plot result for <g> (err==<`str(err)`>)
+  plot result for <g> (err\=<`str(err)`>)
   = <plot_compare(`g`)>
 
 = <start()>

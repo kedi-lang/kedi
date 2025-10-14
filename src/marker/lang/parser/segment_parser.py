@@ -22,19 +22,9 @@ def parse_segments(body: str) -> list[Segment]:
     while i < len(body):
         ch = body[i]
         nxt = body[i + 1] if i + 1 < len(body) else ""
-        
-        # Handle escaped doubles
-        if ch + nxt in ("<<", ">>", "[[", "]]", "==", "@@", "\\\\", "~~"):
-            buf.extend([ch, nxt])
-            i += 2
-            continue
-        
-        # Validate backslash usage
-        if ch == "\\":
-            raise ValueError("Misplaced backslash")
-        
+
         # Parse angle brackets (substitutions)
-        if ch == "<":
+        if ch == "<" and (i == 0 or body[i - 1] != "\\"):
             flush_text()
             end = find_matching_delimiter(body, i, "<", ">")
             inner = body[i + 1:end]
@@ -43,7 +33,7 @@ def parse_segments(body: str) -> list[Segment]:
             continue
         
         # Parse square brackets (outputs)
-        if ch == "[":
+        if ch == "[" and (i == 0 or body[i - 1] != "\\"):
             flush_text()
             end = find_matching_delimiter(body, i, "[", "]")
             inner = body[i + 1:end].strip()
@@ -52,12 +42,12 @@ def parse_segments(body: str) -> list[Segment]:
             continue
         
         # Validate unmatched closers
-        if ch in ("]", ">"):
+        if ch in ("]", ">") and (i == 0 or body[i - 1] != "\\"):
             raise ValueError(f"Unmatched closer '{ch}'")
         
         # Validate literal equals
-        if ch == "=" and nxt != "=":
-            raise ValueError("Literal '=' must be written as '=='")
+        if ch == "=" and (i == 0 or body[i - 1] != "\\"):
+            raise ValueError("Literal '=' must be escaped as '\\='")
         
         buf.append(ch)
         i += 1
@@ -69,8 +59,8 @@ def parse_segments(body: str) -> list[Segment]:
 def parse_angle_expression(inner: str) -> Segment:
     """Parse <...> expression (variable, call, or Python)."""
     # Inline Python
-    if inner.startswith("`") and inner.endswith("`") and len(inner) >= 2:
-        code = inner[1:-1]
+    if _is_wrapped_backticks(inner):
+        code = inner[1:-1].replace("\\`", "`")
         return PythonExprSegment(code=code)
     
     # Call or variable
@@ -96,8 +86,8 @@ def parse_call_arguments(args_src: str) -> list[CallArg]:
         raw_trim = raw.strip()
         
         # Native backtick argument
-        if raw_trim.startswith("`") and raw_trim.endswith("`") and raw_trim.count("`") == 2:
-            code = raw_trim[1:-1]
+        if _is_wrapped_backticks(raw_trim):
+            code = raw_trim[1:-1].replace("\\`", "`")
             lit = LiteralArg("__NATIVE_BACKTICK__")
             setattr(lit, "__native_backtick__", code)
             args.append(lit)
@@ -133,15 +123,17 @@ def find_matching_delimiter(s: str, start: int, open_ch: str, close_ch: str) -> 
         ch = s[i]
         nxt = s[i + 1] if i + 1 < len(s) else ""
         
+        # Skip escaped delimiters in text context (outside backticks)
+        if not in_backticks and ch == "\\" and nxt:
+            i += 2
+            continue
+        
         if ch == "`":
             in_backticks = not in_backticks
             i += 1
             continue
         
         if not in_backticks:
-            if ch + nxt in ("<<", ">>", "==", "@@", ",,", "\\\\"):
-                i += 2
-                continue
             if ch == open_ch:
                 depth += 1
             elif ch == close_ch:
@@ -181,7 +173,8 @@ def _split_arguments(src: str) -> list[str]:
         ch = src[i]
         nxt = src[i + 1] if i + 1 < len(src) else ""
         
-        if ch + nxt == ",,":
+        # Escaped comma becomes literal comma
+        if ch == "\\" and nxt == ",":
             buf.append(",")
             i += 2
             continue
@@ -211,3 +204,21 @@ def _split_arguments(src: str) -> list[str]:
         parts.append("".join(buf).strip())
     
     return [p for p in parts if p]
+
+
+def _is_wrapped_backticks(s: str) -> bool:
+    """Return True if the string is wrapped by unescaped backticks at both ends,
+    and contains no other unescaped backticks inside.
+    """
+    if len(s) >= 2 and s[0] == "`" and s[-1] == "`" and (len(s) < 2 or s[-2] != "\\"):
+        # ensure no other unescaped backticks inside
+        i = 1
+        while i < len(s) - 1:
+            if s[i] == "\\":
+                i += 2
+                continue
+            if s[i] == "`":
+                return False
+            i += 1
+        return True
+    return False
