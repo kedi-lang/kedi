@@ -3,7 +3,7 @@ name: Notify Telegram
 on:
   push:
     branches:
-      - main
+      - stable
   pull_request:
 
 jobs:
