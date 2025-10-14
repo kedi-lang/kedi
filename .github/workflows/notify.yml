@@ -1,0 +1,46 @@
+name: Notify Telegram
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram Message
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          EVENT_NAME="${{ github.event_name }}"
+          REPO_NAME="${{ github.repository }}"
+          BRANCH_NAME="${{ github.ref_name }}"
+          USER="${{ github.actor }}"
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            URL="${{ github.event.pull_request.html_url }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            PR_BODY="${{ github.event.pull_request.body }}"
+            COMMIT_MSGS=""
+          else
+            URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+            PR_TITLE=""
+            PR_BODY=""
+            COMMIT_MSGS=$(git log -1 --pretty=format:"%h - %s" ${{ github.sha }})
+          fi
+
+          MESSAGE="🔔 Repo: $REPO_NAME
+Event: $EVENT_NAME
+User: $USER
+Branch: $BRANCH_NAME
+URL: $URL
+PR Title: $PR_TITLE
+PR Body: $PR_BODY
+Commits: $COMMIT_MSGS"
+
+          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+            -d chat_id="$TELEGRAM_CHAT_ID" \
+            -d text="$MESSAGE"
