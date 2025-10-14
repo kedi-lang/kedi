@@ -10,6 +10,9 @@ jobs:
   notify:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
       - name: Send Telegram Message
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -29,7 +32,7 @@ jobs:
             URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
             PR_TITLE=""
             PR_BODY=""
-            COMMIT_MSGS=$(git log -1 --pretty=format:"%h - %s" ${{ github.sha }})
+            COMMIT_MSGS="${{ github.event.head_commit.message }}"
           fi
           
           MESSAGE="🔔 Repo: $REPO_NAME%0AEvent: $EVENT_NAME%0AUser: $USER%0ABranch: $BRANCH_NAME%0AURL: $URL%0APR Title: $PR_TITLE%0APR Body: $PR_BODY%0ACommits: $COMMIT_MSGS"
