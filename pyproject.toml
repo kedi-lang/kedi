@@ -20,11 +20,11 @@ dependencies = [
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@marker-lang.org"},
-    {name = "Yiğit Polat", email = "yigit@marker-lang.org"}
+    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"}
 ]
 maintainers = [
     {name = "Mert Sırakaya", email = "mert@marker-lang.org"},
-    {name = "Yiğit Polat", email = "yigit@marker-lang.org"}
+    {name = "Doğukan Yiğit Polat", email = "yigit@neurograph.net"}
 ]
 license = {text = "Apache-2.0"}
 keywords = ["marker", "llm", "orchestration", "dsl", "workflow"]
