@@ -50,10 +50,10 @@ sdfv
 
 # Procedure with multiple outputs
 @get_city_info(city: str):
-  For <city>, determine:
-  - Population: [population: int]
-  - Area in km²: [area: float]
-  - Is capital: [is_capital: bool]
+  For <city>, determine: \
+  - Population: [population: int] \
+  - Area in km²: [area: float] \
+  - Is capital: [is_capital: bool] \ 
   - Famous landmarks: [landmarks: list[str]]
   = City <city> has <population> people in <area> km²
 
@@ -114,8 +114,6 @@ radius = 6371  # Earth radius in km >>
 pi_approx = math.pi
 ```
 
-[x] = dfkjnlkdsfv
-[y] = `a*2`
-
 # Top-level execution with nested calls
-= <translate_greeting(<get_language(<get_country(Paris, <a>, `x*2`)>)>)> # fdskvjhbsdfv
+`print(get_city_info("Paris"))`
+= <translate_greeting(<get_language(<get_country(Paris)>)>)> # fdskvjhbsdfv
