@@ -152,6 +152,7 @@ class MarkerRuntime:
     def _marker_run(
         self, expressions: Sequence[Expression], env: ValueEnv
     ) -> Dict[str, Any]:
+        NotFound = object()
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
         for expr in expressions:
@@ -184,37 +185,14 @@ class MarkerRuntime:
 
         if self.adapter is None:
             raise RuntimeError("No adapter provided to MarkerRuntime")
-            
+        
         result = self.adapter.produce_sync(
             template=question, output_schema=typed_fields
         )
-
-        if hasattr(result, "model_dump"):
-            data_dict: Dict[str, Any] = result.model_dump()
-        elif isinstance(result, dict):
-            data_dict = result
-        else:
-            data_dict = dict(result)
-
-        for out in outputs:
-            key = out.key
-            if key not in data_dict:
+    
+        for key in required:
+            value = getattr(result, key, NotFound)  # Ensure result has the attribute
+            if value is NotFound:
                 raise ValueError(f"LLM did not return required key: {key}")
-            
-            raw_value = data_dict[key]
-            
-            # Apply type coercion if pytype is specified
-            if out.pytype is not None:
-                from .lang.compiler.type_system import coerce_model_value
-                from pydantic import BaseModel
-                
-                if isinstance(out.pytype, type) and issubclass(out.pytype, BaseModel):
-                    env[key] = coerce_model_value(out.pytype, raw_value)
-                else:
-                    from pydantic import TypeAdapter
-                    adapter = TypeAdapter(out.pytype, config={'strict': True, 'arbitrary_types_allowed': True})
-                    env[key] = adapter.validate_python(raw_value)
-            else:
-                env[key] = raw_value
-
+            env[key] = value
         return {k: env[k] for k in required}
