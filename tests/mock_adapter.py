@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TypeVar
 from marker.agent_adapter import AgentAdapter
+
+K = TypeVar('K')
+V = TypeVar('V')
+
+class AttrDict(dict[K, V]):
+    __getattr__ = dict.__getitem__
 
 
 class MockAdapter(AgentAdapter[Dict[str, Any]]):
@@ -11,7 +17,7 @@ class MockAdapter(AgentAdapter[Dict[str, Any]]):
         template: str,
         output_schema: Dict[str, type],
         **_: Any,
-    ) -> Dict[str, Any]:
+    ) -> AttrDict[str, Any]:
         # Simple async facade around the synchronous implementation
         return self.produce_sync(template=template, output_schema=output_schema)
 
@@ -21,7 +27,7 @@ class MockAdapter(AgentAdapter[Dict[str, Any]]):
         template: str,
         output_schema: Dict[str, type] | None = None,
         **_: Any,
-    ) -> Dict[str, Any]:
+    ) -> AttrDict[str, Any]:
         start = template.find("[")
         end = template.find("]", start + 1)
         keys: List[str] = []
@@ -51,6 +57,6 @@ class MockAdapter(AgentAdapter[Dict[str, Any]]):
                     data[k] = []
             else:
                 data[k] = f"{k}-value"
-        return data
+        return AttrDict(data)
 
 
