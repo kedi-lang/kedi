@@ -1,9 +1,9 @@
 ~City(name, history, economy, cuisine, population: int)
 
 @get_city_info(city) -> City:
-    Paragraphs [history], [economy], and [cuisine] describe <city> in different aspects.
+    Paragraphs [history], [economy], [population: int] and [cuisine] describe <city> in different aspects.
     
-    = `City(city, history, economy, cuisine)`
+    = `City(city, history, economy, cuisine, population)`
 
 @get_cities_in(country) -> list[str]:
     All cities in <country> are [cities: list[str]].
