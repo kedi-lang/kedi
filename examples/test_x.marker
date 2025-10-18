@@ -1,0 +1,22 @@
+```
+from pydantic import BaseModel
+
+class X(BaseModel):
+    a: str
+    def foo(self) -> str:
+        return self.a
+```
+
+[x: X] is an X object with field 'a' set to 'hello'.
+
+= ```
+try:
+    result = x.foo()
+    print("Success:", result)
+except Exception as e:
+    print("lol: ", e)
+
+# Test that x is properly typed
+print("x type:", type(x))
+print("x.a:", x.a)
+```
