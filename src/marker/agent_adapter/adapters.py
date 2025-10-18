@@ -53,7 +53,6 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 **kwargs,
             )
         ).output
-        print("adapter returned: ", out, type(out))
         return out
 
     def produce_sync(
