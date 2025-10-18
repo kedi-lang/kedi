@@ -196,9 +196,25 @@ class MarkerRuntime:
         else:
             data_dict = dict(result)
 
-        for key in required:
+        for out in outputs:
+            key = out.key
             if key not in data_dict:
                 raise ValueError(f"LLM did not return required key: {key}")
-            env[key] = data_dict[key]
+            
+            raw_value = data_dict[key]
+            
+            # Apply type coercion if pytype is specified
+            if out.pytype is not None:
+                from .lang.compiler.type_system import coerce_model_value
+                from pydantic import BaseModel
+                
+                if isinstance(out.pytype, type) and issubclass(out.pytype, BaseModel):
+                    env[key] = coerce_model_value(out.pytype, raw_value)
+                else:
+                    from pydantic import TypeAdapter
+                    adapter = TypeAdapter(out.pytype, config={'strict': True, 'arbitrary_types_allowed': True})
+                    env[key] = adapter.validate_python(raw_value)
+            else:
+                env[key] = raw_value
 
         return {k: env[k] for k in required}

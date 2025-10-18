@@ -84,30 +84,26 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     if isinstance(value, model):
         return value
     
+    # Handle already-typed BaseModel instances
+    if isinstance(value, BaseModel):
+        return value
+    
     if isinstance(value, dict):
-        try:
-            return model.model_validate(value)
-        except Exception:
-            return value
+        return model.model_validate(value)
     
     if isinstance(value, str):
         text = value.strip()
         # Try JSON
-        try:
-            if text.startswith("{") and text.endswith("}"):
-                return model.model_validate_json(text)
-        except Exception:
-            pass
+        if text.startswith("{") and text.endswith("}"):
+            return model.model_validate_json(text)
         
         # Try key=value format
         parsed = _parse_model_repr(text, model)
         if parsed is not None:
-            try:
-                return model.model_validate(parsed)
-            except Exception:
-                return value
+            return model.model_validate(parsed)
     
-    return value
+    # If we get here, the value can't be coerced
+    raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 
 def is_value_compatible(marker_type: MarkerType, value: Any, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> bool:
