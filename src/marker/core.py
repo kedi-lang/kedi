@@ -193,6 +193,7 @@ class MarkerRuntime:
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute
             if value is NotFound:
+                print("debug: ", result)
                 raise ValueError(f"LLM did not return required key: {key}")
             env[key] = value
         return {k: env[k] for k in required}
