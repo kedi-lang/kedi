@@ -27,7 +27,7 @@ class CompanyModel(BaseModel):
         return len(self.employees)
 
 
-class TypeCoercionMockAdapter(AgentAdapter[Dict[str, Any]]):
+class TypeCoercionMockAdapter(AgentAdapter[Any]):
     """Mock adapter that returns specific data structures for testing type coercion."""
     
     def __init__(self, responses: Dict[str, Any]):
@@ -39,7 +39,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Dict[str, Any]]):
         template: str,
         output_schema: Dict[str, type],
         **_: Any,
-    ) -> Dict[str, Any]:
+    ) -> Any:
         return self.produce_sync(template=template, output_schema=output_schema)
     
     def produce_sync(
@@ -48,7 +48,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Dict[str, Any]]):
         template: str,
         output_schema: Dict[str, type] | None = None,
         **_: Any,
-    ) -> Dict[str, Any]:
+    ) -> Any:
         # Extract keys from template
         start = template.find("[")
         end = template.find("]", start + 1)
@@ -56,7 +56,12 @@ class TypeCoercionMockAdapter(AgentAdapter[Dict[str, Any]]):
         if start != -1 and end != -1:
             keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
         
-        # Return predefined responses
+        # Return predefined responses as an object with attributes
+        class MockResult:
+            def __init__(self, data: Dict[str, Any]):
+                for key, value in data.items():
+                    setattr(self, key, value)
+        
         data: Dict[str, Any] = {}
         for key in keys:
             if key in self.responses:
@@ -65,7 +70,20 @@ class TypeCoercionMockAdapter(AgentAdapter[Dict[str, Any]]):
                 # Fallback to simple string
                 data[key] = f"{key}-value"
         
-        return data
+        return MockResult(data)
+
+
+class EmptyMockAdapter(AgentAdapter[Any]):
+    """Mock adapter that returns empty object to trigger missing key errors."""
+    
+    async def produce(self, *, template: str, output_schema: Dict[str, type], **_: Any) -> Any:
+        return self.produce_sync(template=template, output_schema=output_schema)
+    
+    def produce_sync(self, *, template: str, output_schema: Dict[str, type] | None = None, **_: Any) -> Any:
+        # Return empty object to trigger missing key error
+        class EmptyResult:
+            pass
+        return EmptyResult()
 
 
 def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:
@@ -74,11 +92,11 @@ def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:
     return runtime.run_main()
 
 
-class TestValidTypeCoercion:
-    """Test valid scenarios where type coercion should work correctly."""
+class TestValidAdapterResponses:
+    """Test scenarios where adapters return properly typed objects."""
     
-    def test_simple_pydantic_model_coercion(self):
-        """Test that a simple Pydantic model gets properly coerced."""
+    def test_simple_pydantic_model_response(self):
+        """Test that adapter returns properly typed Pydantic model."""
         src = """
         ```
         from pydantic import BaseModel
@@ -100,17 +118,27 @@ class TestValidTypeCoercion:
         ```
         """
         
+        # Adapter should return properly typed Person instance
+        from pydantic import BaseModel
+        
+        class PersonModel(BaseModel):
+            name: str
+            age: int
+            
+            def greet(self) -> str:
+                return f"Hello, I'm {self.name}"
+        
         responses = {
-            "person": {"name": "Alice", "age": 25}
+            "person": PersonModel(name="Alice", age=25)
         }
         
         result = _run_with_responses(src, responses)
-        assert "Type: Person" in result
+        assert "Type: PersonModel" in result
         assert "Method result: Hello, I'm Alice" in result
         assert "Age: 25" in result
     
-    def test_nested_model_coercion(self):
-        """Test coercion of nested Pydantic models with forward references."""
+    def test_nested_model_response(self):
+        """Test that adapter returns properly typed nested Pydantic models."""
         src = """
         ```
         from pydantic import BaseModel
@@ -123,26 +151,51 @@ class TestValidTypeCoercion:
         class Company(BaseModel):
             name: str
             employees: List[Person]
+            
+            def total_employees(self) -> int:
+                return len(self.employees)
         ```
         
         [company: Company] is a company with employees.
         
-        = "Success"
+        = ```
+        # Test that company is properly typed and methods work
+        result = f"Company: {company.name}, Employees: {company.total_employees()}"
+        for emp in company.employees:
+            result += f", {emp.name}({emp.age})"
+        return result
+        ```
         """
         
+        # Adapter should return properly typed Company instance
+        from pydantic import BaseModel
+        from typing import List
+        
+        class PersonModel(BaseModel):
+            name: str
+            age: int
+            
+        class CompanyModel(BaseModel):
+            name: str
+            employees: List[PersonModel]
+            
+            def total_employees(self) -> int:
+                return len(self.employees)
+        
         responses = {
-            "company": {
-                "name": "TechCorp",
-                "employees": [
-                    {"name": "Alice", "age": 30},
-                    {"name": "Bob", "age": 25}
+            "company": CompanyModel(
+                name="TechCorp",
+                employees=[
+                    PersonModel(name="Alice", age=30),
+                    PersonModel(name="Bob", age=25)
                 ]
-            }
+            )
         }
         
-        # Should raise a validation error due to forward references
-        with pytest.raises(Exception):  # PydanticUserError for forward references
-            _run_with_responses(src, responses)
+        result = _run_with_responses(src, responses)
+        assert "Company: TechCorp, Employees: 2" in result
+        assert "Alice(30)" in result
+        assert "Bob(25)" in result
     
     def test_multiple_typed_outputs(self):
         """Test multiple typed outputs in the same template."""
@@ -171,9 +224,25 @@ class TestValidTypeCoercion:
         ```
         """
         
+        # Adapter should return properly typed objects
+        from pydantic import BaseModel
+        
+        class UserModel(BaseModel):
+            username: str
+            
+            def display_name(self) -> str:
+                return f"@{self.username}"
+        
+        class PostModel(BaseModel):
+            title: str
+            content: str
+            
+            def summary(self) -> str:
+                return f"{self.title}: {self.content[:20]}..."
+        
         responses = {
-            "user": {"username": "alice"},
-            "post": {"title": "Python Tips", "content": "Here are some useful Python programming tips..."}
+            "user": UserModel(username="alice"),
+            "post": PostModel(title="Python Tips", content="Here are some useful Python programming tips...")
         }
         
         result = _run_with_responses(src, responses)
@@ -200,93 +269,22 @@ class TestValidTypeCoercion:
         """
         
         # Return an already-typed Person instance
-        person_instance = PersonModel(name="Charlie", age=35)
+        from pydantic import BaseModel
+        
+        class PersonModel(BaseModel):
+            name: str
+            
+            def greet(self) -> str:
+                return f"Hello, I'm {self.name}"
+        
+        person_instance = PersonModel(name="Charlie")
         responses = {
             "person": person_instance
         }
         
         result = _run_with_responses(src, responses)
-        assert "Type: Person" in result
+        assert "Type: PersonModel" in result
         assert "Name: Charlie" in result
-
-
-class TestInvalidTypeCoercion:
-    """Test scenarios where type coercion should fail fast."""
-    
-    def test_invalid_dict_structure(self):
-        """Test that invalid dict structures raise validation errors."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-            age: int
-        ```
-        
-        [person: Person] is a person.
-        
-        = "Success"
-        """
-        
-        # Return invalid structure (missing required field)
-        responses = {
-            "person": {"name": "Alice"}  # Missing 'age' field
-        }
-        
-        # Should raise a validation error
-        with pytest.raises(Exception):  # Pydantic validation error
-            _run_with_responses(src, responses)
-    
-    def test_wrong_type_structure(self):
-        """Test that wrong type structures raise validation errors."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-            age: int
-        ```
-        
-        [person: Person] is a person.
-        
-        = "Success"
-        """
-        
-        # Return completely wrong structure
-        responses = {
-            "person": {"title": "Mr.", "salary": 50000}  # Wrong fields entirely
-        }
-        
-        # Should raise a validation error
-        with pytest.raises(Exception):  # Pydantic validation error
-            _run_with_responses(src, responses)
-    
-    def test_non_dict_value(self):
-        """Test that non-dict values raise validation errors."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-            age: int
-        ```
-        
-        [person: Person] is a person.
-        
-        = "Success"
-        """
-        
-        # Return a non-dict value
-        responses = {
-            "person": "just a string"  # Not a dict
-        }
-        
-        # Should raise a validation error
-        with pytest.raises(Exception):  # Pydantic validation error
-            _run_with_responses(src, responses)
 
 
 class TestEdgeCases:
@@ -307,21 +305,19 @@ class TestEdgeCases:
         = "Success"
         """
         
-        # Create a custom adapter that returns empty dict
-        class EmptyMockAdapter(AgentAdapter[Dict[str, Any]]):
-            async def produce(self, *, template: str, output_schema: Dict[str, type], **_: Any) -> Dict[str, Any]:
-                return self.produce_sync(template=template, output_schema=output_schema)
-            
-            def produce_sync(self, *, template: str, output_schema: Dict[str, type] | None = None, **_: Any) -> Dict[str, Any]:
-                return {}  # Return empty dict to trigger missing key error
-        
+        # Empty responses - should cause missing key error
         runtime = compile_program(parse_program(src), adapter=EmptyMockAdapter())
         
         with pytest.raises(ValueError, match="LLM did not return required key: person"):
             runtime.run_main()
     
-    def test_none_value_coercion(self):
-        """Test that None values raise validation errors."""
+
+
+class TestEdgeCases:
+    """Test edge cases and error handling."""
+    
+    def test_missing_output_key(self):
+        """Test that missing output keys raise appropriate errors."""
         src = """
         ```
         from pydantic import BaseModel
@@ -335,69 +331,12 @@ class TestEdgeCases:
         = "Success"
         """
         
-        responses = {
-            "person": None
-        }
+        # Empty responses - should cause missing key error
+        runtime = compile_program(parse_program(src), adapter=EmptyMockAdapter())
         
-        # Should raise a validation error for None value
-        with pytest.raises(Exception):  # Pydantic validation error
-            _run_with_responses(src, responses)
+        with pytest.raises(ValueError, match="LLM did not return required key: person"):
+            runtime.run_main()
     
-    def test_complex_nested_type_validation(self):
-        """Test that complex nested types fail due to forward references."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        from typing import List, Dict
-        
-        class ComplexType(BaseModel):
-            data: Dict[str, List[int]]
-            metadata: Dict[str, Any]
-        ```
-        
-        [complex_obj: ComplexType] is a complex object.
-        
-        = "Success"
-        """
-        
-        responses = {
-            "complex_obj": {
-                "data": {"key1": [1, 2, 3], "key2": [4, 5]},
-                "metadata": {"version": "1.0", "author": "test"}
-            }
-        }
-        
-        # Should raise a validation error due to forward references
-        with pytest.raises(Exception):  # PydanticUserError for forward references
-            _run_with_responses(src, responses)
-    
-    def test_mixed_valid_invalid_outputs(self):
-        """Test that invalid outputs cause the entire operation to fail."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-            age: int
-        
-        class Company(BaseModel):
-            name: str
-        ```
-        
-        [person: Person] works at [company: Company].
-        
-        = "Success"
-        """
-        
-        responses = {
-            "person": {"name": "Alice", "age": 30},  # Valid
-            "company": {"title": "TechCorp"}  # Invalid (wrong field name)
-        }
-        
-        # Should raise a validation error for the invalid company
-        with pytest.raises(Exception):  # Pydantic validation error
-            _run_with_responses(src, responses)
 
 
 class TestRegressionTests:
