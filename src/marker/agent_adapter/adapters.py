@@ -46,14 +46,13 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         Invoke the Pydantic AI agent with the provided template and output schema.
         """
         assert output_schema or output_type, "Output spec must be provided."
-        out = (
+        return (
             await self.run(
                 template,
                 output_type=output_type or self.type_builder(output_schema),
                 **kwargs,
             )
         ).output
-        return out
 
     def produce_sync(
         self,
