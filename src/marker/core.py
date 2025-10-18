@@ -152,6 +152,7 @@ class MarkerRuntime:
     def _marker_run(
         self, expressions: Sequence[Expression], env: ValueEnv
     ) -> Dict[str, Any]:
+        NotFound = object()
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
         for expr in expressions:
@@ -184,21 +185,14 @@ class MarkerRuntime:
 
         if self.adapter is None:
             raise RuntimeError("No adapter provided to MarkerRuntime")
-            
+        
         result = self.adapter.produce_sync(
             template=question, output_schema=typed_fields
         )
-
-        if hasattr(result, "model_dump"):
-            data_dict: Dict[str, Any] = result.model_dump()
-        elif isinstance(result, dict):
-            data_dict = result
-        else:
-            data_dict = dict(result)
-
+    
         for key in required:
-            if key not in data_dict:
+            value = getattr(result, key, NotFound)  # Ensure result has the attribute
+            if value is NotFound:
                 raise ValueError(f"LLM did not return required key: {key}")
-            env[key] = data_dict[key]
-
+            env[key] = value
         return {k: env[k] for k in required}
