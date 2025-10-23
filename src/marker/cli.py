@@ -27,8 +27,8 @@ from pathlib import Path
 )
 @click.option(
     "--adapter-model",
-    envvar="MARKER_ADAPTER_MODEL",
-    default=lambda: os.environ.get("MODEL_NAME", "groq:qwen/qwen3-32b"),
+    envvar=["MARKER_ADAPTER_MODEL", "MODEL_NAME"],
+    default="groq:qwen/qwen3-32b",
     help="Model for template adapter",
 )
 @click.option(
