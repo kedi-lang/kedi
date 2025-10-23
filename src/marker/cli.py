@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 
+import click
 import dotenv
-
 dotenv.load_dotenv()
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -15,117 +14,92 @@ if SRC_DIR not in sys.path:
 
 from marker.app import run_tests_cli, run_evals_cli, maybe_run_codegen, run_program_cli
 from pathlib import Path
-from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 
 
-def get_config_value(cli_value, env_var: str, default: str) -> str:
-    """Get configuration value with priority: CLI > ENV > DEFAULT"""
-    if cli_value is not None:
-        return cli_value
-    env_value = os.environ.get(env_var)
-    if env_value is not None:
-        return env_value
-    return default
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Run a .marker program with MarkerRuntime"
-    )
-    parser.add_argument("source", help="Path to .marker source file")
-    
-    # Adapter configuration (for template execution)
-    parser.add_argument(
-        "--adapter",
-        choices=["pydantic", "dspy"],
-        default=None,
-        help="Backend adapter for template execution (default: pydantic, env: MARKER_ADAPTER)"
-    )
-    parser.add_argument(
-        "--adapter-model",
-        default=None,
-        help="Model for template adapter (default: groq:qwen/qwen3-32b, env: MARKER_ADAPTER_MODEL or MODEL_NAME)"
-    )
-    
-    # Codegen configuration
-    parser.add_argument(
-        "--codegen-agent",
-        choices=["pydantic_ai", "mock"],
-        default=None,
-        help="Agent for AI code generation (default: pydantic_ai, env: MARKER_CODEGEN_AGENT)"
-    )
-    parser.add_argument(
-        "--codegen-model",
-        default=None,
-        help="Model for codegen agent (default: openai:gpt-4o, env: MARKER_CODEGEN_MODEL)"
-    )
-    parser.add_argument(
-        "--codegen-retries",
-        type=int,
-        default=None,
-        help="Number of retry stages for codegen (default: 5, env: MARKER_CODEGEN_RETRIES)"
-    )
-    
-    # Actions
-    parser.add_argument("--test", action="store_true", help="Run tests defined with @test: blocks")
-    parser.add_argument("--eval", dest="do_eval", action="store_true", help="Run evals defined with @eval: blocks")
-    parser.add_argument("--no-cache", action="store_true", help="Disable reading/writing codegen cache")
-    
-    args = parser.parse_args()
-
-    # Resolve configuration with priority: CLI > ENV > DEFAULT
-    adapter = get_config_value(args.adapter, "MARKER_ADAPTER", "pydantic")
-    adapter_model = get_config_value(
-        args.adapter_model, 
-        "MARKER_ADAPTER_MODEL",
-        os.environ.get("MODEL_NAME", "groq:qwen/qwen3-32b")
-    )
-    codegen_agent = get_config_value(args.codegen_agent, "MARKER_CODEGEN_AGENT", "pydantic_ai")
-    codegen_model = get_config_value(args.codegen_model, "MARKER_CODEGEN_MODEL", "openai:gpt-4o")
-    codegen_retries = args.codegen_retries or int(os.environ.get("MARKER_CODEGEN_RETRIES", "5"))
-
+@click.command(help="Run a .marker program with MarkerRuntime")
+@click.argument("source")
+@click.option(
+    "--adapter",
+    type=click.Choice(["pydantic", "dspy"]),
+    envvar="MARKER_ADAPTER",
+    default="pydantic",
+    help="Backend adapter for template execution",
+)
+@click.option(
+    "--adapter-model",
+    envvar="MARKER_ADAPTER_MODEL",
+    default=lambda: os.environ.get("MODEL_NAME", "groq:qwen/qwen3-32b"),
+    help="Model for template adapter",
+)
+@click.option(
+    "--codegen-agent",
+    type=click.Choice(["pydantic_ai", "mock"]),
+    envvar="MARKER_CODEGEN_AGENT",
+    default="pydantic_ai",
+    help="Agent for AI code generation",
+)
+@click.option(
+    "--codegen-model",
+    envvar="MARKER_CODEGEN_MODEL",
+    default="openai:gpt-4o",
+    help="Model for codegen agent",
+)
+@click.option(
+    "--codegen-retries",
+    type=int,
+    envvar="MARKER_CODEGEN_RETRIES",
+    default=5,
+    help="Number of retry stages for codegen",
+)
+@click.option("--test", is_flag=True, help="Run tests defined with @test: blocks")
+@click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
+@click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
+def main(source: str, adapter: str, adapter_model: str, codegen_agent: str, codegen_model: str, codegen_retries: int, test: bool = False, do_eval: bool = False, no_cache: bool = False):
     try:
-        with open(args.source, "r", encoding="utf-8") as f:
+        with open(source, "r", encoding="utf-8") as f:
             src = f.read()
     except Exception as e:
-        print(f"Error reading {args.source}: {e}", file=sys.stderr)
+        click.echo(f"Error reading {source}: {e}", err=True)
         return 1
 
     try:
-        if args.test or args.do_eval:
+        if test or do_eval:
             # Run validations
-            if args.test:
-                code, out = run_tests_cli(args.source, model=adapter_model)
-                print(out)
+            if test:
+                code, out = run_tests_cli(source, model=adapter_model)
+                click.echo(out)
                 return code
-            if args.do_eval:
-                code, out = run_evals_cli(args.source, model=adapter_model)
-                print(out)
+            if do_eval:
+                code, out = run_evals_cli(source, model=adapter_model)
+                click.echo(out)
                 return code
 
         # Run codegen if needed
         ok, err = maybe_run_codegen(
-            args.source, 
+            source,
             agent=codegen_agent,
             model=codegen_model,
             retries=codegen_retries,
-            use_cache=not args.no_cache
+            use_cache=not no_cache,
         )
         if not ok:
-            print(err or "Code generation failed.", file=sys.stderr)
+            click.echo(err or "Code generation failed.", err=True)
             return 1
-        
+
         # Execute program
         try:
-            code, out = run_program_cli(args.source, adapter=adapter, model=adapter_model)
-            print(out)
+            code, out = run_program_cli(source, adapter=adapter, model=adapter_model)
+            click.echo(out)
             return code
         finally:
             # Clean up cache if --no-cache was used
-            if args.no_cache:
-                cache_path = Path(args.source).with_suffix(".cache.marker")
-                if cache_path.exists():
-                    cache_path.unlink()
+            if no_cache:
+                cache_path = Path(source).with_suffix(".cache.marker")
+                cache_path.unlink(missing_ok=True)
     except Exception as e:
-        print(f"Execution error: {e}", file=sys.stderr)
+        click.echo(f"Execution error: {e}", err=True)
         return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
