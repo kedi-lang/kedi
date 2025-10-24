@@ -13,6 +13,7 @@ class Segment:
 @dataclass
 class TextSegment(Segment):
     text: str
+    escaped_whitespace: set[int] = field(default_factory=set)  # Positions of escaped whitespace chars
 
 
 @dataclass

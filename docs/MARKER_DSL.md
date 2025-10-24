@@ -385,10 +385,14 @@ Escapable characters:
 - `` \` `` → `` ` ``
 - `\(` → `(`
 - `\)` → `)`
+- `\t` → tab character
+- `\n` → newline character
+- `\s` → space character
 
 Notes:
 - Inside `<...>` substitutions and `[...]` outputs, use the same `\` escapes for literal delimiters.
 - A lone `\` before a non-escapable character is an error.
+- **Whitespace preservation**: Regular whitespace (spaces) at the beginning and end of template strings are trimmed, but escaped whitespace characters (`\t`, `\n`, and `\s`) are preserved even at the boundaries. For example, `= \tTab at start\n` will preserve the leading tab and trailing newline.
 
 ## Testing and Evaluation
 

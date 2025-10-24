@@ -109,7 +109,7 @@ class ProgramParser:
             
             # Return
             if self.stmt_parser.is_return(stripped):
-                self._parse_return(stripped)
+                self._parse_return(line)
                 continue
             
             # AI prompt lines (inside procedure body)
@@ -220,9 +220,10 @@ class ProgramParser:
                     self.current_body.append(stmt)
             self.i += 1
     
-    def _parse_return(self, stripped: str) -> None:
+    def _parse_return(self, line: str) -> None:
         """Parse return statement."""
-        expr_src = stripped[1:]
+        # Strip only the leading '=' and any leading whitespace after it
+        expr_src = line.lstrip()[1:]
         
         # Inline backtick: = `expr`
         expr_trim = expr_src.strip()
@@ -247,8 +248,8 @@ class ProgramParser:
             self.i = next_i
             return
         
-        # Regular return
-        ret_stmt = self.stmt_parser.parse_return(stripped)
+        # Regular return - preserve whitespace by not stripping the expression
+        ret_stmt = self.stmt_parser.parse_return(line)
         if ret_stmt:
             if self.current_body is None:
                 self.program.toplevel_return = ret_stmt

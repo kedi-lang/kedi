@@ -9,6 +9,7 @@ from ..ast import (
 from ...core import MarkerRuntime
 from .environment import lookup_value, build_python_env
 from .type_system import MarkerType
+from ..parser.preprocessing import preserve_escaped_whitespace
 
 
 def evaluate_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
@@ -190,9 +191,29 @@ def _stringify_segments(
 ) -> str:
     """Convert segments to string, resolving all values."""
     parts: list[str] = []
-    for seg in segments:
+    
+    for i, seg in enumerate(segments):
         if isinstance(seg, TextSegment):
-            parts.append(seg.text)
+            # Apply preserve_escaped_whitespace to boundary TextSegments or those with escaped whitespace
+            is_first = (i == 0)
+            is_last = (i == len(segments) - 1)
+            
+            if seg.escaped_whitespace:
+                # Has escaped whitespace, always apply preserve_escaped_whitespace
+                processed_text = preserve_escaped_whitespace(seg.text, seg.escaped_whitespace)
+                parts.append(processed_text)
+            elif is_first and is_last:
+                # Only TextSegment, trim leading and trailing spaces
+                parts.append(seg.text.strip())
+            elif is_first:
+                # First segment, trim leading spaces only
+                parts.append(seg.text.lstrip())
+            elif is_last:
+                # Last segment, trim trailing spaces only
+                parts.append(seg.text.rstrip())
+            else:
+                # Internal TextSegment, keep as-is
+                parts.append(seg.text)
         elif isinstance(seg, InputSegment):
             value = lookup_value(rt, seg.name, kwargs)
             parts.append(str(value))
@@ -211,4 +232,5 @@ def _stringify_segments(
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = evaluate_python_inline(rt, seg.code, kwargs)
             parts.append(str(value))
+    
     return "".join(parts)

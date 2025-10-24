@@ -15,6 +15,7 @@ from .type_system import (
     MarkerType,
     assign_value_from_native, detect_rhs_kind
 )
+from ..parser.preprocessing import preserve_escaped_whitespace
 
 
 class StatementCompiler:
@@ -34,7 +35,7 @@ class StatementCompiler:
         """Compile a return statement to a function."""
         def _fn(**kwargs: Any) -> Any:
             rendered = render_expression(self.rt, stmt.segments, kwargs, context="return")
-            return rendered.strip()
+            return rendered
         return _fn
     
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
@@ -62,14 +63,14 @@ class StatementCompiler:
             elif is_call:
                 value = native
             else:
-                value = rendered.strip()
+                value = rendered
                 if not marker_type.is_none():
                     try:
                         value = marker_type.validate(self.rt, closure_env, value)
                     except Exception:
                         raise TypeError("Native assignment value does not match annotated type")
         else:
-            value = rendered.strip()
+            value = rendered
             if not marker_type.is_none():
                 try:
                     value = marker_type.validate(self.rt, closure_env, value)
@@ -211,7 +212,7 @@ class StatementExecutor:
                     # For typed procedures, preserve native value if resolvable; otherwise render to string
                     if getattr(proc, "return_type_annotation", None):
                         native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
-                        last_return = native if native is not None else rendered.strip()
+                        last_return = native if native is not None else preserve_escaped_whitespace(rendered)
                     else:
                         last_return = self.compiler.compile_return(stmt)(**closure_env)
                 
