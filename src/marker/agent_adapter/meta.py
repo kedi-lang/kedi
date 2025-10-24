@@ -19,9 +19,7 @@ class AgentAdapter(Protocol[T]):
         """
         pass
 
-    def produce_sync(
-        self, *, template: str, output_schema: dict[str, type], **kwargs
-    ) -> T:
+    def produce_sync(self, *, template: str, output_schema: dict[str, type], **kwargs) -> T:
         """
         Synchronous version of the produce method.
         Args:

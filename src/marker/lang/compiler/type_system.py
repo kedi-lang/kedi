@@ -2,13 +2,15 @@
 
 Handles type resolution, coercion, and validation.
 """
+
 from __future__ import annotations
 
+import ast
 import re
 import shlex
 from typing import Any, List
+
 from pydantic import BaseModel, TypeAdapter
-import ast
 
 from ...core import MarkerRuntime
 from ..ast import TypeDef, TypeField
@@ -24,11 +26,11 @@ class MarkerType:
     def resolve(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> Any | None:
         if not self.annotation:
             return None
-        
+
         # Check if this is a backtick-wrapped type expression
         if self._is_backtick_type(self.annotation):
             return self._resolve_backtick_type(rt, env)
-        
+
         # Regular string-based type annotation
         type_env = build_type_env(rt, env)
         try:
@@ -36,6 +38,7 @@ class MarkerType:
         except Exception:
             try:
                 from ..types import TypeValidator
+
                 res = TypeValidator(self.annotation).validate_names()
                 return res.pytype if res.is_valid else None
             except Exception:
@@ -44,15 +47,19 @@ class MarkerType:
     def is_none(self) -> bool:
         return self.annotation is None
 
-    def get_adapter(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> TypeAdapter | None:
+    def get_adapter(
+        self, rt: MarkerRuntime, env: dict[str, Any] | None = None
+    ) -> TypeAdapter | None:
         """Build a strict TypeAdapter via eval("TypeAdapter(<annotation>, config=CONFIG)")."""
         if not self.annotation:
             return None
         ns = build_type_env(rt, env)
-        ns.update({
-            'TypeAdapter': TypeAdapter,
-            'CONFIG': {'strict': True, 'arbitrary_types_allowed': True},
-        })
+        ns.update(
+            {
+                "TypeAdapter": TypeAdapter,
+                "CONFIG": {"strict": True, "arbitrary_types_allowed": True},
+            }
+        )
         try:
             expr = f"TypeAdapter({self.annotation}, config=CONFIG)"
             return eval(expr, ns, ns)
@@ -62,11 +69,18 @@ class MarkerType:
             if typ is None:
                 return None
             try:
-                return TypeAdapter(typ, config={'strict': True, 'arbitrary_types_allowed': True})
+                return TypeAdapter(typ, config={"strict": True, "arbitrary_types_allowed": True})
             except Exception:
                 return None
 
-    def validate(self, rt: MarkerRuntime, env: dict[str, Any] | None, value: Any, *, allow_str_coercion: bool = False) -> Any:
+    def validate(
+        self,
+        rt: MarkerRuntime,
+        env: dict[str, Any] | None,
+        value: Any,
+        *,
+        allow_str_coercion: bool = False,
+    ) -> Any:
         adapter = self.get_adapter(rt, env)
         if adapter is None:
             return value
@@ -80,26 +94,30 @@ class MarkerType:
 
     def __str__(self) -> str:
         return self.annotation or "Any"
-    
+
     def _is_backtick_type(self, annotation: str) -> bool:
         """Check if annotation is wrapped in backticks."""
         annotation = annotation.strip()
-        return (len(annotation) >= 2 and 
-                annotation.startswith("`") and 
-                annotation.endswith("`") and
-                annotation.count("`") == 2)
-    
-    def _resolve_backtick_type(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> Any | None:
+        return (
+            len(annotation) >= 2
+            and annotation.startswith("`")
+            and annotation.endswith("`")
+            and annotation.count("`") == 2
+        )
+
+    def _resolve_backtick_type(
+        self, rt: MarkerRuntime, env: dict[str, Any] | None = None
+    ) -> Any | None:
         """Resolve a backtick-wrapped type expression."""
         if not self.annotation:
             return None
-        
+
         # Extract the Python expression from backticks
         expr = self.annotation.strip()[1:-1]  # Remove backticks
-        
+
         # Build full environment for evaluation
         type_env = build_type_env(rt, env)
-        
+
         try:
             result = eval(expr, type_env, type_env)
             # Validate that the result is actually a type
@@ -109,14 +127,17 @@ class MarkerType:
         except Exception as e:
             # Re-raise with more context
             raise TypeError(f"Invalid type expression '{expr}': {e}") from e
-    
+
     def _is_valid_type(self, obj: Any) -> bool:
         """Check if an object is a valid type."""
         import types
-        return (isinstance(obj, type) or 
-                isinstance(obj, types.GenericAlias) or
-                hasattr(obj, '__origin__') or  # For typing constructs
-                str(type(obj)).startswith('<class \'typing.'))
+
+        return (
+            isinstance(obj, type)
+            or isinstance(obj, types.GenericAlias)
+            or hasattr(obj, "__origin__")  # For typing constructs
+            or str(type(obj)).startswith("<class 'typing.")
+        )
 
 
 """Minimal helpers kept below; complex coercion/compatibility removed in favor of TypeAdapter."""
@@ -126,30 +147,32 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     """Coerce a value to a Pydantic model."""
     if isinstance(value, model):
         return value
-    
+
     # Handle already-typed BaseModel instances
     if isinstance(value, BaseModel):
         return value
-    
+
     if isinstance(value, dict):
         return model.model_validate(value)
-    
+
     if isinstance(value, str):
         text = value.strip()
         # Try JSON
         if text.startswith("{") and text.endswith("}"):
             return model.model_validate_json(text)
-        
+
         # Try key=value format
         parsed = _parse_model_repr(text, model)
         if parsed is not None:
             return model.model_validate(parsed)
-    
+
     # If we get here, the value can't be coerced
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 
-def is_value_compatible(marker_type: MarkerType, value: Any, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> bool:
+def is_value_compatible(
+    marker_type: MarkerType, value: Any, rt: MarkerRuntime, env: dict[str, Any] | None = None
+) -> bool:
     try:
         marker_type.validate(rt, env, value)
         return True
@@ -161,7 +184,7 @@ def register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any])
     """Register a custom type definition as a Pydantic model."""
     annotations: dict[str, Any] = {}
     namespace: dict[str, Any] = {}
-    
+
     for field in typedef.fields:
         anno = field.type_annotation or "str"
         marker_type = MarkerType(anno)
@@ -169,19 +192,26 @@ def register_type(rt: MarkerRuntime, typedef: TypeDef, type_env: dict[str, Any])
         if resolved is None:
             raise TypeError(f"Unknown type annotation '{anno}' in type {typedef.name}")
         annotations[field.name] = resolved
-    
-    namespace['__annotations__'] = annotations
+
+    namespace["__annotations__"] = annotations
     field_order = [field.name for field in typedef.fields]
-    
+
     # Create model class
     new_model = type(typedef.name, (BaseModel,), namespace)
-    setattr(new_model, '__init__', _make_init(typedef.name, field_order, new_model))
-    
+    setattr(new_model, "__init__", _make_init(typedef.name, field_order, new_model))
+
     type_env[typedef.name] = new_model
     type_env[f"__{typedef.name}_fields__"] = annotations
 
 
-def assign_value_from_native(native: Any, marker_type: MarkerType, rt: MarkerRuntime, env: dict[str, Any] | None, *, strict_native: bool) -> Any:
+def assign_value_from_native(
+    native: Any,
+    marker_type: MarkerType,
+    rt: MarkerRuntime,
+    env: dict[str, Any] | None,
+    *,
+    strict_native: bool,
+) -> Any:
     if strict_native:
         if marker_type.is_none():
             if isinstance(native, str):
@@ -205,14 +235,14 @@ def assign_value_from_native(native: Any, marker_type: MarkerType, rt: MarkerRun
 
 def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
     """Detect the kind of RHS expression."""
-    from ..ast import TextSegment, PythonExprNativeSegment, PythonExprSegment, CallSegment
-    
+    from ..ast import CallSegment, PythonExprNativeSegment, PythonExprSegment, TextSegment
+
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
-    
+
     is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
     is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
-    
+
     return is_backtick_native, is_angle_pure, is_call_only
 
 
@@ -237,15 +267,15 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
     text = value.strip()
     if not text:
         return None
-    
+
     try:
         tokens = shlex.split(text)
     except ValueError:
         return None
-    
+
     data: dict[str, Any] = {}
     fields = getattr(model, "model_fields", {})
-    
+
     for token in tokens:
         if "=" not in token:
             return None
@@ -255,12 +285,13 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         field = fields[name]
         annotation = getattr(field, "annotation", str) or str
         data[name] = _convert_basic_literal(raw, annotation)
-    
+
     return data
 
 
 def _make_init(type_name: str, field_order: list[str], model_class: type[BaseModel]):
     """Create an __init__ that accepts positional args in field order."""
+
     def _init(self, *args: Any, **kwargs: Any) -> None:
         if args:
             if len(args) > len(field_order):
@@ -270,6 +301,7 @@ def _make_init(type_name: str, field_order: list[str], model_class: type[BaseMod
                     raise TypeError(f"Multiple values for field '{name}' in {type_name}")
                 kwargs[name] = value
         super(model_class, self).__init__(**kwargs)
+
     return _init
 
 

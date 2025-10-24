@@ -1,7 +1,16 @@
 from __future__ import annotations
 
-from .ast import (CallSegment, InputSegment, OutputSegment, ProcedureDef,
-                  Program, ReturnStmt, Segment, TemplateLine, TextSegment)
+from .ast import (
+    CallSegment,
+    InputSegment,
+    OutputSegment,
+    ProcedureDef,
+    Program,
+    ReturnStmt,
+    Segment,
+    TemplateLine,
+    TextSegment,
+)
 from .compiler import compile_program
 from .parser import parse_program
 from .parser.preprocessing import preprocess_blocks

@@ -2,7 +2,9 @@
 
 Tests backtick-wrapped type expressions that are evaluated at runtime.
 """
+
 import pytest
+
 from tests.utils_llm import run_without_llm
 
 
@@ -13,7 +15,7 @@ def _run(src: str):
 
 class TestBasicBacktickTypes:
     """Test basic Python types with backtick syntax."""
-    
+
     def test_int_backtick_type(self):
         """Test `int` type annotation."""
         src = """
@@ -22,7 +24,7 @@ class TestBasicBacktickTypes:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_str_backtick_type(self):
         """Test `str` type annotation."""
         src = """
@@ -31,7 +33,7 @@ class TestBasicBacktickTypes:
 """
         result = _run(src)
         assert result == "hello"
-    
+
     def test_float_backtick_type(self):
         """Test `float` type annotation."""
         src = """
@@ -40,7 +42,7 @@ class TestBasicBacktickTypes:
 """
         result = _run(src)
         assert result == "3.14"
-    
+
     def test_bool_backtick_type(self):
         """Test `bool` type annotation."""
         src = """
@@ -53,7 +55,7 @@ class TestBasicBacktickTypes:
 
 class TestComplexBacktickTypes:
     """Test complex types with backtick syntax."""
-    
+
     def test_list_int_backtick_type(self):
         """Test `list[int]` type annotation."""
         src = """
@@ -62,7 +64,7 @@ class TestComplexBacktickTypes:
 """
         result = _run(src)
         assert result == "6"
-    
+
     def test_list_str_backtick_type(self):
         """Test `list[str]` type annotation."""
         src = """
@@ -71,7 +73,7 @@ class TestComplexBacktickTypes:
 """
         result = _run(src)
         assert result == "3"
-    
+
     def test_nested_list_backtick_type(self):
         """Test `list[list[int]]` type annotation."""
         src = """
@@ -84,7 +86,7 @@ class TestComplexBacktickTypes:
 
 class TestCustomTypesFromPrelude:
     """Test custom types defined in prelude with backtick syntax."""
-    
+
     def test_prelude_custom_type(self):
         """Test custom type from prelude using backtick."""
         src = """
@@ -102,7 +104,7 @@ class Point:
 """
         result = _run(src)
         assert result == "30"
-    
+
     def test_prelude_list_custom_type(self):
         """Test list of custom type from prelude."""
         src = """
@@ -124,7 +126,7 @@ class Item:
 
 class TestCustomTypesFromDSL:
     """Test custom types defined with ~ syntax using backtick."""
-    
+
     def test_dsl_custom_type(self):
         """Test DSL-defined custom type with backtick."""
         src = """
@@ -135,7 +137,7 @@ class TestCustomTypesFromDSL:
 """
         result = _run(src)
         assert result == "Alice:30"
-    
+
     def test_dsl_list_custom_type(self):
         """Test list of DSL-defined custom type."""
         src = """
@@ -150,7 +152,7 @@ class TestCustomTypesFromDSL:
 
 class TestMixedUsage:
     """Test mixing backtick and non-backtick type annotations."""
-    
+
     def test_mixed_parameter_types(self):
         """Test procedure with mixed parameter type annotations."""
         src = """
@@ -161,7 +163,7 @@ class TestMixedUsage:
 """
         result = _run(src)
         assert result == "30"
-    
+
     def test_mixed_variable_types(self):
         """Test mixed variable type annotations."""
         src = """
@@ -171,7 +173,7 @@ class TestMixedUsage:
 """
         result = _run(src)
         assert result == "30"
-    
+
     def test_mixed_return_types(self):
         """Test procedure with mixed return type annotations."""
         src = """
@@ -189,7 +191,7 @@ class TestMixedUsage:
 
 class TestParameterAnnotations:
     """Test backtick type annotations in procedure parameters."""
-    
+
     def test_int_parameter_backtick(self):
         """Test int parameter with backtick annotation."""
         src = """
@@ -200,7 +202,7 @@ class TestParameterAnnotations:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_list_parameter_backtick(self):
         """Test list parameter with backtick annotation."""
         src = """
@@ -211,7 +213,7 @@ class TestParameterAnnotations:
 """
         result = _run(src)
         assert result == "10"
-    
+
     def test_custom_type_parameter_backtick(self):
         """Test custom type parameter with backtick annotation."""
         src = """
@@ -228,7 +230,7 @@ class TestParameterAnnotations:
 
 class TestReturnTypeAnnotations:
     """Test backtick type annotations in procedure return types."""
-    
+
     def test_int_return_backtick(self):
         """Test int return type with backtick annotation."""
         src = """
@@ -239,7 +241,7 @@ class TestReturnTypeAnnotations:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_list_return_backtick(self):
         """Test list return type with backtick annotation."""
         src = """
@@ -250,7 +252,7 @@ class TestReturnTypeAnnotations:
 """
         result = _run(src)
         assert result == "5"
-    
+
     def test_custom_type_return_backtick(self):
         """Test custom type return with backtick annotation."""
         src = """
@@ -267,7 +269,7 @@ class TestReturnTypeAnnotations:
 
 class TestOutputAnnotations:
     """Test backtick type annotations in output specifications."""
-    
+
     def test_output_int_backtick(self):
         """Test output with int backtick annotation - should work with LLM."""
         src = """
@@ -276,9 +278,11 @@ class TestOutputAnnotations:
 """
         # This test expects the LLM to return an integer, but our mock returns strings
         # So we expect this to fail with type validation error
-        with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
+        with pytest.raises(
+            TypeError, match="Native assignment value does not match annotated type"
+        ):
             _run(src)
-    
+
     def test_output_list_backtick(self):
         """Test output with list backtick annotation - should work with LLM."""
         src = """
@@ -287,13 +291,15 @@ class TestOutputAnnotations:
 """
         # This test expects the LLM to return a list, but our mock returns strings
         # So we expect this to fail with type validation error
-        with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
+        with pytest.raises(
+            TypeError, match="Native assignment value does not match annotated type"
+        ):
             _run(src)
 
 
 class TestTypeSafetyValidation:
     """Test that type safety guarantees hold for backtick types."""
-    
+
     def test_int_backtick_type_mismatch(self):
         """Test that int backtick type rejects string values."""
         src = """
@@ -302,7 +308,7 @@ class TestTypeSafetyValidation:
 """
         with pytest.raises(TypeError, match="Annotation type mismatch"):
             _run(src)
-    
+
     def test_list_int_backtick_type_mismatch(self):
         """Test that list[int] backtick type rejects mixed elements."""
         src = """
@@ -311,7 +317,7 @@ class TestTypeSafetyValidation:
 """
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_custom_type_backtick_validation(self):
         """Test custom type backtick validation."""
         src = """
@@ -322,7 +328,7 @@ class TestTypeSafetyValidation:
 """
         with pytest.raises(RuntimeError, match="ValidationError"):
             _run(src)
-    
+
     def test_parameter_backtick_type_validation(self):
         """Test parameter backtick type validation."""
         src = """
@@ -337,38 +343,44 @@ class TestTypeSafetyValidation:
 
 class TestErrorCases:
     """Test error cases for backtick type annotations."""
-    
+
     def test_undefined_type_backtick(self):
         """Test backtick with undefined type."""
         src = """
 [x: `UndefinedType`] = `42`
 = <`str(x)`>
 """
-        with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
+        with pytest.raises(
+            TypeError, match="Native assignment value does not match annotated type"
+        ):
             _run(src)
-    
+
     def test_invalid_expression_backtick(self):
         """Test backtick with invalid Python expression."""
         src = """
 [x: `int +`] = `42`
 = <`str(x)`>
 """
-        with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
+        with pytest.raises(
+            TypeError, match="Native assignment value does not match annotated type"
+        ):
             _run(src)
-    
+
     def test_non_type_expression_backtick(self):
         """Test backtick with expression that doesn't evaluate to a type."""
         src = """
 [x: `42`] = `42`
 = <`str(x)`>
 """
-        with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
+        with pytest.raises(
+            TypeError, match="Native assignment value does not match annotated type"
+        ):
             _run(src)
 
 
 class TestTypeDefinitionBacktick:
     """Test backtick type annotations in custom type definitions."""
-    
+
     def test_type_field_backtick(self):
         """Test custom type field with backtick type annotation."""
         src = """
@@ -379,7 +391,7 @@ class TestTypeDefinitionBacktick:
 """
         result = _run(src)
         assert result == "30"
-    
+
     def test_type_field_list_backtick(self):
         """Test custom type field with list backtick type annotation."""
         src = """
@@ -390,7 +402,7 @@ class TestTypeDefinitionBacktick:
 """
         result = _run(src)
         assert result == "60"
-    
+
     def test_mixed_type_field_annotations(self):
         """Test custom type with mixed field type annotations."""
         src = """
@@ -405,7 +417,7 @@ class TestTypeDefinitionBacktick:
 
 class TestInteroperability:
     """Test that backtick and non-backtick types work interchangeably."""
-    
+
     def test_function_call_interop(self):
         """Test calling functions with different annotation styles."""
         src = """
@@ -419,7 +431,7 @@ class TestInteroperability:
 """
         result = _run(src)
         assert result == "40"
-    
+
     def test_variable_assignment_interop(self):
         """Test variable assignment with different annotation styles."""
         src = """
@@ -430,7 +442,7 @@ class TestInteroperability:
 """
         result = _run(src)
         assert result == "60"
-    
+
     def test_custom_type_interop(self):
         """Test custom types with different annotation styles."""
         src = """

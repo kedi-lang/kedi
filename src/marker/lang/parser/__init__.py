@@ -5,6 +5,7 @@ This package provides clean, modular parsing of Marker source code.
 Public API:
     parse_program(source) -> Program
 """
+
 from __future__ import annotations
 
 from .program_parser import parse_program

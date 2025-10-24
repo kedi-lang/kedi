@@ -6,9 +6,8 @@ import pytest
 
 import marker.core as core
 from marker.lang import compile_program, parse_program
+from marker.tests_runner import run_evals, run_tests
 from tests.mock_adapter import MockAdapter
-from marker.tests_runner import run_tests, run_evals
-
 
 
 def _compile(src: str):
@@ -204,7 +203,10 @@ def test_validation_companion_file_discovery(tmp_path: Any, monkeypatch: Any) ->
     p = tmp_path / "prog.marker"
     pv = tmp_path / "prog.val.marker"
     p.write_text("@id(x):\n  = <x>\n\n= <id(ok)>\n", encoding="utf-8")
-    pv.write_text("@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n\n@eval: id:\n  > metric: basic:\n    = `1.0`\n", encoding="utf-8")
+    pv.write_text(
+        "@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n\n@eval: id:\n  > metric: basic:\n    = `1.0`\n",
+        encoding="utf-8",
+    )
     tests = run_tests(str(p), adapter=MockAdapter())
     assert tests and tests[0].cases[0].success
     evals = run_evals(str(p), adapter=MockAdapter())
@@ -608,10 +610,7 @@ def test_typed_outputs_multiple(monkeypatch: Any) -> None:
 def test_typed_output_in_return_context(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@mk():\n  produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n"
-            "= <mk()>\n"
-        ),
+        ("@mk():\n  produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n" "= <mk()>\n"),
     )
     assert out.isdigit()
 

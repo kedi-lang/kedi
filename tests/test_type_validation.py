@@ -2,8 +2,10 @@
 
 Tests type checking for parameters, variables, return values, and complex types.
 """
+
 import pytest
 from pydantic_core import ValidationError
+
 from tests.utils_llm import run_without_llm
 
 
@@ -14,7 +16,7 @@ def _run(src: str):
 
 class TestCustomTypeFieldValidation:
     """Tests for custom type field validation (via Pydantic)."""
-    
+
     def test_custom_type_with_wrong_int_field(self):
         """Test custom type with string instead of int."""
         src = """
@@ -26,7 +28,7 @@ class TestCustomTypeFieldValidation:
 """
         with pytest.raises(RuntimeError, match="ValidationError"):
             _run(src)
-    
+
     def test_custom_type_with_correct_fields(self):
         """Test custom type with correct field types."""
         src = """
@@ -38,7 +40,7 @@ class TestCustomTypeFieldValidation:
 """
         result = _run(src)
         assert result == "Alice:30"
-    
+
     def test_custom_type_with_list_field_wrong_elements(self):
         """Test custom type with list field containing wrong element types."""
         src = """
@@ -50,7 +52,7 @@ class TestCustomTypeFieldValidation:
 """
         with pytest.raises(RuntimeError, match="ValidationError"):
             _run(src)
-    
+
     def test_custom_type_with_list_field_correct(self):
         """Test custom type with list field containing correct elements."""
         src = """
@@ -66,7 +68,7 @@ class TestCustomTypeFieldValidation:
 
 class TestParameterTypeValidation:
     """Tests for procedure parameter type validation."""
-    
+
     def test_int_parameter_with_string_value(self):
         """Test int parameter receives string - should fail."""
         src = """
@@ -78,7 +80,7 @@ class TestParameterTypeValidation:
         # Inline call -> wrapped RuntimeError
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_int_parameter_with_correct_value(self):
         """Test int parameter with correct type."""
         src = """
@@ -89,7 +91,7 @@ class TestParameterTypeValidation:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_list_int_parameter_with_mixed_elements(self):
         """Test list[int] parameter with mixed element types."""
         src = """
@@ -100,7 +102,7 @@ class TestParameterTypeValidation:
 """
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_list_int_parameter_with_correct_elements(self):
         """Test list[int] parameter with correct types."""
         src = """
@@ -111,7 +113,7 @@ class TestParameterTypeValidation:
 """
         result = _run(src)
         assert result == "15"
-    
+
     def test_custom_type_parameter_with_correct_value(self):
         """Test custom type parameter validation."""
         src = """
@@ -128,7 +130,7 @@ class TestParameterTypeValidation:
 
 class TestVariableTypeValidation:
     """Tests for variable assignment type validation."""
-    
+
     def test_int_variable_with_string_value(self):
         """Test assigning string to int variable."""
         src = """
@@ -138,7 +140,7 @@ class TestVariableTypeValidation:
 """
         with pytest.raises(TypeError, match="Annotation type mismatch"):
             _run(src)
-    
+
     def test_int_variable_with_correct_value(self):
         """Test assigning int to int variable."""
         src = """
@@ -148,7 +150,7 @@ class TestVariableTypeValidation:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_list_int_variable_with_mixed_elements(self):
         """Test list[int] variable with mixed element types."""
         src = """
@@ -159,7 +161,7 @@ class TestVariableTypeValidation:
         # Top-level backtick assignment raises direct TypeError
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_list_int_variable_with_correct_elements(self):
         """Test list[int] variable with correct types."""
         src = """
@@ -169,7 +171,7 @@ class TestVariableTypeValidation:
 """
         result = _run(src)
         assert result == "6"
-    
+
     def test_native_non_string_requires_annotation(self):
         """Test that native non-string values require type annotation."""
         src = """
@@ -177,13 +179,15 @@ class TestVariableTypeValidation:
 
 = <`value`>
 """
-        with pytest.raises(TypeError, match="Native non-string assignment requires explicit type annotation"):
+        with pytest.raises(
+            TypeError, match="Native non-string assignment requires explicit type annotation"
+        ):
             _run(src)
 
 
 class TestReturnTypeValidation:
     """Tests for procedure return type validation."""
-    
+
     def test_return_int_without_annotation(self):
         """Test that returning int without annotation fails."""
         src = """
@@ -194,7 +198,7 @@ class TestReturnTypeValidation:
 """
         with pytest.raises(RuntimeError, match="Return value must be str"):
             _run(src)
-    
+
     def test_return_int_with_annotation(self):
         """Test returning int with proper annotation."""
         src = """
@@ -205,7 +209,7 @@ class TestReturnTypeValidation:
 """
         result = _run(src)
         assert result == "42"
-    
+
     def test_return_list_int_with_mixed_elements(self):
         """Test returning list[int] with wrong element types."""
         src = """
@@ -218,7 +222,7 @@ class TestReturnTypeValidation:
         # Inside inline call -> wrapped as RuntimeError
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_return_list_int_with_correct_elements(self):
         """Test returning list[int] with correct types."""
         src = """
@@ -234,7 +238,7 @@ class TestReturnTypeValidation:
 
 class TestListCustomTypeValidation:
     """Tests specifically for list[CustomType] validation."""
-    
+
     def test_list_custom_type_all_valid(self):
         """Test list[CustomType] with all valid elements."""
         src = """
@@ -246,7 +250,7 @@ class TestListCustomTypeValidation:
 """
         result = _run(src)
         assert result == "2"
-    
+
     def test_list_custom_type_with_string_element(self):
         """Test list[CustomType] with string element."""
         src = """
@@ -260,7 +264,7 @@ class TestListCustomTypeValidation:
 """
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_list_custom_type_with_dict_element(self):
         """Test list[CustomType] with dict element (should fail)."""
         src = """
@@ -274,7 +278,7 @@ class TestListCustomTypeValidation:
 """
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_list_custom_type_with_none_element(self):
         """Test list[CustomType] with None element."""
         src = """
@@ -288,7 +292,7 @@ class TestListCustomTypeValidation:
 """
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_list_custom_type_with_wrong_custom_type(self):
         """Test list[CustomType] with different custom type."""
         src = """
@@ -307,7 +311,7 @@ class TestListCustomTypeValidation:
 
 class TestEdgeCases:
     """Test edge cases in type validation."""
-    
+
     def test_empty_list_with_type_annotation(self):
         """Test empty list with type annotation is valid."""
         src = """
@@ -317,7 +321,7 @@ class TestEdgeCases:
 """
         result = _run(src)
         assert result == "0"
-    
+
     def test_nested_list_type(self):
         """Test nested list[list[int]] type."""
         src = """
@@ -327,7 +331,7 @@ class TestEdgeCases:
 """
         result = _run(src)
         assert result == "4"
-    
+
     def test_nested_list_with_wrong_inner_type(self):
         """Test nested list with wrong inner element type."""
         src = """
@@ -337,7 +341,7 @@ class TestEdgeCases:
 """
         with pytest.raises(TypeError):
             _run(src)
-    
+
     def test_bool_type_validation(self):
         """Test boolean type validation."""
         src = """
@@ -348,7 +352,7 @@ class TestEdgeCases:
 """
         result = _run(src)
         assert result == "yes"
-    
+
     def test_bool_type_with_string_fails(self):
         """Test bool type with string value fails."""
         src = """
@@ -359,7 +363,7 @@ class TestEdgeCases:
 """
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_float_type_validation(self):
         """Test float type validation."""
         src = """
@@ -370,7 +374,7 @@ class TestEdgeCases:
 """
         result = _run(src)
         assert result == "6.28"
-    
+
     def test_float_type_with_string_fails(self):
         """Test float type with string fails."""
         src = """
@@ -385,7 +389,7 @@ class TestEdgeCases:
 
 class TestParameterListElementValidation:
     """Test parameter validation catches wrong list element types."""
-    
+
     def test_list_int_first_element_wrong(self):
         """Test list[int] with first element wrong type."""
         src = """
@@ -396,7 +400,7 @@ class TestParameterListElementValidation:
 """
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_list_int_middle_element_wrong(self):
         """Test list[int] with middle element wrong type."""
         src = """
@@ -407,7 +411,7 @@ class TestParameterListElementValidation:
 """
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_list_int_last_element_wrong(self):
         """Test list[int] with last element wrong type."""
         src = """
@@ -418,7 +422,7 @@ class TestParameterListElementValidation:
 """
         with pytest.raises(RuntimeError):
             _run(src)
-    
+
     def test_list_int_multiple_elements_wrong(self):
         """Test list[int] with multiple wrong elements."""
         src = """
@@ -433,7 +437,7 @@ class TestParameterListElementValidation:
 
 class TestBacktickTypeAnnotations:
     """Test backtick type annotations integration with existing validation."""
-    
+
     def test_int_backtick_vs_regular_interop(self):
         """Test that `int` and int work interchangeably."""
         src = """
@@ -447,7 +451,7 @@ class TestBacktickTypeAnnotations:
 """
         result = _run(src)
         assert result == "40"
-    
+
     def test_list_backtick_validation(self):
         """Test list[int] backtick type validation."""
         src = """
@@ -458,7 +462,7 @@ class TestBacktickTypeAnnotations:
 """
         result = _run(src)
         assert result == "10"
-    
+
     def test_custom_type_backtick_validation(self):
         """Test custom type with backtick annotation."""
         src = """
@@ -471,7 +475,7 @@ class TestBacktickTypeAnnotations:
 """
         result = _run(src)
         assert result == "Hello Alice!"
-    
+
     def test_backtick_type_mismatch_validation(self):
         """Test that backtick types enforce validation."""
         src = """

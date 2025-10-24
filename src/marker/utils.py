@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypeVar, Callable
+from typing import Callable, TypeVar
 
 K = TypeVar("K")  # key type
 V = TypeVar("V")  # value type
@@ -10,7 +10,7 @@ class AttrDict(dict[K, V]):
     """A dictionary that supports attribute-style access."""
 
     __getattr__: Callable[[K], V] = dict.__getitem__
-    
+
 
 def cast_value(value: str) -> int | float | bool | str:
     """

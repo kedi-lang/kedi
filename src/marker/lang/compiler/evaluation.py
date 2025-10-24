@@ -1,15 +1,25 @@
 """Expression and segment evaluation for Marker compiler."""
+
 from __future__ import annotations
 
 from typing import Any
-from ..ast import (
-    Segment, TextSegment, InputSegment, CallSegment,
-    OutputSegment, PythonExprSegment, PythonExprNativeSegment, CallArg, LiteralArg, VarArg
-)
+
 from ...core import MarkerRuntime
-from .environment import lookup_value, build_python_env
-from .type_system import MarkerType
+from ..ast import (
+    CallArg,
+    CallSegment,
+    InputSegment,
+    LiteralArg,
+    OutputSegment,
+    PythonExprNativeSegment,
+    PythonExprSegment,
+    Segment,
+    TextSegment,
+    VarArg,
+)
 from ..parser.preprocessing import preserve_escaped_whitespace
+from .environment import build_python_env, lookup_value
+from .type_system import MarkerType
 
 
 def evaluate_call(rt: MarkerRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
@@ -38,15 +48,14 @@ def evaluate_python_inline(rt: MarkerRuntime, code: str, local_env: dict[str, An
 def execute_python_block(code: str, rt: MarkerRuntime, kwargs: dict[str, Any]) -> Any:
     """Execute a multi-line Python block with return value."""
     env_exec = build_python_env(rt, kwargs)
-    
+
     # Wrap in function to handle parameter scoping correctly
     param_names = list(kwargs.keys())
     params_str = ", ".join(param_names)
-    wrapper_src = (
-        f"def __marker_block__({params_str}):\n" + 
-        "\n".join("    " + line for line in code.splitlines())
+    wrapper_src = f"def __marker_block__({params_str}):\n" + "\n".join(
+        "    " + line for line in code.splitlines()
     )
-    
+
     try:
         exec(wrapper_src, env_exec, env_exec)
         return env_exec["__marker_block__"](**kwargs)
@@ -61,7 +70,7 @@ def execute_inline_side_effects(rt: MarkerRuntime, code: str, env_map: dict[str,
         exec(code, env_exec, env_exec)
     except Exception as e:
         raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
-    
+
     # Sync back only existing variables
     env_rt = rt._current_env.get()
     for var_name in list(env_map.keys()):
@@ -72,16 +81,12 @@ def execute_inline_side_effects(rt: MarkerRuntime, code: str, env_map: dict[str,
 
 
 def prepare_segments(
-    rt: MarkerRuntime,
-    segments: list[Segment],
-    kwargs: dict[str, Any],
-    *,
-    context: str = "template"
+    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str = "template"
 ) -> tuple[list[Any], str]:
     """Prepare segments for rt.m() call, building expression and string parts."""
     expr: list[Any] = []
     parts: list[str] = []
-    
+
     for seg in segments:
         if isinstance(seg, TextSegment):
             expr.append(seg.text)
@@ -105,16 +110,12 @@ def prepare_segments(
             value = evaluate_python_inline(rt, seg.code, kwargs)
             expr.append(str(value))
             parts.append(str(value))
-    
+
     return expr, "".join(parts)
 
 
 def render_expression(
-    rt: MarkerRuntime,
-    segments: list[Segment],
-    kwargs: dict[str, Any],
-    *,
-    context: str
+    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str
 ) -> str:
     """Render segments to string, invoking rt.m() only if outputs present."""
     if _has_outputs(segments):
@@ -128,18 +129,16 @@ def render_expression(
         finally:
             rt._current_env.reset(token)
         return _stringify_segments(rt, segments, kwargs, context=context)
-    
+
     return _stringify_segments(rt, segments, kwargs, context=context)
 
 
 def evaluate_assignment_rhs(
-    rt: MarkerRuntime,
-    segments: list[Segment],
-    kwargs: dict[str, Any]
+    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any | None, str]:
     """Evaluate assignment RHS, returning native value if pure expression."""
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
-    
+
     # Single native expression or call
     if len(non_ws) == 1:
         seg = non_ws[0]
@@ -149,12 +148,13 @@ def evaluate_assignment_rhs(
         if isinstance(seg, CallSegment):
             value = evaluate_call(rt, seg, kwargs)
             return value, str(value)
-    
+
     # Fallback to rendered string
     return None, render_expression(rt, segments, kwargs, context="assign")
 
 
 # Private helpers
+
 
 def _evaluate_arg(rt: MarkerRuntime, arg: CallArg, local_env: dict[str, Any]) -> Any:
     """Evaluate a single call argument."""
@@ -183,21 +183,17 @@ def _has_outputs(segments: list[Segment]) -> bool:
 
 
 def _stringify_segments(
-    rt: MarkerRuntime,
-    segments: list[Segment],
-    kwargs: dict[str, Any],
-    *,
-    context: str
+    rt: MarkerRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str
 ) -> str:
     """Convert segments to string, resolving all values."""
     parts: list[str] = []
-    
+
     for i, seg in enumerate(segments):
         if isinstance(seg, TextSegment):
             # Apply preserve_escaped_whitespace to boundary TextSegments or those with escaped whitespace
-            is_first = (i == 0)
-            is_last = (i == len(segments) - 1)
-            
+            is_first = i == 0
+            is_last = i == len(segments) - 1
+
             if seg.escaped_whitespace:
                 # Has escaped whitespace, always apply preserve_escaped_whitespace
                 processed_text = preserve_escaped_whitespace(seg.text, seg.escaped_whitespace)
@@ -232,5 +228,5 @@ def _stringify_segments(
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = evaluate_python_inline(rt, seg.code, kwargs)
             parts.append(str(value))
-    
+
     return "".join(parts)

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from marker.agent_adapter import AgentAdapter
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+
+from marker.agent_adapter import AgentAdapter
 
 # -----------------------------
 # Marker runtime implementation
@@ -149,9 +150,7 @@ class MarkerRuntime:
             else result
         )
 
-    def _marker_run(
-        self, expressions: Sequence[Expression], env: ValueEnv
-    ) -> Dict[str, Any]:
+    def _marker_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
@@ -185,11 +184,9 @@ class MarkerRuntime:
 
         if self.adapter is None:
             raise RuntimeError("No adapter provided to MarkerRuntime")
-        
-        result = self.adapter.produce_sync(
-            template=question, output_schema=typed_fields
-        )
-    
+
+        result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute
             if value is NotFound:

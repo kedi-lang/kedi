@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import click
 import dotenv
 
+from marker.app import maybe_run_codegen, run_evals_cli, run_program_cli, run_tests_cli
 from marker.utils import parse_args
-from marker.app import run_tests_cli, run_evals_cli, maybe_run_codegen, run_program_cli
-from pathlib import Path
 
 dotenv.load_dotenv()
 
@@ -17,10 +17,8 @@ SRC_DIR = os.path.join(THIS_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-context_settings = {
-    "ignore_unknown_options": True,
-    "allow_extra_args": True
-}
+context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
+
 
 @click.command(context_settings=context_settings, help="Run a .marker program with MarkerRuntime")
 @click.argument("source")
@@ -61,7 +59,18 @@ context_settings = {
 @click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
 @click.pass_context
-def main(ctx: click.Context, source: str, adapter: str, adapter_model: str, codegen_agent: str, codegen_model: str, codegen_retries: int, test: bool = False, do_eval: bool = False, no_cache: bool = False):
+def main(
+    ctx: click.Context,
+    source: str,
+    adapter: str,
+    adapter_model: str,
+    codegen_agent: str,
+    codegen_model: str,
+    codegen_retries: int,
+    test: bool = False,
+    do_eval: bool = False,
+    no_cache: bool = False,
+):
     try:
         with open(source, "r", encoding="utf-8") as f:
             f.read()
