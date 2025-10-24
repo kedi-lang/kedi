@@ -5,6 +5,11 @@ import sys
 
 import click
 import dotenv
+
+from marker.utils import parse_args
+from marker.app import run_tests_cli, run_evals_cli, maybe_run_codegen, run_program_cli
+from pathlib import Path
+
 dotenv.load_dotenv()
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -12,11 +17,12 @@ SRC_DIR = os.path.join(THIS_DIR, "src")
 if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
-from marker.app import run_tests_cli, run_evals_cli, maybe_run_codegen, run_program_cli
-from pathlib import Path
+context_settings = {
+    "ignore_unknown_options": True,
+    "allow_extra_args": True
+}
 
-
-@click.command(help="Run a .marker program with MarkerRuntime")
+@click.command(context_settings=context_settings, help="Run a .marker program with MarkerRuntime")
 @click.argument("source")
 @click.option(
     "--adapter",
@@ -54,14 +60,18 @@ from pathlib import Path
 @click.option("--test", is_flag=True, help="Run tests defined with @test: blocks")
 @click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
-def main(source: str, adapter: str, adapter_model: str, codegen_agent: str, codegen_model: str, codegen_retries: int, test: bool = False, do_eval: bool = False, no_cache: bool = False):
+@click.pass_context
+def main(ctx: click.Context, source: str, adapter: str, adapter_model: str, codegen_agent: str, codegen_model: str, codegen_retries: int, test: bool = False, do_eval: bool = False, no_cache: bool = False):
     try:
         with open(source, "r", encoding="utf-8") as f:
-            src = f.read()
+            f.read()
     except Exception as e:
         click.echo(f"Error reading {source}: {e}", err=True)
         return 1
-
+    data = parse_args(ctx.args)
+    # the data comes from command line arguments
+    # should be passed into runtime environment
+    # TL;DR: pass `data` into runtime
     try:
         if test or do_eval:
             # Run validations
@@ -102,4 +112,4 @@ def main(source: str, adapter: str, adapter_model: str, codegen_agent: str, code
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
