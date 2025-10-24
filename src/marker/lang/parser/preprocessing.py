@@ -96,10 +96,37 @@ def merge_line_continuations(source: str) -> str:
     return "\n".join(merged)
 
 
+def preserve_escaped_whitespace(text: str, escaped_positions: set[int] = None) -> str:
+    if not text:
+        return text
+    
+    # If no escaped positions provided or empty, use original behavior (trim leading/trailing whitespace)
+    if escaped_positions is None or not escaped_positions:
+        return text.strip()
+    
+    # Find the start of non-space content, but preserve escaped whitespace
+    start = 0
+    while start < len(text):
+        if text[start] == ' ' and start not in escaped_positions:
+            start += 1
+        else:
+            break
+    
+    # Find the end of non-space content, but preserve escaped whitespace
+    end = len(text)
+    while end > start:
+        if text[end - 1] == ' ' and (end - 1) not in escaped_positions:
+            end -= 1
+        else:
+            break
+    
+    return text[start:end]
+
+
 def unescape_text(text: str) -> str:
     """Unescape backslash-escaped characters in plain text segments.
 
-    Recognized escapes: \\ < > [ ] = @ , \\ # ~ ` ( )
+    Recognized escapes: \\ < > [ ] = @ , \\ # ~ ` ( ) t n s
     """
     out: list[str] = []
     i = 0
@@ -109,6 +136,18 @@ def unescape_text(text: str) -> str:
         if ch == "\\":
             if nxt in ("<", ">", "[", "]", "=", "@", ",", "\\", "#", "~", "`", "(", ")"):
                 out.append(nxt)
+                i += 2
+                continue
+            elif nxt == "t":
+                out.append("\t")
+                i += 2
+                continue
+            elif nxt == "n":
+                out.append("\n")
+                i += 2
+                continue
+            elif nxt == "s":
+                out.append(" ")
                 i += 2
                 continue
             raise ValueError("Invalid escape sequence in text")

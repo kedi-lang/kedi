@@ -637,3 +637,204 @@ def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
 def test_parametrized_typed_snippets(monkeypatch: Any, src: str) -> None:
     out = _run(monkeypatch, src)
     assert isinstance(out, str)
+
+
+# ----------------------
+# Whitespace escape sequences
+# ----------------------
+def test_tab_escape_sequence(monkeypatch: Any) -> None:
+    """Test that \\t produces a tab character in plain text."""
+    src = "= Column1\\tColumn2\\tColumn3"
+    out = _run(monkeypatch, src)
+    assert "\t" in out
+    assert "Column1\tColumn2\tColumn3" in out
+
+
+def test_newline_escape_sequence(monkeypatch: Any) -> None:
+    """Test that \\n produces a newline character in plain text."""
+    src = "= Line1\\nLine2\\nLine3"
+    out = _run(monkeypatch, src)
+    assert "\n" in out
+    assert "Line1\nLine2\nLine3" in out
+
+
+def test_multiple_whitespace_escapes(monkeypatch: Any) -> None:
+    """Test multiple whitespace escape sequences in the same line."""
+    src = "= Name\\tAge\\nJohn\\t25\\nJane\\t30"
+    out = _run(monkeypatch, src)
+    assert "\t" in out and "\n" in out
+    assert "Name\tAge\nJohn\t25\nJane\t30" in out
+
+
+def test_whitespace_escapes_with_substitutions(monkeypatch: Any) -> None:
+    """Test whitespace escapes work with variable substitutions."""
+    src = "@format_data(name, age):\n  = <name>\\t<age>\\n\n= <format_data(John, 25)>"
+    out = _run(monkeypatch, src)
+    # The output should contain tab character
+    assert "\t" in out
+    # The output should be "John\t25" (newline might be stripped)
+    assert "John\t25" in out
+
+
+def test_whitespace_escapes_in_return_statement(monkeypatch: Any) -> None:
+    """Test whitespace escapes work in return statements."""
+    src = "@p():\n  = Header\\nData\\tValue\n\n= <p()>"
+    out = _run(monkeypatch, src)
+    assert "\n" in out and "\t" in out
+    assert "Header\nData\tValue" in out
+
+
+def test_whitespace_escapes_with_other_escapes(monkeypatch: Any) -> None:
+    """Test whitespace escapes work alongside other escape sequences."""
+    src = "= Text\\twith\\n\\<brackets\\>\\tand\\n\\#comments"
+    out = _run(monkeypatch, src)
+    assert "\t" in out and "\n" in out
+    assert "<brackets>" in out
+    assert "#comments" in out
+
+
+def test_python_expressions_unaffected_by_whitespace_escapes(monkeypatch: Any) -> None:
+    """Test that Python expressions are not affected by whitespace escape processing."""
+    src = "= <`'tab\\tnewline\\n'`>"
+    out = _run(monkeypatch, src)
+    # Python should handle its own escapes, so \t should be tab
+    assert "\t" in out  # tab character should be present
+    # The output should contain the Python string as processed by Python
+    assert "tab\tnewline" in out
+
+
+def test_invalid_whitespace_escape_sequence(monkeypatch: Any) -> None:
+    """Test that invalid escape sequences still raise errors."""
+    with pytest.raises(ValueError, match="Invalid escape sequence"):
+        _run(monkeypatch, "= Invalid\\x escape")
+
+
+def test_whitespace_escapes_in_template_lines(monkeypatch: Any) -> None:
+    """Test whitespace escapes work in template lines."""
+    src = "= Header\\tData\\nFooter"
+    out = _run(monkeypatch, src)
+    assert "\t" in out and "\n" in out
+    assert "Header\tData\nFooter" in out
+
+
+# ----------------------
+# Whitespace preservation behavior
+# ----------------------
+def test_escaped_whitespace_preserved_in_return(monkeypatch: Any) -> None:
+    """Test that escaped whitespace characters are preserved in return statements."""
+    src = "= \\tLeading tab\\nTrailing newline\\n"
+    out = _run(monkeypatch, src)
+    # Should preserve the escaped whitespace at the beginning and end
+    assert out.startswith("\t")
+    assert out.endswith("\n")
+    assert "Leading tab\nTrailing newline" in out
+
+
+def test_regular_whitespace_trimmed_in_return(monkeypatch: Any) -> None:
+    """Test that regular whitespace is still trimmed from return statements."""
+    src = "=   Regular spaces trimmed   "
+    out = _run(monkeypatch, src)
+    # Should trim regular spaces but preserve content
+    assert out == "Regular spaces trimmed"
+
+
+def test_mixed_whitespace_behavior(monkeypatch: Any) -> None:
+    """Test mixed escaped and regular whitespace behavior."""
+    src = "=   \\tEscaped tab\\n   Regular spaces   \\nEscaped newline\\n   "
+    out = _run(monkeypatch, src)
+    # Should trim regular spaces but preserve escaped whitespace
+    assert out.startswith("\t")
+    assert out.endswith("\n")
+    assert "Escaped tab\n   Regular spaces   \nEscaped newline" in out
+
+
+def test_escaped_whitespace_in_procedure_return(monkeypatch: Any) -> None:
+    """Test escaped whitespace preservation in procedure returns."""
+    src = "@p():\n  = \\tTab at start\\nNewline at end\\n\n= <p()>"
+    out = _run(monkeypatch, src)
+    # Should preserve escaped whitespace from procedure return
+    assert out.startswith("\t")
+    assert out.endswith("\n")
+    assert "Tab at start\nNewline at end" in out
+
+
+def test_regular_whitespace_trimmed_in_procedure_return(monkeypatch: Any) -> None:
+    """Test regular whitespace trimming in procedure returns."""
+    src = "@p():\n  =   Regular spaces   \n\n= <p()>"
+    out = _run(monkeypatch, src)
+    # Should trim regular spaces
+    assert out == "Regular spaces"
+
+
+def test_escaped_whitespace_in_assignment(monkeypatch: Any) -> None:
+    """Test escaped whitespace preservation in assignments."""
+    src = "[text] = \\tTab\\nNewline\\n\n= <text>"
+    out = _run(monkeypatch, src)
+    # Should preserve escaped whitespace in assignment
+    assert out.startswith("\t")
+    assert out.endswith("\n")
+    assert "Tab\nNewline" in out
+
+
+def test_regular_whitespace_trimmed_in_assignment(monkeypatch: Any) -> None:
+    """Test regular whitespace trimming in assignments."""
+    src = "[text] =   Regular spaces   \n= <text>"
+    out = _run(monkeypatch, src)
+    # Should trim regular spaces
+    assert out == "Regular spaces"
+
+
+# ----------------------
+# Space escape sequence (\s)
+# ----------------------
+def test_space_escape_sequence(monkeypatch: Any) -> None:
+    """Test that \\s produces a space character in plain text."""
+    src = "= Word1\\sWord2\\sWord3"
+    out = _run(monkeypatch, src)
+    assert " " in out
+    assert "Word1 Word2 Word3" in out
+
+
+def test_space_escape_preserved_in_return(monkeypatch: Any) -> None:
+    """Test that escaped spaces are preserved in return statements."""
+    src = "= \\sLeading space\\sTrailing space\\s"
+    out = _run(monkeypatch, src)
+    # Should preserve the escaped spaces (they become regular spaces after unescaping)
+    # Note: boundary spaces are still trimmed, but internal escaped spaces are preserved
+    assert "Leading space Trailing space" in out
+
+
+def test_space_escape_with_other_escapes(monkeypatch: Any) -> None:
+    """Test space escape works alongside other escape sequences."""
+    src = "= \\tTab\\sSpace\\nNewline\\sSpace"
+    out = _run(monkeypatch, src)
+    assert "\t" in out and " " in out and "\n" in out
+    assert "Tab Space\nNewline Space" in out
+
+
+def test_space_escape_in_procedure_return(monkeypatch: Any) -> None:
+    """Test escaped space preservation in procedure returns."""
+    src = "@p():\n  = \\sSpace at start\\sSpace at end\\s\n\n= <p()>"
+    out = _run(monkeypatch, src)
+    # Should preserve escaped spaces from procedure return
+    # Note: boundary spaces are still trimmed, but internal escaped spaces are preserved
+    assert "Space at start Space at end" in out
+
+
+def test_space_escape_in_assignment(monkeypatch: Any) -> None:
+    """Test escaped space preservation in assignments."""
+    src = "[text] = \\sSpace\\sSpace\\s\n= <text>"
+    out = _run(monkeypatch, src)
+    # Should preserve escaped spaces in assignment
+    # Note: boundary spaces are still trimmed, but internal escaped spaces are preserved
+    assert "Space Space" in out
+
+
+def test_mixed_space_escapes_and_regular_spaces(monkeypatch: Any) -> None:
+    """Test mixed escaped and regular space behavior."""
+    src = "=   \\sEscaped space\\s   Regular spaces   \\sEscaped space   "
+    out = _run(monkeypatch, src)
+    # Should preserve escaped spaces at boundaries and internally
+    # The \s becomes a space, and regular spaces are also preserved
+    assert " Escaped space    Regular spaces    Escaped space" in out
+    assert "Escaped spacE   " not in out

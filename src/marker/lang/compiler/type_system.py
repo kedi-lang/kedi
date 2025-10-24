@@ -24,6 +24,12 @@ class MarkerType:
     def resolve(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> Any | None:
         if not self.annotation:
             return None
+        
+        # Check if this is a backtick-wrapped type expression
+        if self._is_backtick_type(self.annotation):
+            return self._resolve_backtick_type(rt, env)
+        
+        # Regular string-based type annotation
         type_env = build_type_env(rt, env)
         try:
             return eval(self.annotation, type_env, type_env)
@@ -74,6 +80,43 @@ class MarkerType:
 
     def __str__(self) -> str:
         return self.annotation or "Any"
+    
+    def _is_backtick_type(self, annotation: str) -> bool:
+        """Check if annotation is wrapped in backticks."""
+        annotation = annotation.strip()
+        return (len(annotation) >= 2 and 
+                annotation.startswith("`") and 
+                annotation.endswith("`") and
+                annotation.count("`") == 2)
+    
+    def _resolve_backtick_type(self, rt: MarkerRuntime, env: dict[str, Any] | None = None) -> Any | None:
+        """Resolve a backtick-wrapped type expression."""
+        if not self.annotation:
+            return None
+        
+        # Extract the Python expression from backticks
+        expr = self.annotation.strip()[1:-1]  # Remove backticks
+        
+        # Build full environment for evaluation
+        type_env = build_type_env(rt, env)
+        
+        try:
+            result = eval(expr, type_env, type_env)
+            # Validate that the result is actually a type
+            if not self._is_valid_type(result):
+                raise TypeError(f"Expression '{expr}' does not evaluate to a valid type")
+            return result
+        except Exception as e:
+            # Re-raise with more context
+            raise TypeError(f"Invalid type expression '{expr}': {e}") from e
+    
+    def _is_valid_type(self, obj: Any) -> bool:
+        """Check if an object is a valid type."""
+        import types
+        return (isinstance(obj, type) or 
+                isinstance(obj, types.GenericAlias) or
+                hasattr(obj, '__origin__') or  # For typing constructs
+                str(type(obj)).startswith('<class \'typing.'))
 
 
 """Minimal helpers kept below; complex coercion/compatibility removed in favor of TypeAdapter."""

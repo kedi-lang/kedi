@@ -8,6 +8,67 @@ from .preprocessing import unescape_text
 import re
 
 
+def unescape_text_with_tracking(text: str) -> tuple[str, set[int]]:
+    """Unescape text and track positions of escaped whitespace characters.
+    
+    Returns:
+        tuple: (unescaped_text, escaped_positions) where escaped_positions
+        contains the indices of characters that were originally escaped whitespace.
+    """
+    escaped_positions = set()
+    out = []
+    i = 0
+    
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt in ("<", ">", "[", "]", "=", "@", ",", "\\", "#", "~", "`", "(", ")", "t", "n", "s"):
+                if nxt == "t":
+                    out.append("\t")
+                    escaped_positions.add(len(out) - 1)
+                elif nxt == "n":
+                    out.append("\n")
+                    escaped_positions.add(len(out) - 1)
+                elif nxt == "s":
+                    out.append(" ")
+                    escaped_positions.add(len(out) - 1)
+                elif nxt == "<":
+                    out.append("<")
+                elif nxt == ">":
+                    out.append(">")
+                elif nxt == "[":
+                    out.append("[")
+                elif nxt == "]":
+                    out.append("]")
+                elif nxt == "=":
+                    out.append("=")
+                elif nxt == "@":
+                    out.append("@")
+                elif nxt == ",":
+                    out.append(",")
+                elif nxt == "\\":
+                    out.append("\\")
+                elif nxt == "#":
+                    out.append("#")
+                elif nxt == "~":
+                    out.append("~")
+                elif nxt == "`":
+                    out.append("`")
+                elif nxt == "(":
+                    out.append("(")
+                elif nxt == ")":
+                    out.append(")")
+                i += 2
+            else:
+                raise ValueError("Invalid escape sequence in text")
+        else:
+            out.append(ch)
+            i += 1
+    
+    return "".join(out), escaped_positions
+
+
 def parse_segments(body: str) -> list[Segment]:
     """Parse a template line body into segments."""
     segments: list[Segment] = []
@@ -16,7 +77,8 @@ def parse_segments(body: str) -> list[Segment]:
     
     def flush_text():
         if buf:
-            segments.append(TextSegment(unescape_text("".join(buf))))
+            unescaped_text, escaped_positions = unescape_text_with_tracking("".join(buf))
+            segments.append(TextSegment(text=unescaped_text, escaped_whitespace=escaped_positions))
             buf.clear()
     
     while i < len(body):
@@ -146,7 +208,7 @@ def find_matching_delimiter(s: str, start: int, open_ch: str, close_ch: str) -> 
 
 
 def _parse_output(inner: str) -> OutputSegment:
-    """Parse output specification [name] or [name: type]."""
+    """Parse output specification [name] or [name: type] or [name: `type_expr`]."""
     if ":" in inner:
         name_part, type_part = inner.split(":", 1)
         name = name_part.strip()

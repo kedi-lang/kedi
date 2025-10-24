@@ -36,7 +36,7 @@ class StatementParser:
         return stripped.startswith("@") and stripped.endswith(":")
     
     def parse_assignment(self, line: str) -> AssignStmt | None:
-        """Parse assignment statement [name] = expr or [name: type] = expr."""
+        """Parse assignment statement [name] = expr or [name: type] = expr or [name: `type_expr`] = expr."""
         stripped = line.strip()
         if not self.is_assignment(line):
             return None
@@ -51,7 +51,7 @@ class StatementParser:
         
         rhs_src = rest[1:]
         
-        # Parse target [name] or [name: type]
+        # Parse target [name] or [name: type] or [name: `type_expr`]
         type_anno: str | None = None
         if ":" in target_inner:
             name_part, type_part = target_inner.split(":", 1)
@@ -97,7 +97,7 @@ class StatementParser:
         return ReturnStmt(segments=segments)
     
     def parse_type_definition(self, line: str) -> TypeDef:
-        """Parse type definition ~Name(field, ...)."""
+        """Parse type definition ~Name(field, ...) or ~Name(field: `type_expr`, ...)."""
         if not re.match(r"^~[A-Za-z_][A-Za-z0-9_]*\(.*\)$", line):
             raise ValueError("Type definition must follow syntax ~Name(field, ...)")
         
@@ -137,7 +137,7 @@ class StatementParser:
         return TypeDef(name=name, fields=fields)
     
     def parse_procedure_header(self, line: str) -> Tuple[str, list[str], dict[str, str | None], str | None]:
-        """Parse procedure header @name(params) -> returntype:.
+        """Parse procedure header @name(params) -> returntype: or @name(params) -> `returntype_expr`:.
         
         Returns: (name, params, param_type_annotations, return_type_annotation)
         """
@@ -147,7 +147,7 @@ class StatementParser:
         stripped = line.strip()
         header = stripped[1:-1]  # Remove @ and :
         
-        # Support optional return type: name(params) -> type
+        # Support optional return type: name(params) -> type or name(params) -> `type_expr`
         ret_anno: str | None = None
         if "->" in header:
             header, ret_anno_src = header.split("->", 1)
