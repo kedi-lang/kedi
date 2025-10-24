@@ -15,7 +15,6 @@ Makefile
 dev/
 test.marker
 markers.md
-*.png
 
 # Distribution / packaging
 .Python
