@@ -43,6 +43,6 @@ jobs:
           git checkout stable
 
           git add .
-          git diff --cached --quiet || git commit -m "Auto format code via GitHub Actions"
+          git diff --cached --quiet || git commit -m "format: black"
 
           git push origin stable
