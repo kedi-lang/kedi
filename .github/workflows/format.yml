@@ -3,7 +3,6 @@ name: Code Formatter
 on:
   push:
     branches: [ stable ]
-  pull_request:
 
 jobs:
   auto-format:
