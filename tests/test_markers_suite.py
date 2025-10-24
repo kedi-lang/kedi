@@ -10,6 +10,7 @@ import pytest
 from marker.lang import compile_program, parse_program
 from marker.agent_adapter.adapters import PydanticAdapter, DSPyAdapter
 from marker.cli import main as cli_main
+from marker.utils import parse_args
 from tests.utils_llm import llm_retry
 
 
@@ -60,3 +61,20 @@ def test_cli_test_and_eval(tmp_path: Path) -> None:
         cli_main.main(sys.argv)
     except SystemExit as e:
         assert e.code == 0
+
+def test_parse_cli_args() -> None:
+    args = [
+        "--foo", "bar",
+        "--retries", "5",
+        "--temperature", "0.7",
+        "--test",
+        "--no-cache",
+    ]
+    
+    assert parse_args(args) == {
+        "foo": "bar",
+        "retries": 5,
+        "temperature": 0.7,
+        "test": True,
+        "no_cache": True,
+    }
