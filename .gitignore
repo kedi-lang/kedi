@@ -12,9 +12,10 @@ __pycache__/
 
 # Dev files
 Makefile
-*.test.py
+dev/
 test.marker
 markers.md
+*.png
 
 # Distribution / packaging
 .Python
