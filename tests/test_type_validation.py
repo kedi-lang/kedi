@@ -429,3 +429,54 @@ class TestParameterListElementValidation:
 """
         with pytest.raises(RuntimeError):
             _run(src)
+
+
+class TestBacktickTypeAnnotations:
+    """Test backtick type annotations integration with existing validation."""
+    
+    def test_int_backtick_vs_regular_interop(self):
+        """Test that `int` and int work interchangeably."""
+        src = """
+@process1(x: int) -> int:
+    = `x * 2`
+
+@process2(x: `int`) -> `int`:
+    = `x * 2`
+
+= <`str(process1(10) + process2(10))`>
+"""
+        result = _run(src)
+        assert result == "40"
+    
+    def test_list_backtick_validation(self):
+        """Test list[int] backtick type validation."""
+        src = """
+@sum_numbers(nums: `list[int]`) -> `int`:
+    = `sum(nums)`
+
+= <`str(sum_numbers([1, 2, 3, 4]))`>
+"""
+        result = _run(src)
+        assert result == "10"
+    
+    def test_custom_type_backtick_validation(self):
+        """Test custom type with backtick annotation."""
+        src = """
+~Person(name, age: int)
+
+@greet(p: `Person`):
+    = Hello <`p.name`>!
+
+= <`greet(Person(name="Alice", age=30))`>
+"""
+        result = _run(src)
+        assert result == "Hello Alice!"
+    
+    def test_backtick_type_mismatch_validation(self):
+        """Test that backtick types enforce validation."""
+        src = """
+[x: `int`] = `"not_a_number"`
+= <`str(x)`>
+"""
+        with pytest.raises(TypeError, match="Annotation type mismatch: got str value"):
+            _run(src)

@@ -208,7 +208,7 @@ def find_matching_delimiter(s: str, start: int, open_ch: str, close_ch: str) -> 
 
 
 def _parse_output(inner: str) -> OutputSegment:
-    """Parse output specification [name] or [name: type]."""
+    """Parse output specification [name] or [name: type] or [name: `type_expr`]."""
     if ":" in inner:
         name_part, type_part = inner.split(":", 1)
         name = name_part.strip()
