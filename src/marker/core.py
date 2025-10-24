@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextvars import ContextVar
 from dataclasses import dataclass
 from marker.agent_adapter import AgentAdapter
-from typing import Any, Callable, TypeVar, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 # -----------------------------
 # Marker runtime implementation
@@ -12,15 +12,6 @@ from typing import Any, Callable, TypeVar, Dict, List, Optional, Sequence, Tuple
 # Public API types
 Value = Any
 ValueEnv = Dict[str, Value]
-
-K = TypeVar('K') # key type
-V = TypeVar('V') # value type
-
-class AttrDict(dict[K, V]):
-    """
-    A class to make dictionary accesible by attribute notation.
-    """
-    __getattr__ = dict.__getitem__ # forward attrs to items
 
 
 @dataclass

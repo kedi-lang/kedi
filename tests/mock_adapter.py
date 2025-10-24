@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-from marker.core import AttrDict
+from marker.utils import AttrDict
 from marker.agent_adapter import AgentAdapter
 
 
-class MockAdapter(AgentAdapter[Dict[str, Any]]):
+class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     async def produce(
         self,
         *,
