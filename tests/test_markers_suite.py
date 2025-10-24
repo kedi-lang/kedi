@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import os
 from pathlib import Path
 from typing import Iterable
@@ -45,10 +46,17 @@ def test_cli_test_and_eval(tmp_path: Path) -> None:
     valp = tmp_path / "x.val.marker"
     srcp.write_text("@f():\n  = ok\n\n= <f()>\n", encoding="utf-8")
     valp.write_text("@test: f:\n  > case: ok:\n    `assert f() == 'ok'`\n\n@eval: f:\n  > metric: s:\n    = `0.5`\n", encoding="utf-8")
-    import sys
-    sys.argv = ["marker", str(srcp), "--test"]
-    rc = cli_main()
-    assert rc == 0
-    sys.argv = ["marker", str(srcp), "--eval"]
-    rc2 = cli_main()
-    assert rc2 == 0
+    
+    try:
+        sys.argv = [str(srcp), "--test"]
+        print(sys.argv, file=sys.stderr)
+        cli_main.main(sys.argv)
+    except SystemExit as e:
+        assert e.code == 0
+    
+    try:
+        sys.argv = [str(srcp), "--eval"]
+        print(sys.argv, file=sys.stderr)
+        cli_main.main(sys.argv)
+    except SystemExit as e:
+        assert e.code == 0

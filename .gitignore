@@ -12,7 +12,7 @@ __pycache__/
 
 # Dev files
 Makefile
-*.test.py
+dev/
 test.marker
 markers.md
 
@@ -216,3 +216,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+*.png

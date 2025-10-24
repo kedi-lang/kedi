@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, TypeVar
+from typing import Any, Dict, List
+from marker.utils import AttrDict
 from marker.agent_adapter import AgentAdapter
 
-K = TypeVar('K') # key type
-V = TypeVar('V') # value type
 
-class AttrDict(dict[K, V]):
-    """
-    A class to make dictionary accesible by attribute notation.
-    """
-    __getattr__ = dict.__getitem__ # forward attrs to items
-
-
-class MockAdapter(AgentAdapter[Dict[str, Any]]):
+class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     async def produce(
         self,
         *,
