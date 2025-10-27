@@ -91,15 +91,7 @@ def test_prelude_math_imports_success() -> None:
 
 def test_prelude_math_imports_failure() -> None:
     src = (
-        "```\n"
-        "# dummy\n"
-        "```\n"
-        "\n"
-        "```\n"
-        "import math\n"
-        "```\n"
-        "\n"
-        "= <`math.sqrt(9)`>\n"
+        "```\n" "# dummy\n" "```\n" "\n" "```\n" "import math\n" "```\n" "\n" "= <`math.sqrt(9)`>\n"
     )
     with pytest.raises(Exception):
         _run(src)

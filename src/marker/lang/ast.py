@@ -13,7 +13,9 @@ class Segment:
 @dataclass
 class TextSegment(Segment):
     text: str
-    escaped_whitespace: set[int] = field(default_factory=set)  # Positions of escaped whitespace chars
+    escaped_whitespace: set[int] = field(
+        default_factory=set
+    )  # Positions of escaped whitespace chars
 
 
 @dataclass
@@ -126,9 +128,7 @@ class ProcedureDef:
     return_type_annotation: Optional[str] = None
     # Optional mapping of parameter name to type annotation string
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
-    lexical_env: Optional[dict[str, Any]] = field(
-        default=None, repr=False, compare=False
-    )
+    lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
     # If present, this procedure is an AI-prompt-only spec
     ai_prompt: Optional[str] = None
 

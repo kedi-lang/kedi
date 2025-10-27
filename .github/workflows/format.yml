@@ -1,0 +1,48 @@
+name: Code Formatter
+
+on:
+  push:
+    branches: [ stable ]
+
+jobs:
+  auto-format:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install formatters
+        run: |
+          pip install --quiet black isort
+
+      - name: Run Black + isort (safe mode)
+        run: |
+          set +e
+          find . -type f -name "*.py" -print0 | xargs -0 black || true
+          find . -type f -name "*.py" -print0 | xargs -0 isort || true
+          set -e
+
+      - name: Commit formatted code
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout stable
+
+          git add .
+          git diff --cached --quiet || git commit -m "format: black"
+
+          git push origin stable

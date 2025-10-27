@@ -84,9 +84,7 @@ def test_shadow_param_names(monkeypatch: Any) -> None:
 
 
 def test_outer_cannot_see_inner_param(monkeypatch: Any) -> None:
-    src = (
-        "@foo(x):\n" "  @inner(n):\n" "    = <n>\n" "  = <`int(n)`>\n\n" "= <foo(7)>\n"
-    )
+    src = "@foo(x):\n" "  @inner(n):\n" "    = <n>\n" "  = <`int(n)`>\n\n" "= <foo(7)>\n"
     with pytest.raises(Exception):
         _run(src)
 

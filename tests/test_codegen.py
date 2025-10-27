@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
+from marker.cli import main as cli_main
 from marker.codegen.manager import CodegenManager
 from marker.codegen.mock_agents import MockPassingAgent
 from marker.codegen.runner import run_codegen
-from marker.cli import main as cli_main
 from marker.tests_runner import run_tests
 
-import os, sys
 
 def test_codegen_cache_paths(tmp_path: Path) -> None:
     src = tmp_path / "prog.marker"
@@ -36,12 +37,10 @@ def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:
 def test_cli_like_codegen_runner(tmp_path: Path) -> None:
     src = tmp_path / "h.marker"
     src.write_text("@f():\n  > implement f returning ok\n\n= <f()>\n", encoding="utf-8")
-    
+
     os.environ["MARKER_CODEGEN_AGENT"] = "mock"
     sys.argv = [str(src)]
     try:
         cli_main.main(sys.argv)
     except SystemExit as e:
         assert e.code == 0
-
-

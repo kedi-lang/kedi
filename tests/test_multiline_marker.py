@@ -40,9 +40,7 @@ def test_block_comment_basic(monkeypatch: Any) -> None:
 
 
 def test_block_comment_between_statements(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n" "  ###\n" "  ignored lines\n" "  ###\n" "  = in body\n\n" "= <p()>\n"
-    )
+    src = "@p():\n" "  ###\n" "  ignored lines\n" "  ###\n" "  = in body\n\n" "= <p()>\n"
     out = _run(src)
     assert out == "in body"
 
@@ -147,14 +145,7 @@ def test_multiline_escaped_backslash(monkeypatch: Any) -> None:
 
 
 def test_multiline_inside_template_line(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n"
-        "  prefix \\\n"
-        "    [x] \\\n"
-        "    suffix\n"
-        "  = <x>\n\n"
-        "= <p()>\n"
-    )
+    src = "@p():\n" "  prefix \\\n" "    [x] \\\n" "    suffix\n" "  = <x>\n\n" "= <p()>\n"
     out = _run(src)
     assert out.endswith("-value")
 

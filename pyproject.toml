@@ -48,3 +48,11 @@ marker = "marker.cli:main"
 [tool.hatch.build]
 packages = ["src/marker"]
 include-package-data = true
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.isort]
+profile = "black"
+line_length = 100

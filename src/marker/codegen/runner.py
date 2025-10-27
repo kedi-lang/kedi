@@ -7,8 +7,8 @@ from ..lang import parse_program
 from ..lang.ast import ProcedureDef
 from .interfaces import CodegenConfig
 from .manager import CodegenManager
-from .pydantic_ai_agent import PydanticAIAgent
 from .mock_agents import MockPassingAgent
+from .pydantic_ai_agent import PydanticAIAgent
 
 
 def _reconstruct_header(proc: ProcedureDef) -> str:
@@ -32,11 +32,22 @@ def _select_agent(kind: str, model: str | None):
     return PydanticAIAgent(model=model)
 
 
-def run_codegen(source_path: Path, *, agent_kind: str = "pydantic_ai", model: str | None = None, max_retries: int = 5, use_cache: bool = True) -> bool:
+def run_codegen(
+    source_path: Path,
+    *,
+    agent_kind: str = "pydantic_ai",
+    model: str | None = None,
+    max_retries: int = 5,
+    use_cache: bool = True,
+) -> bool:
     text = Path(source_path).read_text(encoding="utf-8")
     prog = parse_program(text)
     procs: List[ProcedureDef] = prog.procedures
-    mgr = CodegenManager(_select_agent(agent_kind, model), CodegenConfig(max_retries=max_retries), use_cache=use_cache)
+    mgr = CodegenManager(
+        _select_agent(agent_kind, model),
+        CodegenConfig(max_retries=max_retries),
+        use_cache=use_cache,
+    )
     success_all = True
     for proc in procs:
         prompt = getattr(proc, "ai_prompt", None)
@@ -47,5 +58,3 @@ def run_codegen(source_path: Path, *, agent_kind: str = "pydantic_ai", model: st
         ok = mgr.orchestrate_generation(Path(source_path), header, prompt, spec="")
         success_all = success_all and ok
     return success_all
-
-

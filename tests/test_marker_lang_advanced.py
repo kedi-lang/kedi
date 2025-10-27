@@ -8,8 +8,6 @@ from marker.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 
 
-
-
 def _compile(src: str):
     return compile_program(parse_program(src), adapter=MockAdapter())
 
@@ -481,9 +479,7 @@ def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None
 
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "42-42"
 
@@ -567,21 +563,16 @@ def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
 
 
 def test_standalone_backtick_line_side_effects(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n"
-        "  [x] = start\n"
-        "  `x = x + '-mid'`\n"
-        "  = <x>\n\n"
-        "= <p()>\n"
-    )
+    src = "@p():\n" "  [x] = start\n" "  `x = x + '-mid'`\n" "  = <x>\n\n" "= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.endswith("-mid")
 
 
 def test_standalone_backtick_invalid_mixed_content(monkeypatch: Any) -> None:
     src = "@p():\n  `x=1` more\n  = ok\n\n= <p()>\n"
-    from tests.mock_adapter import MockAdapter
     from marker.lang import parse_program
+    from tests.mock_adapter import MockAdapter
+
     with pytest.raises(Exception):
         parse_program(src)
 
@@ -599,22 +590,13 @@ def test_standalone_backtick_block_comment_interplay(monkeypatch: Any) -> None:
 
 
 def test_standalone_backtick_line_in_top_level(monkeypatch: Any) -> None:
-    src = (
-        "[x] = base\n"
-        "`x = x + '-top'`\n"
-        "= <x>\n"
-    )
+    src = "[x] = base\n" "`x = x + '-top'`\n" "= <x>\n"
     out = _run(monkeypatch, src)
     assert out.endswith("-top")
 
 
 def test_standalone_backtick_line_error_propagates(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n"
-        "  `assert False`\n"
-        "  = ok\n\n"
-        "= <p()>\n"
-    )
+    src = "@p():\n" "  `assert False`\n" "  = ok\n\n" "= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()

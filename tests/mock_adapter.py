@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-from marker.utils import AttrDict
+
 from marker.agent_adapter import AgentAdapter
+from marker.utils import AttrDict
 
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):

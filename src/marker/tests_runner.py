@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from pathlib import Path
-from .lang import parse_program, compile_program
-from .lang.ast import TestSuite, EvalSuite
 from .agent_adapter.adapters import PydanticAdapter
+from .lang import compile_program, parse_program
+from .lang.ast import EvalSuite, TestSuite
 
 
 @dataclass
@@ -56,7 +56,9 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
 
 
 def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
-    rt = _load_program_with_validations(src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+    rt = _load_program_with_validations(
+        src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+    )
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -65,10 +67,12 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
             try:
                 if c.is_block:
                     from .lang.compiler import _execute_python_block
+
                     _execute_python_block(c.code, rt, {})
                 else:
                     # Backtick expression or statement: evaluate via inline python helper
                     from .lang.compiler import _eval_python_inline
+
                     _eval_python_inline(rt, c.code, {})
                 case_results.append(TestCaseResult(name=c.name, success=True))
             except Exception as e:
@@ -78,7 +82,9 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
 
 
 def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
-    rt = _load_program_with_validations(src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+    rt = _load_program_with_validations(
+        src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+    )
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
     for suite in suites:
@@ -89,9 +95,11 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
             try:
                 if m.is_block:
                     from .lang.compiler import _execute_python_block
+
                     val = _execute_python_block(m.code, rt, {})
                 else:
                     from .lang.compiler import _eval_python_inline
+
                     val = _eval_python_inline(rt, m.code, {})
                 if isinstance(val, tuple) and len(val) == 2:
                     score = float(val[0])
@@ -104,5 +112,3 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
             metric_results.append(EvalMetricResult(name=m.name, score=score, feedback=feedback))
         results.append(EvalRunResult(procedure=suite.procedure_name, metrics=metric_results))
     return results
-
-
