@@ -109,11 +109,16 @@ The capital of France is [capital].
 # Typed output
 Top cities: [cities: list[str]]
 
+# Typed output with inline Python type annotation
+Top cities: [cities: `list[str]`]
+
 # Multiple outputs on one line
 [first_name] [last_name] lives in [city: str]
 ```
 
 Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`
+
+Backtick-wrapped type expressions in outputs are evaluated at runtime, giving you access to dynamic types from the prelude or computed values.
 
 ### Variable Assignment
 
@@ -126,6 +131,9 @@ Variables can be assigned using output syntax on the left side:
 # Typed assignment
 [count: int] = `5`
 
+# Typed assignment with inline Python type annotation
+[count: `int`] = `5`
+
 # String assignment from expression
 [message] = Hello <name>
 
@@ -134,6 +142,32 @@ Variables can be assigned using output syntax on the left side:
 return sum([1, 2, 3])
 ```
 ```
+
+#### Inline Python Type Annotations
+
+You can use backtick-wrapped Python expressions in type annotations:
+
+```marker
+# Basic types
+[x: `int`] = `42`
+[y: `str`] = `"hello"`
+[z: `float`] = `3.14`
+
+# Complex types
+[numbers: `list[int]`] = `[1, 2, 3, 4, 5]`
+[words: `list[str]`] = `["apple", "banana", "cherry"]`
+
+# Custom types from DSL definitions
+~Person(name, age: int)
+[person: `Person`] = `Person(name="Alice", age=30)`
+
+# Mix regular and backtick annotations interchangeably
+[x: int] = `10`
+[y: `int`] = `20`
+= <`str(x + y)`>  # Works the same
+```
+
+Backtick type annotations are evaluated at runtime with full access to prelude, globals, and local scope. They work identically to regular type annotations.
 
 ## Procedures
 
@@ -159,9 +193,22 @@ Message: <greet(Alice)>
 @process(items: list[str]) -> str:
   Total items: <`len(items)`>
   = Processed <`len(items)`> items
+
+# Inline Python type annotations work too
+@double(x: `int`) -> `int`:
+  = `x * 2`
+
+@sum_list(nums: `list[int]`) -> `int`:
+  = `sum(nums)`
+
+# Mixed usage
+@combined(x: int, y: `int`) -> `int`:
+  = `x + y`
 ```
 
-Supported types: `str`, `int`, `float`, `bool`, `list[T]`
+Supported types: `str`, `int`, `float`, `bool`, `list[T]`, plus any custom types defined in your program.
+
+You can use either regular or backtick-wrapped type annotations for parameters and return types. They work interchangeably and provide the same type safety guarantees.
 
 ### Procedure Arguments
 
@@ -333,9 +380,14 @@ Define Pydantic-compatible models with `~TypeName`:
 [employee: Person] = ```
 return Person(name="Bob", age=25, email="bob@example.com")
 ```
+
+# Use inline Python type annotations with custom types
+~Team(name, scores: `list[int]`, members: `dict[str, int]`)
+
+[team: `Team`] = `Team(name="Eagles", scores=[10, 20, 30], members={"Alice": 10, "Bob": 20})`
 ````
 
-Fields without type annotations default to `str`.
+Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable assignments. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
 
 ## Advanced Features
 
