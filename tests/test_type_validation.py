@@ -1,4 +1,4 @@
-"""Comprehensive type validation tests for Marker DSL.
+"""Comprehensive type validation tests for Kedi DSL.
 
 Tests type checking for parameters, variables, return values, and complex types.
 """
@@ -10,7 +10,7 @@ from tests.utils_llm import run_without_llm
 
 
 def _run(src: str):
-    """Helper to run marker program without LLM."""
+    """Helper to run kedi program without LLM."""
     return run_without_llm(src)
 
 

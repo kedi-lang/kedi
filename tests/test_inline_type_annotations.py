@@ -1,4 +1,4 @@
-"""Comprehensive tests for inline Python type annotations in Marker DSL.
+"""Comprehensive tests for inline Python type annotations in Kedi DSL.
 
 Tests backtick-wrapped type expressions that are evaluated at runtime.
 """
@@ -9,7 +9,7 @@ from tests.utils_llm import run_without_llm
 
 
 def _run(src: str):
-    """Helper to run marker program without LLM."""
+    """Helper to run kedi program without LLM."""
     return run_without_llm(src)
 
 

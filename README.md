@@ -1,7 +1,7 @@
-# Marker 
+# Kedi 
 ## A typed reasoning layer for LLM orchestration
 
-Marker is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
+Kedi is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
 
 ### A Quick Taste
 
@@ -35,11 +35,11 @@ Marker is a compact DSL that lets you compose multi‑step LLM workflows with st
 - Local install:
 `pip install -e .`
 - After install:
-`marker <source> [OPTIONS]`
+`kedi <source> [OPTIONS]`
 - Execute a program: 
-`python marker_run.py your_program.marker`
+`kedi your_program.kedi`
 - Override model (optional): 
-`python marker_run.py your_program.marker --model groq:qwen/qwen3-32b`
+`kedi your_program.kedi --model groq:qwen/qwen3-32b`
 
 The runner loads the source, compiles it, optionally applies `--model`, and executes the top‑level program via `run_main()`.
 
@@ -68,6 +68,6 @@ The runner loads the source, compiles it, optionally applies `--model`, and exec
 - **Escaping specials**: use backslash before special chars. Escapable: `<`, `>`, `[`, `]`, `=`, `@`, `,`, `\\`, `#`, `~`, `` ` ``, `(`, `)`.
   - Examples: `\<`, `\>`, `\[`, `\]`, `\\`, `\,`, `\=`, `\@`, `\#`, `\~`, `` \` ``, `\(`, `\)`.
 
-See `docs/MARKER_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
+See `docs/KEDI_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
 
 
