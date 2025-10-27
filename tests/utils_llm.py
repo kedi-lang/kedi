@@ -4,7 +4,7 @@ import functools
 import time
 from typing import Any, Callable, TypeVar
 
-from marker.lang import compile_program, parse_program
+from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 
 F = TypeVar("F", bound=Callable[..., Any])

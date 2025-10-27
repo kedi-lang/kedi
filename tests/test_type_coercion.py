@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 import pytest
 from pydantic import BaseModel
 
-from marker.agent_adapter import AgentAdapter
-from marker.lang import compile_program, parse_program
+from kedi.agent_adapter import AgentAdapter
+from kedi.lang import compile_program, parse_program
 
 
 class PersonModel(BaseModel):
@@ -90,7 +90,7 @@ class EmptyMockAdapter(AgentAdapter[Any]):
 
 
 def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:
-    """Run a marker program with specific LLM responses."""
+    """Run a kedi program with specific LLM responses."""
     runtime = compile_program(parse_program(src), adapter=TypeCoercionMockAdapter(responses))
     return runtime.run_main()
 

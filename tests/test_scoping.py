@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from marker.lang import compile_program, parse_program
+from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 
 
@@ -29,7 +29,7 @@ def test_top_level_assignment_visible_in_python_block(monkeypatch: Any) -> None:
     assert out == "14"
 
 
-def test_python_block_modifies_existing_marker_var_only(monkeypatch: Any) -> None:
+def test_python_block_modifies_existing_kedi_var_only(monkeypatch: Any) -> None:
     src = (
         "@p():\n"
         "  [x] = base\n"
@@ -44,7 +44,7 @@ def test_python_block_modifies_existing_marker_var_only(monkeypatch: Any) -> Non
         _run(src)
 
 
-def test_new_python_names_do_not_leak_to_marker(monkeypatch: Any) -> None:
+def test_new_python_names_do_not_leak_to_kedi(monkeypatch: Any) -> None:
     src = "@p():\n" "  ```\n" "  z = 'new'\n" "  ```\n" "  = <z>\n\n" "= <p()>\n"
     with pytest.raises(Exception):
         _run(src)
