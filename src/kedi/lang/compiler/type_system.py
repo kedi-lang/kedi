@@ -47,9 +47,7 @@ class KediType:
     def is_none(self) -> bool:
         return self.annotation is None
 
-    def get_adapter(
-        self, rt: KediRuntime, env: dict[str, Any] | None = None
-    ) -> TypeAdapter | None:
+    def get_adapter(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> TypeAdapter | None:
         """Build a strict TypeAdapter via eval("TypeAdapter(<annotation>, config=CONFIG)")."""
         if not self.annotation:
             return None

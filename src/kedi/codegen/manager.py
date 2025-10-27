@@ -55,9 +55,7 @@ class CodegenManager:
 
         # Procedure definitions (exclude AI-generated ones) - convert to Python function signatures
         context.procedure_definitions = [
-            kedi_procedure_to_python_signature(pd)
-            for pd in program.procedures
-            if not pd.ai_prompt
+            kedi_procedure_to_python_signature(pd) for pd in program.procedures if not pd.ai_prompt
         ]
 
         return context
