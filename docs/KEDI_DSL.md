@@ -51,7 +51,7 @@ A Kedi program consists of:
 
 - Indentation defines block scope (like Python)
 - Tabs count as width 4 for comparison
-- The preprocessor inserts virtual BEGIN/END kedis on indentation changes
+- The preprocessor inserts virtual BEGIN/END tokens on indentation changes
 
 ## Basic Syntax Elements
 
