@@ -121,6 +121,17 @@ class TypeDef:
 
 
 @dataclass
+class OptimizeSpan:
+    name: str
+    template_lines: List[TemplateLine]  # Contiguous template lines to optimize
+
+
+@dataclass
+class AutoSpec:
+    prompt: str  # Content after > auto:
+
+
+@dataclass
 class ProcedureDef:
     name: str
     params: List[str]
@@ -129,8 +140,12 @@ class ProcedureDef:
     # Optional mapping of parameter name to type annotation string
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
     lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
-    # If present, this procedure is an AI-prompt-only spec
+    # If present, this procedure is an AI-prompt-only spec (deprecated, use auto_spec instead)
     ai_prompt: Optional[str] = None
+    # New codegen spec using explicit > auto: syntax
+    auto_spec: Optional[AutoSpec] = None
+    # Optimize spans for prompt optimization
+    optimize_spans: List[OptimizeSpan] = field(default_factory=list)
 
 
 @dataclass
@@ -169,15 +184,25 @@ class TestSuite:
 
 
 @dataclass
-class EvalMetric:
+class EvalDataset:
     name: str
     code: str
     is_block: bool = False
 
 
 @dataclass
+class EvalMetric:
+    name: str
+    code: str
+    is_block: bool = False
+    dataset_name: Optional[str] = None  # If None, legacy single-eval behavior
+
+
+@dataclass
 class EvalSuite:
     procedure_name: str
+    datasets: dict[str, EvalDataset] = field(default_factory=dict)
+    test_datasets: dict[str, EvalDataset] = field(default_factory=dict)
     metrics: List[EvalMetric] = field(default_factory=list)
 
 

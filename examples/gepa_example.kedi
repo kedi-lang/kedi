@@ -1,0 +1,22 @@
+```
+import logfire
+
+logfire.configure()  
+logfire.instrument_pydantic_ai() 
+
+```
+
+@solve_math_problem(problem: str) -> int:
+  # This span will be optimized by GEPA using training data
+  > optimize: parse_problem:
+    Given the math problem: <problem> \
+    Parse it and extract: [num1: int] and [num2: int] and [operator: str]
+  
+  # This span will also be optimized
+  > optimize: compute_result:
+    Calculate <num1> <operator> <num2>. \
+    The answer is: [answer: int]
+  
+  = `answer`
+
+= <solve_math_problem('What is 15 + 27?')>

@@ -190,13 +190,17 @@ def test_validation_blocks_parse_and_run(monkeypatch: Any) -> None:
         "  > case: sg_cities_len:\n"
         "    `assert len(get_cities_in('Singapore')) >= 0`\n\n"
         "@eval: get_cities_in:\n"
-        "  > metric: num:\n"
-        "    = `1.5`\n"
+        "  > data: cities:\n"
+        "    = `['Istanbul', 'Ankara']`\n"
+        "  > metric: num(cities):\n"
+        "    = `1.0 if len(cities) > 0 else 0.0`\n"
     )
     tests = run_tests(src, adapter=MockAdapter())
     assert tests and all(c.success for s in tests for c in s.cases)
     evals = run_evals(src, adapter=MockAdapter())
-    assert evals and all(m.score >= 0 for s in evals for m in s.metrics)
+    assert evals and len(evals) == 1
+    assert len(evals[0].metrics) > 0
+    assert all(m.score >= 0 for s in evals for m in s.metrics)
 
 
 def test_validation_companion_file_discovery(tmp_path: Any, monkeypatch: Any) -> None:
@@ -204,7 +208,9 @@ def test_validation_companion_file_discovery(tmp_path: Any, monkeypatch: Any) ->
     pv = tmp_path / "prog.val.kedi"
     p.write_text("@id(x):\n  = <x>\n\n= <id(ok)>\n", encoding="utf-8")
     pv.write_text(
-        "@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n\n@eval: id:\n  > metric: basic:\n    = `1.0`\n",
+        "@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n\n"
+        "@eval: id:\n  > data: inputs:\n    = `['x']`\n"
+        "  > metric: basic(inputs):\n    = `1.0 if id(inputs) == inputs else 0.0`\n",
         encoding="utf-8",
     )
     tests = run_tests(str(p), adapter=MockAdapter())

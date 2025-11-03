@@ -39,9 +39,15 @@ Kedi is a compact DSL that lets you compose multi‑step LLM workflows with stro
 - Execute a program: 
 `kedi your_program.kedi`
 - Override model (optional): 
-`kedi your_program.kedi --model groq:qwen/qwen3-32b`
+`kedi your_program.kedi --adapter-model groq:qwen/qwen3-32b`
+- Run tests:
+`kedi your_program.kedi --test`
+- Run evaluations:
+`kedi your_program.kedi --eval`
+- Run with optimizer:
+`kedi your_program.kedi --eval --optimize --optimizer gepa`
 
-The runner loads the source, compiles it, optionally applies `--model`, and executes the top‑level program via `run_main()`.
+The runner loads the source, compiles it, optionally applies model/adapter settings, and executes the top‑level program via `run_main()`.
 
 ### Core syntax in 30 seconds
 - **Procedures**: `@name(param[: type], ...) -> ret_type:` then an indented block.

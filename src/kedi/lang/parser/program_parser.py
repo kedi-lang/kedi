@@ -7,7 +7,9 @@ from typing import List
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
+    AutoSpec,
     BacktickLineStmt,
+    OptimizeSpan,
     ProcDefStmt,
     ProcedureDef,
     Program,
@@ -127,9 +129,9 @@ class ProgramParser:
                 self._parse_return(line)
                 continue
 
-            # AI prompt lines (inside procedure body)
+            # Directive lines (inside procedure body): > auto:, > optimize: name:
             if stripped.startswith(">") and self.current_body is not None and self.proc_stack:
-                self._parse_ai_prompt()
+                self._parse_directive()
                 continue
 
             # Template line
@@ -277,27 +279,179 @@ class ProgramParser:
                 self.current_body.append(ret_stmt)
         self.i += 1
 
-    def _parse_ai_prompt(self) -> None:
-        """Parse AI generation prompt lines (> ...)."""
-        prompt_lines: list[str] = []
-        while self.i < len(self.lines):
-            cur = self.lines[self.i]
-            cur_s = cur.strip()
-            if cur_s.startswith(">"):
-                # Strip leading '>' and one space
-                text = cur.lstrip()
-                if text.startswith(">"):
-                    text = text[1:]
-                    if text.startswith(" "):
-                        text = text[1:]
-                prompt_lines.append(text)
+    def _parse_directive(self) -> None:
+        """Parse directive lines: > auto:, > optimize: name:.
+        
+        Valid directives:
+        - > auto: ... (codegen spec)
+        - > optimize: name: ... (optimize span)
+        """
+        if not self.proc_stack:
+            raise ValueError("Directive must be inside a procedure")
+        
+        proc = self.proc_stack[-1]
+        cur_line = self.lines[self.i]
+        cur_s = cur_line.strip()
+        
+        if not cur_s.startswith(">"):
+            return
+        
+        directive = cur_s[1:].strip()
+        
+        # Parse > auto:
+        if directive.startswith("auto:"):
+            auto_content = directive[len("auto:"):].strip()
+            auto_lines = [auto_content] if auto_content else []
+            self.i += 1
+            
+            # Check if there's an indented block (BEGIN marker)
+            if self.i < len(self.lines) and self.lines[self.i].strip() == BEGIN:
+                # Has indented block - collect until matching END
                 self.i += 1
-                continue
-            break
-
-        # Attach to innermost procedure
-        if self.proc_stack:
-            self.proc_stack[-1].ai_prompt = "\n".join(prompt_lines)
+                depth = 1
+                
+                while self.i < len(self.lines):
+                    cur_line = self.lines[self.i]
+                    cur_s = cur_line.strip()
+                    
+                    if cur_s == BEGIN:
+                        depth += 1
+                        self.i += 1
+                        continue
+                    
+                    if cur_s == END:
+                        depth -= 1
+                        if depth == 0:
+                            self.i += 1
+                            break
+                        self.i += 1
+                        continue
+                    
+                    # Accumulate content lines
+                    auto_lines.append(cur_line.lstrip())
+                    self.i += 1
+            else:
+                # No indented block - collect continuation lines until next directive/statement
+                while self.i < len(self.lines):
+                    next_line = self.lines[self.i]
+                    next_s = next_line.strip()
+                    
+                    # Stop on another directive or template/statement
+                    if next_s.startswith(">"):
+                        break
+                    if next_s.startswith("@") or next_s == "```" or self.stmt_parser.is_return(next_line) or self.stmt_parser.is_assignment(next_s):
+                        break
+                    # Skip markers that aren't part of auto scope
+                    if next_s in (BEGIN, END):
+                        break
+                    # Accumulate content lines
+                    if next_s:
+                        auto_lines.append(next_line.lstrip())
+                    self.i += 1
+            
+            proc.auto_spec = AutoSpec(prompt="\n".join(auto_lines))
+        
+        # Parse > optimize: name:
+        elif directive.startswith("optimize:"):
+            parts = directive[len("optimize:"):].strip().split(":", 1)
+            if len(parts) == 0 or not parts[0].strip():
+                raise ValueError("Optimize directive must have a name: > optimize: name:")
+            
+            optimize_name = parts[0].strip()
+            if optimize_name.endswith(":"):
+                optimize_name = optimize_name[:-1].strip()
+            
+            self.i += 1
+            
+            # Expect BEGIN marker for the indented scope
+            if self.i >= len(self.lines) or self.lines[self.i].strip() != BEGIN:
+                raise ValueError(f"Optimize span '{optimize_name}' must have an indented block after it")
+            self.i += 1
+            
+            # Collect template lines within the indented scope
+            template_lines: list[TemplateLine] = []
+            depth = 1  # Track nested BEGIN/END within the optimize span
+            
+            while self.i < len(self.lines):
+                cur_line = self.lines[self.i]
+                cur_s = cur_line.strip()
+                
+                # Track depth for nested scopes
+                if cur_s == BEGIN:
+                    depth += 1
+                    self.i += 1
+                    continue
+                
+                if cur_s == END:
+                    depth -= 1
+                    if depth == 0:
+                        # This END closes the optimize span scope
+                        self.i += 1
+                        break
+                    self.i += 1
+                    continue
+                
+                # Stop if we hit another directive at same level (would be preceded by END)
+                # Actually, END would have been seen already, so this shouldn't happen
+                # But check for safety
+                if cur_s.startswith(">") and depth == 1:
+                    break
+                
+                # Stop on statement types at same level
+                if depth == 1 and (cur_s.startswith("@") or cur_s == "```" or self.stmt_parser.is_return(cur_line) or self.stmt_parser.is_assignment(cur_s)):
+                    break
+                
+                # Empty line - continue collecting
+                if not cur_s:
+                    self.i += 1
+                    continue
+                
+                # Must be a template line - parse it
+                segments = parse_segments(cur_s)
+                template_line = TemplateLine(segments=segments)
+                template_lines.append(template_line)
+                # Also add to procedure body for normal execution
+                proc.body.append(template_line)
+                self.i += 1
+            
+            if not template_lines:
+                raise ValueError(f"Optimize span '{optimize_name}' must contain at least one template line")
+            
+            span = OptimizeSpan(name=optimize_name, template_lines=template_lines)
+            proc.optimize_spans.append(span)
+        
+        else:
+            # Legacy codegen syntax: any `>` line without explicit directive
+            # Collect as ai_prompt for backward compatibility
+            prompt_lines = [cur_line]
+            self.i += 1
+            
+            # Collect continuation lines (non-directive, non-template lines)
+            while self.i < len(self.lines):
+                next_line = self.lines[self.i]
+                next_s = next_line.strip()
+                
+                # Stop on another directive, template/statement, or explicit > auto:/optimize:
+                if next_s.startswith(">") and (next_s.startswith("> auto:") or next_s.startswith("> optimize:")):
+                    break
+                if next_s.startswith("@") or next_s == "```" or self.stmt_parser.is_return(next_line) or self.stmt_parser.is_assignment(next_s):
+                    break
+                # Accumulate content lines
+                prompt_lines.append(next_line)
+                self.i += 1
+            
+            # Strip leading `>` from each line
+            cleaned_lines = []
+            for line in prompt_lines:
+                stripped = line.lstrip()
+                if stripped.startswith(">"):
+                    cleaned = stripped[1:].strip()
+                    cleaned_lines.append(cleaned)
+                else:
+                    cleaned_lines.append(line.lstrip())
+            
+            # Set legacy ai_prompt for backward compatibility
+            proc.ai_prompt = "\n".join(cleaned_lines)
 
     def _parse_template_line(self, stripped: str) -> None:
         """Parse a template line."""

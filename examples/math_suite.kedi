@@ -27,14 +27,14 @@
     `assert fib(10) == 55`
 
 @eval: prime_factors:
-  > metric: correctness:
+  > data: prime_factors:
     = ```
-    data = {6:[2,3], 28:[2,2,7], 35:[5,7]}
-    score = 0
-    for k,v in data.items():
-        if prime_factors(k)==v:
-            score += 1
-    return score/len(data)
+    return {6:[2,3], 28:[2,2,7], 35:[5,7]}.items()
+    ```
+  > metric: correctness(prime_factors):
+    = ```
+    k, v = prime_factors
+    return prime_factors(k) == v
     ```
 
 = <is_prime(`13`)>

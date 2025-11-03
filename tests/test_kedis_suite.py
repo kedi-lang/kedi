@@ -49,7 +49,9 @@ def test_cli_test_and_eval(tmp_path: Path) -> None:
     valp = tmp_path / "x.val.kedi"
     srcp.write_text("@f():\n  = ok\n\n= <f()>\n", encoding="utf-8")
     valp.write_text(
-        "@test: f:\n  > case: ok:\n    `assert f() == 'ok'`\n\n@eval: f:\n  > metric: s:\n    = `0.5`\n",
+        "@test: f:\n  > case: ok:\n    `assert f() == 'ok'`\n\n"
+        "@eval: f:\n  > data: cases:\n    = `[1, 2, 3]`\n"
+        "  > metric: s(cases):\n    = `1.0`\n",
         encoding="utf-8",
     )
 

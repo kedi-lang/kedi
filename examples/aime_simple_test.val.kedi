@@ -1,0 +1,21 @@
+# Simple evaluation for AIME test
+
+@eval: solve_math_problem:
+  > data: problems:
+    = ```
+    return [
+      ("What is 5 + 3?", 8),
+      ("What is 10 * 2?", 20),
+      ("What is 15 - 7?", 8),
+    ]
+    ```
+  
+  > metric: correctness(problems):
+    = ```
+    problem_text, expected = problems
+    result = solve_math_problem(problem_text)
+    correct = result == expected
+    feedback = f"Expected {expected}, got {result}" if not correct else None
+    return (1.0 if correct else 0.0, feedback)
+    ```
+

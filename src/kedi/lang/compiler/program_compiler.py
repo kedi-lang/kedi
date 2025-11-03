@@ -48,7 +48,8 @@ class ProgramCompiler:
 
         # Register procedures (skip AI-prompted placeholders)
         for proc in prog.procedures:
-            if getattr(proc, "ai_prompt", None):
+            # Skip procedures with auto_spec or legacy ai_prompt
+            if proc.auto_spec or getattr(proc, "ai_prompt", None):
                 continue
             fn = self.proc_compiler.compile_procedure(proc)
             self.rt.procedure(fn)

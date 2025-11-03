@@ -25,7 +25,7 @@ def test_codegen_cache_paths(tmp_path: Path) -> None:
 def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:
     src = tmp_path / "g.kedi"
     # Base program contains a header we want to implement
-    src.write_text("@f():\n  > implement a function returning ok\n\n= <f()>\n", encoding="utf-8")
+    src.write_text("@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n", encoding="utf-8")
     mgr = CodegenManager(MockPassingAgent())
     ok = mgr.orchestrate_generation(src, "@f():", "implement", "spec")
     assert ok

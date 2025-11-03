@@ -469,29 +469,84 @@ Notes:
 
 ### Evaluation Metrics
 
+Define dataset-aware metrics with automatic iteration:
+
 ````kedi
-@eval: get_cities:
-  > metric: city_count:
+@eval: prime_factors:
+  > data: cases:
     = ```
-    cities = get_cities("USA")
-    score = len(cities) / 50.0  # Normalize by expected
-    return (score, f"Found {len(cities)} cities")
-```
+    # Must return an iterable. Supported forms include:
+    # - items: [x1, x2, ...]
+    # - pairs/tuples: [((args_tuple), label), ...]
+    # - mappings: {x: y, ...}  (coerced to .items())
+    return {6:[2,3], 28:[2,2,7], 35:[5,7]}.items()
+    ```
+
+  > test_data: cases:
+    = ```
+    return {12:[2,2,3]}.items()
+    ```
+
+  > metric: correctness(cases):
+    = ```
+    # For each item in the dataset, the dataset name (`cases`) is bound.
+    # Use it directly or unpack as needed.
+    k, v = cases
+    return prime_factors(k) == v  # bools map to 1.0/0.0
+    ```
 ````
+
+Rules:
+- `> data: NAME:` defines the training dataset for the enclosing `@eval` suite and must return an iterable.
+- `> test_data: NAME:` (optional) defines a test dataset; when present, both train and test performance are reported.
+- `> metric: metric_name(NAME):` iterates automatically over the dataset named `NAME`, binding the dataset name as a variable for each item.
+- Per-example results can be: `bool` (mapped to 1.0/0.0), `float`, or `(score, feedback)`.
+
+## Prompt Optimization Blocks
+
+Mark specific template spans in a procedure for optimization using the `> optimize: name:` directive:
+
+````kedi
+@solve_math_problem(problem: str) -> int:
+  # This template span will be optimized by the optimizer
+  > optimize: parse_problem:
+    Given the math problem: <problem>
+    Parse it and extract: [num1: int] and [num2: int] and [operator: str]
+  
+  # Another span to optimize
+  > optimize: compute_result:
+    Calculate <num1> <operator> <num2>.
+    The answer is: [answer: int]
+  
+  = `answer`
+````
+
+Rules:
+- `> optimize: name:` must be followed by an indented block containing template lines (prompt text with `<variables>`, `<calls>`, and `[outputs]`).
+- Multiple optimize spans can be defined per procedure.
+- Optimization requires:
+  1. A matching `@eval: procedure_name` suite with training data (`> data:`)
+  2. The `--optimize` flag when running evaluations
+  3. An optimizer selected via `--optimizer` (default: `gepa`)
+- The optimizer uses training data to improve prompts iteratively.
+- Test data (if provided) is used to measure generalization after optimization.
 
 ## AI-Generated Procedures
 
-Define procedure signatures with a specification line starting with `>`:
+Define procedure signatures with an explicit `> auto:` block (replaces the old implicit `>` form):
 
 ```kedi
 @summarize(texts: list[str]) -> str:
-  > Takes a list of text documents and produces a concise summary that preserves key information while reducing length by 80%
+  > auto:
+    Takes a list of text documents and produces a concise summary that preserves key information while reducing length by 80%
 ```
 
 The system will:
 1. Generate test cases based on the specification
 2. Implement the procedure iteratively until tests pass
 3. Cache the implementation in `source.cache.kedi`
+
+Unknown `>` directives will raise a directive error. Valid directives are `auto`, `data`, `test_data`, `metric`, and `optimize`.
 
 ## Complete Example with Explanations
 

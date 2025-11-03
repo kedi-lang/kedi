@@ -7,7 +7,7 @@ from pathlib import Path
 import click
 import dotenv
 
-from kedi.app import maybe_run_codegen, run_evals_cli, run_program_cli, run_tests_cli
+from kedi.app import maybe_run_codegen, run_evals_cli, run_optimization_cli, run_program_cli, run_tests_cli
 from kedi.utils import parse_args
 
 dotenv.load_dotenv()
@@ -57,6 +57,30 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 )
 @click.option("--test", is_flag=True, help="Run tests defined with @test: blocks")
 @click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
+@click.option(
+    "--optimizer",
+    type=click.Choice(["mock", "gepa"]),
+    envvar="KEDI_OPTIMIZER",
+    default="mock",
+    help="Optimizer to use for prompt optimization",
+)
+@click.option(
+    "--optimizer-model",
+    envvar="KEDI_OPTIMIZER_MODEL",
+    default="openai/gpt-4o",
+    help="Model for optimizer (main model for GEPA)",
+)
+@click.option(
+    "--optimizer-reflection-model",
+    envvar="KEDI_OPTIMIZER_REFLECTION_MODEL",
+    default="openai/gpt-5",
+    help="Reflection model for GEPA optimizer",
+)
+@click.option(
+    "--optimize",
+    is_flag=True,
+    help="Run optimizer on procedures with > optimize: blocks before evaluation",
+)
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
 @click.pass_context
 def main(
@@ -69,6 +93,10 @@ def main(
     codegen_retries: int,
     test: bool = False,
     do_eval: bool = False,
+    optimizer: str = "mock",
+    optimizer_model: str = "openai/gpt-4o",
+    optimizer_reflection_model: str = "openai/gpt-5",
+    optimize: bool = False,
     no_cache: bool = False,
 ):
     try:
@@ -82,15 +110,48 @@ def main(
     # should be passed into runtime environment
     # TL;DR: pass `data` into runtime
     try:
+        # Run optimization if requested (independent of eval flag)
+        if optimize:
+            code, msg = run_optimization_cli(
+                source,
+                optimizer=optimizer,
+                optimizer_model=optimizer_model,
+                reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
+            )
+            if msg:
+                if code != 0:
+                    click.echo(msg, err=True)
+                else:
+                    click.echo(msg)
+            if code != 0:
+                ctx.exit(code)
+            # Continue after optimization even if --eval is not set
+        
         if test or do_eval:
             # Run validations
             if test:
                 code, out = run_tests_cli(source, model=adapter_model)
                 click.echo(out)
+                if code != 0:
+                    ctx.exit(code)
                 return code
             if do_eval:
-                code, out = run_evals_cli(source, model=adapter_model)
-                click.echo(out)
+                code, out = run_evals_cli(
+                    source, 
+                    model=adapter_model, 
+                    optimizer=optimizer,
+                    optimizer_model=optimizer_model,
+                    reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
+                    optimize=optimize, 
+                    use_cache=not no_cache
+                )
+                if out:
+                    if code != 0:
+                        click.echo(out, err=True)
+                    else:
+                        click.echo(out)
+                if code != 0:
+                    ctx.exit(code)
                 return code
 
         # Run codegen if needed
@@ -115,6 +176,9 @@ def main(
             if no_cache:
                 cache_path = Path(source).with_suffix(".cache.kedi")
                 cache_path.unlink(missing_ok=True)
+    except click.exceptions.Exit:
+        # Re-raise click Exit exceptions (from ctx.exit())
+        raise
     except Exception as e:
         click.echo(f"Execution error: {e}", err=True)
         return 1

@@ -82,6 +82,7 @@ class DSPyAdapter:
                 provider=provider,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                cache=False,
                 **kwargs,
             )
         )
