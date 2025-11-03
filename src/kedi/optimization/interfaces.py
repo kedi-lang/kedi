@@ -14,7 +14,7 @@ class OptimizerAdapter(Protocol):
     The interface follows the DSPy GEPA pattern where optimizers orchestrate
     training loops using metrics to score candidates. Optimizers are
     implementation-agnostic and receive clean data/metadata.
-    """
+        """
     
     def optimize_procedure(
         self,
@@ -45,7 +45,7 @@ class OptimizerAdapter(Protocol):
             Tuple of (optimized_prompts, train_score) where:
             - optimized_prompts: Dict mapping span.name -> optimized prompt string
             - train_score: Average metric score over training data (0.0-1.0)
-            
+        
         Raises:
             TypeError: If type validation fails for any training example
             ValueError: If train_data is empty or spans is empty

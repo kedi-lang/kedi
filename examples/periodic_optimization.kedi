@@ -1,0 +1,152 @@
+```
+import logfire
+
+logfire.configure()  
+logfire.instrument_pydantic_ai() 
+```
+
+~Coordinates(x: float, y: float)
+
+@find_maximum(A: float, B: float) -> `Coordinates`:
+  > optimize: search:
+    Given <A> and <B>, find the [coord: Coordinates] that maximize the value of a hidden function.
+  
+  = `coord`
+
+@eval: find_maximum:
+  > data: test_cases:
+    = ```
+    # Training data: (A, B) pairs with None as expected value
+    # Since this is analytical optimization, we don't have fixed expected outputs
+    return [
+        ((2.0, 3.0), None),
+        ((1.5, 2.5), None),
+        ((3.0, 1.0), None),
+        ((2.5, 2.0), None),
+        ((1.0, 3.5), None),
+        ((2.2, 1.8), None),
+        ((1.8, 2.2), None),
+        ((3.5, 0.5), None),
+        ((0.5, 3.0), None),
+        ((2.0, 2.0), None),
+    ]
+    ```
+  
+  > test_data: validation_cases:
+    = ```
+    # Test data for validation
+    return [
+        ((1.2, 2.8), None),
+        ((2.8, 1.2), None),
+        ((1.7, 2.3), None),
+        ((3.2, 0.8), None),
+        ((0.8, 3.2), None),
+    ]
+    ```
+  
+  > metric: evaluate_maximum(test_cases):
+    = ```
+    # Analytical metric: computes actual maximum and compares with LLM prediction
+    # The procedure returns (x, y) coordinates, we compute z from those and compare with optimal z
+    import numpy as np
+    from scipy.optimize import minimize
+    
+    # Define the periodic function (negated for minimization)
+    def periodic_func(xy, A, B):
+        x, y = xy
+        z = A * np.sin(x) + B * np.cos(y) + np.sin(x + y)
+        return -z  # Negate for minimization
+    
+    # Function to compute z from coordinates
+    def compute_z(x, y, A, B):
+        return A * np.sin(x) + B * np.cos(y) + np.sin(x + y)
+    
+    A, B = test_cases
+    predicted_coords = find_maximum(A, B)
+    
+    # Extract (x, y) from Coordinates custom type
+    try:
+        predicted_x = float(predicted_coords.x)
+        predicted_y = float(predicted_coords.y)
+    except (AttributeError, TypeError, ValueError) as e:
+        feedback = f"Error extracting coordinates: {e}"
+        return (0.0, feedback)
+    
+    # Compute z value from predicted coordinates
+    predicted_z = compute_z(predicted_x, predicted_y, A, B)
+    
+    # Find actual maximum using numerical optimization
+    # Try multiple initial guesses for robustness
+    bounds = [(-10.0, 10.0), (-10.0, 10.0)]
+    best_max = float('-inf')
+    best_coords = None
+    
+    initial_guesses = [
+        np.array([0.0, 0.0]),
+        np.array([5.0, 5.0]),
+        np.array([-5.0, -5.0]),
+        np.array([5.0, -5.0]),
+        np.array([-5.0, 5.0]),
+    ]
+    
+    try:
+        for initial_guess in initial_guesses:
+            result = minimize(
+                periodic_func,
+                initial_guess,
+                args=(A, B),
+                method='L-BFGS-B',
+                bounds=bounds,
+                options={'maxiter': 1000}
+            )
+            if result.success:
+                candidate_max = -result.fun  # Negate back to get actual max
+                if candidate_max > best_max:
+                    best_max = candidate_max
+                    best_coords = result.x
+        
+        if best_coords is None or best_max == float('-inf'):
+            feedback = f"Optimization failed to find maximum for A={A:.2f}, B={B:.2f}"
+            return (0.0, feedback)
+        
+        actual_max_z = best_max
+        actual_x, actual_y = best_coords
+        
+        # Compute error and score
+        # Use both coordinate distance and z-value difference for scoring
+        coord_error = np.sqrt((predicted_x - actual_x)**2 + (predicted_y - actual_y)**2)
+        z_error = abs(predicted_z - actual_max_z)
+        
+        # Normalize errors
+        max_abs_z = max(abs(actual_max_z), 1.0)
+        normalized_z_error = z_error / max_abs_z
+        normalized_coord_error = coord_error / 10.0  # Normalize by max coordinate range
+        
+        # Combined score: penalize both coordinate and z-value errors
+        # Prefer z-value accuracy since that's the optimization goal
+        z_score = np.exp(-2.0 * normalized_z_error)
+        coord_score = np.exp(-0.5 * normalized_coord_error)  # Less weight on coordinate error
+        score = 0.7 * z_score + 0.3 * coord_score
+        
+        # Ensure score is in [0, 1]
+        score = max(0.0, min(1.0, score))
+        
+        # Generate feedback (without revealing actual maximum values)
+        feedback = (
+            f"Parameters: A={A:.2f}, B={B:.2f}. "
+            f"Predicted: (x={predicted_x:.4f}, y={predicted_y:.4f}, z={predicted_z:.4f}). "
+            f"Z error: {z_error:.4f}, Coord error: {coord_error:.4f}, "
+            f"Score: {score:.4f}"
+        )
+        
+        return (float(score), feedback)
+        
+    except Exception as e:
+        # If optimization fails, return low score with error details
+        import traceback
+        error_details = str(e)
+        feedback = f"Optimization error: {error_details}"
+        return (0.0, feedback)
+    ```
+
+= `find_maximum(3.1, -4.2)`

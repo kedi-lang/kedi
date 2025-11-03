@@ -56,9 +56,37 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
 
 
 def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
-    rt = _load_program_with_validations(
-        src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-    )
+    from pathlib import Path
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
+    from .lang.compiler import compile_program
+    
+    # Check if src_main is a file path or source code string
+    source_path = None
+    if isinstance(src_main, str):
+        is_likely_source = ("\n" in src_main and "@" in src_main) or len(src_main) > 500
+        if not is_likely_source:
+            try:
+                candidate_path = Path(src_main)
+                if len(str(candidate_path)) < 500 and candidate_path.exists():
+                    source_path = candidate_path.resolve()
+            except (OSError, ValueError):
+                pass
+    
+    # Load program with optimized prompts if available (only for file paths)
+    if source_path:
+        try:
+            program = load_program_with_optimized_prompts(source_path)
+            rt = compile_program(program, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+        except Exception:
+            # Fallback to original loading method
+            rt = _load_program_with_validations(
+                src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+            )
+    else:
+        # Source code string - use original loading method
+        rt = _load_program_with_validations(
+            src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+        )
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -82,9 +110,43 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
 
 
 def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
-    rt = _load_program_with_validations(
-        src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-    )
+    from pathlib import Path
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
+    
+    # Check if src_main is a file path or source code string
+    # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path
+    source_path = None
+    if isinstance(src_main, str):
+        # Quick check: if it's very long or contains newlines and @, it's likely source code
+        is_likely_source = ("\n" in src_main and "@" in src_main) or len(src_main) > 500
+        if not is_likely_source:
+            # Try to resolve as path - but catch errors if path is too long (source code)
+            try:
+                candidate_path = Path(src_main)
+                # Only check exists if path is reasonable length (file paths are short)
+                if len(str(candidate_path)) < 500 and candidate_path.exists():
+                    source_path = candidate_path.resolve()
+            except (OSError, ValueError):
+                # Path resolution failed - likely source code, not a path
+                pass
+    
+    # Load program with optimized prompts if available (only for file paths)
+    if source_path:
+        try:
+            # Load with optimized prompts
+            program = load_program_with_optimized_prompts(source_path)
+            # Compile with optimized prompts
+            rt = compile_program(program, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+        except Exception:
+            # Fallback to original loading method if optimized prompt loading fails
+            rt = _load_program_with_validations(
+                src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+            )
+    else:
+        # Source code string - use original loading method
+        rt = _load_program_with_validations(
+            src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
+        )
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
     
@@ -184,8 +246,34 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                 else:
                     for example in eval_data:
                         try:
-                            # Bind dataset name as the iteration variable
-                            metric_env = {dataset_name: example}
+                            # Extract input from example
+                            # Handle two formats:
+                            # 1. Explicit tuples: ((input, expected_output)) - extract input
+                            # 2. dict.items() or other: (key, value) - use as-is
+                            if isinstance(example, tuple) and len(example) == 2:
+                                first, second = example
+                                # Check if this is (input, expected_output) format:
+                                # - Second is None (explicit None expected), OR
+                                # - First is a tuple (multi-param input) and second is not a list/dict
+                                if second is None or (isinstance(first, tuple) and not isinstance(second, (list, dict, tuple))):
+                                    input_val = first
+                                    expected_val = second
+                                else:
+                                    # dict.items() or similar: (key, value) is the input itself
+                                    input_val = example
+                                    expected_val = None
+                            else:
+                                # Single value or non-standard format - use as-is
+                                input_val = example
+                                expected_val = None
+                            
+                            # Bind dataset name with input value
+                            metric_env = {dataset_name: input_val}
+                            
+                            # Also bind expected output if available (for metrics that need it)
+                            if expected_val is not None:
+                                metric_env['expected'] = expected_val
+                            
                             if m.is_block:
                                 val = _execute_python_block(m.code, rt, metric_env)
                             else:

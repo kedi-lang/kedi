@@ -77,6 +77,27 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     help="Reflection model for GEPA optimizer",
 )
 @click.option(
+    "--optimizer-max-metric-calls",
+    type=int,
+    envvar="KEDI_OPTIMIZER_MAX_METRIC_CALLS",
+    default=30,
+    help="Maximum number of metric evaluations during optimization",
+)
+@click.option(
+    "--optimizer-model-max-tokens",
+    type=int,
+    envvar="KEDI_OPTIMIZER_MODEL_MAX_TOKENS",
+    default=2000,
+    help="Max tokens for the main optimizer model",
+)
+@click.option(
+    "--optimizer-reflection-model-max-tokens",
+    type=int,
+    envvar="KEDI_OPTIMIZER_REFLECTION_MODEL_MAX_TOKENS",
+    default=32000,
+    help="Max tokens for the reflection model (GEPA)",
+)
+@click.option(
     "--optimize",
     is_flag=True,
     help="Run optimizer on procedures with > optimize: blocks before evaluation",
@@ -96,6 +117,9 @@ def main(
     optimizer: str = "mock",
     optimizer_model: str = "openai/gpt-4o",
     optimizer_reflection_model: str = "openai/gpt-5",
+    optimizer_max_metric_calls: int = 30,
+    optimizer_model_max_tokens: int = 2000,
+    optimizer_reflection_model_max_tokens: int = 32000,
     optimize: bool = False,
     no_cache: bool = False,
 ):
@@ -117,6 +141,9 @@ def main(
                 optimizer=optimizer,
                 optimizer_model=optimizer_model,
                 reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
+                max_metric_calls=optimizer_max_metric_calls,
+                optimizer_model_max_tokens=optimizer_model_max_tokens,
+                reflection_model_max_tokens=optimizer_reflection_model_max_tokens,
             )
             if msg:
                 if code != 0:

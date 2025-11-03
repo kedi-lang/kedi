@@ -72,6 +72,7 @@ class Stmt:
 @dataclass
 class TemplateLine(Stmt):
     segments: Expr
+    optimized_prompt_prefix: Optional[str] = None  # Optimized prompt text to prepend
 
 
 @dataclass

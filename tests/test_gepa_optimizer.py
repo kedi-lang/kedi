@@ -20,7 +20,11 @@ except ImportError:
 )
 def test_gepa_optimizer_interface():
     """Test GEPA optimizer implements the interface correctly."""
-    optimizer = GEPAOptimizer(max_metric_calls=10)  # Small budget for testing
+    from kedi.optimization.config import OptimizerConfig
+    
+    # Create config with small budget for testing
+    config = OptimizerConfig(max_metric_calls=10)
+    optimizer = GEPAOptimizer(config=config, runtime=None)
     
     src = """
 @foo(country):
@@ -41,15 +45,16 @@ def test_gepa_optimizer_interface():
     # This would call GEPA, which requires actual model setup
     # For now, just verify the optimizer can be instantiated
     assert optimizer is not None
-    assert optimizer.max_metric_calls == 10
+    assert optimizer.config.max_metric_calls == 10
 
 
 def test_gepa_import_handling():
     """Test that GEPA import is handled gracefully."""
     from kedi.optimization import get_optimizer
     
-    # Should not raise even if DSPy is unavailable (handled in __init__)
+    # get_optimizer("gepa") should return None since GEPA requires config
+    # (it's instantiated directly in app.py with proper config)
     optimizer = get_optimizer("gepa")
-    # May be None if DSPy unavailable, or GEPAOptimizer if available
-    assert optimizer is None or hasattr(optimizer, 'optimize_procedure')
+    # Should be None because GEPA can't be instantiated without config
+    assert optimizer is None
 

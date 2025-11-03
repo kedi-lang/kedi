@@ -34,10 +34,26 @@ class StatementCompiler:
         self.rt = rt
 
     def compile_template_line(self, stmt: TemplateLine) -> Callable:
-        """Compile a template line to a function."""
+        """Compile a template line to a function.
+        
+        If the template has an optimized_prompt_prefix, it is prepended to the
+        original seed prompt (with proper type annotations) at evaluation time.
+        This allows GEPA to output plain text without needing correct type names,
+        while preserving the original prompt's type annotations for proper resolution.
+        """
 
         def _fn(**kwargs: Any) -> Any:
-            expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
+            # If there's an optimized prompt prefix, prepend it to the segments
+            # This allows GEPA to output plain text while preserving type annotations
+            segments_to_use = stmt.segments
+            if stmt.optimized_prompt_prefix:
+                from ..ast import TextSegment
+                # Prepend optimized text, then original seed prompt with types
+                # Use two newlines for better separation between optimized and seed prompts
+                optimized_text = TextSegment(text=stmt.optimized_prompt_prefix + "\n\n")
+                segments_to_use = [optimized_text] + stmt.segments
+            
+            expr, _ = prepare_segments(self.rt, segments_to_use, kwargs)
             return self.rt.m(expr)
 
         return _fn
