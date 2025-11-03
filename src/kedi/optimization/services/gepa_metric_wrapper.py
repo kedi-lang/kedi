@@ -127,7 +127,10 @@ class GEPAMetricWrapper:
         return gepa_metric
     
     def _extract_input(self, gold: dspy.Example, proc_params: list[str]) -> Any:
-        """Extract input value from gold example."""
+        """Extract input value from gold example.
+        
+        Examples have user_prompt (for DSPy) and original param fields (for metric).
+        """
         if len(proc_params) == 1:
             return getattr(gold, proc_params[0])
         return tuple(getattr(gold, param) for param in proc_params)

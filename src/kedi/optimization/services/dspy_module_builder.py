@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
-from typing import Any
-
 try:
     import dspy
     DSPY_AVAILABLE = True
@@ -27,17 +24,17 @@ class DSPyModuleBuilder:
     
     def __init__(
         self,
-        runtime: KediRuntime | None = None,
+        runtime: KediRuntime,
     ):
         """Initialize module builder.
         
         Args:
-            runtime: Optional Kedi runtime for structured type handling
+            runtime: Kedi runtime for structured type handling
         """
         if not DSPY_AVAILABLE:
             raise ImportError("DSPy is required for DSPyModuleBuilder")
         
-        self.type_handler = StructuredTypeHandler(runtime) if runtime else None
+        self.type_handler = StructuredTypeHandler(runtime)
     
     def build_module(
         self,
@@ -66,66 +63,50 @@ class DSPyModuleBuilder:
                 f"Optimize span '{span.name}' must have at least one output field"
             )
         
-        # Create signature
-        # CRITICAL: Make custom types available in the namespace for DSPy Signature parsing
-        signature = self._create_signature(proc_params, span_outputs, span=span)
+        # Create signature using DSPyAdapter.type_builder() directly (same as adapters.py)
+        signature = self._create_signature(span_outputs)
         
-        # Get initial instruction
+        # Get initial instruction (template string)
         instruction = span_to_instruction(span)
         
         # Create module with Predict
         class SingleSpanModule(dspy.Module):
-            def __init__(self, sig: dspy.Signature, inst: str):
+            def __init__(self, sig: dspy.Signature, template: str, proc_params: list[str]):
                 super().__init__()
-                self.predictor = dspy.Predict(sig.with_instructions(inst))
+                self.predictor = dspy.Predict(sig.with_instructions(template))
+                self.template = template
+                self.proc_params = proc_params
             
             def forward(self, **kwargs):
-                return self.predictor(**kwargs)
+                # Examples have user_prompt field (substituted template)
+                # Pass it directly to predictor (same as DSPyAdapter.produce)
+                return self.predictor(user_prompt=kwargs["user_prompt"])
         
-        return SingleSpanModule(signature, instruction)
+        return SingleSpanModule(signature, instruction, proc_params)
     
     def _create_signature(
         self,
-        inputs: list[str],
         outputs: list[tuple[str, str | None]],
-        span: OptimizeSpan | None = None,
     ) -> dspy.Signature:
-        """Create DSPy Signature from inputs and outputs.
+        """Create DSPy Signature using exact same logic as DSPyAdapter.type_builder().
         
-        Uses type handler if available for structured types, otherwise
-        creates simple string signature.
+        Signature is str -> output_types (same as DSPyAdapter.produce).
+        Inputs are substituted in the template, not in the signature.
         """
-        # Use type handler for proper type annotations in signature
-        if self.type_handler:
-            try:
-                signature_str = self.type_handler.create_dspy_signature_sync(
-                    inputs,
-                    outputs,
-                    use_string_signature=True,  # String signatures work fine - DSPy handles types
-                )
-                
-                # CRITICAL: DSPy Signature needs custom types in the calling namespace
-                # Make custom types available in __main__ module so DSPy can resolve them
-                output_schema = self.type_handler.build_output_schema(outputs)
-                import __main__
-                for field_name, field_type in output_schema.items():
-                    if isinstance(field_type, type) and field_type.__module__ not in ('builtins', 'typing'):
-                        # Register custom type in __main__ namespace
-                        type_name = field_type.__name__
-                        setattr(__main__, type_name, field_type)
-                
-                # Now create signature - DSPy will find the types in __main__
-                return dspy.Signature(signature_str)
-            except Exception as e:
-                # Fallback to simple signature
-                import warnings
-                warnings.warn(f"Failed to create typed signature: {e}, using simple signature")
-                pass
+        # Build output schema from runtime's type environment
+        output_schema = self.type_handler.build_output_schema(outputs)
         
-        # Simple string signature
-        input_str = ", ".join(inputs)
-        output_names = [out_name for out_name, _ in outputs]
-        output_str = ", ".join(output_names)
-        signature_str = f"{input_str} -> {output_str}"
-        return dspy.Signature(signature_str)
+        # Use exact same logic as DSPyAdapter.type_builder() when string=False (lines 101-110)
+        from pydantic import create_model
+        
+        field_definitions = {
+            field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
+        }
+        field_definitions.update({"user_prompt": (str, dspy.InputField())})
+        
+        return create_model(
+            "_OutputSignature",
+            __base__=dspy.Signature,
+            **field_definitions,
+        )
 
