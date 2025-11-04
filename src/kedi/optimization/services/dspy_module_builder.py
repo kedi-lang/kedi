@@ -63,46 +63,50 @@ class DSPyModuleBuilder:
                 f"Optimize span '{span.name}' must have at least one output field"
             )
         
-        # Create signature using DSPyAdapter.type_builder() directly (same as adapters.py)
-        signature = self._create_signature(span_outputs)
+        # Create signature with actual typed inputs
+        signature = self._create_signature(span_outputs, proc_params, param_types)
         
-        # Get initial instruction (template string)
+        # Get initial instruction (template string) - pass as-is, no modifications
         instruction = span_to_instruction(span)
         
         # Create module with Predict
         class SingleSpanModule(dspy.Module):
-            def __init__(self, sig: dspy.Signature, template: str, proc_params: list[str]):
+            def __init__(self, sig: dspy.Signature):
                 super().__init__()
-                self.predictor = dspy.Predict(sig.with_instructions(template))
-                self.template = template
-                self.proc_params = proc_params
+                self.predictor = dspy.Predict(sig)
             
             def forward(self, **kwargs):
-                # Examples have user_prompt field (substituted template)
-                # Pass it directly to predictor (same as DSPyAdapter.produce)
-                return self.predictor(user_prompt=kwargs["user_prompt"])
+                # Accept typed inputs (A, B, etc.), DSPy substitutes them into instructions
+                return self.predictor(**kwargs)
         
-        return SingleSpanModule(signature, instruction, proc_params)
+        return SingleSpanModule(signature.with_instructions(instruction))
     
     def _create_signature(
         self,
         outputs: list[tuple[str, str | None]],
+        proc_params: list[str],
+        param_types: dict[str, type],
     ) -> dspy.Signature:
-        """Create DSPy Signature using exact same logic as DSPyAdapter.type_builder().
+        """Create DSPy Signature with typed inputs.
         
-        Signature is str -> output_types (same as DSPyAdapter.produce).
-        Inputs are substituted in the template, not in the signature.
+        Signature uses actual input types (A: float, B: float) not user_prompt: str.
         """
         # Build output schema from runtime's type environment
         output_schema = self.type_handler.build_output_schema(outputs)
         
-        # Use exact same logic as DSPyAdapter.type_builder() when string=False (lines 101-110)
         from pydantic import create_model
         
-        field_definitions = {
-            field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
-        }
-        field_definitions.update({"user_prompt": (str, dspy.InputField())})
+        # Create field definitions with typed inputs
+        field_definitions = {}
+        
+        # Add input fields for each parameter
+        for param_name in proc_params:
+            param_type = param_types.get(param_name, str)
+            field_definitions[param_name] = (param_type, dspy.InputField())
+        
+        # Add output fields
+        for field, type_ in output_schema.items():
+            field_definitions[field] = (type_, dspy.OutputField())
         
         return create_model(
             "_OutputSignature",

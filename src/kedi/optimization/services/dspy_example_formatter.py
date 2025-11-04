@@ -23,17 +23,15 @@ class DSPyExampleFormatter:
         self,
         data: list[tuple[Any, Any]],
         proc_params: list[str],
-        template: str,
     ) -> list[dspy.Example]:
         """Format training data as DSPy Examples.
         
         Args:
             data: List of (input, expected_output) tuples
             proc_params: List of procedure parameter names
-            template: Template string to substitute inputs into
             
         Returns:
-            List of dspy.Example objects with user_prompt field
+            List of dspy.Example objects with typed input fields
         """
         if not DSPY_AVAILABLE:
             raise ImportError("DSPy is required for DSPyExampleFormatter")
@@ -54,21 +52,14 @@ class DSPyExampleFormatter:
                     # Assume single value maps to first param
                     input_dict[proc_params[0]] = input_val
             
-            # Substitute inputs into template to create user_prompt
-            user_prompt = template
-            for param, val in input_dict.items():
-                user_prompt = user_prompt.replace(f"<{param}>", str(val))
-            
-            # Create Example with user_prompt (same as DSPyAdapter.produce)
-            # Also include original input values for metric to access
+            # Create Example with typed input fields (A, B, etc.)
             example_dict = {
-                "user_prompt": user_prompt,
                 "_expected": expected_output,  # Metadata for metric
             }
-            example_dict.update(input_dict)  # Add original input values
+            example_dict.update(input_dict)  # Add input values (A, B, etc.)
             
-            # Mark user_prompt as input field (DSPy uses this, not the param fields)
-            example = dspy.Example(**example_dict).with_inputs("user_prompt")
+            # Mark input fields as inputs (DSPy uses these typed fields)
+            example = dspy.Example(**example_dict).with_inputs(*proc_params)
             examples.append(example)
         
         return examples

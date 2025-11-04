@@ -116,13 +116,10 @@ class GEPAOptimizer(OptimizerAdapter):
             primary_span, proc_params, param_types
         )
         
-        # Get template string for example formatting
-        template = span_to_instruction(primary_span)
-        
         # Format training and validation data
-        trainset = self.example_formatter.format_examples(train_list, proc_params, template)
+        trainset = self.example_formatter.format_examples(train_list, proc_params)
         valset = (
-            self.example_formatter.format_examples(list(test_data), proc_params, template)
+            self.example_formatter.format_examples(list(test_data), proc_params)
             if test_data
             else trainset[:len(trainset)//4] if len(trainset) >= 4 else trainset
         )
