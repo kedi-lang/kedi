@@ -73,6 +73,7 @@ class Stmt:
 class TemplateLine(Stmt):
     segments: Expr
     optimized_prompt_prefix: Optional[str] = None  # Optimized prompt text to prepend
+    optimized_output_override: Optional[dict[str, Any]] = None  # Deterministic outputs to inject
 
 
 @dataclass

@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from ..lang.ast import InputSegment, OptimizeSpan, OutputSegment, TemplateLine, TextSegment
+from ..lang.ast import (
+    InputSegment,
+    OptimizeSpan,
+    OutputSegment,
+    TemplateLine,
+    TextSegment,
+    PythonExprSegment,
+    PythonExprNativeSegment,
+)
 
 
 def template_line_to_string(template_line: TemplateLine) -> str:
@@ -29,6 +37,14 @@ def template_line_to_string(template_line: TemplateLine) -> str:
                 parts.append(f"[{segment.name}: {segment.type_annotation}]")
             else:
                 parts.append(f"[{segment.name}]")
+        elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
+            # Preserve visibility of dynamic hints in instructions; do not evaluate here
+            # Represent as inline code within angle brackets
+            code = getattr(segment, 'code', '')
+            if code:
+                parts.append(f"<`{code}`>")
+            else:
+                parts.append("<expr>")
     return "".join(parts)
 
 

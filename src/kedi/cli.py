@@ -166,7 +166,7 @@ def main(
                 code, out = run_evals_cli(
                     source, 
                     model=adapter_model, 
-                    optimizer=optimizer,
+                    optimizer=optimizer, 
                     optimizer_model=optimizer_model,
                     reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
                     optimize=optimize, 

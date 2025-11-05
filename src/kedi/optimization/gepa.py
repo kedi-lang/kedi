@@ -23,7 +23,7 @@ from .services.dspy_module_builder import DSPyModuleBuilder
 from .services.dspy_prompt_extractor import DSPyPromptExtractor
 from .services.dspy_score_calculator import DSPyScoreCalculator
 from .services.gepa_metric_wrapper import GEPAMetricWrapper
-from .utils import extract_output_fields, span_to_instruction
+from .utils import span_to_instruction
 
 
 class GEPAOptimizer(OptimizerAdapter):
@@ -101,77 +101,122 @@ class GEPAOptimizer(OptimizerAdapter):
         
         # Verify DSPy is configured
         self.dspy_config_service.verify_configured()
+        test_list = list(test_data) if test_data is not None else None
         
-        # Build DSPy module
-        # For now, optimize first span only (multi-span optimization is complex)
-        if len(spans) > 1:
-            warnings.warn(
-                f"Multi-span optimization: optimizing first span '{spans[0].name}' only. "
-                "Full multi-span support coming soon.",
-                UserWarning
-            )
+        # Prepare training/validation examples once (reused across spans)
+        train_examples = self.example_formatter.format_examples(train_list, proc_params)
+        if test_list:
+            val_examples = self.example_formatter.format_examples(test_list, proc_params)
+        elif len(train_examples) >= 4:
+            cutoff = max(1, len(train_examples) // 4)
+            val_examples = train_examples[:cutoff]
+        else:
+            val_examples = train_examples
         
-        primary_span = spans[0]
-        dspy_module = self.module_builder.build_module(
-            primary_span, proc_params, param_types
-        )
-        
-        # Format training and validation data
-        trainset = self.example_formatter.format_examples(train_list, proc_params)
-        valset = (
-            self.example_formatter.format_examples(list(test_data), proc_params)
-            if test_data
-            else trainset[:len(trainset)//4] if len(trainset) >= 4 else trainset
-        )
-        
-        # Extract output fields for metric wrapper
-        span_outputs = extract_output_fields(primary_span)
-        
-        # Wrap metric for GEPA
-        gepa_metric = self.metric_wrapper.wrap_metric(
-            metric, proc_params, span_outputs, proc_name=proc_name, runtime=self.runtime
-        )
-        
-        # Configure reflection LM
+        # Configure reflection LM once
         reflection_lm = None
         if self.config.reflection_model:
             reflection_lm = self.dspy_config_service.configure_reflection_lm()
-    
-        # Run GEPA optimization
-        optimizer = dspy.GEPA(
-            metric=gepa_metric,
-            max_metric_calls=self.config.max_metric_calls,
-            reflection_lm=reflection_lm,
-        )
         
-        optimized_module = optimizer.compile(
-            student=dspy_module,
-            trainset=trainset,
-            valset=valset,
-        )
+        optimized_prompts: dict[str, str] = {}
+        span_scores: list[float] = []
         
-        # Extract optimized prompts
-        optimized_prompts = self.prompt_extractor.extract_prompts(
-            optimized_module, spans
-        )
-        
-        # Warn if prompts unchanged
+        # Preserve original optimized prefixes so we can restore after optimization
+        original_prefixes: dict[str, str | None] = {}
         for span in spans:
-            if span.name not in optimized_prompts:
-                warnings.warn(f"No optimized prompt found for span '{span.name}'")
-            elif optimized_prompts[span.name] == span_to_instruction(span):
-                warnings.warn(
-                    f"Optimized prompt for '{span.name}' appears unchanged. "
-                    f"GEPA may not have optimized this span."
+            if span.template_lines:
+                original_prefixes[span.name] = span.template_lines[0].optimized_prompt_prefix
+            else:
+                original_prefixes[span.name] = None
+        
+        try:
+            for span in spans:
+                dspy_module = self.module_builder.build_module(span, proc_params, param_types)
+                
+                # Metric used during GEPA optimization - points at the module being optimized
+                # Obtain proc_def for sibling span overrides during metric evaluation
+                proc_def_for_wrapper = self._get_proc_def(proc_name)
+                gepa_metric = self.metric_wrapper.wrap_metric(
+                    metric,
+                    proc_params,
+                    span=span,
+                    module_ref=dspy_module,
+                    proc_def=proc_def_for_wrapper,
                 )
+                
+                optimizer = dspy.GEPA(
+                    metric=gepa_metric,
+                    max_metric_calls=self.config.max_metric_calls,
+                    reflection_lm=reflection_lm,
+                )
+                
+                optimized_module = optimizer.compile(
+                    student=dspy_module,
+                    trainset=train_examples,
+                    valset=val_examples,
+                )
+                
+                # Extract optimized prompt for this span
+                extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
+                optimized_prompt = extracted.get(span.name)
+                if optimized_prompt:
+                    optimized_prompts[span.name] = optimized_prompt
+                    if span.template_lines:
+                        span.template_lines[0].optimized_prompt_prefix = optimized_prompt
+                else:
+                    warnings.warn(f"No optimized prompt found for span '{span.name}'", UserWarning)
+                    continue
+                
+                if optimized_prompt == span_to_instruction(span):
+                    warnings.warn(
+                        f"Optimized prompt for '{span.name}' appears unchanged. "
+                        "GEPA may not have optimized this span.",
+                        UserWarning,
+                    )
+                
+                # Re-wrap metric with the optimized module for scoring
+                scoring_metric = self.metric_wrapper.wrap_metric(
+                    metric,
+                    proc_params,
+                    span=span,
+                    module_ref=optimized_module,
+                    proc_def=proc_def_for_wrapper,
+                )
+                
+                span_score = self.score_calculator.calculate_score(
+                    optimized_module,
+                    train_examples,
+                    scoring_metric,
+                )
+                span_scores.append(span_score)
+        finally:
+            # Restore original prefixes so caller gets pristine AST
+            for span in spans:
+                if not span.template_lines:
+                    continue
+                original_prefix = original_prefixes.get(span.name)
+                span.template_lines[0].optimized_prompt_prefix = original_prefix
         
-        # Calculate training score
-        train_score = self.score_calculator.calculate_score(
-            optimized_module, trainset, gepa_metric
-        )
-        
-        return optimized_prompts, train_score
-    
+        overall_score = sum(span_scores) / len(span_scores) if span_scores else 0.0
+        return optimized_prompts, overall_score
+
+    def _get_proc_def(self, proc_name: str):
+        """Best-effort retrieval of ProcedureDef from runtime for the given name."""
+        if not self.runtime:
+            return None
+        try:
+            fn = self.runtime._procedures.get(proc_name)
+            if not fn:
+                return None
+            import inspect
+            if hasattr(fn, '__code__'):
+                closure_vars = inspect.getclosurevars(fn)
+                proc = closure_vars.nonlocals.get('proc') or closure_vars.globals.get('proc')
+                return proc
+        except Exception:
+            return None
+        return None
+
     def _validate_types(
         self,
         proc_name: str,

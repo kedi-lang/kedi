@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
 
 try:
     import dspy
@@ -51,12 +52,23 @@ class DSPyScoreCalculator:
                 
                 pred = module(**inputs)
                 score_result = metric(example, pred)
-                
+
                 # Extract score from result
                 if hasattr(score_result, 'score'):
-                    scores.append(float(score_result.score))
+                    score_val = float(score_result.score)
                 else:
-                    scores.append(float(score_result))
+                    score_val = float(score_result)
+
+                # Sanitize NaN/Inf and clamp into [0.0, 1.0] for stability
+                if not math.isfinite(score_val):
+                    score_val = 0.0
+                # Do not force-clamp if metric is on a different scale; keep within sane bounds
+                if score_val < 0.0:
+                    score_val = 0.0
+                if score_val > 1.0:
+                    score_val = min(score_val, 1.0)
+
+                scores.append(score_val)
             except Exception:
                 scores.append(0.0)
         
@@ -78,4 +90,3 @@ class DSPyScoreCalculator:
             }
         
         return {}
-

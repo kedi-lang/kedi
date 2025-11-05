@@ -75,10 +75,15 @@ class MetricFactory:
                             metric_env[param_name] = arg_val
                 
                 # Execute metric code (which internally calls procedure)
-                if metric_def.is_block:
-                    val = _execute_python_block(metric_def.code, self.runtime, metric_env)
-                else:
-                    val = _eval_python_inline(self.runtime, metric_def.code, metric_env)
+                # Set _current_env before execution so rt.m() calls work
+                token = self.runtime._current_env.set(metric_env)
+                try:
+                    if metric_def.is_block:
+                        val = _execute_python_block(metric_def.code, self.runtime, metric_env)
+                    else:
+                        val = _eval_python_inline(self.runtime, metric_def.code, metric_env)
+                finally:
+                    self.runtime._current_env.reset(token)
                 
                 # Process result - must return (float, str | None)
                 return self._normalize_metric_result(val)

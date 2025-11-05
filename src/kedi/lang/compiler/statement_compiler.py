@@ -43,6 +43,16 @@ class StatementCompiler:
         """
 
         def _fn(**kwargs: Any) -> Any:
+            # If an override is provided, short-circuit LLM invocation and inject values.
+            if stmt.optimized_output_override is not None:
+                env = self.rt._current_env.get()
+                if env is None:
+                    raise RuntimeError("Template override requires active runtime environment")
+                for key, value in stmt.optimized_output_override.items():
+                    env[key] = value
+                    kwargs[key] = value
+                return stmt.optimized_output_override
+
             # If there's an optimized prompt prefix, prepend it to the segments
             # This allows GEPA to output plain text while preserving type annotations
             segments_to_use = stmt.segments

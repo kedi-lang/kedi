@@ -65,6 +65,7 @@ def run_optimization_cli(
     )
     
     # Configure DSPy for GEPA if needed
+    adapter_for_runtime = None
     if optimizer == "gepa":
         try:
             dspy_config_service = DSPyConfigurationService(config)
@@ -72,6 +73,9 @@ def run_optimization_cli(
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
+            # Create adapter for runtime so metrics can call procedures
+            from .agent_adapter.adapters import DSPyAdapter
+            adapter_for_runtime = DSPyAdapter(model=main_model)
         except ImportError:
             return 1, "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai"
     
@@ -85,7 +89,7 @@ def run_optimization_cli(
         text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
     
     prog = parse_program(text)
-    rt = compile_program(prog, adapter=None)
+    rt = compile_program(prog, adapter=adapter_for_runtime)
     
     # Initialize services
     data_loader = OptimizationDataLoader(rt)
@@ -169,7 +173,9 @@ def run_optimization_cli(
                 )
         
         # Create metric using service
-        metric_fn = metric_factory.create_metric(metric_def, proc, dataset_name)
+        # Use metric_def.dataset_name if specified, otherwise fall back to dataset_name
+        metric_dataset_name = metric_def.dataset_name or dataset_name
+        metric_fn = metric_factory.create_metric(metric_def, proc, metric_dataset_name)
         
         # Call optimizer
         try:

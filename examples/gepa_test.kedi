@@ -1,0 +1,4 @@
+@foo(a: int, b: int) -> `int`:
+    > optimize: parse_span:
+        Given the seed values
+       
