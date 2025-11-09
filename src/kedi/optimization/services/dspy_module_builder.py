@@ -91,8 +91,10 @@ class DSPyModuleBuilder:
                 
             
             def forward(self, **kwargs):
-                # Prefix-only program; no inputs needed for predictor call
-                return self.predictor()
+                # Prefix-only program; avoid any LLM call here.
+                # GEPA scoring happens via Kedi metric; return a dummy prediction.
+                output_fields = {name: "" for name, _ in span_outputs}
+                return dspy.Prediction(**output_fields)
         
         return SingleSpanModule(signature.with_instructions(instruction))
     

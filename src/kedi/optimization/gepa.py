@@ -103,10 +103,8 @@ class GEPAOptimizer(OptimizerAdapter):
         self.dspy_config_service.verify_configured()
         test_list = list(test_data) if test_data is not None else None
         
-        # Configure reflection LM once
+        # Disable reflection in GEPA for prefix-only integration (no DSPy traces available)
         reflection_lm = None
-        if self.config.reflection_model:
-            reflection_lm = self.dspy_config_service.configure_reflection_lm()
         
         optimized_prompts: dict[str, str] = {}
         span_scores: list[float] = []
