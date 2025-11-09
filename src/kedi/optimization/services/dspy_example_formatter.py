@@ -29,6 +29,7 @@ class DSPyExampleFormatter:
         Args:
             data: List of (input, expected_output) tuples
             proc_params: List of procedure parameter names
+            (No specific module inputs are required by prefix-only modules.)
             
         Returns:
             List of dspy.Example objects with typed input fields
@@ -58,8 +59,8 @@ class DSPyExampleFormatter:
             }
             example_dict.update(input_dict)  # Add input values (A, B, etc.)
             
-            # Mark input fields as inputs (DSPy uses these typed fields)
-            example = dspy.Example(**example_dict).with_inputs(*proc_params)
+            # Mark no inputs for prefix-only module; still carry expected for metric
+            example = dspy.Example(**example_dict).with_inputs()
             examples.append(example)
         
         return examples

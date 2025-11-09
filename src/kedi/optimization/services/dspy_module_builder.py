@@ -11,8 +11,19 @@ except ImportError:
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
-from ..utils import extract_output_fields, span_to_instruction
+from ..utils import extract_output_fields
 from .type_handler import StructuredTypeHandler
+
+
+class _KediRuntimeRef:
+    """Lightweight, deepcopy-safe reference holder for KediRuntime."""
+
+    def __init__(self, rt: KediRuntime):
+        self.rt = rt
+
+    def __deepcopy__(self, memo):  # noqa: D401
+        # Safe to return self; underlying runtime is managed elsewhere
+        return self
 
 
 class DSPyModuleBuilder:
@@ -62,51 +73,44 @@ class DSPyModuleBuilder:
             raise ValueError(
                 f"Optimize span '{span.name}' must have at least one output field"
             )
+        # Create signature with only outputs; no inputs for prefix-only instructions
+        signature = self._create_signature(span_outputs, param_types)
         
-        # Create signature with actual typed inputs
-        signature = self._create_signature(span_outputs, proc_params, param_types)
-        
-        # Get initial instruction (template string) - pass as-is, no modifications
-        instruction = span_to_instruction(span)
+        # Initial instruction is empty prefix; GEPA will mutate this
+        instruction = ""
         
         # Create module with Predict
+        rt = self.type_handler.runtime
         class SingleSpanModule(dspy.Module):
             def __init__(self, sig: dspy.Signature):
                 super().__init__()
                 self.predictor = dspy.Predict(sig)
+                self._kedi_span = span
+                # Keep runtime in a deepcopy-safe wrapper to avoid noisy warnings
+                self._kedi_runtime_ref = _KediRuntimeRef(rt)
+                
             
             def forward(self, **kwargs):
-                # Accept typed inputs (A, B, etc.), DSPy substitutes them into instructions
-                return self.predictor(**kwargs)
+                # Prefix-only program; no inputs needed for predictor call
+                return self.predictor()
         
         return SingleSpanModule(signature.with_instructions(instruction))
     
     def _create_signature(
         self,
         outputs: list[tuple[str, str | None]],
-        proc_params: list[str],
         param_types: dict[str, type],
     ) -> dspy.Signature:
-        """Create DSPy Signature with typed inputs.
-        
-        Signature uses actual input types (A: float, B: float) not user_prompt: str.
-        """
-        # Build output schema from runtime's type environment
-        output_schema = self.type_handler.build_output_schema(outputs)
-        
+        """Create DSPy Signature with only output fields (prefix-only program)."""
         from pydantic import create_model
         
-        # Create field definitions with typed inputs
+        # Create field definitions with only outputs
         field_definitions = {}
         
-        # Add input fields for each parameter
-        for param_name in proc_params:
-            param_type = param_types.get(param_name, str)
-            field_definitions[param_name] = (param_type, dspy.InputField())
-        
         # Add output fields
-        for field, type_ in output_schema.items():
-            field_definitions[field] = (type_, dspy.OutputField())
+        # IMPORTANT: Use str for all outputs in DSPy module. Kedi handles real typing.
+        for field, _type_anno in outputs:
+            field_definitions[field] = (str, dspy.OutputField())
         
         return create_model(
             "_OutputSignature",

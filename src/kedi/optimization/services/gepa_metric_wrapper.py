@@ -67,12 +67,6 @@ class GEPAMetricWrapper:
                 example_obj = context.get("module_inputs", gold)
                 prediction_obj = context.get("module_outputs", pred)
 
-                # Derive target output field names for extraction/override
-                if isinstance(span, list):
-                    target_fields = [name for (name, _type) in span if isinstance(name, str)]
-                else:
-                    target_fields = [name for name, _ in extract_output_fields(span)] if span else []
-                
                 cached = self._lookup_cached_feedback(prediction_obj) or self._lookup_cached_feedback(pred)
                 if cached is not None:
                     cached_score, cached_feedback = cached
@@ -82,19 +76,10 @@ class GEPAMetricWrapper:
                 expected_output = getattr(example_obj, "_expected", None)
                 
                 prompt_handle = None
-                override_handle = None
-                sibling_overrides = None
                 try:
                     if module_ref:
                         optimized_prompt = self._extract_current_instructions(module_ref)
                         prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
-                    
-                    predicted_outputs = self._collect_prediction_outputs(prediction_obj or pred, target_fields)
-                    if predicted_outputs and hasattr(span, "template_lines"):
-                        override_handle = self._apply_output_override(span, predicted_outputs)
-                    # Prevent non-active optimize spans from invoking the LLM
-                    if proc_def is not None:
-                        sibling_overrides = self._apply_default_overrides(proc_def, span)
                     
                     score, feedback = kedi_metric(input_val, expected_output)
                     score_float = float(score)
@@ -104,10 +89,8 @@ class GEPAMetricWrapper:
                     self._store_cached_feedback(pred, score_float, feedback_text)
                     return payload
                 finally:
-                    self._restore_output_override(override_handle)
-                    self._restore_sibling_overrides(sibling_overrides)
                     self._restore_prompt_prefix(prompt_handle)
-            except Exception as e:
+            except Exception:
                 import traceback
                 error_msg = traceback.format_exc()
                 payload = ScoreWithFeedback(score=0.0, feedback=f"GEPA metric error: {error_msg}")
@@ -115,44 +98,6 @@ class GEPAMetricWrapper:
                 return payload
         
         return gepa_metric
-    
-    def _collect_prediction_outputs(self, pred: dspy.Prediction, target_fields: list[str]) -> dict[str, Any]:
-        """Collect predicted outputs keyed by output name."""
-        outputs: dict[str, Any] = {}
-        if pred is None:
-            return outputs
-        
-        
-        def _assign(name: str, value: Any) -> None:
-            if name and value is not None and not callable(value):
-                outputs[name] = value
-        
-        if target_fields:
-            for field in target_fields:
-                if hasattr(pred, field):
-                    _assign(field, getattr(pred, field))
-        
-        if outputs:
-            return outputs
-        
-        # Fallback: single value predictions or unnamed attributes
-        if not hasattr(pred, "__dict__"):
-            if target_fields:
-                outputs[target_fields[0]] = pred
-            else:
-                outputs["value"] = pred
-            return outputs
-        
-        for attr, value in pred.__dict__.items():
-            if attr.startswith("_") or attr in ("score", "feedback"):
-                continue
-            _assign(attr, value)
-        
-        if not outputs and target_fields:
-            # Still nothing - attach first field as raw prediction
-            outputs[target_fields[0]] = getattr(pred, target_fields[0], pred)
-        
-        return outputs
     
     def _extract_input(self, gold: dspy.Example, proc_params: list[str]) -> Any:
         """Extract input value from gold example."""
@@ -177,39 +122,7 @@ class GEPAMetricWrapper:
         line, original = handle
         line.optimized_prompt_prefix = original
     
-    def _apply_output_override(
-        self,
-        span: Any,
-        predicted_outputs: dict[str, Any],
-    ) -> list[tuple[TemplateLine, dict[str, Any] | None]] | None:
-        """Apply deterministic output overrides to each template line in span."""
-        if not span or not getattr(span, "template_lines", None):
-            return None
-        
-        handles: list[tuple[TemplateLine, dict[str, Any] | None]] = []
-        for template_line in span.template_lines:
-            output_names = self._line_output_names(template_line)
-            if not output_names:
-                continue
-            mapping = {
-                name: predicted_outputs[name]
-                for name in output_names
-                if name in predicted_outputs
-            }
-            if mapping:
-                handles.append((template_line, template_line.optimized_output_override))
-                template_line.optimized_output_override = mapping
-        
-        return handles or None
-    
-    def _restore_output_override(
-        self,
-        handle: list[tuple[TemplateLine, dict[str, Any] | None]] | None,
-    ) -> None:
-        if not handle:
-            return
-        for template_line, original in handle:
-            template_line.optimized_output_override = original
+    # Removed prediction-based output override; metric evaluates Kedi directly
     
     def _line_output_names(self, template_line: TemplateLine) -> list[str]:
         """Return output names declared in a template line."""

@@ -5,12 +5,20 @@ from __future__ import annotations
 from ..lang.ast import (
     InputSegment,
     OptimizeSpan,
+    CallSegment,
     OutputSegment,
     TemplateLine,
     TextSegment,
     PythonExprSegment,
     PythonExprNativeSegment,
 )
+
+from ..lang.compiler.evaluation import (
+    evaluate_call,
+    evaluate_python_inline,
+    lookup_value,
+)
+from ..lang.compiler.environment import KediRuntime
 
 
 def template_line_to_string(template_line: TemplateLine) -> str:
@@ -50,7 +58,7 @@ def template_line_to_string(template_line: TemplateLine) -> str:
 
 def span_to_instruction(span: OptimizeSpan) -> str:
     """Convert OptimizeSpan to instruction string.
-    
+
     Args:
         span: The optimize span to convert
         
@@ -60,6 +68,61 @@ def span_to_instruction(span: OptimizeSpan) -> str:
     lines = [template_line_to_string(tl) for tl in span.template_lines]
     return "\n".join(lines)
 
+
+def render_instruction_lines(
+    span: OptimizeSpan,
+    rt: KediRuntime,
+    kwargs: dict[str, object],
+) -> str:
+    """Render optimize span template lines into a concrete instruction string.
+    
+    Substitutes inputs (<name>), evaluates inline python (both `<`expr`>` and native),
+    and evaluates calls. Output placeholders are preserved as textual markers
+    (e.g., `[name: type]`) so the instruction still guides the LLM to produce fields.
+    
+    Args:
+        span: Optimize span whose template lines will be rendered
+        rt: Active KediRuntime for evaluation
+        kwargs: Values to use for substitutions and python evaluation
+    
+    Returns:
+        Concrete instruction string with inputs and expressions resolved while
+        preserving output placeholders.
+    """
+    rendered_lines: list[str] = []
+    for template_line in span.template_lines:
+        parts: list[str] = []
+        for segment in template_line.segments:
+            if isinstance(segment, TextSegment):
+                parts.append(segment.text)
+            elif isinstance(segment, InputSegment):
+                try:
+                    value = lookup_value(rt, segment.name, kwargs)
+                    parts.append(str(value))
+                except Exception:
+                    # Leave placeholder if value not available in this context
+                    parts.append(f"<{segment.name}>")
+            elif isinstance(segment, CallSegment):
+                try:
+                    value = evaluate_call(rt, segment, kwargs)
+                    parts.append(str(value))
+                except Exception:
+                    # Preserve call placeholder if evaluation isn't possible here
+                    parts.append(f"<{segment.name}()>")
+            elif isinstance(segment, OutputSegment):
+                if segment.type_annotation:
+                    parts.append(f"[{segment.name}: {segment.type_annotation}]")
+                else:
+                    parts.append(f"[{segment.name}]")
+            elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
+                try:
+                    value = evaluate_python_inline(rt, getattr(segment, "code", ""), kwargs)
+                    parts.append(str(value))
+                except Exception:
+                    code = getattr(segment, "code", "")
+                    parts.append(f"<`{code}`>")
+        rendered_lines.append("".join(parts))
+    return "\n".join(rendered_lines)
 
 def extract_output_fields(span: OptimizeSpan) -> list[tuple[str, str | None]]:
     """Extract output field names and types from an OptimizeSpan.

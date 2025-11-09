@@ -46,12 +46,8 @@ class DSPyScoreCalculator:
         
         for example in sample:
             try:
-                inputs = self._extract_inputs(example)
-                if not inputs:
-                    continue
-                
-                pred = module(**inputs)
-                score_result = metric(example, pred)
+                # Prefix-only program: module predictions are irrelevant; call metric directly
+                score_result = metric(example, None)
 
                 # Extract score from result
                 if hasattr(score_result, 'score'):

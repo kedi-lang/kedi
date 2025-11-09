@@ -103,16 +103,6 @@ class GEPAOptimizer(OptimizerAdapter):
         self.dspy_config_service.verify_configured()
         test_list = list(test_data) if test_data is not None else None
         
-        # Prepare training/validation examples once (reused across spans)
-        train_examples = self.example_formatter.format_examples(train_list, proc_params)
-        if test_list:
-            val_examples = self.example_formatter.format_examples(test_list, proc_params)
-        elif len(train_examples) >= 4:
-            cutoff = max(1, len(train_examples) // 4)
-            val_examples = train_examples[:cutoff]
-        else:
-            val_examples = train_examples
-        
         # Configure reflection LM once
         reflection_lm = None
         if self.config.reflection_model:
@@ -131,6 +121,16 @@ class GEPAOptimizer(OptimizerAdapter):
         
         try:
             for span in spans:
+                # Prepare training/validation examples (inputs not required by prefix-only module)
+                train_examples = self.example_formatter.format_examples(train_list, proc_params)
+                if test_list:
+                    val_examples = self.example_formatter.format_examples(test_list, proc_params)
+                elif len(train_examples) >= 4:
+                    cutoff = max(1, len(train_examples) // 4)
+                    val_examples = train_examples[:cutoff]
+                else:
+                    val_examples = train_examples
+                
                 dspy_module = self.module_builder.build_module(span, proc_params, param_types)
                 
                 # Metric used during GEPA optimization - points at the module being optimized

@@ -220,3 +220,5 @@ __marimo__/
 mlruns/
 *optimized.json
 *optimized_scores.json
+
+.dspy_cache/
