@@ -50,17 +50,46 @@ class DSPyConfigurationService:
         if not model:
             raise ValueError("No model specified for main LM configuration")
         
-        # Get appropriate max_tokens for this model
-        max_tokens = self.config.get_model_max_tokens(model)
+        # Use configured max_tokens
+        max_tokens = self.config.get_optimizer_max_tokens()
         
-        # Check if it's a reasoning model (requires temperature=1.0)
-        if self.config.is_reasoning_model(model):
-            main_lm = LM(model=model, temperature=1.0, max_tokens=max_tokens)
-        else:
-            main_lm = LM(model=model, max_tokens=max_tokens)
+        print(f"🔧 Configuring main DSPy LM:")
+        print(f"   Model: {model}")
+        print(f"   Max tokens: {max_tokens}")
+        
+        # WORKAROUND: Monkey-patch DSPy's LM class BEFORE creating any instances
+        # This fixes DSPy's bug where internal LM instances use hardcoded max_tokens=4000
+        if not hasattr(LM, '_kedi_patched'):
+            original_init = LM.__init__
+            configured_max_tokens = max_tokens
+            
+            def patched_init(self, model, model_type="chat", temperature=0.0, max_tokens=4000, 
+                            cache=True, callbacks=None, num_retries=3, provider=None,
+                            finetuning_model=None, launch_kwargs=None, train_kwargs=None, **kwargs):
+                # Override the default max_tokens with our configured value
+                if max_tokens == 4000:  # If using default, replace with our config
+                    max_tokens = configured_max_tokens
+                return original_init(self, model, model_type, temperature, max_tokens,
+                                   cache, callbacks, num_retries, provider,
+                                   finetuning_model, launch_kwargs, train_kwargs, **kwargs)
+            
+            LM.__init__ = patched_init
+            LM._kedi_patched = True
+            print(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
+        
+        # Create LM with configured settings
+        main_lm = LM(model=model, max_tokens=max_tokens, temperature=1.0)
         
         # Configure DSPy with this LM, disable cache
         dspy.settings.configure(lm=main_lm, cache=False)
+        print(f"   ✅ Main LM configured")
+        
+        # Verify the configuration was applied
+        if hasattr(dspy.settings, 'lm') and dspy.settings.lm:
+            lm_obj = dspy.settings.lm
+            print(f"   Verification: DSPy settings.lm = {lm_obj}")
+            if hasattr(lm_obj, 'kwargs'):
+                print(f"   LM kwargs: {lm_obj.kwargs}")
         
         # CRITICAL: Disable DSPy cache (both disk and memory)
         dspy.configure_cache(
@@ -87,14 +116,11 @@ class DSPyConfigurationService:
         if not model:
             raise ValueError("No model specified for reflection LM configuration")
         
-        # Get appropriate max_tokens for reflection model
-        max_tokens = self.config.get_model_max_tokens(model)
+        # Use configured max_tokens for reflection
+        max_tokens = self.config.get_reflection_max_tokens()
         
-        # Reasoning models require temperature=1.0
-        if self.config.is_reasoning_model(model):
-            return LM(model=model, temperature=1.0, max_tokens=max_tokens)
-        else:
-            return LM(model=model, max_tokens=max_tokens)
+        # Create LM with configured settings
+        return LM(model=model, max_tokens=max_tokens)
     
     def verify_configured(self) -> None:
         """Verify DSPy LM is configured and cache is disabled.

@@ -34,6 +34,8 @@ def run_optimization_cli(
     max_metric_calls: int = 30,
     optimizer_model_max_tokens: int = 2000,
     reflection_model_max_tokens: int = 32000,
+    reflection_minibatch_size: int = 3,
+    max_validation_examples: int | None = None,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
     
@@ -62,6 +64,8 @@ def run_optimization_cli(
         reflection_model_max_tokens=reflection_model_max_tokens,
         optimizer_model=optimizer_model,
         reflection_model=reflection_model,
+        reflection_minibatch_size=reflection_minibatch_size,
+        max_validation_examples=max_validation_examples,
     )
     
     # Configure DSPy for GEPA if needed
@@ -100,7 +104,7 @@ def run_optimization_cli(
     # Get optimizer instance
     if optimizer == "gepa":
         from .optimization.gepa import GEPAOptimizer
-        opt = GEPAOptimizer(config=config, runtime=rt)
+        opt = GEPAOptimizer(config=config, runtime=rt, source_path=source_path)
     else:
         opt = get_optimizer(optimizer)
     

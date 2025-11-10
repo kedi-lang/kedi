@@ -73,8 +73,8 @@ class DSPyModuleBuilder:
             raise ValueError(
                 f"Optimize span '{span.name}' must have at least one output field"
             )
-        # Create signature with only outputs; no inputs for prefix-only instructions
-        signature = self._create_signature(span_outputs, param_types)
+        # Create signature with procedure parameters as inputs and span outputs
+        signature = self._create_signature(proc_params, span_outputs, param_types)
         
         # Initial instruction is empty prefix; GEPA will mutate this
         instruction = ""
@@ -84,6 +84,7 @@ class DSPyModuleBuilder:
         class SingleSpanModule(dspy.Module):
             def __init__(self, sig: dspy.Signature):
                 super().__init__()
+                # Use the globally configured LM (inherits max_tokens from dspy.settings)
                 self.predictor = dspy.Predict(sig)
                 self._kedi_span = span
                 # Keep runtime in a deepcopy-safe wrapper to avoid noisy warnings
@@ -91,23 +92,28 @@ class DSPyModuleBuilder:
                 
             
             def forward(self, **kwargs):
-                # Prefix-only program; avoid any LLM call here.
-                # GEPA scoring happens via Kedi metric; return a dummy prediction.
-                output_fields = {name: "" for name, _ in span_outputs}
-                return dspy.Prediction(**output_fields)
+                # Call the predictor to generate real predictions
+                # GEPA needs these predictions to build reflective datasets
+                return self.predictor(**kwargs)
         
         return SingleSpanModule(signature.with_instructions(instruction))
     
     def _create_signature(
         self,
+        inputs: list[str],
         outputs: list[tuple[str, str | None]],
         param_types: dict[str, type],
     ) -> dspy.Signature:
-        """Create DSPy Signature with only output fields (prefix-only program)."""
+        """Create DSPy Signature with input and output fields."""
         from pydantic import create_model
         
-        # Create field definitions with only outputs
+        # Create field definitions
         field_definitions = {}
+        
+        # Add input fields (procedure parameters)
+        for param in inputs:
+            # Use str for all inputs in DSPy module
+            field_definitions[param] = (str, dspy.InputField())
         
         # Add output fields
         # IMPORTANT: Use str for all outputs in DSPy module. Kedi handles real typing.
@@ -115,7 +121,7 @@ class DSPyModuleBuilder:
             field_definitions[field] = (str, dspy.OutputField())
         
         return create_model(
-            "_OutputSignature",
+            "_ProcedureSignature",
             __base__=dspy.Signature,
             **field_definitions,
         )

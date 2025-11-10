@@ -152,7 +152,7 @@ class OptimizationDataLoader:
         """Format data list as (input, expected_output) tuples.
         
         Handles:
-        - Tuples with 2 elements: use as-is
+        - Tuples with 2 elements: use as-is (input, expected_output)
         - Tuples with other lengths: (item[0], None)
         - Single objects: (obj, None)
         
@@ -167,7 +167,7 @@ class OptimizationDataLoader:
         for item in data_list:
             if isinstance(item, tuple):
                 if len(item) == 2:
-                    # Already proper tuple - use as-is
+                    # Use tuple as-is: first element is input, second is expected output
                     formatted_data.append(item)
                 else:
                     # Single value in tuple - make it (value, None)

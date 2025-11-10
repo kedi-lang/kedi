@@ -54,6 +54,9 @@ class GEPAMetricWrapper:
         Returns:
             GEPA-compatible metric function
         """
+        # Track metric call count for progress feedback
+        call_count = {"count": 0, "last_printed": 0}
+        
         def gepa_metric(
             gold: dspy.Example,
             pred: dspy.Prediction,
@@ -63,6 +66,12 @@ class GEPAMetricWrapper:
             **context: Any,
         ):
             """GEPA metric function."""
+            call_count["count"] += 1
+            
+            if call_count["count"] - call_count["last_printed"] >= 5:
+                print(f"   🔄 Metric evaluations: {call_count['count']}...", flush=True)
+                call_count["last_printed"] = call_count["count"]
+            
             try:
                 example_obj = context.get("module_inputs", gold)
                 prediction_obj = context.get("module_outputs", pred)

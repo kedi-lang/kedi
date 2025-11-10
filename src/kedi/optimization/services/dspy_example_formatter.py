@@ -53,14 +53,14 @@ class DSPyExampleFormatter:
                     # Assume single value maps to first param
                     input_dict[proc_params[0]] = input_val
             
-            # Create Example with typed input fields (A, B, etc.)
+            # Create Example with typed input fields
             example_dict = {
                 "_expected": expected_output,  # Metadata for metric
             }
-            example_dict.update(input_dict)  # Add input values (A, B, etc.)
+            example_dict.update(input_dict)  # Add input values
             
-            # Mark no inputs for prefix-only module; still carry expected for metric
-            example = dspy.Example(**example_dict).with_inputs()
+            # Mark the procedure parameters as inputs
+            example = dspy.Example(**example_dict).with_inputs(*proc_params)
             examples.append(example)
         
         return examples

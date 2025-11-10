@@ -67,7 +67,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 @click.option(
     "--optimizer-model",
     envvar="KEDI_OPTIMIZER_MODEL",
-    default="openai/gpt-4o",
+    default="openai/gpt-4.1-mini",
     help="Model for optimizer (main model for GEPA)",
 )
 @click.option(
@@ -80,14 +80,14 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     "--optimizer-max-metric-calls",
     type=int,
     envvar="KEDI_OPTIMIZER_MAX_METRIC_CALLS",
-    default=30,
+    default=100,
     help="Maximum number of metric evaluations during optimization",
 )
 @click.option(
     "--optimizer-model-max-tokens",
     type=int,
     envvar="KEDI_OPTIMIZER_MODEL_MAX_TOKENS",
-    default=2000,
+    default=8000,
     help="Max tokens for the main optimizer model",
 )
 @click.option(
@@ -96,6 +96,20 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     envvar="KEDI_OPTIMIZER_REFLECTION_MODEL_MAX_TOKENS",
     default=32000,
     help="Max tokens for the reflection model (GEPA)",
+)
+@click.option(
+    "--optimizer-reflection-minibatch-size",
+    type=int,
+    envvar="KEDI_OPTIMIZER_REFLECTION_MINIBATCH_SIZE",
+    default=3,
+    help="Number of examples to evaluate before triggering reflection (GEPA)",
+)
+@click.option(
+    "--optimizer-max-validation-examples",
+    type=int,
+    envvar="KEDI_OPTIMIZER_MAX_VALIDATION_EXAMPLES",
+    default=None,
+    help="Maximum validation examples for baseline evaluation (default: use entire test set)",
 )
 @click.option(
     "--optimize",
@@ -120,6 +134,8 @@ def main(
     optimizer_max_metric_calls: int = 30,
     optimizer_model_max_tokens: int = 2000,
     optimizer_reflection_model_max_tokens: int = 32000,
+    optimizer_reflection_minibatch_size: int = 3,
+    optimizer_max_validation_examples: int | None = None,
     optimize: bool = False,
     no_cache: bool = False,
 ):
@@ -144,6 +160,8 @@ def main(
                 max_metric_calls=optimizer_max_metric_calls,
                 optimizer_model_max_tokens=optimizer_model_max_tokens,
                 reflection_model_max_tokens=optimizer_reflection_model_max_tokens,
+                reflection_minibatch_size=optimizer_reflection_minibatch_size,
+                max_validation_examples=optimizer_max_validation_examples,
             )
             if msg:
                 if code != 0:

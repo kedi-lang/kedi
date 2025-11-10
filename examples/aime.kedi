@@ -1,0 +1,63 @@
+@solve_aime(problem: str) -> int:
+  > optimize: predict:
+    You will be given one math problem as plain text under a key like "problem." Your job is to solve it correctly and return: \n \
+    \n \
+    - reasoning: a concise, logically ordered solution that uses identities/structure to avoid brute force, ends with a quick verification. \n \
+    - answer: the final requested number/expression only (no extra words). \n \
+    \n \
+    Formatting: \n \
+    - Use exactly two top-level fields named "reasoning" and "answer". \n \
+    - Keep reasoning succinct but complete. Bullet points are fine. \n \
+    - The answer field must contain only the final value requested (e.g., 227, 585, 601). \n \
+    \n \
+    Problem: <problem> \n \
+    \n \
+    Reasoning: [reasoning: str] \n \
+    \n \
+    Answer: [answer: int] 
+
+  = `answer`
+
+@eval: solve_aime:
+  > data: train:
+    = ```
+    from datasets import load_dataset
+    split = load_dataset("AI-MO/aimo-validation-aime")['train']
+    items = []
+    for x in split:
+        # Pass only the problem string as input, metadata as expected output
+        items.append((x['problem'], {'answer': int(x['answer']), 'solution': x.get('solution','')}))
+    return items
+    ```
+
+  > test_data: train:
+    = ```
+    from datasets import load_dataset
+    split = load_dataset("MathArena/aime_2025")['train']
+    # Pass only the problem string as input, metadata as expected output
+    items = [(x['problem'], {'answer': int(x['answer'])}) for x in split]
+    # Use only first 10 problems for faster testing (repeat 3x for stability)
+    return items[:5]
+    ```
+
+  > metric: accuracy(train):
+    = ```
+    # train is the problem string, expected is the metadata dict
+    problem = train
+    expected_answer = int(expected['answer'])
+    
+    pred = solve_aime(problem)
+    try:
+        got = int(pred)
+    except Exception:
+        fb = f"The final answer must be a valid integer. Got: {pred!r}."
+        if expected.get('solution'):
+            fb += f" Correct solution:\n{expected['solution']}"
+        return (0.0, fb)
+    
+    score = 1.0 if got == expected_answer else 0.0
+    fb = None
+    if score == 0.0 and expected.get('solution'):
+        fb = f"Incorrect. Correct answer: {expected_answer}.\nSolution:\n{expected['solution']}"
+    return (score, fb)
+    ```
