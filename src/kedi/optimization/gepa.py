@@ -220,8 +220,10 @@ class GEPAOptimizer(OptimizerAdapter):
                 
                 # Verify dspy.settings is configured correctly
                 if hasattr(dspy.settings, 'lm') and dspy.settings.lm:
-                    print(f"   DSPy settings.lm: {dspy.settings.lm.model}")
-                    print(f"   DSPy settings.lm kwargs: {dspy.settings.lm.kwargs}")
+                    model_name = getattr(dspy.settings.lm, 'model', 'unknown')
+                    lm_kwargs = getattr(dspy.settings.lm, 'kwargs', {})
+                    print(f"   DSPy settings.lm: {model_name}")
+                    print(f"   DSPy settings.lm kwargs: {lm_kwargs}")
                 else:
                     print(f"   ⚠️  WARNING: dspy.settings.lm is not configured!")
                 

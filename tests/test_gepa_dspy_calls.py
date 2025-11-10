@@ -58,10 +58,11 @@ def _install_fake_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
             return FakePrediction(**kwargs)
 
     class FakeGEPA:
-        def __init__(self, metric=None, max_metric_calls: int = 30, reflection_lm=None):
+        def __init__(self, metric=None, max_metric_calls: int = 30, reflection_lm=None, reflection_minibatch_size: int = 3, **kwargs):
             self.metric = metric
             self.max_metric_calls = max_metric_calls
             self.reflection_lm = reflection_lm
+            self.reflection_minibatch_size = reflection_minibatch_size
 
         def compile(self, student, trainset, valset):
             # Simulate a training loop: call student on each example and run the metric
