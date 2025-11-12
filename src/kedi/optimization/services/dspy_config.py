@@ -78,7 +78,13 @@ class DSPyConfigurationService:
             print(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
         
         # Create LM with configured settings
-        main_lm = LM(model=model, max_tokens=max_tokens, temperature=1.0)
+        # Enable JSON mode for more reliable structured outputs
+        main_lm = LM(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=1.0,
+            response_format={"type": "json_object"}
+        )
         
         # Configure DSPy with this LM, disable cache
         dspy.settings.configure(lm=main_lm, cache=False)
@@ -120,7 +126,11 @@ class DSPyConfigurationService:
         max_tokens = self.config.get_reflection_max_tokens()
         
         # Create LM with configured settings
-        return LM(model=model, max_tokens=max_tokens)
+        # Note: Reflection LM generates natural language instructions, NOT JSON
+        return LM(
+            model=model,
+            max_tokens=max_tokens,
+        )
     
     def verify_configured(self) -> None:
         """Verify DSPy LM is configured and cache is disabled.

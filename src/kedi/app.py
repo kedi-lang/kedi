@@ -36,6 +36,8 @@ def run_optimization_cli(
     reflection_model_max_tokens: int = 32000,
     reflection_minibatch_size: int = 3,
     max_validation_examples: int | None = None,
+    adapter: str = "pydantic",
+    adapter_model: str | None = None,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
     
@@ -82,6 +84,18 @@ def run_optimization_cli(
             adapter_for_runtime = DSPyAdapter(model=main_model)
         except ImportError:
             return 1, "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai"
+    else:
+        # Always create an adapter for runtime so metrics can call procedures
+        # Use the adapter specified via CLI parameters
+        model = adapter_model or "groq:qwen/qwen3-32b"
+        if adapter == "dspy":
+            try:
+                from .agent_adapter.adapters import DSPyAdapter
+                adapter_for_runtime = DSPyAdapter(model=model)
+            except ImportError:
+                return 1, "DSPy is required for dspy adapter. Install with: pip install dspy-ai"
+        else:
+            adapter_for_runtime = PydanticAdapter(model=model)
     
     # Compile runtime early (needed for services)
     text = source_path.read_text(encoding="utf-8")

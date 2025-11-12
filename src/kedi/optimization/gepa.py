@@ -61,7 +61,7 @@ class GEPAOptimizer(OptimizerAdapter):
         # Initialize services
         self.dspy_config_service = DSPyConfigurationService(config)
         self.module_builder = DSPyModuleBuilder(runtime=runtime)
-        self.example_formatter = DSPyExampleFormatter()
+        self.example_formatter = DSPyExampleFormatter(runtime)
         self.metric_wrapper = GEPAMetricWrapper()
         self.prompt_extractor = DSPyPromptExtractor()
         self.score_calculator = DSPyScoreCalculator()
@@ -145,10 +145,9 @@ class GEPAOptimizer(OptimizerAdapter):
                     self.call_count["count"] += 1
                     print(f"\n💭 Reflection LM call #{self.call_count['count']}")
                     print(f"   Model: {self.model_name}")
-                    print(f"   Prompt length: {len(prompt)} chars")
                     print(f"   Analyzing program behavior and proposing improvements...")
                     result = self.base_lm(prompt)
-                    print(f"   ✅ Reflection complete (returned {len(result) if hasattr(result, '__len__') else 'N/A'} results)")
+                    print(f"   ✅ Reflection complete")
                     return result
             
             reflection_lm = TracedReflectionLM(base_lm, self.config.reflection_model, reflection_call_count)
@@ -175,14 +174,18 @@ class GEPAOptimizer(OptimizerAdapter):
                 
                 # Prepare training/validation examples
                 print(f"📊 Preparing datasets...")
-                train_examples = self.example_formatter.format_examples(train_list, proc_params)
+                train_examples = self.example_formatter.format_examples(
+                    train_list, proc_params, span=span, proc_name=proc_name
+                )
                 
                 if test_list:
                     test_list_full = list(test_list)
                     # Trim test set if max_validation_examples is configured
                     if self.config.max_validation_examples is not None:
                         test_list_full = test_list_full[:self.config.max_validation_examples]
-                    val_examples = self.example_formatter.format_examples(test_list_full, proc_params)
+                    val_examples = self.example_formatter.format_examples(
+                        test_list_full, proc_params, span=span, proc_name=proc_name
+                    )
                 elif len(train_examples) >= 4:
                     val_examples = train_examples[:max(1, len(train_examples) // 4)]
                 else:

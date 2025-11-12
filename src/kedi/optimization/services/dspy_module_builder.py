@@ -11,7 +11,7 @@ except ImportError:
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
-from ..utils import extract_output_fields
+from ..utils import extract_output_fields, extract_input_fields
 from .type_handler import StructuredTypeHandler
 
 
@@ -66,15 +66,19 @@ class DSPyModuleBuilder:
         if not DSPY_AVAILABLE:
             raise ImportError("DSPy is required")
         
-        # Extract outputs from span
+        # Extract inputs and outputs from span
+        span_inputs = extract_input_fields(span)
         span_outputs = extract_output_fields(span)
         
         if not span_outputs:
             raise ValueError(
                 f"Optimize span '{span.name}' must have at least one output field"
             )
-        # Create signature with procedure parameters as inputs and span outputs
-        signature = self._create_signature(proc_params, span_outputs, param_types)
+        
+        # Create signature with span inputs (not procedure parameters) and span outputs
+        # This ensures DSPy sees the actual span-level inputs like <prettified_architecture>
+        # rather than procedure-level parameters like architecture: Architecture
+        signature = self._create_signature(span_inputs, span_outputs, param_types)
         
         # Initial instruction is empty prefix; GEPA will mutate this
         instruction = ""
@@ -85,6 +89,7 @@ class DSPyModuleBuilder:
             def __init__(self, sig: dspy.Signature):
                 super().__init__()
                 # Use the globally configured LM (inherits max_tokens from dspy.settings)
+                # DSPy automatically uses JSON mode via its adapter system for structured outputs
                 self.predictor = dspy.Predict(sig)
                 self._kedi_span = span
                 # Keep runtime in a deepcopy-safe wrapper to avoid noisy warnings
@@ -104,7 +109,11 @@ class DSPyModuleBuilder:
         outputs: list[tuple[str, str | None]],
         param_types: dict[str, type],
     ) -> dspy.Signature:
-        """Create DSPy Signature with input and output fields."""
+        """Create DSPy Signature with input and output fields.
+        
+        Uses actual Pydantic types for structured outputs to enable proper
+        type enforcement via DSPy's JSON mode and structured output adapters.
+        """
         from pydantic import create_model
         
         # Create field definitions
@@ -115,14 +124,45 @@ class DSPyModuleBuilder:
             # Use str for all inputs in DSPy module
             field_definitions[param] = (str, dspy.InputField())
         
-        # Add output fields
-        # IMPORTANT: Use str for all outputs in DSPy module. Kedi handles real typing.
-        for field, _type_anno in outputs:
-            field_definitions[field] = (str, dspy.OutputField())
+        # Add output fields with actual types for structured enforcement
+        for field, type_anno in outputs:
+            if type_anno:
+                # Parse the type annotation to get the actual Python type
+                output_type = self._resolve_type_annotation(type_anno, param_types)
+                field_definitions[field] = (output_type, dspy.OutputField())
+            else:
+                # Fallback to str if no type annotation
+                field_definitions[field] = (str, dspy.OutputField())
         
         return create_model(
             "_ProcedureSignature",
             __base__=dspy.Signature,
             **field_definitions,
         )
+    
+    def _resolve_type_annotation(self, type_anno: str, param_types: dict[str, type]) -> type:
+        """Resolve a type annotation string to an actual Python type.
+        
+        Args:
+            type_anno: Type annotation string (e.g., 'list[SimpleMappingRecommendation]')
+            param_types: Available type mappings from the runtime
+            
+        Returns:
+            The resolved Python type
+        """
+        from ...lang.compiler.environment import build_type_env
+        
+        # Build the type environment from the runtime
+        # This includes prelude imports, globals, and type definitions
+        type_env = build_type_env(self.type_handler.runtime, None)
+        
+        try:
+            # Evaluate the type annotation in the context of the type environment
+            # This handles complex types like list[SimpleMappingRecommendation]
+            resolved_type = eval(type_anno, type_env)
+            return resolved_type
+        except Exception:
+            # If resolution fails, fall back to str
+            # This ensures we don't break on unknown types
+            return str
 

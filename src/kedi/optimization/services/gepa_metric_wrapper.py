@@ -109,9 +109,22 @@ class GEPAMetricWrapper:
         return gepa_metric
     
     def _extract_input(self, gold: dspy.Example, proc_params: list[str]) -> Any:
-        """Extract input value from gold example."""
+        """Extract input value from gold example.
+        
+        Prefers _proc_inputs if available (original procedure parameters),
+        otherwise falls back to extracting from proc_params fields.
+        """
         if gold is None:
             raise ValueError("Metric requires module inputs to be available")
+        
+        # Check if we have stored procedure inputs (from span-aware formatting)
+        if hasattr(gold, '_proc_inputs'):
+            proc_inputs = gold._proc_inputs
+            if len(proc_params) == 1:
+                return proc_inputs[proc_params[0]]
+            return tuple(proc_inputs[param] for param in proc_params)
+        
+        # Fallback: extract from proc_params fields directly
         if len(proc_params) == 1:
             return getattr(gold, proc_params[0])
         return tuple(getattr(gold, param) for param in proc_params)

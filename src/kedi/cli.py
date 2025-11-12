@@ -162,6 +162,8 @@ def main(
                 reflection_model_max_tokens=optimizer_reflection_model_max_tokens,
                 reflection_minibatch_size=optimizer_reflection_minibatch_size,
                 max_validation_examples=optimizer_max_validation_examples,
+                adapter=adapter,
+                adapter_model=adapter_model,
             )
             if msg:
                 if code != 0:
