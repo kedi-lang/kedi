@@ -39,7 +39,7 @@ class GEPAMetricWrapper:
         self,
         kedi_metric: Callable[[Any, Any], tuple[float, str | None]],
         proc_params: list[str],
-        span: Any = None,
+        span_or_output_fields: Any = None,  # Can be span object or list of output fields (backward compat)
         module_ref: Any = None,
         proc_def: Any = None,
     ) -> Callable:
@@ -48,12 +48,24 @@ class GEPAMetricWrapper:
         Args:
             kedi_metric: Kedi metric function (input, expected) -> (score, feedback)
             proc_params: Procedure parameter names
-            span: OptimizeSpan to inject optimized prompt into
+            span_or_output_fields: OptimizeSpan object OR list of (name, type) tuples for backward compatibility
             module_ref: Reference to GEPA's module (for extracting current instructions)
+            proc_def: Procedure definition for sibling span overrides
             
         Returns:
             GEPA-compatible metric function
         """
+        # Determine if we have a span or output_fields list
+        span = None
+        output_fields = None
+        if span_or_output_fields is not None:
+            if isinstance(span_or_output_fields, list):
+                # Backward compatibility: list of output fields
+                output_fields = span_or_output_fields
+            else:
+                # New behavior: span object
+                span = span_or_output_fields
+        
         # Track metric call count for progress feedback
         call_count = {"count": 0, "last_printed": 0}
         
@@ -85,7 +97,16 @@ class GEPAMetricWrapper:
                 expected_output = getattr(example_obj, "_expected", None)
                 
                 prompt_handle = None
+                output_override_handle = None
                 try:
+                    # Extract outputs from DSPy prediction and inject them into the span
+                    # This ensures the Kedi procedure uses the DSPy-generated outputs
+                    # Only apply output override if we have a span (not just output_fields for backward compat)
+                    if span and prediction_obj:
+                        output_override = self._extract_prediction_outputs(prediction_obj, span, output_fields)
+                        if output_override:
+                            output_override_handle = self._apply_output_override(span, output_override)
+                    
                     if module_ref:
                         optimized_prompt = self._extract_current_instructions(module_ref)
                         prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
@@ -99,6 +120,7 @@ class GEPAMetricWrapper:
                     return payload
                 finally:
                     self._restore_prompt_prefix(prompt_handle)
+                    self._restore_output_override(output_override_handle)
             except Exception:
                 import traceback
                 error_msg = traceback.format_exc()
@@ -143,6 +165,55 @@ class GEPAMetricWrapper:
             return
         line, original = handle
         line.optimized_prompt_prefix = original
+    
+    def _extract_prediction_outputs(self, prediction: Any, span: Any, output_fields_override: list[tuple[str, str]] | None = None) -> dict[str, Any] | None:
+        """Extract output values from DSPy prediction that match the span's outputs."""
+        if not prediction:
+            return None
+        
+        # Get output field names from span or override
+        if output_fields_override:
+            output_fields = output_fields_override
+        elif span:
+            from ..utils import extract_output_fields
+            output_fields = extract_output_fields(span)
+        else:
+            return None
+        
+        if not output_fields:
+            return None
+        
+        # Extract values from prediction
+        outputs = {}
+        for field_name, _ in output_fields:
+            if hasattr(prediction, field_name):
+                outputs[field_name] = getattr(prediction, field_name)
+        
+        return outputs if outputs else None
+    
+    def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
+        """Apply output override to ALL template lines in the span."""
+        if not span or not outputs:
+            return None
+        if not hasattr(span, 'template_lines') or not span.template_lines:
+            return None
+        
+        # Store original values for all lines and set override on all of them
+        # This is necessary because a span can have multiple template lines
+        originals = []
+        for line in span.template_lines:
+            originals.append((line, line.optimized_output_override))
+            line.optimized_output_override = outputs
+        
+        return originals
+    
+    def _restore_output_override(self, handle: Any) -> None:
+        """Restore original output override for all lines."""
+        if not handle:
+            return
+        # Handle is now a list of (line, original) tuples
+        for line, original in handle:
+            line.optimized_output_override = original
     
     # Removed prediction-based output override; metric evaluates Kedi directly
     

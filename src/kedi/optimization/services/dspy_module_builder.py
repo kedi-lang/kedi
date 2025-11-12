@@ -80,8 +80,10 @@ class DSPyModuleBuilder:
         # rather than procedure-level parameters like architecture: Architecture
         signature = self._create_signature(span_inputs, span_outputs, param_types)
         
-        # Initial instruction is empty prefix; GEPA will mutate this
-        instruction = ""
+        # Initial instruction from span template; GEPA will mutate this
+        # Use the span's template as the starting point for optimization
+        from ..utils import span_to_instruction
+        instruction = span_to_instruction(span)
         
         # Create module with Predict
         rt = self.type_handler.runtime

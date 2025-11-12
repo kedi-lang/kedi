@@ -432,7 +432,12 @@ def test_dspy_module_builder_basic():
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_single_param():
     """Test formatting examples with single parameter."""
-    formatter = DSPyExampleFormatter()
+    from kedi.lang import compile_program, parse_program
+    
+    # Create a minimal runtime for the formatter
+    src = "@dummy(x: int) -> int:\n  = `x`"
+    rt = compile_program(parse_program(src), adapter=None)
+    formatter = DSPyExampleFormatter(runtime=rt)
     
     data = [(1, 2), (2, 4), (3, 6)]
     examples = formatter.format_examples(data, ["x"])
@@ -445,7 +450,12 @@ def test_dspy_example_formatter_single_param():
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_multi_param():
     """Test formatting examples with multiple parameters."""
-    formatter = DSPyExampleFormatter()
+    from kedi.lang import compile_program, parse_program
+    
+    # Create a minimal runtime for the formatter
+    src = "@dummy(a: int, b: int) -> int:\n  = `a + b`"
+    rt = compile_program(parse_program(src), adapter=None)
+    formatter = DSPyExampleFormatter(runtime=rt)
     
     data = [((1, 2), 3), ((2, 3), 5)]
     examples = formatter.format_examples(data, ["a", "b"])

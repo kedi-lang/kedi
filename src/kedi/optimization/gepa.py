@@ -205,7 +205,7 @@ class GEPAOptimizer(OptimizerAdapter):
                 gepa_metric = self.metric_wrapper.wrap_metric(
                     metric,
                     proc_params,
-                    span=span,
+                    span,  # Pass span as positional arg
                     module_ref=dspy_module,
                     proc_def=proc_def_for_wrapper,
                 )
@@ -256,7 +256,10 @@ class GEPAOptimizer(OptimizerAdapter):
                 if optimized_prompt:
                     optimized_prompts[span.name] = optimized_prompt
                     if span.template_lines:
-                        span.template_lines[0].optimized_prompt_prefix = optimized_prompt
+                        # Set optimized prompt on ALL template lines in the span
+                        # This is necessary because a span can have multiple template lines
+                        for line in span.template_lines:
+                            line.optimized_prompt_prefix = optimized_prompt
                     
                     original_instruction = span_to_instruction(span)
                     print(f"   Original prompt length: {len(original_instruction)} chars")
@@ -285,7 +288,7 @@ class GEPAOptimizer(OptimizerAdapter):
                 scoring_metric = self.metric_wrapper.wrap_metric(
                     metric,
                     proc_params,
-                    span=span,
+                    span,  # Pass span as positional arg
                     module_ref=optimized_module,
                     proc_def=proc_def_for_wrapper,
                 )
