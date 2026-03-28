@@ -221,4 +221,7 @@ mlruns/
 *optimized.json
 *optimized_scores.json
 
+# GEPA (DSPy) checkpoint state next to each .kedi file
+*.kedi.gepa/
+
 .dspy_cache/

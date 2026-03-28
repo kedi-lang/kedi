@@ -500,7 +500,36 @@ Rules:
 - `> data: NAME:` defines the training dataset for the enclosing `@eval` suite and must return an iterable.
 - `> test_data: NAME:` (optional) defines a test dataset; when present, both train and test performance are reported.
 - `> metric: metric_name(NAME):` iterates automatically over the dataset named `NAME`, binding the dataset name as a variable for each item.
+- Only one metric per `@eval` suite is allowed. Multiple metrics will raise a parse error.
 - Per-example results can be: `bool` (mapped to 1.0/0.0), `float`, or `(score, feedback)`.
+
+#### Dataset Item Format
+
+Dataset items can follow two conventions:
+
+1. **`(input, expected_output)` tuples**: When the dataset yields two-tuples, the first element is bound to the dataset variable name in the metric, and the second is bound to a special `expected` variable. Use `None` as `expected_output` for analytical metrics where the metric computes correctness internally.
+
+2. **Raw items**: Single values or `dict.items()` key-value pairs are bound directly to the dataset variable name.
+
+````kedi
+@eval: solve_aime:
+  > data: train:
+    = ```
+    return [
+      ("What is 2+2?", {'answer': 4}),
+      ("What is 3*5?", {'answer': 15}),
+    ]
+    ```
+
+  > metric: accuracy(train):
+    = ```
+    # 'train' is bound to the input (first element of tuple)
+    # 'expected' is bound to the expected output (second element)
+    problem = train
+    pred = solve_aime(problem)
+    return 1.0 if int(pred) == expected['answer'] else 0.0
+    ```
+````
 
 ## Prompt Optimization Blocks
 
@@ -613,12 +642,22 @@ def format_result(value):
     assert result.query == "test"
     ```
 
-# Evaluation metric
+# Evaluation with dataset-aware metric
 @eval: search:
-  > metric: relevance:
+  > data: queries:
     = ```
-    result = search("python", 10)
-    return (result.score, None)
+    return [
+      ("python", {"min_results": 3}),
+      ("javascript", {"min_results": 2}),
+    ]
+    ```
+
+  > metric: relevance(queries):
+    = ```
+    query = queries
+    result = search(query, 10)
+    meets_min = len(result.items) >= expected['min_results']
+    return (result.score, f"Found {len(result.items)} items") if meets_min else (0.0, "Too few results")
     ```
 
 # Main execution

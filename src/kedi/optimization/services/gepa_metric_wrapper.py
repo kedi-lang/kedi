@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any, Optional
 import weakref
@@ -15,7 +16,7 @@ except ImportError:
 
 from ...lang.ast import OutputSegment, TemplateLine
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
-from ..utils import extract_output_fields
+from ..utils import extract_output_fields, normalize_optimized_prompt_prefix
 
 
 class GEPAMetricWrapper:
@@ -66,9 +67,13 @@ class GEPAMetricWrapper:
                 # New behavior: span object
                 span = span_or_output_fields
         
-        # Track metric call count for progress feedback
-        call_count = {"count": 0, "last_printed": 0}
-        
+        progress = {
+            "count": 0,
+            "total_score": 0.0,
+            "best_score": float("-inf"),
+            "start_time": time.monotonic(),
+        }
+
         def gepa_metric(
             gold: dspy.Example,
             pred: dspy.Prediction,
@@ -78,12 +83,12 @@ class GEPAMetricWrapper:
             **context: Any,
         ):
             """GEPA metric function."""
-            call_count["count"] += 1
-            
-            if call_count["count"] - call_count["last_printed"] >= 5:
-                print(f"   🔄 Metric evaluations: {call_count['count']}...", flush=True)
-                call_count["last_printed"] = call_count["count"]
-            
+            progress["count"] += 1
+            cnt = progress["count"]
+            # Not compared to max_metric_calls: GEPA's budget counts internal eval units;
+            # DSPy may invoke this callback more often than that.
+            print(f"   [metric callback {cnt}] starting...", flush=True)
+
             try:
                 example_obj = context.get("module_inputs", gold)
                 prediction_obj = context.get("module_outputs", pred)
@@ -114,6 +119,21 @@ class GEPAMetricWrapper:
                     score, feedback = kedi_metric(input_val, expected_output)
                     score_float = float(score)
                     feedback_text = self._stringify_feedback(feedback)
+
+                    progress["total_score"] += score_float
+                    cnt = progress["count"]
+                    avg = progress["total_score"] / cnt
+                    elapsed = time.monotonic() - progress["start_time"]
+                    is_new_best = score_float > progress["best_score"]
+                    if is_new_best:
+                        progress["best_score"] = score_float
+                    print(
+                        f"   [metric callback {cnt}] score={score_float:.3f}  "
+                        f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
+                        f"({elapsed:.0f}s)",
+                        flush=True,
+                    )
+
                     payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
                     self._store_cached_feedback(prediction_obj, score_float, feedback_text)
                     self._store_cached_feedback(pred, score_float, feedback_text)
@@ -124,10 +144,23 @@ class GEPAMetricWrapper:
             except Exception:
                 import traceback
                 error_msg = traceback.format_exc()
+
+                progress["total_score"] += 0.0
+                cnt = progress["count"]
+                avg = progress["total_score"] / cnt
+                elapsed = time.monotonic() - progress["start_time"]
+                print(
+                    f"   [metric callback {cnt}] score=0.000 (error)  "
+                    f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
+                    f"({elapsed:.0f}s)",
+                    flush=True,
+                )
+
                 payload = ScoreWithFeedback(score=0.0, feedback=f"GEPA metric error: {error_msg}")
                 self._store_cached_feedback(pred, 0.0, payload.feedback)
                 return payload
         
+        gepa_metric._progress = progress
         return gepa_metric
     
     def _extract_input(self, gold: dspy.Example, proc_params: list[str]) -> Any:
@@ -153,11 +186,13 @@ class GEPAMetricWrapper:
     
     def _apply_prompt_prefix(self, span: Any, instructions: str | None):
         """Temporarily apply optimized instructions to the span's first line."""
-        if not instructions or not span or not getattr(span, "template_lines", None):
+        if instructions is None or not span or not getattr(span, "template_lines", None):
             return None
         first_line = span.template_lines[0]
         original = first_line.optimized_prompt_prefix
-        first_line.optimized_prompt_prefix = instructions
+        first_line.optimized_prompt_prefix = (
+            normalize_optimized_prompt_prefix(span, instructions) or None
+        )
         return first_line, original
     
     def _restore_prompt_prefix(self, handle: Any) -> None:

@@ -7,6 +7,7 @@ from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.output import OutputDataT
 
+from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from .meta import T
 
 
@@ -19,6 +20,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     """
     Adapter to use Pydantic AI agents.
     """
+
+    def __init__(self, model: str | None = None, **kwargs):
+        """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
+        m = normalize_for_pydantic_ai(model) if model is not None else None
+        super().__init__(m, **kwargs)
 
     @staticmethod
     def type_builder(output_schema: dict[str, type]) -> type[BaseModel]:
@@ -76,6 +82,7 @@ class DSPyAdapter:
         provider: dspy.Provider | None = None,
         **kwargs,
     ):
+        model = normalize_for_litellm(model)
         dspy.settings.configure(
             lm=LM(
                 model=model,

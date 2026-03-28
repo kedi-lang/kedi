@@ -2,16 +2,73 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 try:
     import dspy
     from dspy import LM
+    from dspy.adapters.json_adapter import JSONAdapter, _get_structured_outputs_response_format
+    from dspy.adapters.chat_adapter import ChatAdapter
     DSPY_AVAILABLE = True
 except ImportError:
     DSPY_AVAILABLE = False
     dspy = None  # type: ignore
     LM = None  # type: ignore
+    JSONAdapter = None  # type: ignore
+    ChatAdapter = None  # type: ignore
 
+from ...model_normalization import normalize_for_litellm
 from ..config import OptimizerConfig
+
+logger = logging.getLogger(__name__)
+
+
+class AdaptiveJSONAdapter(JSONAdapter):
+    """JSONAdapter that caches structured output failures per model.
+
+    First call for a given model tries structured output normally.
+    If it fails, the model name is remembered and all subsequent calls
+    go straight to json_object mode -- no retry overhead, no log spam.
+    Models where structured output succeeds keep using it every time.
+    """
+
+    _failed_models: set[str] = set()
+
+    def __call__(
+        self,
+        lm: Any,
+        lm_kwargs: dict[str, Any],
+        signature: Any,
+        demos: list[dict[str, Any]],
+        inputs: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        result = self._json_adapter_call_common(
+            lm, lm_kwargs, signature, demos, inputs,
+            lambda *a, **kw: ChatAdapter.__call__(self, *a, **kw),
+        )
+        if result:
+            return result
+
+        if lm.model in AdaptiveJSONAdapter._failed_models:
+            lm_kwargs["response_format"] = {"type": "json_object"}
+            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
+
+        try:
+            structured_model = _get_structured_outputs_response_format(
+                signature, self.use_native_function_calling,
+            )
+            lm_kwargs["response_format"] = structured_model
+            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
+        except Exception:
+            AdaptiveJSONAdapter._failed_models.add(lm.model)
+            logger.info(
+                "Model '%s' failed structured output on first attempt; "
+                "using json_object mode for all future calls.",
+                lm.model,
+            )
+            lm_kwargs["response_format"] = {"type": "json_object"}
+            return ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
 
 
 class DSPyConfigurationService:
@@ -49,7 +106,8 @@ class DSPyConfigurationService:
         model = model or self.config.optimizer_model
         if not model:
             raise ValueError("No model specified for main LM configuration")
-        
+        model = normalize_for_litellm(model)
+
         # Use configured max_tokens
         max_tokens = self.config.get_optimizer_max_tokens()
         
@@ -83,12 +141,15 @@ class DSPyConfigurationService:
             model=model,
             max_tokens=max_tokens,
             temperature=1.0,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            timeout=300,
         )
         
-        # Configure DSPy with this LM, disable cache
-        dspy.settings.configure(lm=main_lm, cache=False)
-        print(f"   ✅ Main LM configured")
+        # Configure DSPy with this LM and our adaptive adapter, disable cache
+        dspy.settings.configure(
+            lm=main_lm, cache=False, adapter=AdaptiveJSONAdapter(),
+        )
+        print(f"   ✅ Main LM configured (AdaptiveJSONAdapter)")
         
         # Verify the configuration was applied
         if hasattr(dspy.settings, 'lm') and dspy.settings.lm:
@@ -121,7 +182,8 @@ class DSPyConfigurationService:
         model = model or self.config.reflection_model
         if not model:
             raise ValueError("No model specified for reflection LM configuration")
-        
+        model = normalize_for_litellm(model)
+
         # Use configured max_tokens for reflection
         max_tokens = self.config.get_reflection_max_tokens()
         
@@ -130,6 +192,7 @@ class DSPyConfigurationService:
         return LM(
             model=model,
             max_tokens=max_tokens,
+            timeout=300,
         )
     
     def verify_configured(self) -> None:

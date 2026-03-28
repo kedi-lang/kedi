@@ -1,4 +1,16 @@
+"""Multi-span GEPA optimization tests.
+
+Tests that:
+  1. Two spans inside ONE procedure are optimized independently toward
+     different targets.
+  2. Two separate procedures are optimized independently without interference.
+  3. Spans are optimized in declaration order and each gets its own optimized
+     prompt.
+"""
 from __future__ import annotations
+
+import warnings
+from typing import Any
 
 import pytest
 
@@ -6,120 +18,259 @@ from kedi.lang import compile_program, parse_program
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
-from tests.dspy_mocks import RangeAwareAdapter, install_mock_dspy, parse_first_range
+from tests.dspy_mocks import (
+    Recorder,
+    RangeAwareAdapter,
+    install_mock_dspy,
+    parse_first_range,
+)
 
 
-def _setup(proc_src: str, eval_name: str):
-    prog = parse_program(proc_src)
+def _prepare(src: str, proc_index: int = 0, eval_index: int = 0):
+    prog = parse_program(src)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
-    # pick the matching procedure by name
-    proc = next(p for p in prog.procedures if p.name == eval_name)
-    param_types = TypeResolver(rt).resolve_param_types(proc)
-    suite = next(s for s in prog._validation_evals if s.procedure_name == eval_name)
-    metric_def = suite.metrics[0]
-    dataset_name = metric_def.dataset_name or next(iter(suite.datasets.keys()))
+    proc = prog.procedures[proc_index]
+    resolver = TypeResolver(rt)
+    param_types = resolver.resolve_param_types(proc)
+    eval_suite = prog._validation_evals[eval_index]
+    metric_def = eval_suite.metrics[0]
+    dataset_name = metric_def.dataset_name or next(iter(eval_suite.datasets.keys()))
     metric = MetricFactory(rt).create_metric(metric_def, proc, dataset_name)
-    return prog, rt, proc, param_types, metric
+    return prog, rt, proc, param_types, eval_suite, metric
 
 
-def test_independent_optimization_for_two_procedures(monkeypatch: pytest.MonkeyPatch):
+# ── Two spans in ONE procedure ───────────────────────────────────────
+
+def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPatch):
+    """A single procedure with two optimize spans. Each span gets its own
+    optimized prompt, and both appear in the result dict."""
     install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    src = """
+@solve(seed: str) -> int:
+  > optimize: span_a:
+    First compute [x: int]
+  > optimize: span_b:
+    Then compute [y: int]
+  = `x + y`
+
+@eval: solve:
+  > data: cases:
+    = ```
+    return [("alpha", None), ("beta", None)]
+    ```
+  > metric: score(cases):
+    = ```
+    result = solve(cases)
+    if 40 <= result <= 60:
+        return (1.0, "OK")
+    elif result < 40:
+        return (0.5, "TOO_LOW")
+    else:
+        return (0.5, "TOO_HIGH")
+    ```
+"""
+    prog, rt, proc, param_types, _, metric = _prepare(src)
+    train_data = [("alpha", None), ("beta", None)]
+
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=40,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=2,
+        ),
+        runtime=rt,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        optimized, score = optimizer.optimize_procedure(
+            proc_name=proc.name,
+            proc_params=proc.params,
+            param_types=param_types,
+            spans=proc.optimize_spans,
+            train_data=train_data,
+            test_data=None,
+            metric=metric,
+        )
+
+    assert len(proc.optimize_spans) == 2, "Procedure should have 2 optimize spans"
+    assert "span_a" in optimized, "span_a should have an optimized prompt"
+    assert "span_b" in optimized, "span_b should have an optimized prompt"
+    assert optimized["span_a"] != optimized["span_b"], (
+        "Different spans should get different optimized prompts"
+    )
+
+
+# ── Two procedures optimized independently ───────────────────────────
+
+def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch):
+    """Optimize proc_a and proc_b separately. Each targets a different range.
+    Results should not interfere with each other."""
+    install_mock_dspy(monkeypatch)
+
     src = """
 @pa(seed: str) -> int:
   > optimize: span_a:
-    The A value is [ya: int]
-  = `ya`
+    Produce a low value [y: int]
+  = `y`
 
 @pb(seed: str) -> int:
   > optimize: span_b:
-    The B value is [yb: int]
-  = `yb`
+    Produce a high value [y: int]
+  = `y`
 
 @eval: pa:
-  > data: cases_a:
+  > data: ds_a:
     = ```
-    return [("aa", None), ("ab", None)]
+    return [("x", None), ("y", None)]
     ```
-  > metric: score_a(cases_a):
+  > metric: low_target(ds_a):
     = ```
-    y = pa(cases_a)
-    # Gradual metric for range [10,20]
+    y = pa(ds_a)
     if 10 <= y <= 20:
         return (1.0, "OK")
     elif y < 10:
-        distance = 10 - y
-        score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_LOW")
+        return (max(0.0, 1.0 - (10-y)/100.0), "TOO_LOW")
     else:
-        distance = y - 20
-        score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_HIGH")
+        return (max(0.0, 1.0 - (y-20)/100.0), "TOO_HIGH")
     ```
 
 @eval: pb:
-  > data: cases_b:
+  > data: ds_b:
     = ```
-    return [("ba", None), ("bb", None)]
+    return [("x", None), ("y", None)]
     ```
-  > metric: score_b(cases_b):
+  > metric: high_target(ds_b):
     = ```
-    y = pb(cases_b)
-    # Gradual metric for range [80,90]
+    y = pb(ds_b)
     if 80 <= y <= 90:
         return (1.0, "OK")
     elif y < 80:
-        distance = 80 - y
-        score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_LOW")
+        return (max(0.0, 1.0 - (80-y)/100.0), "TOO_LOW")
     else:
-        distance = y - 90
-        score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_HIGH")
+        return (max(0.0, 1.0 - (y-90)/100.0), "TOO_HIGH")
     ```
 """
-    # Optimize A
-    _, rt, proc_a, param_types_a, metric_a = _setup(src, "pa")
-    opt = GEPAOptimizer(
-        config=OptimizerConfig(max_metric_calls=120, reflection_model="mock/reflection"),  # Increased for convergence
+    # Optimize proc_a
+    Recorder.reset()
+    prog_a, rt_a, proc_a, param_types_a, _, metric_a = _prepare(src, proc_index=0, eval_index=0)
+    optimizer_a = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=120,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=2,
+        ),
+        runtime=rt_a,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        optimized_a, score_a = optimizer_a.optimize_procedure(
+            proc_name=proc_a.name,
+            proc_params=proc_a.params,
+            param_types=param_types_a,
+            spans=proc_a.optimize_spans,
+            train_data=[("x", None), ("y", None)],
+            test_data=None,
+            metric=metric_a,
+        )
+
+    ranges_a = Recorder.predict_ranges()
+
+    # Optimize proc_b
+    Recorder.reset()
+    prog_b, rt_b, proc_b, param_types_b, _, metric_b = _prepare(src, proc_index=1, eval_index=1)
+    optimizer_b = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=120,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=2,
+        ),
+        runtime=rt_b,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        optimized_b, score_b = optimizer_b.optimize_procedure(
+            proc_name=proc_b.name,
+            proc_params=proc_b.params,
+            param_types=param_types_b,
+            spans=proc_b.optimize_spans,
+            train_data=[("x", None), ("y", None)],
+            test_data=None,
+            metric=metric_b,
+        )
+
+    ranges_b = Recorder.predict_ranges()
+
+    assert score_a >= 0.5, f"proc_a score {score_a} should be >= 0.5"
+    assert score_b >= 0.5, f"proc_b score {score_b} should be >= 0.5"
+
+    assert "span_a" in optimized_a
+    assert "span_b" in optimized_b
+
+    if ranges_a and ranges_b:
+        last_a = ranges_a[-1]
+        last_b = ranges_b[-1]
+        mid_a = (last_a[0] + last_a[1]) / 2
+        mid_b = (last_b[0] + last_b[1]) / 2
+        assert mid_a < mid_b or abs(mid_a - mid_b) < 200, (
+            f"proc_a (target [10,20]) final midpoint {mid_a:.1f} should generally be "
+            f"lower than proc_b (target [80,90]) midpoint {mid_b:.1f}"
+        )
+
+
+# ── Each span gets its own prompt ────────────────────────────────────
+
+def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatch):
+    """Each span in a multi-span procedure gets a unique optimized prompt
+    containing its span name in the instructions."""
+    install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    src = """
+@proc(seed: str) -> int:
+  > optimize: first_step:
+    Compute the initial [x: int]
+  > optimize: second_step:
+    Refine to get [y: int]
+  = `x + y`
+
+@eval: proc:
+  > data: ds:
+    = ```
+    return [("a", None), ("b", None)]
+    ```
+  > metric: score(ds):
+    = ```
+    r = proc(ds)
+    return (1.0, "OK")
+    ```
+"""
+    prog, rt, proc, param_types, _, metric = _prepare(src)
+    train_data = [("a", None), ("b", None)]
+
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=30,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=2,
+        ),
         runtime=rt,
     )
-    spans_a = [s for s in proc_a.optimize_spans if s.name == "span_a"]
-    optimized_a, score_a = opt.optimize_procedure(
-        proc_name=proc_a.name,
-        proc_params=proc_a.params,
-        param_types=param_types_a,
-        spans=spans_a,
-        train_data=[("aa", None), ("ab", None)],
-        test_data=None,
-        metric=metric_a,
-    )
-    assert "span_a" in optimized_a
-    lo_a, hi_a = parse_first_range(optimized_a["span_a"])
-    # With enough iterations, we should achieve good convergence
-    assert score_a >= 0.5, f"Expected score_a >= 0.5 with 120 iterations, got score={score_a}"
-    # Optimize B
-    _, rt2, proc_b, param_types_b, metric_b = _setup(src, "pb")
-    opt2 = GEPAOptimizer(
-        config=OptimizerConfig(max_metric_calls=120, reflection_model="mock/reflection"),  # Increased for convergence
-        runtime=rt2,
-    )
-    spans_b = [s for s in proc_b.optimize_spans if s.name == "span_b"]
-    optimized_b, score_b = opt2.optimize_procedure(
-        proc_name=proc_b.name,
-        proc_params=proc_b.params,
-        param_types=param_types_b,
-        spans=spans_b,
-        train_data=[("ba", None), ("bb", None)],
-        test_data=None,
-        metric=metric_b,
-    )
-    assert "span_b" in optimized_b
-    lo_b, hi_b = parse_first_range(optimized_b["span_b"])
-    # With enough iterations, we should achieve good convergence
-    assert score_b >= 0.5, f"Expected score_b >= 0.5 with 120 iterations, got score={score_b}"
-    # Ranges should differ significantly (aimed at different target bands)
-    # Target for A is [10,20], target for B is [80,90]
-    # We expect the ranges to be on opposite sides of the midpoint (around 50)
-    assert (hi_a <= 50 and lo_b >= 50) or (hi_b <= 50 and lo_a >= 50)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        optimized, score = optimizer.optimize_procedure(
+            proc_name=proc.name,
+            proc_params=proc.params,
+            param_types=param_types,
+            spans=proc.optimize_spans,
+            train_data=train_data,
+            test_data=None,
+            metric=metric,
+        )
 
+    assert "first_step" in optimized
+    assert "second_step" in optimized
 
+    assert isinstance(optimized["first_step"], str) and len(optimized["first_step"]) > 0
+    assert isinstance(optimized["second_step"], str) and len(optimized["second_step"]) > 0

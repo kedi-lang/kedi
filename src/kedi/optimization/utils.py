@@ -56,17 +56,63 @@ def template_line_to_string(template_line: TemplateLine) -> str:
     return "".join(parts)
 
 
-def span_to_instruction(span: OptimizeSpan) -> str:
+def span_to_instruction(
+    span: OptimizeSpan,
+    *,
+    include_optimized_prefix: bool = True,
+) -> str:
     """Convert OptimizeSpan to instruction string.
+
+    If ``include_optimized_prefix`` is true and the first template line has
+    ``optimized_prompt_prefix`` (from a prior run's ``.optimized.json``), it is
+    prepended so DSPy/GEPA seed from the last saved prompt.
 
     Args:
         span: The optimize span to convert
-        
+        include_optimized_prefix: Whether to prepend saved optimized prefix text
+
     Returns:
         Newline-joined string of all template lines in the span
     """
     lines = [template_line_to_string(tl) for tl in span.template_lines]
-    return "\n".join(lines)
+    base = "\n".join(lines)
+    if include_optimized_prefix and span.template_lines:
+        prefix = getattr(span.template_lines[0], "optimized_prompt_prefix", None)
+        if prefix and str(prefix).strip():
+            p = str(prefix).rstrip()
+            return f"{p}\n{base}" if base.strip() else p
+    return base
+
+
+def normalize_optimized_prompt_prefix(span: OptimizeSpan, instructions: str | None) -> str:
+    """Convert a full DSPy instruction string into the stored prefix form.
+
+    Kedi persists only the optimized prefix and keeps the original span lines as the
+    canonical typed seed prompt. GEPA/DSPy often surface a full instruction string
+    that ends with that canonical seed prompt. Strip any trailing copies of the seed
+    so reloading the saved prompt does not duplicate the base instructions.
+    """
+    if instructions is None:
+        return ""
+
+    current = str(instructions).rstrip()
+    if not current:
+        return ""
+
+    base = span_to_instruction(span, include_optimized_prefix=False).rstrip()
+    if not base:
+        return current
+
+    while True:
+        if current == base:
+            return ""
+        if not current.endswith(base):
+            return current
+
+        prefix = current[: -len(base)]
+        if prefix and not prefix[-1].isspace():
+            return current
+        current = prefix.rstrip()
 
 
 def render_instruction_lines(

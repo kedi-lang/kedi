@@ -252,14 +252,20 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                             # 2. dict.items() or other: (key, value) - use as-is
                             if isinstance(example, tuple) and len(example) == 2:
                                 first, second = example
-                                # Check if this is (input, expected_output) format:
-                                # - Second is None (explicit None expected), OR
-                                # - First is a tuple (multi-param input) and second is not a list/dict
-                                if second is None or (isinstance(first, tuple) and not isinstance(second, (list, dict, tuple))):
+                                # (input, expected_output): expected is often a dict, e.g. {"answer": 13}
+                                if isinstance(second, dict):
+                                    input_val = first
+                                    expected_val = second
+                                elif second is None:
+                                    input_val = first
+                                    expected_val = None
+                                elif isinstance(first, tuple) and not isinstance(
+                                    second, (list, dict, tuple)
+                                ):
                                     input_val = first
                                     expected_val = second
                                 else:
-                                    # dict.items() or similar: (key, value) is the input itself
+                                    # dict.items(): (key, value) — whole pair is the metric input
                                     input_val = example
                                     expected_val = None
                             else:

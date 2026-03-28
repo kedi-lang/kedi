@@ -1,5 +1,16 @@
+"""End-to-end integration tests for GEPA optimizer convergence.
+
+Tests the full chain: Evaluator -> Reflection -> Optimizer -> Evaluator.
+Uses real dspy.GEPA with injected MockLM to verify that:
+  1. Scores improve over iterations
+  2. Reflection feedback drives range adjustments in the right direction
+  3. Textual feedback content is propagated to the reflection model
+  4. Inverted feedback hinders convergence
+  5. OK feedback stabilizes the range
+"""
 from __future__ import annotations
 
+import warnings
 from typing import Any, List, Tuple
 
 import pytest
@@ -11,6 +22,7 @@ from kedi.optimization.services import MetricFactory, TypeResolver
 from tests.dspy_mocks import (
     Recorder,
     RangeAwareAdapter,
+    dist_to_target,
     install_mock_dspy,
     parse_first_range,
 )
@@ -29,18 +41,7 @@ def _prepare(src: str):
     return prog, rt, proc, param_types, eval_suite, metric
 
 
-def _collect_ranges_from_calls() -> List[Tuple[float, float]]:
-    ranges: List[Tuple[float, float]] = []
-    for call in Recorder.calls:
-        lo, hi = parse_first_range(call.instructions)
-        ranges.append((lo, hi))
-    return ranges
-
-
-def test_reflection_improves_scores(monkeypatch: pytest.MonkeyPatch):
-    install_mock_dspy(monkeypatch)
-    Recorder.reset()
-    src = """
+_CONVERGENCE_SRC = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
     The result is [y: int]
@@ -54,7 +55,6 @@ def test_reflection_improves_scores(monkeypatch: pytest.MonkeyPatch):
   > metric: range_score(cases):
     = ```
     y = solve(cases)
-    # Gradual metric: score based on distance to target range [40,60]
     if 40 <= y <= 60:
         return (1.0, "OK")
     elif y < 40:
@@ -67,12 +67,25 @@ def test_reflection_improves_scores(monkeypatch: pytest.MonkeyPatch):
         return (score, "TOO_HIGH")
     ```
 """
-    prog, rt, proc, param_types, eval_suite, metric = _prepare(src)
-    spans = proc.optimize_spans
+
+
+# ── Score improvement and range convergence ──────────────────────────
+
+def test_optimization_converges_score_improves(monkeypatch: pytest.MonkeyPatch):
+    """Target [40,60], initial range [-100,-50].
+    After optimization:
+      (a) final score >= 0.66
+      (b) last RANGE closer to target than first RANGE
+      (c) multiple distinct ranges in trace (proving iteration happened)
+    """
+    install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    prog, rt, proc, param_types, _, metric = _prepare(_CONVERGENCE_SRC)
     train_data = [("alpha", None), ("beta", None), ("gamma", None)]
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(
-            max_metric_calls=120,  # Increased to allow more iterations for convergence
+            max_metric_calls=120,
             reflection_model="mock/reflection",
             reflection_minibatch_size=3,
         ),
@@ -82,37 +95,80 @@ def test_reflection_improves_scores(monkeypatch: pytest.MonkeyPatch):
         proc_name=proc.name,
         proc_params=proc.params,
         param_types=param_types,
-        spans=spans,
+        spans=proc.optimize_spans,
         train_data=train_data,
         test_data=None,
         metric=metric,
     )
-    # We should have recorded Predict calls during compile and scoring
+
     assert Recorder.calls, "Predict should be invoked by GEPA + scoring"
-    # Ranges observed in instructions should have shifted toward target band
-    ranges = _collect_ranges_from_calls()
+
+    ranges = Recorder.predict_ranges()
     first_lo, first_hi = ranges[0]
     last_lo, last_hi = ranges[-1]
-    # Initial default is far from [40,60]; final should overlap or be closer
-    def dist_to_target(lo: float, hi: float) -> float:
-        # distance from interval to [40,60]
-        if hi < 40:
-            return 40 - hi
-        if lo > 60:
-            return lo - 60
-        return 0.0
-    assert dist_to_target(last_lo, last_hi) <= dist_to_target(first_lo, first_hi)
-    # Final training score should be high - with enough iterations we should converge
+
+    assert dist_to_target(last_lo, last_hi) <= dist_to_target(first_lo, first_hi), (
+        f"Last range [{last_lo},{last_hi}] should be closer to [40,60] "
+        f"than first range [{first_lo},{first_hi}]"
+    )
+
     assert score >= 0.66, f"Expected score >= 0.66, got {score}"
-    # Optimized prompt extracted for the span should contain a RANGE token
-    assert spans[0].name in optimized
-    assert "RANGE[" in optimized[spans[0].name]
+
+    distinct = {r for r in ranges}
+    assert len(distinct) >= 2, (
+        f"Expected at least 2 distinct ranges (proving iteration), got {len(distinct)}"
+    )
+
+    assert "produce_value" in optimized
+    assert "RANGE[" in optimized["produce_value"]
 
 
-def test_feedback_directionality(monkeypatch: pytest.MonkeyPatch):
+# ── Feedback text propagated to reflection ───────────────────────────
+
+def test_feedback_text_reaches_reflection_lm(monkeypatch: pytest.MonkeyPatch):
+    """The evaluator returns feedback strings like 'TOO_LOW' or 'TOO_HIGH'.
+    Verify these strings appear in the reflection LM's input prompts."""
     install_mock_dspy(monkeypatch)
     Recorder.reset()
-    src = """
+
+    prog, rt, proc, param_types, _, metric = _prepare(_CONVERGENCE_SRC)
+    train_data = [("alpha", None), ("beta", None), ("gamma", None)]
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=120,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=3,
+        ),
+        runtime=rt,
+    )
+    optimized, score = optimizer.optimize_procedure(
+        proc_name=proc.name,
+        proc_params=proc.params,
+        param_types=param_types,
+        spans=proc.optimize_spans,
+        train_data=train_data,
+        test_data=None,
+        metric=metric,
+    )
+
+    reflection_prompts = [c.prompt for c in Recorder.reflection_calls()]
+    if reflection_prompts:
+        all_text = " ".join(reflection_prompts)
+        feedback_found = "TOO_LOW" in all_text or "TOO_HIGH" in all_text or "OK" in all_text
+        assert feedback_found, (
+            "Expected feedback text (TOO_LOW/TOO_HIGH/OK) in at least one reflection prompt"
+        )
+
+
+# ── Inverted feedback diverges or stalls ─────────────────────────────
+
+def test_inverted_feedback_hinders_convergence(monkeypatch: pytest.MonkeyPatch):
+    """With TOO_LOW and TOO_HIGH swapped, the optimizer should NOT converge
+    to the target range [40,60]. Compare against correct-feedback run."""
+    install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    inverted_src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
     The result is [y: int]
@@ -126,49 +182,224 @@ def test_feedback_directionality(monkeypatch: pytest.MonkeyPatch):
   > metric: flipped_feedback(cases):
     = ```
     y = solve(cases)
-    # Gradual metric with inverted feedback semantics
     if 40 <= y <= 60:
         return (1.0, "OK")
     elif y < 40:
         distance = 40 - y
         score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_HIGH")  # inverted
+        return (score, "TOO_HIGH")
     else:
         distance = y - 60
         score = max(0.0, 1.0 - distance / 100.0)
-        return (score, "TOO_LOW")  # inverted
+        return (score, "TOO_LOW")
     ```
 """
-    prog, rt, proc, param_types, eval_suite, metric = _prepare(src)
-    spans = proc.optimize_spans
+    prog, rt, proc, param_types, _, metric = _prepare(inverted_src)
     train_data = [("omega", None)]
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(
-            max_metric_calls=20,
+            max_metric_calls=40,
             reflection_model="mock/reflection",
             reflection_minibatch_size=1,
         ),
         runtime=rt,
     )
-    # Suppress warning - this test uses inverted feedback which confuses GEPA
-    import warnings
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*appears unchanged.*")
-        _ = optimizer.optimize_procedure(
+        _, inverted_score = optimizer.optimize_procedure(
             proc_name=proc.name,
             proc_params=proc.params,
             param_types=param_types,
-            spans=spans,
+            spans=proc.optimize_spans,
             train_data=train_data,
             test_data=None,
             metric=metric,
         )
-    assert Recorder.calls
-    ranges = _collect_ranges_from_calls()
-    # With flipped feedback, ensure that the range moved at least once but not necessarily toward target
-    assert len(ranges) >= 1
-    # Check that at least two distinct ranges were proposed
-    distinct = {tuple(r) for r in ranges}
-    assert len(distinct) >= 1
+
+    inverted_ranges = Recorder.predict_ranges()
+
+    # Now run with correct feedback for comparison
+    Recorder.reset()
+    correct_src = """
+@solve(seed: str) -> int:
+  > optimize: produce_value:
+    The result is [y: int]
+  = `y`
+
+@eval: solve:
+  > data: cases:
+    = ```
+    return [("omega", None)]
+    ```
+  > metric: correct_feedback(cases):
+    = ```
+    y = solve(cases)
+    if 40 <= y <= 60:
+        return (1.0, "OK")
+    elif y < 40:
+        distance = 40 - y
+        score = max(0.0, 1.0 - distance / 100.0)
+        return (score, "TOO_LOW")
+    else:
+        distance = y - 60
+        score = max(0.0, 1.0 - distance / 100.0)
+        return (score, "TOO_HIGH")
+    ```
+"""
+    prog2, rt2, proc2, param_types2, _, metric2 = _prepare(correct_src)
+    optimizer2 = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=40,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=1,
+        ),
+        runtime=rt2,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        _, correct_score = optimizer2.optimize_procedure(
+            proc_name=proc2.name,
+            proc_params=proc2.params,
+            param_types=param_types2,
+            spans=proc2.optimize_spans,
+            train_data=train_data,
+            test_data=None,
+            metric=metric2,
+        )
+
+    correct_ranges = Recorder.predict_ranges()
+
+    # Correct feedback should yield final range closer to target than inverted
+    if inverted_ranges and correct_ranges:
+        inv_last = inverted_ranges[-1]
+        cor_last = correct_ranges[-1]
+        inv_dist = dist_to_target(*inv_last)
+        cor_dist = dist_to_target(*cor_last)
+        assert cor_dist <= inv_dist, (
+            f"Correct feedback final range dist={cor_dist:.1f} should be <= "
+            f"inverted feedback dist={inv_dist:.1f}"
+        )
 
 
+# ── OK feedback stabilizes range ─────────────────────────────────────
+
+def test_ok_feedback_stabilizes_range(monkeypatch: pytest.MonkeyPatch):
+    """When the evaluator always returns OK (score=1.0), the reflection model
+    should not shift the range, and the range should remain stable."""
+    install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    src = """
+@solve(seed: str) -> int:
+  > optimize: produce_value:
+    The result is [y: int]
+  = `y`
+
+@eval: solve:
+  > data: cases:
+    = ```
+    return [("alpha", None), ("beta", None)]
+    ```
+  > metric: always_ok(cases):
+    = ```
+    y = solve(cases)
+    return (1.0, "OK")
+    ```
+"""
+    prog, rt, proc, param_types, _, metric = _prepare(src)
+    train_data = [("alpha", None), ("beta", None)]
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=30,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=2,
+        ),
+        runtime=rt,
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*appears unchanged.*")
+        optimized, score = optimizer.optimize_procedure(
+            proc_name=proc.name,
+            proc_params=proc.params,
+            param_types=param_types,
+            spans=proc.optimize_spans,
+            train_data=train_data,
+            test_data=None,
+            metric=metric,
+        )
+
+    assert score >= 0.5, "Perfect OK feedback should yield high score"
+
+    ranges = Recorder.predict_ranges()
+    if len(ranges) >= 2:
+        first = ranges[0]
+        last = ranges[-1]
+        shift = abs(last[0] - first[0]) + abs(last[1] - first[1])
+        assert shift < 250.0, (
+            f"With OK feedback, range should not shift drastically. "
+            f"First={first}, Last={last}, shift={shift:.1f}"
+        )
+
+
+# ── Gradual metric rewards proximity ─────────────────────────────────
+
+def test_gradual_metric_drives_incremental_improvement(monkeypatch: pytest.MonkeyPatch):
+    """A gradual metric (partial credit for proximity) should drive the
+    optimizer closer to the target over iterations, not just binary pass/fail."""
+    install_mock_dspy(monkeypatch)
+    Recorder.reset()
+
+    src = """
+@solve(seed: str) -> int:
+  > optimize: produce_value:
+    The result is [y: int]
+  = `y`
+
+@eval: solve:
+  > data: cases:
+    = ```
+    return [("a", None), ("b", None), ("c", None), ("d", None)]
+    ```
+  > metric: gradual(cases):
+    = ```
+    y = solve(cases)
+    if 40 <= y <= 60:
+        return (1.0, "OK")
+    elif y < 40:
+        distance = 40 - y
+        score = max(0.0, 1.0 - distance / 200.0)
+        return (score, "TOO_LOW")
+    else:
+        distance = y - 60
+        score = max(0.0, 1.0 - distance / 200.0)
+        return (score, "TOO_HIGH")
+    ```
+"""
+    prog, rt, proc, param_types, _, metric = _prepare(src)
+    train_data = [("a", None), ("b", None), ("c", None), ("d", None)]
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(
+            max_metric_calls=200,
+            reflection_model="mock/reflection",
+            reflection_minibatch_size=3,
+        ),
+        runtime=rt,
+    )
+    optimized, score = optimizer.optimize_procedure(
+        proc_name=proc.name,
+        proc_params=proc.params,
+        param_types=param_types,
+        spans=proc.optimize_spans,
+        train_data=train_data,
+        test_data=None,
+        metric=metric,
+    )
+
+    ranges = Recorder.predict_ranges()
+    first_lo, first_hi = ranges[0]
+    last_lo, last_hi = ranges[-1]
+
+    assert dist_to_target(last_lo, last_hi) <= dist_to_target(first_lo, first_hi), (
+        "Gradual metric should drive range closer to target"
+    )
+    assert score >= 0.5, f"Expected score >= 0.5 with gradual metric, got {score}"

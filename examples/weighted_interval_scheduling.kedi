@@ -1,0 +1,127 @@
+#
+# Harder GEPA target than knapsack:
+# choose a maximum-profit set of non-overlapping jobs and return a structured answer.
+#
+
+```
+import itertools
+import re
+
+JOB_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\(s\s*=\s*(\d+),\s*e\s*=\s*(\d+),\s*p\s*=\s*(\d+)\)"
+)
+
+def parse_jobs(text):
+    jobs = []
+    for name, start, end, profit in JOB_RE.findall(text):
+        jobs.append(
+            {
+                "name": name,
+                "start": int(start),
+                "end": int(end),
+                "profit": int(profit),
+            }
+        )
+    if not jobs:
+        raise ValueError(f"Could not parse any jobs from: {text!r}")
+    return jobs
+
+def is_feasible(subset):
+    ordered = sorted(subset, key=lambda job: (job["start"], job["end"], job["name"]))
+    for left, right in zip(ordered, ordered[1:]):
+        if right["start"] < left["end"]:
+            return False
+    return True
+
+def exact_best_schedule(jobs):
+    best_profit = -1
+    best_sets = set()
+    for r in range(len(jobs) + 1):
+        for subset in itertools.combinations(jobs, r):
+            if not is_feasible(subset):
+                continue
+            names = tuple(sorted(job["name"] for job in subset))
+            profit = sum(job["profit"] for job in subset)
+            if profit > best_profit:
+                best_profit = profit
+                best_sets = {names}
+            elif profit == best_profit:
+                best_sets.add(names)
+    return best_profit, best_sets
+
+def validate_selection(jobs_by_name, chosen_names):
+    subset = []
+    seen = set()
+    for name in chosen_names:
+        if name in seen:
+            raise ValueError(f"duplicate job {name}")
+        seen.add(name)
+        job = jobs_by_name.get(name)
+        if job is None:
+            raise ValueError(f"unknown job {name}")
+        subset.append(job)
+    if not is_feasible(subset):
+        raise ValueError("chosen jobs overlap")
+    return sum(job["profit"] for job in subset)
+```
+
+~ScheduleDecision(chosen_jobs: list[str], total_profit: int)
+
+@solve_weighted_interval_scheduling(jobs: str) -> ScheduleDecision:
+  > optimize: solver:
+    Jobs: <jobs>
+    Choose the subset of jobs with maximum total profit.
+    Jobs do not overlap if the next job starts at or after the previous job ends.
+    Reasoning: [reasoning: str]
+    Chosen jobs: [chosen_jobs: list[str]]
+    Total profit: [total_profit: int]
+
+  = `ScheduleDecision(chosen_jobs=chosen_jobs, total_profit=total_profit)`
+
+@eval: solve_weighted_interval_scheduling:
+  > data: problems:
+    = ```
+    return [
+        "A(s=1,e=3,p=5), B(s=2,e=5,p=6), C(s=4,e=6,p=5), D(s=6,e=7,p=4), E(s=5,e=8,p=11), F(s=7,e=9,p=2)",
+        "A(s=1,e=4,p=5), B(s=3,e=5,p=1), C(s=0,e=6,p=8), D(s=4,e=7,p=4), E(s=3,e=8,p=6), F(s=5,e=9,p=3), G(s=6,e=10,p=2), H(s=8,e=11,p=4)",
+        "K(s=1,e=2,p=4), L(s=2,e=4,p=5), M(s=1,e=5,p=9), N(s=4,e=6,p=6), O(s=6,e=7,p=4), P(s=5,e=8,p=10), Q(s=7,e=9,p=5)",
+        "A1(s=1,e=2,p=2), A2(s=2,e=3,p=2), A3(s=3,e=4,p=2), B1(s=1,e=4,p=7), C1(s=4,e=6,p=5), C2(s=6,e=9,p=8), D1(s=5,e=9,p=9)",
+    ]
+    ```
+
+  > test_data: problems:
+    = ```
+    return [
+        "Q(s=1,e=3,p=5), R(s=3,e=4,p=1), S(s=4,e=6,p=6), T(s=1,e=6,p=10), U(s=6,e=7,p=4), V(s=5,e=8,p=7)",
+        "M1(s=1,e=4,p=8), M2(s=4,e=5,p=2), M3(s=5,e=7,p=7), M4(s=2,e=6,p=14), M5(s=6,e=9,p=9), M6(s=8,e=10,p=4), M7(s=9,e=11,p=6)",
+    ]
+    ```
+
+  > metric: optimality(problems):
+    = ```
+    jobs = parse_jobs(problems)
+    optimum_profit, _ = exact_best_schedule(jobs)
+    jobs_by_name = {job["name"]: job for job in jobs}
+    result = solve_weighted_interval_scheduling(problems)
+
+    try:
+        chosen_names = list(result.chosen_jobs)
+        reported_profit = int(result.total_profit)
+        selected_profit = validate_selection(jobs_by_name, chosen_names)
+    except Exception as exc:
+        return (0.0, f"Invalid schedule: {exc}. Optimal profit is {optimum_profit}.")
+
+    optimality = max(0.0, 1.0 - max(0, optimum_profit - selected_profit) / max(1, optimum_profit))
+    consistency = max(0.0, 1.0 - abs(reported_profit - selected_profit) / max(1, optimum_profit))
+    score = round(0.8 * optimality + 0.2 * consistency, 6)
+
+    if selected_profit == optimum_profit and reported_profit == selected_profit:
+        return (1.0, f"Optimal schedule {chosen_names} with profit {selected_profit}.")
+    return (
+        score,
+        f"Selected profit {selected_profit}, reported {reported_profit}, optimal {optimum_profit}.",
+    )
+    ```
+
+[demo: ScheduleDecision] = `solve_weighted_interval_scheduling("A(s=1,e=3,p=5), B(s=2,e=5,p=6), C(s=4,e=6,p=5), D(s=6,e=7,p=4), E(s=5,e=8,p=11), F(s=7,e=9,p=2)")`
+= Jobs: <`", ".join(demo.chosen_jobs)`>; Profit: <`str(demo.total_profit)`>

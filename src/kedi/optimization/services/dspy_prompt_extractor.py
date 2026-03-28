@@ -12,7 +12,7 @@ except ImportError:
     dspy = None  # type: ignore
 
 from ...lang.ast import OptimizeSpan
-from ..utils import span_to_instruction
+from ..utils import normalize_optimized_prompt_prefix, span_to_instruction
 
 
 class DSPyPromptExtractor:
@@ -118,13 +118,13 @@ class DSPyPromptExtractor:
         predictor: dspy.Predict | None,
         span: OptimizeSpan,
     ) -> str:
-        """Extract prompt from predictor or use original."""
+        """Extract stored optimized prefix from predictor instructions."""
         if not predictor:
-            return span_to_instruction(span)
+            return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
         
         # Extract instructions from signature
         if not hasattr(predictor, 'signature'):
-            return span_to_instruction(span)
+            return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
         
         sig = predictor.signature
         instructions = None
@@ -135,12 +135,12 @@ class DSPyPromptExtractor:
             instructions = sig._instructions
         
         if not instructions or not instructions.strip():
-            return span_to_instruction(span)
+            return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
         
         # Filter out default DSPy signature instructions
         default_pattern = "Given the fields"
         if default_pattern not in instructions or len(instructions) > len(default_pattern) + 50:
-            return instructions
+            return normalize_optimized_prompt_prefix(span, instructions)
         
-        return span_to_instruction(span)
+        return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
 

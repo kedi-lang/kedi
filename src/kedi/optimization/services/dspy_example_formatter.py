@@ -54,8 +54,9 @@ class DSPyExampleFormatter:
             raise ImportError("DSPy is required for DSPyExampleFormatter")
         
         examples = []
+        total = len(data)
         
-        for input_val, expected_output in data:
+        for idx, (input_val, expected_output) in enumerate(data, 1):
             # Build input dict from input_val (procedure parameters)
             proc_input_dict = {}
             if len(proc_params) == 1:
@@ -74,6 +75,8 @@ class DSPyExampleFormatter:
                 span_inputs = self._compute_span_inputs(
                     span, proc_name, proc_input_dict
                 )
+                if idx == 1 or idx % 5 == 0 or idx == total:
+                    print(f"   Formatting example {idx}/{total}...", flush=True)
                 input_fields = list(span_inputs.keys())
             else:
                 # Fallback: use procedure parameters
@@ -117,10 +120,14 @@ class DSPyExampleFormatter:
         span_input_names = extract_input_fields(span)
         
         if not span_input_names:
-            # No span inputs, return empty dict
             return {}
         
-        # Get the procedure definition from runtime
+        # Fast path: if all span inputs are direct procedure parameters, skip the
+        # expensive procedure call (which would trigger LLM calls).
+        if all(name in proc_inputs for name in span_input_names):
+            return {name: str(proc_inputs[name]) for name in span_input_names}
+        
+        # Slow path: span uses computed intermediate values — must run procedure.
         try:
             # Find the procedure definition in the runtime
             proc_def = None

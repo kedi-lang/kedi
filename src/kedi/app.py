@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -11,11 +12,23 @@ from .lang import compile_program, parse_program
 from .tests_runner import run_evals, run_tests
 
 
-def run_tests_cli(source: str, *, model: str | None = None) -> Tuple[int, str]:
+def _build_runtime_adapter(adapter: str, model: str | None):
+    """Create the adapter instance used for eval/test/program execution."""
+    if adapter == "dspy":
+        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+
+
+def run_tests_cli(
+    source: str,
+    *,
+    adapter: str = "pydantic",
+    model: str | None = None,
+) -> Tuple[int, str]:
     ok, err = maybe_run_codegen(source, model=model)
     if not ok:
         return 1, (err or "Code generation failed")
-    results = run_tests(source)
+    results = run_tests(source, adapter=_build_runtime_adapter(adapter, model))
     failed = sum(1 for s in results for c in s.cases if not c.success)
     lines = ["Tests:"]
     for suite in results:
@@ -23,6 +36,11 @@ def run_tests_cli(source: str, *, model: str | None = None) -> Tuple[int, str]:
             status = "OK" if case.success else f"FAIL: {case.error}"
             lines.append(f"- {suite.procedure}::{case.name}: {status}")
     return (1 if failed else 0, "\n".join(lines))
+
+
+def _gepa_checkpoint_root(source_path: Path) -> Path:
+    """Directory where DSPy GEPA stores ``gepa_state.bin`` (resume)."""
+    return source_path.parent / f"{source_path.name}.gepa"
 
 
 def run_optimization_cli(
@@ -38,6 +56,7 @@ def run_optimization_cli(
     max_validation_examples: int | None = None,
     adapter: str = "pydantic",
     adapter_model: str | None = None,
+    optimizer_fresh: bool = False,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
     
@@ -107,26 +126,36 @@ def run_optimization_cli(
         text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
     
     prog = parse_program(text)
+    result_writer = OptimizationResultWriter(source_path)
+
+    if optimizer_fresh:
+        result_writer.delete_existing_optimized_files()
+        gepa_root = _gepa_checkpoint_root(source_path)
+        if gepa_root.exists():
+            shutil.rmtree(gepa_root)
+    else:
+        from .optimization.services.prompt_loader import OptimizedPromptLoader
+
+        prompt_loader = OptimizedPromptLoader(source_path)
+        if prompt_loader.has_optimized_prompts():
+            prompt_loader.inject_optimized_prompts(prog)
+
     rt = compile_program(prog, adapter=adapter_for_runtime)
-    
+
     # Initialize services
     data_loader = OptimizationDataLoader(rt)
     type_resolver = TypeResolver(rt)
     metric_factory = MetricFactory(rt)
-    result_writer = OptimizationResultWriter(source_path)
-    
+
     # Get optimizer instance
     if optimizer == "gepa":
         from .optimization.gepa import GEPAOptimizer
         opt = GEPAOptimizer(config=config, runtime=rt, source_path=source_path)
     else:
         opt = get_optimizer(optimizer)
-    
+
     if not opt:
         return 1, f"Unknown optimizer: {optimizer}"
-    
-    # Delete cached optimized files
-    result_writer.delete_existing_optimized_files()
     
     # Find procedures with optimize spans
     procs_with_optimize = [p for p in prog.procedures if p.optimize_spans]
@@ -224,15 +253,21 @@ def run_optimization_cli(
 
 
 def run_evals_cli(
-    source: str, 
-    *, 
-    model: str | None = None, 
+    source: str,
+    *,
+    adapter: str = "pydantic",
+    adapter_model: str | None = None,
+    codegen_model: str | None = None,
     optimizer: str = "mock",
     optimizer_model: str | None = None,
     reflection_model: str | None = None,
-    optimize: bool = False, 
-    use_cache: bool = True
+    optimize: bool = False,
+    use_cache: bool = True,
 ) -> Tuple[int, str]:
+    """Run eval suites. Set ``optimize=True`` only when not calling ``run_optimization_cli`` first
+    (e.g. programmatic API). The CLI runs optimization in ``run_optimization_cli`` and passes
+    ``optimize=False`` here so GEPA does not run twice.
+    """
     from pathlib import Path
     
     source_path = Path(source).resolve()
@@ -244,27 +279,21 @@ def run_evals_cli(
             optimizer=optimizer,
             optimizer_model=optimizer_model,
             reflection_model=reflection_model,
+            adapter=adapter,
+            adapter_model=adapter_model,
         )
         if code != 0:
             return code, msg
     
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=model)
+    ok, err = maybe_run_codegen(source, model=codegen_model)
     if not ok:
         return 1, (err or "Code generation failed")
     
-    # Load program with optimized prompts injected (after codegen which may modify cache)
-    import os
-    from .optimization.services.program_loader import load_program_with_optimized_prompts
-    
-    DEBUG = os.getenv("KEDI_DEBUG_OPTIMIZED", "0") == "1"
-    program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
-    
-    # Compile and run evals
-    rt = compile_program(program, adapter=None)
-    # run_evals will now also check for optimized prompts, so just call it
-    from .tests_runner import run_evals
-    results = run_evals(str(source_path), adapter=None)
+    results = run_evals(
+        str(source_path),
+        adapter=_build_runtime_adapter(adapter, adapter_model),
+    )
     
     lines = ["Evals:"]
     for suite in results:
@@ -325,11 +354,7 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
     
-    adapter_impl = (
-        DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
-        if adapter == "dspy"
-        else PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
-    )
+    adapter_impl = _build_runtime_adapter(adapter, model)
     rt = compile_program(program, adapter=adapter_impl)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))

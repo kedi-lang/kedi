@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import time
 import warnings
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+
+_GEPA_STATE_NAME = "gepa_state.bin"
 
 try:
     import dspy
@@ -14,6 +17,7 @@ except ImportError:
     DSPY_AVAILABLE = False
     dspy = None  # type: ignore[assignment]
 
+from ..model_normalization import normalize_for_litellm
 from ..lang.ast import OptimizeSpan
 from ..lang.compiler.environment import KediRuntime
 from .config import OptimizerConfig
@@ -24,7 +28,7 @@ from .services.dspy_module_builder import DSPyModuleBuilder
 from .services.dspy_prompt_extractor import DSPyPromptExtractor
 from .services.dspy_score_calculator import DSPyScoreCalculator
 from .services.gepa_metric_wrapper import GEPAMetricWrapper
-from .utils import span_to_instruction
+from .utils import normalize_optimized_prompt_prefix, span_to_instruction
 
 
 class GEPAOptimizer(OptimizerAdapter):
@@ -65,14 +69,21 @@ class GEPAOptimizer(OptimizerAdapter):
         self.metric_wrapper = GEPAMetricWrapper()
         self.prompt_extractor = DSPyPromptExtractor()
         self.score_calculator = DSPyScoreCalculator()
-        
+
         # Initialize result writer if source path provided
         if source_path:
             from .services import OptimizationResultWriter
             self.result_writer = OptimizationResultWriter(source_path)
         else:
             self.result_writer = None
-    
+
+    def _gepa_log_dir(self, proc_name: str, span_name: str) -> Path | None:
+        """Per-span directory for DSPy GEPA ``log_dir`` (``gepa_state.bin`` resume)."""
+        if not self.source_path:
+            return None
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in f"{proc_name}__{span_name}")
+        return self.source_path.parent / f"{self.source_path.name}.gepa" / safe
+
     def optimize_procedure(
         self,
         proc_name: str,
@@ -124,9 +135,10 @@ class GEPAOptimizer(OptimizerAdapter):
             print(f"   Temperature: 1.0")
             
             base_lm = dspy.LM(
-                model=self.config.reflection_model,
+                model=normalize_for_litellm(self.config.reflection_model),
                 temperature=1.0,
                 max_tokens=max_tokens,
+                timeout=300,
             )
             
             # Wrap the LM to add call tracing
@@ -139,15 +151,15 @@ class GEPAOptimizer(OptimizerAdapter):
                 def __init__(self, base_lm, model_name, call_count):
                     self.base_lm = base_lm
                     self.model_name = model_name
+                    self.model = model_name  # DSPy / logging expect .model
                     self.call_count = call_count
                 
                 def __call__(self, prompt):
                     self.call_count["count"] += 1
-                    print(f"\n💭 Reflection LM call #{self.call_count['count']}")
-                    print(f"   Model: {self.model_name}")
-                    print(f"   Analyzing program behavior and proposing improvements...")
+                    print(f"\n💭 Reflection LM call #{self.call_count['count']}", flush=True)
+                    print(f"   Model: {self.model_name}", flush=True)
                     result = self.base_lm(prompt)
-                    print(f"   ✅ Reflection complete")
+                    print(f"   ✅ Reflection complete", flush=True)
                     return result
             
             reflection_lm = TracedReflectionLM(base_lm, self.config.reflection_model, reflection_call_count)
@@ -230,42 +242,72 @@ class GEPAOptimizer(OptimizerAdapter):
                 else:
                     print(f"   ⚠️  WARNING: dspy.settings.lm is not configured!")
                 
+                gepa_log_dir = self._gepa_log_dir(proc_name, span.name)
+                if gepa_log_dir is not None:
+                    gepa_log_dir.mkdir(parents=True, exist_ok=True)
+                    state_file = gepa_log_dir / _GEPA_STATE_NAME
+                    if state_file.exists():
+                        print(
+                            f"   GEPA checkpoint: resuming from {gepa_log_dir}\n"
+                            f"   If optimization ends immediately, raise "
+                            f"--optimizer-max-metric-calls above the prior total eval-units.",
+                            flush=True,
+                        )
+
                 optimizer = dspy.GEPA(
                     metric=gepa_metric,
                     max_metric_calls=self.config.max_metric_calls,
                     reflection_lm=reflection_lm,
                     reflection_minibatch_size=self.config.reflection_minibatch_size,
+                    track_stats=True,
+                    log_dir=str(gepa_log_dir) if gepa_log_dir is not None else None,
                 )
                 print(f"   Reflection minibatch size: {self.config.reflection_minibatch_size}")
                 print(f"   ✅ GEPA optimizer created successfully")
-                print(f"   GEPA will use reflection_lm for: {getattr(reflection_lm, 'model', 'unknown') if reflection_lm else 'N/A'}")
-                
+
+                est_seconds = len(train_examples) * 25
+                print(f"\n⏳ Starting compile ({len(train_examples)} examples, "
+                      f"budget={self.config.max_metric_calls} calls, "
+                      f"est ~{est_seconds // 60}m{est_seconds % 60:02d}s for baseline)...")
+                print(f"{'─'*80}")
+
+                compile_start = time.monotonic()
                 optimized_module = optimizer.compile(
                     student=dspy_module,
                     trainset=train_examples,
                     valset=val_examples,
                 )
-                
+                compile_elapsed = time.monotonic() - compile_start
+                compile_min = int(compile_elapsed) // 60
+                compile_sec = int(compile_elapsed) % 60
+
+                metric_calls = 0
+                if hasattr(gepa_metric, "_progress"):
+                    metric_calls = gepa_metric._progress["count"]
+
                 print(f"{'─'*80}")
                 print(f"✅ GEPA optimization complete for span '{span.name}'")
+                print(f"   Duration: {compile_min}m{compile_sec:02d}s  |  "
+                      f"DSPy metric callbacks: {metric_calls}  "
+                      f"(GEPA budget: {self.config.max_metric_calls} eval-units; "
+                      f"DSPy may call the metric more than once per unit)")
                 
                 # Extract optimized prompt for this span
                 print(f"\n🔍 Extracting optimized prompt...")
+                previous_instruction = span_to_instruction(span)
                 extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
-                optimized_prompt = extracted.get(span.name)
-                if optimized_prompt:
+                optimized_prompt = normalize_optimized_prompt_prefix(span, extracted.get(span.name))
+                if optimized_prompt is not None:
                     optimized_prompts[span.name] = optimized_prompt
                     if span.template_lines:
-                        # Set optimized prompt on ALL template lines in the span
-                        # This is necessary because a span can have multiple template lines
-                        for line in span.template_lines:
-                            line.optimized_prompt_prefix = optimized_prompt
-                    
-                    original_instruction = span_to_instruction(span)
-                    print(f"   Original prompt length: {len(original_instruction)} chars")
-                    print(f"   Optimized prompt length: {len(optimized_prompt)} chars")
-                    
-                    if optimized_prompt == original_instruction:
+                        span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
+
+                    effective_instruction = span_to_instruction(span)
+                    print(f"   Previous seed length: {len(previous_instruction)} chars")
+                    print(f"   Optimized prefix length: {len(optimized_prompt)} chars")
+                    print(f"   Effective prompt length: {len(effective_instruction)} chars")
+
+                    if effective_instruction == previous_instruction:
                         print(f"   ⚠️  Prompt appears unchanged")
                         warnings.warn(
                             f"Optimized prompt for '{span.name}' appears unchanged. "
@@ -274,7 +316,7 @@ class GEPAOptimizer(OptimizerAdapter):
                         )
                     else:
                         print(f"   ✨ Prompt successfully optimized")
-                    
+
                     # Save optimized prompts immediately after extraction, before scoring
                     # This ensures prompts are saved even if scoring fails or is interrupted
                     self._save_prompts_immediately(proc_name, optimized_prompts)

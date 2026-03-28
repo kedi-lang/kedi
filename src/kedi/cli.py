@@ -45,7 +45,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 @click.option(
     "--codegen-model",
     envvar="KEDI_CODEGEN_MODEL",
-    default="openai:gpt-4o",
+    default="openrouter/minimax/minimax-m2.7",
     help="Model for codegen agent",
 )
 @click.option(
@@ -67,13 +67,13 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 @click.option(
     "--optimizer-model",
     envvar="KEDI_OPTIMIZER_MODEL",
-    default="openai/gpt-4.1-mini",
+    default="openrouter/minimax/minimax-m2.7",
     help="Model for optimizer (main model for GEPA)",
 )
 @click.option(
     "--optimizer-reflection-model",
     envvar="KEDI_OPTIMIZER_REFLECTION_MODEL",
-    default="openai/gpt-5",
+    default="openrouter/minimax/minimax-m2.7",
     help="Reflection model for GEPA optimizer",
 )
 @click.option(
@@ -116,6 +116,11 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     is_flag=True,
     help="Run optimizer on procedures with > optimize: blocks before evaluation",
 )
+@click.option(
+    "--optimizer-fresh",
+    is_flag=True,
+    help="For GEPA: delete .optimized.json, scores, and checkpoint dir so optimization starts from the source template only",
+)
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
 @click.pass_context
 def main(
@@ -137,6 +142,7 @@ def main(
     optimizer_reflection_minibatch_size: int = 3,
     optimizer_max_validation_examples: int | None = None,
     optimize: bool = False,
+    optimizer_fresh: bool = False,
     no_cache: bool = False,
 ):
     try:
@@ -164,6 +170,7 @@ def main(
                 max_validation_examples=optimizer_max_validation_examples,
                 adapter=adapter,
                 adapter_model=adapter_model,
+                optimizer_fresh=optimizer_fresh,
             )
             if msg:
                 if code != 0:
@@ -177,20 +184,24 @@ def main(
         if test or do_eval:
             # Run validations
             if test:
-                code, out = run_tests_cli(source, model=adapter_model)
+                code, out = run_tests_cli(source, adapter=adapter, model=adapter_model)
                 click.echo(out)
                 if code != 0:
                     ctx.exit(code)
                 return code
             if do_eval:
+                # Optimization is handled above by run_optimization_cli when --optimize is set.
+                # Do not pass optimize=True here or GEPA would run twice with default budget/model.
                 code, out = run_evals_cli(
-                    source, 
-                    model=adapter_model, 
-                    optimizer=optimizer, 
+                    source,
+                    adapter=adapter,
+                    adapter_model=adapter_model,
+                    codegen_model=codegen_model,
+                    optimizer=optimizer,
                     optimizer_model=optimizer_model,
                     reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
-                    optimize=optimize, 
-                    use_cache=not no_cache
+                    optimize=False,
+                    use_cache=not no_cache,
                 )
                 if out:
                     if code != 0:

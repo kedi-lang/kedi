@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import pytest
 import tempfile
 from pathlib import Path
 
 from kedi.lang import parse_program, compile_program
 from kedi.optimization.config import OptimizerConfig
+from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
+from kedi.optimization.utils import extract_output_fields
 from kedi.optimization.services import (
     OptimizationDataLoader,
     MetricFactory,
@@ -358,6 +361,79 @@ def test_result_writer_delete_existing():
         assert not scores_path.exists()
 
 
+def test_program_loader_preserves_output_fields_with_optimized_prefix():
+    """Loading optimized prompts must not drop later template lines.
+
+    Multi-line optimize spans often put output placeholders on later lines.
+    Those placeholders must survive prompt injection so DSPy can still
+    extract a valid signature for GEPA.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> int:
+  > optimize: solver:
+    Input: <x>
+    Reasoning: [reasoning: str]
+    Answer: [answer: int]
+  = `answer`
+""".strip()
+        )
+
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            """
+{
+  "solve": {
+    "solver": "Use careful reasoning before answering."
+  }
+}
+""".strip()
+        )
+
+        program = load_program_with_optimized_prompts(source_path)
+        proc = next(p for p in program.procedures if p.name == "solve")
+        span = proc.optimize_spans[0]
+
+        assert len(span.template_lines) == 3
+        assert span.template_lines[0].optimized_prompt_prefix == "Use careful reasoning before answering."
+
+        outputs = extract_output_fields(span)
+        assert outputs == [("reasoning", "str"), ("answer", "int")]
+
+
+def test_program_loader_normalizes_polluted_optimized_prompt():
+    """Historical full-instruction saves should be normalized back to prefix form."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> int:
+  > optimize: solver:
+    Input: <x>
+    Reasoning: [reasoning: str]
+    Answer: [answer: int]
+  = `answer`
+""".strip()
+        )
+
+        base = "Input: <x>\nReasoning: [reasoning: str]\nAnswer: [answer: int]"
+        polluted = "Use exact IDs only.\n" + base + "\n" + base
+
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            json.dumps({"solve": {"solver": polluted}}),
+            encoding="utf-8",
+        )
+
+        program = load_program_with_optimized_prompts(source_path)
+        proc = next(p for p in program.procedures if p.name == "solve")
+        span = proc.optimize_spans[0]
+
+        assert span.template_lines[0].optimized_prompt_prefix == "Use exact IDs only."
+
+
 # ==================== StructuredTypeHandler Tests ====================
 
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
@@ -538,8 +614,37 @@ def test_dspy_prompt_extractor():
     prompts = extractor.extract_prompts(module, [span])
     
     assert span.name in prompts
-    # Should extract the optimized prompt or fallback to original
-    assert prompts[span.name] is not None
+    assert prompts[span.name] == "Optimized prompt: <x>"
+
+
+@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
+def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
+    """Extractor should persist only the optimized prefix, not prefix+base(+base)."""
+    extractor = DSPyPromptExtractor()
+
+    src = """
+@test(x: int) -> int:
+  > optimize: compute:
+    Original prompt: <x>
+    [result: int]
+  = `result`
+"""
+    prog = parse_program(src)
+    span = prog.procedures[0].optimize_spans[0]
+    base = "Original prompt: <x>\n[result: int]"
+
+    class MockModule(dspy.Module):
+        def __init__(self):
+            super().__init__()
+            sig = dspy.Signature("x -> result")
+            self.predictor = dspy.Predict(
+                sig.with_instructions(f"Use the exact identifier.\n{base}\n{base}")
+            )
+
+    module = MockModule()
+    prompts = extractor.extract_prompts(module, [span])
+
+    assert prompts[span.name] == "Use the exact identifier."
 
 
 @pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")

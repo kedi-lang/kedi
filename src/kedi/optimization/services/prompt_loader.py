@@ -16,6 +16,7 @@ from ...lang.ast import (
     TextSegment,
 )
 from ...lang.parser.segment_parser import parse_segments
+from ..utils import normalize_optimized_prompt_prefix
 
 
 class OptimizedPromptLoader:
@@ -87,29 +88,24 @@ class OptimizedPromptLoader:
                 if span.name not in proc_optimized:
                     continue
                 
-                optimized_prompt = proc_optimized[span.name]
+                optimized_prompt = normalize_optimized_prompt_prefix(span, proc_optimized[span.name])
                 # NEW APPROACH: Store optimized prompt as prefix, keep original seed prompt intact
                 # This way:
                 # 1. GEPA can output plain text without needing correct type names
                 # 2. Original prompt with proper type annotations is preserved
                 # 3. At evaluation time, optimized text is prepended to seed prompt
                 
-                # Store the optimized prompt text in the TemplateLine's optimized_prompt_prefix
-                # The original segments (with type annotations) remain unchanged
+                # Store the optimized prompt text in the first template line's prefix.
+                # Keep all original template lines so typed output placeholders remain
+                # available for DSPy signature extraction and execution.
                 if span.template_lines:
                     # Modify the existing TemplateLine object in place
                     # This automatically updates proc.body since they reference the same object
-                    span.template_lines[0].optimized_prompt_prefix = optimized_prompt
-                    
-                    # If there are multiple template lines, we only update the first one
-                    # (the optimized prompt applies to the whole span)
-                    if len(span.template_lines) > 1:
-                        # Keep only the first line (now updated) and remove others
-                        span.template_lines = span.template_lines[:1]
+                    span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
                 else:
                     # This shouldn't happen - optimize spans should have template lines
                     # But if it does, create a new one with empty segments and the prefix
-                    span.template_lines = [TemplateLine(segments=[], optimized_prompt_prefix=optimized_prompt)]
+                    span.template_lines = [TemplateLine(segments=[], optimized_prompt_prefix=optimized_prompt or None)]
     
     def has_optimized_prompts(self) -> bool:
         """Check if optimized prompts file exists.
