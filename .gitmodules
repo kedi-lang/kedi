@@ -1,0 +1,9 @@
+[submodule "tree-sitter"]
+	path = tree-sitter
+	url = https://github.com/tree-sitter/tree-sitter
+[submodule "py-tree-sitter"]
+	path = py-tree-sitter
+	url = https://github.com/tree-sitter/py-tree-sitter
+[submodule "kedi-vscode"]
+	path = kedi-vscode
+	url = https://github.com/kedi-lang/kedi-vscode
