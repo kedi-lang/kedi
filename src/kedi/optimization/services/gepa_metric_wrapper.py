@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, Optional
@@ -21,12 +22,22 @@ from ..utils import extract_output_fields, normalize_optimized_prompt_prefix
 
 class GEPAMetricWrapper:
     """Service for wrapping Kedi metrics to work with GEPA.
-    
+
     GEPA metrics receive (gold: Example, pred: Prediction, ...) but
     Kedi metrics expect (input, expected_output). This service bridges
     the gap by extracting inputs from DSPy examples and calling the Kedi
     metric directly. The metric calls the procedure normally, which uses
     the optimized prompt injected into the span's template.
+
+    Note on concurrency: applying overrides/prefix mutates ``TemplateLine``
+    fields on the shared span AST. DSPy's evaluator runs metric callbacks
+    on a ``ThreadPoolExecutor`` (default ``dspy.settings.num_threads == 8``),
+    so two concurrent callbacks can interleave apply/restore and leak the
+    wrong override into the next callback (or the post-compile scoring
+    pass). We serialize the entire apply→evaluate→restore region with
+    ``_span_lock`` to keep the mutation atomic; the lock is fast because
+    the heavy lifting (LM calls) already happened before ``gepa_metric``
+    runs.
     """
 
     def __init__(self) -> None:
@@ -35,6 +46,9 @@ class GEPAMetricWrapper:
         )
         # Fallback cache keyed by id() for objects that are not weakref-able
         self._prediction_id_cache: dict[int, tuple[float, Optional[str]]] = {}
+        # Serializes apply/restore of span.template_lines mutations across
+        # concurrent metric callbacks. See class docstring.
+        self._span_lock = threading.Lock()
     
     def wrap_metric(
         self,
@@ -103,44 +117,49 @@ class GEPAMetricWrapper:
                 
                 prompt_handle = None
                 output_override_handle = None
-                try:
-                    # Extract outputs from DSPy prediction and inject them into the span
-                    # This ensures the Kedi procedure uses the DSPy-generated outputs
-                    # Only apply output override if we have a span (not just output_fields for backward compat)
-                    if span and prediction_obj:
-                        output_override = self._extract_prediction_outputs(prediction_obj, span, output_fields)
-                        if output_override:
-                            output_override_handle = self._apply_output_override(span, output_override)
-                    
-                    if module_ref:
-                        optimized_prompt = self._extract_current_instructions(module_ref)
-                        prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
-                    
-                    score, feedback = kedi_metric(input_val, expected_output)
-                    score_float = float(score)
-                    feedback_text = self._stringify_feedback(feedback)
+                # The apply/restore region must be atomic with the kedi_metric
+                # call (which reads the just-applied prefix/override); otherwise
+                # parallel DSPy evaluator threads race and leak overrides past
+                # their own restore. See class docstring.
+                with self._span_lock:
+                    try:
+                        # Extract outputs from DSPy prediction and inject them into the span
+                        # This ensures the Kedi procedure uses the DSPy-generated outputs
+                        # Only apply output override if we have a span (not just output_fields for backward compat)
+                        if span and prediction_obj:
+                            output_override = self._extract_prediction_outputs(prediction_obj, span, output_fields)
+                            if output_override:
+                                output_override_handle = self._apply_output_override(span, output_override)
 
-                    progress["total_score"] += score_float
-                    cnt = progress["count"]
-                    avg = progress["total_score"] / cnt
-                    elapsed = time.monotonic() - progress["start_time"]
-                    is_new_best = score_float > progress["best_score"]
-                    if is_new_best:
-                        progress["best_score"] = score_float
-                    print(
-                        f"   [metric callback {cnt}] score={score_float:.3f}  "
-                        f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
-                        f"({elapsed:.0f}s)",
-                        flush=True,
-                    )
+                        if module_ref:
+                            optimized_prompt = self._extract_current_instructions(module_ref)
+                            prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
 
-                    payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
-                    self._store_cached_feedback(prediction_obj, score_float, feedback_text)
-                    self._store_cached_feedback(pred, score_float, feedback_text)
-                    return payload
-                finally:
-                    self._restore_prompt_prefix(prompt_handle)
-                    self._restore_output_override(output_override_handle)
+                        score, feedback = kedi_metric(input_val, expected_output)
+                        score_float = float(score)
+                        feedback_text = self._stringify_feedback(feedback)
+
+                        progress["total_score"] += score_float
+                        cnt = progress["count"]
+                        avg = progress["total_score"] / cnt
+                        elapsed = time.monotonic() - progress["start_time"]
+                        is_new_best = score_float > progress["best_score"]
+                        if is_new_best:
+                            progress["best_score"] = score_float
+                        print(
+                            f"   [metric callback {cnt}] score={score_float:.3f}  "
+                            f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
+                            f"({elapsed:.0f}s)",
+                            flush=True,
+                        )
+
+                        payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
+                        self._store_cached_feedback(prediction_obj, score_float, feedback_text)
+                        self._store_cached_feedback(pred, score_float, feedback_text)
+                        return payload
+                    finally:
+                        self._restore_prompt_prefix(prompt_handle)
+                        self._restore_output_override(output_override_handle)
             except Exception:
                 import traceback
                 error_msg = traceback.format_exc()

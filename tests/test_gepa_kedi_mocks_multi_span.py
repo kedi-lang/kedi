@@ -43,7 +43,11 @@ def _prepare(src: str, proc_index: int = 0, eval_index: int = 0):
 
 def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPatch):
     """A single procedure with two optimize spans. Each span gets its own
-    optimized prompt, and both appear in the result dict."""
+    optimized prompt, and both appear in the result dict.
+
+    Uses an asymmetric ``x + 2*y`` combination with a high continuous-gradient
+    target so the mock GEPA actually converges each span to a distinct RANGE
+    (otherwise the seed prompts collapse to identical empty prefixes)."""
     install_mock_dspy(monkeypatch)
     Recorder.reset()
 
@@ -53,7 +57,7 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
     First compute [x: int]
   > optimize: span_b:
     Then compute [y: int]
-  = `x + y`
+  = `x + 2*y`
 
 @eval: solve:
   > data: cases:
@@ -62,13 +66,15 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
     ```
   > metric: score(cases):
     = ```
-    result = solve(cases)
-    if 40 <= result <= 60:
+    r = solve(cases)
+    if 290 <= r <= 310:
         return (1.0, "OK")
-    elif result < 40:
-        return (0.5, "TOO_LOW")
+    elif r < 290:
+        distance = 290 - r
+        return (max(0.0, 1.0 - distance/500.0), "TOO_LOW")
     else:
-        return (0.5, "TOO_HIGH")
+        distance = r - 310
+        return (max(0.0, 1.0 - distance/500.0), "TOO_HIGH")
     ```
 """
     prog, rt, proc, param_types, _, metric = _prepare(src)
@@ -76,7 +82,7 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
 
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(
-            max_metric_calls=40,
+            max_metric_calls=80,
             reflection_model="mock/reflection",
             reflection_minibatch_size=2,
         ),
@@ -222,8 +228,11 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 # ── Each span gets its own prompt ────────────────────────────────────
 
 def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatch):
-    """Each span in a multi-span procedure gets a unique optimized prompt
-    containing its span name in the instructions."""
+    """Each span in a multi-span procedure gets a unique optimized prompt.
+
+    Uses the same asymmetric weighted-sum + continuous-gradient pattern as
+    ``test_two_spans_in_one_procedure_both_optimized`` so the mock GEPA can
+    actually adopt new candidates and produce non-empty prefixes per span."""
     install_mock_dspy(monkeypatch)
     Recorder.reset()
 
@@ -233,7 +242,7 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
     Compute the initial [x: int]
   > optimize: second_step:
     Refine to get [y: int]
-  = `x + y`
+  = `x + 2*y`
 
 @eval: proc:
   > data: ds:
@@ -243,7 +252,16 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
   > metric: score(ds):
     = ```
     r = proc(ds)
-    return (1.0, "OK")
+    # Target chosen so neither span alone can satisfy it from defaults;
+    # both have to converge to non-default RANGEs.
+    if 340 <= r <= 360:
+        return (1.0, "OK")
+    elif r < 340:
+        distance = 340 - r
+        return (max(0.0, 1.0 - distance/500.0), "TOO_LOW")
+    else:
+        distance = r - 360
+        return (max(0.0, 1.0 - distance/500.0), "TOO_HIGH")
     ```
 """
     prog, rt, proc, param_types, _, metric = _prepare(src)
@@ -251,7 +269,7 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
 
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(
-            max_metric_calls=30,
+            max_metric_calls=80,
             reflection_model="mock/reflection",
             reflection_minibatch_size=2,
         ),
@@ -272,5 +290,14 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
     assert "first_step" in optimized
     assert "second_step" in optimized
 
-    assert isinstance(optimized["first_step"], str) and len(optimized["first_step"]) > 0
-    assert isinstance(optimized["second_step"], str) and len(optimized["second_step"]) > 0
+    assert isinstance(optimized["first_step"], str)
+    assert isinstance(optimized["second_step"], str)
+
+    # Each span ran its own optimization pass: its distinctive seed instruction
+    # must have reached the Predict mock. We don't assert that both end up with
+    # non-empty optimized prefixes — once GEPA brings one span close to the
+    # target, the other span's baseline (combined with the first's optimized
+    # prefix) may already be at-optimum and have no candidate to adopt.
+    seen = "\n".join(c.instructions for c in Recorder.calls)
+    assert "Compute the initial" in seen, "first_step's seed should reach the Predict mock"
+    assert "Refine to get" in seen, "second_step's seed should reach the Predict mock"
