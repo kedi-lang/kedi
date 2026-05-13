@@ -1,0 +1,138 @@
+==================
+Type definition with mixed annotated and bare fields
+==================
+
+~Person(name, age: int, city: str)
+
+---
+
+(source_file
+  (type_def
+    name: (identifier)
+    fields: (type_field_list
+      (type_field name: (identifier))
+      (type_field
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier))))
+      (type_field
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier)))))))
+
+
+==================
+Generic type via type_apply
+==================
+
+@xs(items: list[int]) -> list[str]:
+  = <items>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr
+          (type_apply
+            name: (identifier)
+            args: (type_expr (type_ref name: (identifier)))))))
+    return_type: (type_expr
+      (type_apply
+        name: (identifier)
+        args: (type_expr (type_ref name: (identifier)))))
+    body: (block
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Nested generic type
+==================
+
+~Grid(cells: list[list[int]])
+
+---
+
+(source_file
+  (type_def
+    name: (identifier)
+    fields: (type_field_list
+      (type_field
+        name: (identifier)
+        type: (type_expr
+          (type_apply
+            name: (identifier)
+            args: (type_expr
+              (type_apply
+                name: (identifier)
+                args: (type_expr (type_ref name: (identifier)))))))))))
+
+
+==================
+Dict type takes two args
+==================
+
+~M(rows: dict[str, int])
+
+---
+
+(source_file
+  (type_def
+    name: (identifier)
+    fields: (type_field_list
+      (type_field
+        name: (identifier)
+        type: (type_expr
+          (type_apply
+            name: (identifier)
+            args: (type_expr (type_ref name: (identifier)))
+            args: (type_expr (type_ref name: (identifier)))))))))
+
+
+==================
+Union type via pipe
+==================
+
+@id(x: int | str) -> int | str:
+  = <x>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr
+          (type_union
+            left: (type_ref name: (identifier))
+            right: (type_ref name: (identifier))))))
+    return_type: (type_expr
+      (type_union
+        left: (type_ref name: (identifier))
+        right: (type_ref name: (identifier))))
+    body: (block
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Backtick (TypePython) escape hatch
+==================
+
+[x: `Optional[int]`] = `42`
+
+---
+
+(source_file
+  (assign_stmt
+    (assign_target
+      name: (identifier)
+      type: (type_expr
+        (type_python code: (python_inline_body))))
+    rhs: (inline_python_expr code: (python_inline_body))))

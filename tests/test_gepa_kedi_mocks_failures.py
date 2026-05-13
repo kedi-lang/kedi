@@ -28,7 +28,7 @@ def _prepare(src: str):
     proc = prog.procedures[0]
     resolver = TypeResolver(rt)
     param_types = resolver.resolve_param_types(proc)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     metric_def = eval_suite.metrics[0]
     dataset_name = metric_def.dataset_name or next(iter(eval_suite.datasets.keys()))
     metric = MetricFactory(rt).create_metric(metric_def, proc, dataset_name)
@@ -61,8 +61,8 @@ def test_missing_output_in_span_raises_valueerror(monkeypatch: pytest.MonkeyPatc
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[0]
     param_types = TypeResolver(rt).resolve_param_types(proc)
-    metric_def = prog._validation_evals[0].metrics[0]
-    dataset_name = metric_def.dataset_name or next(iter(prog._validation_evals[0].datasets.keys()))
+    metric_def = prog.evals[0].metrics[0]
+    dataset_name = metric_def.dataset_name or next(iter(prog.evals[0].datasets.keys()))
     metric = MetricFactory(rt).create_metric(metric_def, proc, dataset_name)
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(max_metric_calls=1, reflection_model="mock/reflection"),
@@ -106,8 +106,8 @@ def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[0]
     param_types = TypeResolver(rt).resolve_param_types(proc)
-    metric_def = prog._validation_evals[0].metrics[0]
-    dataset_name = metric_def.dataset_name or next(iter(prog._validation_evals[0].datasets.keys()))
+    metric_def = prog.evals[0].metrics[0]
+    dataset_name = metric_def.dataset_name or next(iter(prog.evals[0].datasets.keys()))
     metric = MetricFactory(rt).create_metric(metric_def, proc, dataset_name)
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(max_metric_calls=1, reflection_model="mock/reflection"),

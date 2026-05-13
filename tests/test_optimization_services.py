@@ -54,7 +54,7 @@ def test_data_loader_single_param():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     train_data = loader.load_training_data(eval_suite, 'cases')
     
     assert len(train_data) == 3
@@ -79,7 +79,7 @@ def test_data_loader_multi_param():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     train_data = loader.load_training_data(eval_suite, 'cases')
     
     assert len(train_data) == 3
@@ -106,7 +106,7 @@ def test_data_loader_test_data():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     test_data = loader.load_test_data(eval_suite, 'cases')
@@ -135,7 +135,7 @@ def test_data_loader_dict_format():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     train_data = loader.load_training_data(eval_suite, 'cases')
     
     assert len(train_data) == 3
@@ -166,7 +166,7 @@ def test_metric_factory_simple_metric():
     rt = compile_program(prog, adapter=None)
     
     factory = MetricFactory(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     proc = prog.procedures[0]
     metric_def = eval_suite.metrics[0]
     
@@ -205,7 +205,7 @@ def test_metric_factory_with_feedback():
     rt = compile_program(prog, adapter=None)
     
     factory = MetricFactory(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     proc = prog.procedures[0]
     metric_def = eval_suite.metrics[0]
     
@@ -237,7 +237,7 @@ def test_metric_factory_bool_return():
     rt = compile_program(prog, adapter=None)
     
     factory = MetricFactory(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     proc = prog.procedures[0]
     metric_def = eval_suite.metrics[0]
     

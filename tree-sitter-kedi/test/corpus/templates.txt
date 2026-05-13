@@ -1,0 +1,232 @@
+==================
+Plain template line with one output
+==================
+
+@hello(name):
+  Hello, [greeting: str]!
+  = <greeting>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list (param name: (identifier)))
+    body: (block
+      (template_line
+        (template_expr
+          (text_segment)
+          (output_segment
+            name: (identifier)
+            type: (type_expr (type_ref name: (identifier))))
+          (text_segment)))
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Call segment with var argument
+==================
+
+@analyze(city):
+  [country: str] = <get_country(<city>)>
+  = <country>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list (param name: (identifier)))
+    body: (block
+      (assign_stmt
+        (assign_target
+          name: (identifier)
+          type: (type_expr (type_ref name: (identifier))))
+        rhs: (template_expr
+          (call_segment
+            name: (identifier)
+            args: (call_arg_list
+              (call_arg
+                (template_arg
+                  (input_segment name: (identifier))))))))
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Call with literal text argument and nested call
+==================
+
+@trip(start):
+  [neighbor] = <get_neighbors(<get_country(<start>)>, Europe)>
+  = <neighbor>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list (param name: (identifier)))
+    body: (block
+      (assign_stmt
+        (assign_target name: (identifier))
+        rhs: (template_expr
+          (call_segment
+            name: (identifier)
+            args: (call_arg_list
+              (call_arg
+                (template_arg
+                  (call_segment
+                    name: (identifier)
+                    args: (call_arg_list
+                      (call_arg
+                        (template_arg
+                          (input_segment name: (identifier))))))))
+              (call_arg (template_arg (text_in_call_segment)))))))
+      (return_stmt
+        value: (template_expr (input_segment name: (identifier)))))))
+
+
+==================
+Call argument can be a mini template with output placeholder
+==================
+
+= <foo(apple is a [category])>
+
+---
+
+(source_file
+  (return_stmt
+    value: (template_expr
+      (call_segment
+        name: (identifier)
+        args: (call_arg_list
+          (call_arg
+            (template_arg
+              (text_in_call_segment)
+              (output_segment name: (identifier)))))))))
+
+
+==================
+Python expression segment in template
+==================
+
+@show(x):
+  Result is <`x * 2`>.
+  = ok
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list (param name: (identifier)))
+    body: (block
+      (template_line
+        (template_expr
+          (text_segment)
+          (python_expr_segment
+            (inline_python_expr code: (python_inline_body)))
+          (text_segment)))
+      (return_stmt
+        value: (template_expr (text_segment))))))
+
+
+==================
+Output placeholder with no type annotation
+==================
+
+@guess():
+  Pick a number: [n]
+  = <n>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    body: (block
+      (template_line
+        (template_expr
+          (text_segment)
+          (output_segment name: (identifier))))
+      (return_stmt
+        value: (template_expr (input_segment name: (identifier)))))))
+
+
+==================
+Assign target distinguishable from template line starting with output
+==================
+
+@dual():
+  [a] = hello
+  [b] world
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    body: (block
+      (assign_stmt
+        (assign_target name: (identifier))
+        rhs: (template_expr (text_segment)))
+      (template_line
+        (template_expr
+          (output_segment name: (identifier))
+          (text_segment))))))
+
+
+==================
+Escapes inside template text
+==================
+
+@esc():
+  Use \<angle\> \[brackets\] \@at \= eq \, com
+  = ok
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    body: (block
+      (template_line
+        (template_expr (text_segment)))
+      (return_stmt
+        value: (template_expr (text_segment))))))
+
+
+==================
+Top-level assignment and top-level return
+==================
+
+[global_city: str] = Paris
+= <global_city>
+
+---
+
+(source_file
+  (assign_stmt
+    (assign_target
+      name: (identifier)
+      type: (type_expr (type_ref name: (identifier))))
+    rhs: (template_expr (text_segment)))
+  (return_stmt
+    value: (template_expr (input_segment name: (identifier)))))
+
+
+==================
+Top-level backtick-line statement (side effect)
+==================
+
+`print("hi")`
+
+---
+
+(source_file
+  (backtick_line_stmt
+    (inline_python_expr code: (python_inline_body))))

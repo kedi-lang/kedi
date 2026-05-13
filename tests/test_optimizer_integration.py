@@ -52,7 +52,7 @@ def test_mock_optimizer_end_to_end():
     rt = compile_program(prog, adapter=None)
     
     proc = prog.procedures[0]
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     # Setup services
     data_loader = OptimizationDataLoader(rt)
@@ -147,7 +147,7 @@ def test_data_loader_and_metric_integration():
     rt = compile_program(prog, adapter=None)
     
     proc = prog.procedures[0]
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     loader = OptimizationDataLoader(rt)
     factory = MetricFactory(rt)

@@ -162,8 +162,11 @@ def run_optimization_cli(
     if not procs_with_optimize:
         return 0, "No procedures with optimize spans found"
     
-    # Find eval suites
-    evals = getattr(prog, "_validation_evals", [])
+    # Find eval suites. `parse_program` returns `ProgramWithValidation`
+    # when `@eval:` blocks are present, exposing them as `.evals`.
+    from .lang.ast import ProgramWithValidation
+
+    evals = prog.evals if isinstance(prog, ProgramWithValidation) else []
     eval_map = {e.procedure_name: e for e in evals}
     
     # Validate

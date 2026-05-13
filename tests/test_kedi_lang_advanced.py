@@ -473,9 +473,22 @@ def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
+    """A raw backtick mid-template is now a parse error (was: literal text).
+
+    Tree-sitter refactor (Phase-6): the new grammar treats `` ` `` as a
+    segment delimiter consistently. The pre-refactor parser accepted
+    `[x] = \\`1+1\\` and more <s>` and rendered it as the literal
+    string ``\\`1+1\\` and more ok`` — a quirky special case where
+    backticks inside a template body became literal text only when
+    additional content followed. Users who want a literal backtick
+    must now escape it (``\\\\\\``) or wrap an inline-Python segment
+    in angle brackets (``<\\`expr\\`>``); we reject the old form.
+    """
+    import pytest
+
     src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
-    out = _run(monkeypatch, src)
-    assert out.startswith("`1+1` and more ok")
+    with pytest.raises(Exception):
+        _run(monkeypatch, src)
 
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:

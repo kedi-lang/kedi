@@ -1,77 +1,192 @@
-"""Type system for Kedi compiler.
+"""Type system for the Kedi compiler.
 
-Handles type resolution, coercion, and validation.
+Phase-7 refactor: ``KediType`` is now driven by structured ``TypeExpr``
+nodes produced by the tree-sitter CST→AST walker. The pre-refactor
+parser stored every type annotation as a raw string and ``eval``'d it
+at compile time across four different paths; with structured types we
+dispatch on ``TypeRef`` / ``TypeApply`` / ``TypeUnion``, and ``eval``
+survives only inside the explicit ``TypePython`` (backtick) escape
+hatch.
+
+Backward-compat: ``KediType`` still accepts a raw string for callers
+that have not yet migrated to the structured representation; in that
+mode it falls back to the legacy ``eval``-based resolution. Phase 8
+removes that path once every compiler / codegen / optimizer call site
+constructs ``KediType`` from a ``TypeExpr``.
 """
 
 from __future__ import annotations
 
-import ast
-import re
 import shlex
-from typing import Any, List
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, TypeAdapter
 
 from ...core import KediRuntime
-from ..ast import TypeDef, TypeField
+from ..ast import (
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypeField,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
 from .environment import build_type_env
 
 
-class KediType:
-    """Represents a type annotation in Kedi DSL and provides strict validation."""
+# ---------------------------------------------------------------------
+# TypeExpr resolution
+# ---------------------------------------------------------------------
 
-    def __init__(self, annotation: str | None):
-        self.annotation = annotation
 
-    def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Any | None:
-        if not self.annotation:
+def _lookup_name(name: str, type_env: dict[str, Any]) -> Any:
+    """Resolve a bare type name against the type environment.
+
+    Falls back to Python's ``eval`` so builtins (``int``, ``list``, …)
+    and qualified names (``typing.Optional``) work without us
+    enumerating every supported source.
+    """
+    if name in type_env:
+        return type_env[name]
+    try:
+        return eval(name, type_env, type_env)
+    except Exception:
+        return None
+
+
+def _resolve_expr(expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
+    """Resolve a structured ``TypeExpr`` against a type environment."""
+    if isinstance(expr, TypeRef):
+        return _lookup_name(expr.name, type_env)
+
+    if isinstance(expr, TypeApply):
+        base = _lookup_name(expr.name, type_env)
+        if base is None:
+            return None
+        args = tuple(_resolve_expr(a, type_env) for a in expr.args)
+        if any(a is None for a in args):
+            return None
+        try:
+            if len(args) == 1:
+                return base[args[0]]
+            return base[args]
+        except Exception:
             return None
 
-        # Check if this is a backtick-wrapped type expression
-        if self._is_backtick_type(self.annotation):
-            return self._resolve_backtick_type(rt, env)
-
-        # Regular string-based type annotation
-        type_env = build_type_env(rt, env)
+    if isinstance(expr, TypeUnion):
+        left = _resolve_expr(expr.left, type_env) if expr.left is not None else None
+        right = _resolve_expr(expr.right, type_env) if expr.right is not None else None
+        if left is None or right is None:
+            return None
         try:
-            return eval(self.annotation, type_env, type_env)
+            return left | right
         except Exception:
-            try:
-                from ..types import TypeValidator
+            return None
 
-                res = TypeValidator(self.annotation).validate_names()
-                return res.pytype if res.is_valid else None
-            except Exception:
-                return None
+    if isinstance(expr, TypePython):
+        # Explicit `\`code\`` escape hatch — the user opted into
+        # running arbitrary Python here. A failing eval (undefined
+        # name, syntax error, or a value that isn't a real type)
+        # raises a structured ``TypeError`` so the caller's
+        # try/except in ``assign_value_from_native`` produces the
+        # legacy "Native assignment value does not match annotated
+        # type" diagnostic.
+        try:
+            result = eval(expr.code, type_env, type_env)
+        except Exception as exc:
+            raise TypeError(
+                f"Invalid type expression {expr.code!r}: {exc}"
+            ) from exc
+        if not _is_valid_type(result):
+            raise TypeError(
+                f"Expression {expr.code!r} does not evaluate to a valid type"
+            )
+        return result
+
+    return None
+
+
+def _is_valid_type(obj: Any) -> bool:
+    """Best-effort check that ``obj`` is a usable type for validation."""
+    import types as _types
+
+    return (
+        isinstance(obj, type)
+        or isinstance(obj, _types.GenericAlias)
+        or hasattr(obj, "__origin__")
+        or str(type(obj)).startswith("<class 'typing.")
+    )
+
+
+# ---------------------------------------------------------------------
+# KediType
+# ---------------------------------------------------------------------
+
+
+class KediType:
+    """A type annotation, either structured (``TypeExpr``) or legacy string.
+
+    The structured form is preferred — Phase-7 call sites construct
+    ``KediType`` from the AST's ``type_expr`` field whenever available.
+    The legacy string path remains so unmigrated callers
+    (codegen, optimizer utilities, hand-built AST in tests) still
+    work; it routes through ``eval`` like the pre-refactor parser.
+    """
+
+    def __init__(self, source: Union[TypeExpr, str, None]):
+        if source is None:
+            self._expr: Optional[TypeExpr] = None
+            self._legacy_str: Optional[str] = None
+        elif isinstance(source, TypeExpr):
+            self._expr = source
+            self._legacy_str = None
+        else:
+            # Treat as legacy raw annotation string.
+            self._expr = None
+            self._legacy_str = source if str(source).strip() else None
+
+    @classmethod
+    def from_node(
+        cls,
+        type_expr: Optional[TypeExpr],
+        type_annotation: Optional[str],
+    ) -> "KediType":
+        """Build a ``KediType`` from a pair of AST fields.
+
+        Prefers the structured ``type_expr``; falls back to
+        ``type_annotation`` so consumers that haven't migrated still
+        work end-to-end during the Phase-7→8 transition.
+        """
+        if type_expr is not None:
+            return cls(type_expr)
+        return cls(type_annotation)
+
+    # ---- public API ----
 
     def is_none(self) -> bool:
-        return self.annotation is None
+        return self._expr is None and self._legacy_str is None
+
+    def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
+        if self._expr is not None:
+            type_env = build_type_env(rt, env)
+            return _resolve_expr(self._expr, type_env)
+        if self._legacy_str:
+            return self._legacy_resolve(rt, env)
+        return None
 
     def get_adapter(
         self, rt: KediRuntime, env: dict[str, Any] | None = None
-    ) -> TypeAdapter | None:
-        """Build a strict TypeAdapter via eval("TypeAdapter(<annotation>, config=CONFIG)")."""
-        if not self.annotation:
+    ) -> Optional[TypeAdapter]:
+        if self.is_none():
             return None
-        ns = build_type_env(rt, env)
-        ns.update(
-            {
-                "TypeAdapter": TypeAdapter,
-                "CONFIG": {"strict": True, "arbitrary_types_allowed": True},
-            }
-        )
+        resolved = self.resolve(rt, env)
+        if resolved is None:
+            return None
         try:
-            expr = f"TypeAdapter({self.annotation}, config=CONFIG)"
-            return eval(expr, ns, ns)
+            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
         except Exception:
-            # Fallback to resolved type
-            typ = self.resolve(rt, env)
-            if typ is None:
-                return None
-            try:
-                return TypeAdapter(typ, config={"strict": True, "arbitrary_types_allowed": True})
-            except Exception:
-                return None
+            return None
 
     def validate(
         self,
@@ -84,89 +199,78 @@ class KediType:
         adapter = self.get_adapter(rt, env)
         if adapter is None:
             return value
-        try:
-            return adapter.validate_python(value)
-        except Exception:
-            raise
+        return adapter.validate_python(value)
 
     def __repr__(self) -> str:
-        return f"KediType({self.annotation!r})"
+        if self._expr is not None:
+            return f"KediType({self._expr!r})"
+        return f"KediType({self._legacy_str!r})"
 
     def __str__(self) -> str:
-        return self.annotation or "Any"
+        if self._expr is not None:
+            return _typeexpr_to_str(self._expr)
+        return self._legacy_str or "Any"
 
-    def _is_backtick_type(self, annotation: str) -> bool:
-        """Check if annotation is wrapped in backticks."""
-        annotation = annotation.strip()
-        return (
+    # ---- legacy fallback ----
+
+    def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
+        """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
+        annotation = (self._legacy_str or "").strip()
+        if not annotation:
+            return None
+        # Backtick-wrapped legacy strings (``[x: `Optional[int]`]``).
+        if (
             len(annotation) >= 2
             and annotation.startswith("`")
             and annotation.endswith("`")
             and annotation.count("`") == 2
-        )
-
-    def _resolve_backtick_type(
-        self, rt: KediRuntime, env: dict[str, Any] | None = None
-    ) -> Any | None:
-        """Resolve a backtick-wrapped type expression."""
-        if not self.annotation:
+        ):
+            expr = annotation[1:-1]
+            type_env = build_type_env(rt, env)
+            try:
+                return eval(expr, type_env, type_env)
+            except Exception:
+                return None
+        type_env = build_type_env(rt, env)
+        try:
+            return eval(annotation, type_env, type_env)
+        except Exception:
             return None
 
-        # Extract the Python expression from backticks
-        expr = self.annotation.strip()[1:-1]  # Remove backticks
 
-        # Build full environment for evaluation
-        type_env = build_type_env(rt, env)
-
-        try:
-            result = eval(expr, type_env, type_env)
-            # Validate that the result is actually a type
-            if not self._is_valid_type(result):
-                raise TypeError(f"Expression '{expr}' does not evaluate to a valid type")
-            return result
-        except Exception as e:
-            # Re-raise with more context
-            raise TypeError(f"Invalid type expression '{expr}': {e}") from e
-
-    def _is_valid_type(self, obj: Any) -> bool:
-        """Check if an object is a valid type."""
-        import types
-
-        return (
-            isinstance(obj, type)
-            or isinstance(obj, types.GenericAlias)
-            or hasattr(obj, "__origin__")  # For typing constructs
-            or str(type(obj)).startswith("<class 'typing.")
-        )
+def _typeexpr_to_str(e: TypeExpr) -> str:
+    """Render a structured ``TypeExpr`` back to a human-readable form."""
+    if isinstance(e, TypeRef):
+        return e.name
+    if isinstance(e, TypeApply):
+        return f"{e.name}[{', '.join(_typeexpr_to_str(a) for a in e.args)}]"
+    if isinstance(e, TypeUnion):
+        return f"{_typeexpr_to_str(e.left)} | {_typeexpr_to_str(e.right)}"
+    if isinstance(e, TypePython):
+        return f"`{e.code}`"
+    return repr(e)
 
 
-"""Minimal helpers kept below; complex coercion/compatibility removed in favor of TypeAdapter."""
+# ---------------------------------------------------------------------
+# Helpers below this point are unchanged from the pre-refactor module.
+# ---------------------------------------------------------------------
 
 
 def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     """Coerce a value to a Pydantic model."""
     if isinstance(value, model):
         return value
-
-    # Handle already-typed BaseModel instances
     if isinstance(value, BaseModel):
         return value
-
     if isinstance(value, dict):
         return model.model_validate(value)
-
     if isinstance(value, str):
         text = value.strip()
-        # Try JSON
         if text.startswith("{") and text.endswith("}"):
             return model.model_validate_json(text)
-
-        # Try key=value format
         parsed = _parse_model_repr(text, model)
         if parsed is not None:
             return model.model_validate(parsed)
-
-    # If we get here, the value can't be coerced
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 
@@ -186,17 +290,20 @@ def register_type(rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]) -
     namespace: dict[str, Any] = {}
 
     for field in typedef.fields:
-        anno = field.type_annotation or "str"
-        kedi_type = KediType(anno)
+        kedi_type = KediType.from_node(field.type_expr, field.type_annotation)
+        if kedi_type.is_none():
+            # Untyped field defaults to `str` (legacy behaviour).
+            kedi_type = KediType(TypeRef(name="str"))
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
-            raise TypeError(f"Unknown type annotation '{anno}' in type {typedef.name}")
+            raise TypeError(
+                f"Unknown type annotation {kedi_type!s} in type {typedef.name}"
+            )
         annotations[field.name] = resolved
 
     namespace["__annotations__"] = annotations
     field_order = [field.name for field in typedef.fields]
 
-    # Create model class
     new_model = type(typedef.name, (BaseModel,), namespace)
     setattr(new_model, "__init__", _make_init(typedef.name, field_order, new_model))
 
@@ -217,7 +324,6 @@ def assign_value_from_native(
             if isinstance(native, str):
                 return native
             raise TypeError("Native non-string assignment requires explicit type annotation")
-        # Preserve legacy message for str vs non-str annotation mismatch
         if isinstance(native, str):
             try_typ = kedi_type.resolve(rt, env)
             if try_typ is not None and try_typ is not str:
@@ -227,7 +333,6 @@ def assign_value_from_native(
         except Exception:
             raise TypeError("Native assignment value does not match annotated type")
     else:
-        # Angle-inline: always string unless annotated
         if not kedi_type.is_none():
             raise TypeError("Angle-inline pure python cannot have a non-str annotation")
         return str(native)
@@ -247,7 +352,6 @@ def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
 
 
 def _convert_basic_literal(raw: str, typ: Any) -> Any:
-    """Convert a string to a basic literal type."""
     try:
         if typ in (int, float, str):
             return typ(raw)
@@ -263,19 +367,15 @@ def _convert_basic_literal(raw: str, typ: Any) -> Any:
 
 
 def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | None:
-    """Parse key=value format into dict for model."""
     text = value.strip()
     if not text:
         return None
-
     try:
         tokens = shlex.split(text)
     except ValueError:
         return None
-
     data: dict[str, Any] = {}
     fields = getattr(model, "model_fields", {})
-
     for token in tokens:
         if "=" not in token:
             return None
@@ -285,13 +385,10 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         field = fields[name]
         annotation = getattr(field, "annotation", str) or str
         data[name] = _convert_basic_literal(raw, annotation)
-
     return data
 
 
 def _make_init(type_name: str, field_order: list[str], model_class: type[BaseModel]):
-    """Create an __init__ that accepts positional args in field order."""
-
     def _init(self, *args: Any, **kwargs: Any) -> None:
         if args:
             if len(args) > len(field_order):
@@ -305,11 +402,7 @@ def _make_init(type_name: str, field_order: list[str], model_class: type[BaseMod
     return _init
 
 
-# Complex list coercion/compatibility helpers removed
-
-
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:
-    """Push a new type environment layer."""
     stack = getattr(rt, "_type_env_stack", None)
     if stack is None:
         stack = []
@@ -320,7 +413,6 @@ def push_type_env(rt: KediRuntime) -> dict[str, Any]:
 
 
 def pop_type_env(rt: KediRuntime) -> None:
-    """Pop the current type environment layer."""
     stack = getattr(rt, "_type_env_stack", None)
     if isinstance(stack, list) and stack:
         stack.pop()

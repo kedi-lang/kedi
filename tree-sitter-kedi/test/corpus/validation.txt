@@ -1,0 +1,121 @@
+==================
+Test block with one case
+==================
+
+@test: greet:
+  > case: friendly:
+    `assert "hello" in greet("world")`
+
+---
+
+(source_file
+  (validation_block
+    kw: (validation_keyword)
+    procedure: (identifier)
+    body: (validation_body
+      (test_case
+        name: (identifier)
+        code: (test_case_body
+          (backtick_line_stmt
+            (inline_python_expr code: (python_inline_body))))))))
+
+
+==================
+Test block with multiple cases (python block bodies)
+==================
+
+@test: solver:
+  > case: simple:
+    ```
+    assert solver(1) == 2
+    ```
+  > case: complex:
+    ```
+    result = solver(10)
+    assert result > 0
+    ```
+
+---
+
+(source_file
+  (validation_block
+    kw: (validation_keyword)
+    procedure: (identifier)
+    body: (validation_body
+      (test_case
+        name: (identifier)
+        code: (test_case_body
+          (python_block code: (python_code))))
+      (test_case
+        name: (identifier)
+        code: (test_case_body
+          (python_block code: (python_code)))))))
+
+
+==================
+Eval block with data and metric
+==================
+
+@eval: solver:
+  > data: cases:
+    = ```
+    return [(1, 2), (3, 4)]
+    ```
+  > metric: accuracy(cases):
+    = ```
+    return (1.0, "ok")
+    ```
+
+---
+
+(source_file
+  (validation_block
+    kw: (validation_keyword)
+    procedure: (identifier)
+    body: (validation_body
+      (eval_data
+        name: (identifier)
+        body: (eval_entry_body
+          (return_block_stmt code: (python_code))))
+      (eval_metric
+        name: (identifier)
+        dataset: (identifier)
+        body: (eval_entry_body
+          (return_block_stmt code: (python_code)))))))
+
+
+==================
+Eval with data, test_data, and metric
+==================
+
+@eval: solver:
+  > data: train:
+    = `[(1, 2)]`
+  > test_data: holdout:
+    = `[(3, 4)]`
+  > metric: acc(train):
+    = `(1.0, "ok")`
+
+---
+
+(source_file
+  (validation_block
+    kw: (validation_keyword)
+    procedure: (identifier)
+    body: (validation_body
+      (eval_data
+        name: (identifier)
+        body: (eval_entry_body
+          (return_stmt
+            value: (inline_python_expr code: (python_inline_body)))))
+      (eval_test_data
+        name: (identifier)
+        body: (eval_entry_body
+          (return_stmt
+            value: (inline_python_expr code: (python_inline_body)))))
+      (eval_metric
+        name: (identifier)
+        dataset: (identifier)
+        body: (eval_entry_body
+          (return_stmt
+            value: (inline_python_expr code: (python_inline_body))))))))

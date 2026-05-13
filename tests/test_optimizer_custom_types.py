@@ -81,7 +81,7 @@ def test_pydantic_in_dataset():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     # Should be able to load data with Pydantic models
     train_data = loader.load_training_data(eval_suite, 'people')
@@ -128,7 +128,7 @@ def test_list_in_data():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 3
@@ -154,7 +154,7 @@ def test_list_output():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 2
@@ -182,7 +182,7 @@ def test_dict_input():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 2
@@ -210,7 +210,7 @@ def test_tuple_input():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 2
@@ -257,7 +257,7 @@ def test_mixed_types():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 2
@@ -285,7 +285,7 @@ def test_nested_structures():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 2
@@ -312,7 +312,7 @@ def test_optional_types():
     rt = compile_program(prog, adapter=None)
     
     loader = OptimizationDataLoader(rt)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     
     train_data = loader.load_training_data(eval_suite, 'cases')
     assert len(train_data) == 3

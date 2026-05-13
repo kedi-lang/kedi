@@ -100,10 +100,18 @@ class ProgramCompiler:
                 return "" if value is None else str(value)
 
     def _attach_validation(self, prog: Program) -> None:
-        """Attach validation suites if present."""
-        tests = getattr(prog, "_validation_tests", None)
-        evals = getattr(prog, "_validation_evals", None)
-        if tests is not None:
-            setattr(self.rt, "_validation_tests", tests)
-        if evals is not None:
-            setattr(self.rt, "_validation_evals", evals)
+        """Attach validation suites if present.
+
+        The parser returns ``ProgramWithValidation`` when ``@test:`` or
+        ``@eval:`` blocks are present; we forward the public ``.tests``
+        / ``.evals`` collections onto the runtime so downstream
+        consumers (``kedi-lsp``, ``tests_runner``, ``app.py``) can
+        read them as normal attributes.
+        """
+        from ..ast import ProgramWithValidation
+
+        if isinstance(prog, ProgramWithValidation):
+            if prog.tests:
+                setattr(self.rt, "_validation_tests", prog.tests)
+            if prog.evals:
+                setattr(self.rt, "_validation_evals", prog.evals)

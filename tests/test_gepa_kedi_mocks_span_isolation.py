@@ -30,7 +30,7 @@ def _prepare(src: str):
     proc = prog.procedures[0]
     resolver = TypeResolver(rt)
     param_types = resolver.resolve_param_types(proc)
-    eval_suite = prog._validation_evals[0]
+    eval_suite = prog.evals[0]
     metric_def = eval_suite.metrics[0]
     dataset_name = metric_def.dataset_name or next(iter(eval_suite.datasets.keys()))
     metric = MetricFactory(rt).create_metric(metric_def, proc, dataset_name)

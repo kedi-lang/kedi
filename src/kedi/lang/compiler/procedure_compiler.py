@@ -70,12 +70,19 @@ class ProcedureCompiler:
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
-        if not proc.param_type_annotations:
+        if not (proc.param_type_annotations or proc.param_type_exprs):
             return
 
+        param_exprs = proc.param_type_exprs or {}
+        param_strs = proc.param_type_annotations or {}
+
         for param_name in proc.params:
-            expected = proc.param_type_annotations.get(param_name)
-            kedi_type = KediType(expected if expected else "str")
+            kedi_type = KediType.from_node(
+                param_exprs.get(param_name),
+                param_strs.get(param_name),
+            )
+            if kedi_type.is_none():
+                kedi_type = KediType("str")
 
             if param_name not in kwargs:
                 raise TypeError(f"Missing parameter: {param_name}")
@@ -96,7 +103,7 @@ class ProcedureCompiler:
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
-        kedi_type = KediType(proc.return_type_annotation)
+        kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
 
         if kedi_type.is_none():
             # Default to str: non-string native returns are illegal

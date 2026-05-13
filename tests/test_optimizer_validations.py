@@ -44,7 +44,7 @@ def test_one_dataset_per_metric():
     = `1.0`
 """
     prog = parse_program(src)
-    eval_suite = prog._validation_evals[0]  # type: ignore
+    eval_suite = prog.evals[0]  # type: ignore
     
     # Should have exactly one metric
     assert len(eval_suite.metrics) == 1

@@ -73,14 +73,19 @@ def test_parse_unknown_directive_error():
     # This should fail because "data" is only valid in @eval blocks, not procedures
     # Actually, legacy `>` lines are treated as codegen prompts, so this would work
     # But let's test a truly unknown directive pattern
+    # Phase-6 refactor: the legacy "any unrecognized ``>`` directive
+    # becomes ``proc.ai_prompt``" fallback was an undocumented
+    # backward-compat path. The tree-sitter grammar accepts only
+    # ``> auto:`` and ``> optimize: <name>:`` inside a procedure body
+    # and rejects everything else as a parse error. Callers should
+    # migrate to ``> auto:``.
     src2 = """
 @foo():
   > directive: name: arg:
     Some content
 """
-    # This should work as legacy codegen (backward compatibility)
-    prog = parse_program(src2)
-    assert prog.procedures[0].ai_prompt is not None
+    with pytest.raises(Exception):
+        parse_program(src2)
 
 
 def test_parse_optimize_empty_error():

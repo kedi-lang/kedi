@@ -16,7 +16,9 @@ dependencies = [
     "python-dotenv",
     "pydantic-settings",
     "pydantic-ai>=1.0.17",
-    "antlr4-python3-runtime>=4.13"
+    "tree-sitter>=0.25",
+    "tree-sitter-kedi==0.1.0",
+    "pygls>=1.3",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
@@ -44,6 +46,7 @@ Tracker = "https://github.com/kedi-lang/kedi/issues"
 
 [project.scripts]
 kedi = "kedi.cli:main"
+kedi-lsp = "kedi.lsp.server:main"
 
 [tool.hatch.build]
 packages = ["src/kedi"]

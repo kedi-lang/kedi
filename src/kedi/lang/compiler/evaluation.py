@@ -17,7 +17,7 @@ from ..ast import (
     TextSegment,
     VarArg,
 )
-from ..parser.preprocessing import preserve_escaped_whitespace
+from ..parser.escapes import preserve_escaped_whitespace
 from .environment import build_python_env, lookup_value
 from .type_system import KediType
 
@@ -103,7 +103,7 @@ def prepare_segments(
             expr.append(str(value))
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
-            kedi_type = KediType(seg.type_annotation)
+            kedi_type = KediType.from_node(seg.type_expr, seg.type_annotation)
             pytype = kedi_type.resolve(rt, env=kwargs)
             expr.append(rt.o(seg.name, pytype))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):

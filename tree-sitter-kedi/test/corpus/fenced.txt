@@ -1,0 +1,137 @@
+==================
+Top-level Python block (prelude)
+==================
+
+```
+import numpy as np
+class Poly:
+  def __init__(self, expr): self.expr = expr
+```
+
+= done
+
+---
+
+(source_file
+  (python_block
+    code: (python_code))
+  (return_stmt
+    value: (template_expr (text_segment))))
+
+
+==================
+Assignment with fenced Python block RHS
+==================
+
+@stats(numbers: list[int]) -> int:
+  [total: int] = ```
+  return sum(numbers)
+  ```
+  = <total>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr
+          (type_apply
+            name: (identifier)
+            args: (type_expr (type_ref name: (identifier)))))))
+    return_type: (type_expr (type_ref name: (identifier)))
+    body: (block
+      (assign_block_stmt
+        (assign_target
+          name: (identifier)
+          type: (type_expr (type_ref name: (identifier))))
+        code: (python_code))
+      (return_stmt
+        value: (template_expr (input_segment name: (identifier)))))))
+
+
+==================
+Return statement with fenced Python block
+==================
+
+@compute() -> int:
+  = ```
+  return 1 + 2 + 3
+  ```
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    return_type: (type_expr (type_ref name: (identifier)))
+    body: (block
+      (return_block_stmt
+        code: (python_code)))))
+
+
+==================
+Fenced body absorbs specials and embedded newlines
+==================
+
+```
+x = [1, 2, 3]
+y = <function>
+z = `nested-backticks-allowed`
+w = a@b~c=d
+```
+
+---
+
+(source_file
+  (python_block
+    code: (python_code)))
+
+
+==================
+Empty fenced body
+==================
+
+```
+```
+
+= ok
+
+---
+
+(source_file
+  (python_block
+    code: (python_code))
+  (return_stmt
+    value: (template_expr (text_segment))))
+
+
+==================
+Multiple fenced blocks
+==================
+
+@multi():
+  [a] = ```
+  return 1
+  ```
+  [b] = ```
+  return 2
+  ```
+  = <a>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    body: (block
+      (assign_block_stmt
+        (assign_target name: (identifier))
+        code: (python_code))
+      (assign_block_stmt
+        (assign_target name: (identifier))
+        code: (python_code))
+      (return_stmt
+        value: (template_expr (input_segment name: (identifier)))))))

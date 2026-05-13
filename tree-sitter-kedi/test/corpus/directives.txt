@@ -1,0 +1,79 @@
+==================
+Auto directive in procedure body
+==================
+
+@summarize(text: str) -> str:
+  > auto:
+    Takes a long text and produces a concise summary.
+    Preserves key information.
+
+= done
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier)))))
+    return_type: (type_expr (type_ref name: (identifier)))
+    body: (block
+      (auto_directive
+        body: (auto_body
+          (template_line
+            (template_expr (text_segment)))
+          (template_line
+            (template_expr (text_segment)))))))
+  (return_stmt
+    value: (template_expr (text_segment))))
+
+
+==================
+Optimize directive with template span
+==================
+
+@solve(items: str) -> int:
+  > optimize: solver:
+    Items: <items>
+    Pick the best.
+    Reasoning: [reasoning: str]
+    Total: [value: int]
+
+  = `value`
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier)))))
+    return_type: (type_expr (type_ref name: (identifier)))
+    body: (block
+      (optimize_directive
+        name: (identifier)
+        body: (optimize_body
+          (template_line
+            (template_expr
+              (text_segment)
+              (input_segment name: (identifier))))
+          (template_line
+            (template_expr (text_segment)))
+          (template_line
+            (template_expr
+              (text_segment)
+              (output_segment
+                name: (identifier)
+                type: (type_expr (type_ref name: (identifier))))))
+          (template_line
+            (template_expr
+              (text_segment)
+              (output_segment
+                name: (identifier)
+                type: (type_expr (type_ref name: (identifier))))))))
+      (return_stmt
+        value: (inline_python_expr code: (python_inline_body))))))

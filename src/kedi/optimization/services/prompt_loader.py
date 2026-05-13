@@ -15,7 +15,6 @@ from ...lang.ast import (
     TemplateLine,
     TextSegment,
 )
-from ...lang.parser.segment_parser import parse_segments
 from ..utils import normalize_optimized_prompt_prefix
 
 

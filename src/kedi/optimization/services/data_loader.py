@@ -7,7 +7,7 @@ from typing import Any
 
 from ...lang.compiler import _execute_python_block, _eval_python_inline
 from ...lang.compiler.environment import KediRuntime
-from ...lang.parser.block_parser import EvalDataset, EvalSuite
+from ...lang.ast import EvalDataset, EvalSuite
 
 
 class OptimizationDataLoader:

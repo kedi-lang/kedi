@@ -1,0 +1,1200 @@
+[
+  {
+    "type": "_segment",
+    "named": true,
+    "subtypes": [
+      {
+        "type": "call_segment",
+        "named": true
+      },
+      {
+        "type": "input_segment",
+        "named": true
+      },
+      {
+        "type": "output_segment",
+        "named": true
+      },
+      {
+        "type": "python_expr_segment",
+        "named": true
+      },
+      {
+        "type": "text_segment",
+        "named": true
+      }
+    ]
+  },
+  {
+    "type": "_stmt",
+    "named": true,
+    "subtypes": [
+      {
+        "type": "assign_block_stmt",
+        "named": true
+      },
+      {
+        "type": "assign_stmt",
+        "named": true
+      },
+      {
+        "type": "auto_directive",
+        "named": true
+      },
+      {
+        "type": "backtick_line_stmt",
+        "named": true
+      },
+      {
+        "type": "optimize_directive",
+        "named": true
+      },
+      {
+        "type": "procedure_def",
+        "named": true
+      },
+      {
+        "type": "python_block",
+        "named": true
+      },
+      {
+        "type": "return_block_stmt",
+        "named": true
+      },
+      {
+        "type": "return_stmt",
+        "named": true
+      },
+      {
+        "type": "template_line",
+        "named": true
+      },
+      {
+        "type": "type_def_stmt",
+        "named": true
+      }
+    ]
+  },
+  {
+    "type": "_top_item",
+    "named": true,
+    "subtypes": [
+      {
+        "type": "assign_block_stmt",
+        "named": true
+      },
+      {
+        "type": "assign_stmt",
+        "named": true
+      },
+      {
+        "type": "backtick_line_stmt",
+        "named": true
+      },
+      {
+        "type": "procedure_def",
+        "named": true
+      },
+      {
+        "type": "python_block",
+        "named": true
+      },
+      {
+        "type": "return_block_stmt",
+        "named": true
+      },
+      {
+        "type": "return_stmt",
+        "named": true
+      },
+      {
+        "type": "template_line",
+        "named": true
+      },
+      {
+        "type": "type_def",
+        "named": true
+      },
+      {
+        "type": "validation_block",
+        "named": true
+      }
+    ]
+  },
+  {
+    "type": "_type_expr_term",
+    "named": true,
+    "subtypes": [
+      {
+        "type": "type_apply",
+        "named": true
+      },
+      {
+        "type": "type_ref",
+        "named": true
+      },
+      {
+        "type": "type_union",
+        "named": true
+      }
+    ]
+  },
+  {
+    "type": "assign_block_stmt",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "python_code",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "assign_target",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "assign_stmt",
+    "named": true,
+    "fields": {
+      "rhs": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "inline_python_expr",
+            "named": true
+          },
+          {
+            "type": "template_expr",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "assign_target",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "assign_target",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "auto_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "template_line",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "auto_directive",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "auto_body",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "backtick_line_stmt",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "inline_python_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_stmt",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "call_arg",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "inline_python_expr",
+          "named": true
+        },
+        {
+          "type": "template_arg",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "call_arg_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "call_arg",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "call_segment",
+    "named": true,
+    "fields": {
+      "args": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "call_arg_list",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "eval_data",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "eval_entry_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "eval_entry_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "return_block_stmt",
+          "named": true
+        },
+        {
+          "type": "return_stmt",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "eval_metric",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "eval_entry_body",
+            "named": true
+          }
+        ]
+      },
+      "dataset": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "eval_test_data",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "eval_entry_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "inline_python_expr",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "python_inline_body",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "input_segment",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "optimize_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "template_line",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "optimize_directive",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "optimize_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "output_segment",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "param",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "param_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "param",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "procedure_def",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "params": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "param_list",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "python_block",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "python_code",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "python_code",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "python_expr_segment",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "inline_python_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "return_block_stmt",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "python_code",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "return_stmt",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "inline_python_expr",
+            "named": true
+          },
+          {
+            "type": "template_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "source_file",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "_top_item",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "template_arg",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "call_segment",
+          "named": true
+        },
+        {
+          "type": "input_segment",
+          "named": true
+        },
+        {
+          "type": "output_segment",
+          "named": true
+        },
+        {
+          "type": "python_expr_segment",
+          "named": true
+        },
+        {
+          "type": "text_in_call_segment",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "template_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_segment",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "template_line",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "template_expr",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "test_case",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "test_case_body",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "test_case_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "backtick_line_stmt",
+          "named": true
+        },
+        {
+          "type": "python_block",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "text_in_call_segment",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "text_segment",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "type_apply",
+    "named": true,
+    "fields": {
+      "args": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": ",",
+            "named": false
+          },
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_def",
+    "named": true,
+    "fields": {
+      "fields": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_field_list",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_def_stmt",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "type_def",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "_type_expr_term",
+          "named": true
+        },
+        {
+          "type": "type_python",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_field",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_expr",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_field_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "type_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_python",
+    "named": true,
+    "fields": {
+      "code": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "python_inline_body",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_ref",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "type_union",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_type_expr_term",
+            "named": true
+          }
+        ]
+      },
+      "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_type_expr_term",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "validation_block",
+    "named": true,
+    "fields": {
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "validation_body",
+            "named": true
+          }
+        ]
+      },
+      "kw": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "validation_keyword",
+            "named": true
+          }
+        ]
+      },
+      "procedure": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "validation_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "eval_data",
+          "named": true
+        },
+        {
+          "type": "eval_metric",
+          "named": true
+        },
+        {
+          "type": "eval_test_data",
+          "named": true
+        },
+        {
+          "type": "test_case",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "(",
+    "named": false
+  },
+  {
+    "type": ")",
+    "named": false
+  },
+  {
+    "type": ",",
+    "named": false
+  },
+  {
+    "type": "->",
+    "named": false
+  },
+  {
+    "type": ":",
+    "named": false
+  },
+  {
+    "type": "<",
+    "named": false
+  },
+  {
+    "type": "=",
+    "named": false
+  },
+  {
+    "type": ">",
+    "named": false
+  },
+  {
+    "type": "@",
+    "named": false
+  },
+  {
+    "type": "[",
+    "named": false
+  },
+  {
+    "type": "]",
+    "named": false
+  },
+  {
+    "type": "`",
+    "named": false
+  },
+  {
+    "type": "```",
+    "named": false
+  },
+  {
+    "type": "auto",
+    "named": false
+  },
+  {
+    "type": "block_comment",
+    "named": true,
+    "extra": true
+  },
+  {
+    "type": "case",
+    "named": false
+  },
+  {
+    "type": "data",
+    "named": false
+  },
+  {
+    "type": "identifier",
+    "named": true
+  },
+  {
+    "type": "line_comment",
+    "named": true,
+    "extra": true
+  },
+  {
+    "type": "metric",
+    "named": false
+  },
+  {
+    "type": "optimize",
+    "named": false
+  },
+  {
+    "type": "python_inline_body",
+    "named": true
+  },
+  {
+    "type": "test_data",
+    "named": false
+  },
+  {
+    "type": "validation_keyword",
+    "named": true
+  },
+  {
+    "type": "|",
+    "named": false
+  },
+  {
+    "type": "~",
+    "named": false
+  }
+]

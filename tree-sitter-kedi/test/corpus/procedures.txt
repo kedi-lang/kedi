@@ -1,0 +1,115 @@
+==================
+Simplest procedure with template line and return
+==================
+
+@get_country(city):
+  <city> is located in [country: str].
+  = <country>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param name: (identifier)))
+    body: (block
+      (template_line
+        (template_expr
+          (input_segment name: (identifier))
+          (text_segment)
+          (output_segment
+            name: (identifier)
+            type: (type_expr (type_ref name: (identifier))))
+          (text_segment)))
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Procedure with typed params and return
+==================
+
+@get_language(country: str) -> str:
+  The primary language spoken in <country> is [language: str].
+  = <language>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier)))))
+    return_type: (type_expr (type_ref name: (identifier)))
+    body: (block
+      (template_line
+        (template_expr
+          (text_segment)
+          (input_segment name: (identifier))
+          (text_segment)
+          (output_segment
+            name: (identifier)
+            type: (type_expr (type_ref name: (identifier))))
+          (text_segment)))
+      (return_stmt
+        value: (template_expr
+          (input_segment name: (identifier)))))))
+
+
+==================
+Nested procedure
+==================
+
+@outer(x):
+  @inner():
+    = <`x + 1`>
+  = <inner()>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param name: (identifier)))
+    body: (block
+      (procedure_def
+        name: (identifier)
+        body: (block
+          (return_stmt
+            value: (template_expr
+              (python_expr_segment
+                (inline_python_expr code: (python_inline_body)))))))
+      (return_stmt
+        value: (template_expr
+          (call_segment name: (identifier)))))))
+
+
+==================
+Procedure with multiple typed params (no return type)
+==================
+
+@foo(a: int, b: int):
+  = <`a + b`>
+
+---
+
+(source_file
+  (procedure_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier))))
+      (param
+        name: (identifier)
+        type: (type_expr (type_ref name: (identifier)))))
+    body: (block
+      (return_stmt
+        value: (template_expr
+          (python_expr_segment
+            (inline_python_expr code: (python_inline_body))))))))

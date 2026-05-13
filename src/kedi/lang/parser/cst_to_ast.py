@@ -1,0 +1,1148 @@
+"""Walk a tree-sitter Kedi CST and produce typed Python AST dataclasses.
+
+This module is the bridge between the tree-sitter parser (which produces
+a concrete syntax tree of opaque ``tree_sitter.Node`` objects) and the
+existing Kedi AST defined in :mod:`kedi.lang.ast`. It is the
+Phase-6 replacement for the entire pre-refactor parser package
+(``preprocessing.py``, ``program_parser.py``, ``segment_parser.py``,
+``statement_parser.py``, ``block_parser.py``).
+
+Design notes:
+
+  - Every produced AST node carries a ``Span`` populated from its CST
+    counterpart's ``start_byte`` / ``end_byte`` / ``start_point`` /
+    ``end_point``.
+  - Type annotations are produced in two forms: a structured
+    ``TypeExpr`` (the new representation; populated on the ``type_expr``
+    field) and the user's raw source slice as a string (kept on the
+    legacy ``type_annotation`` field for compatibility with the compiler
+    / codegen / optimizer modules that have not yet migrated). The two
+    forms agree by construction.
+  - ``parse_program`` returns ``ProgramWithValidation`` whenever any
+    ``@test:`` or ``@eval:`` block is present in the source. For
+    backward compatibility with read sites that still use the legacy
+    ``setattr``-based access pattern (``getattr(prog,
+    "_validation_evals", [])``), the same lists are also exposed as
+    ``_validation_tests`` and ``_validation_evals`` attributes. The
+    Phase-7 migration removes those aliases.
+
+The walker is implemented as a single class with one ``_walk_<rule>``
+method per relevant CST node type, plus a small dispatcher
+``_walk_node``.
+"""
+
+from __future__ import annotations
+
+from typing import Any, List, Optional, Union
+
+from tree_sitter import Node, Tree
+
+from ..ast import (
+    AssignBlockStmt,
+    AssignStmt,
+    AutoSpec,
+    BacktickLineStmt,
+    CallArg,
+    CallSegment,
+    EvalDataset,
+    EvalMetric,
+    EvalSuite,
+    InputSegment,
+    LiteralArg,
+    OptimizeSpan,
+    OutputSegment,
+    ProcDefStmt,
+    ProcedureDef,
+    Program,
+    ProgramWithValidation,
+    PythonBlock,
+    PythonExprNativeSegment,
+    PythonExprSegment,
+    ReturnBlockStmt,
+    ReturnStmt,
+    Segment,
+    Span,
+    Stmt,
+    TemplateLine,
+    TestCase,
+    TestSuite,
+    TextSegment,
+    TypeApply,
+    TypeDef,
+    TypeDefStmt,
+    TypeExpr,
+    TypeField,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
+from .diagnostics import KediDiagnostic, KediParseError
+from .escapes import dedent_block, unescape_text_with_tracking
+
+
+# ---------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------
+
+
+def _span(node: Node, source_path: Optional[str] = None) -> Span:
+    """Build a :class:`Span` from a tree-sitter node."""
+    return Span(
+        start_byte=node.start_byte,
+        end_byte=node.end_byte,
+        # tree-sitter Point.row/column are 0-based; convert to 1-based.
+        start_line=node.start_point[0] + 1,
+        start_col=node.start_point[1] + 1,
+        end_line=node.end_point[0] + 1,
+        end_col=node.end_point[1] + 1,
+        source_path=source_path,
+    )
+
+
+def _src_text(source: bytes, node: Node) -> str:
+    """Extract the raw source slice corresponding to ``node`` as UTF-8."""
+    return source[node.start_byte:node.end_byte].decode("utf-8")
+
+
+def _identifier_name(source: bytes, node: Node) -> str:
+    """Return the text of an identifier node."""
+    return _src_text(source, node)
+
+
+def _named_children(node: Node) -> List[Node]:
+    """All named children of ``node`` in source order."""
+    return [c for c in node.children if c.is_named]
+
+
+def _field(node: Node, name: str) -> Optional[Node]:
+    """Get the (single) named child stored under field ``name``, or None."""
+    return node.child_by_field_name(name)
+
+
+def _fields(node: Node, name: str) -> List[Node]:
+    """Get all named children stored under field ``name``."""
+    return [c for c in node.children if c.is_named and node.field_name_for_child(c.id) == name]
+
+
+# ---------------------------------------------------------------------
+# Inline-Python body decoding
+# ---------------------------------------------------------------------
+
+
+def _decode_inline_python_body(source: bytes, body_node: Node) -> str:
+    r"""Decode the body of an ``inline_python_expr`` (between backticks).
+
+    Backslash-backtick (``\``) is the only escape recognised inside
+    inline Python; legacy ``segment_parser`` does the same with
+    ``raw.replace("\\`", "`")``.
+    """
+    raw = _src_text(source, body_node)
+    return raw.replace("\\`", "`")
+
+
+def _decode_type_python_body(source: bytes, body_node: Node) -> str:
+    """Decode the body of a ``type_python`` (backtick-wrapped type expr).
+
+    Same escape rule as :func:`_decode_inline_python_body`.
+    """
+    raw = _src_text(source, body_node)
+    return raw.replace("\\`", "`")
+
+
+# ---------------------------------------------------------------------
+# The walker
+# ---------------------------------------------------------------------
+
+
+class _Walker:
+    def __init__(self, source: bytes, tree: Tree, source_path: Optional[str]):
+        self.source = source
+        self.tree = tree
+        self.source_path = source_path
+        self.diagnostics: List[KediDiagnostic] = []
+
+    # ----- entry point -----
+    def walk_program(self) -> Union[Program, ProgramWithValidation]:
+        root = self.tree.root_node
+        if root.type != "source_file":
+            raise KediParseError(
+                [
+                    KediDiagnostic(
+                        severity="error",
+                        message=f"Expected source_file at root, got {root.type!r}",
+                        span=self._span(root),
+                    )
+                ]
+            )
+
+        # Pre-pass: structural validation of `###` block comments.
+        # Mirrors the legacy `strip_comments` invariants — `###` must
+        # occupy a line on its own; unterminated blocks raise; using
+        # `###` inside a block comment body raises. The tree-sitter
+        # `block_comment` regex is lenient about these conditions, so
+        # we enforce them in Python.
+        self._validate_block_comments()
+        if any(d.severity == "error" for d in self.diagnostics):
+            raise KediParseError(self.diagnostics)
+
+        # First pass — discover whether we need ProgramWithValidation.
+        children = _named_children(root)
+        has_validation = any(c.type == "validation_block" for c in children)
+
+        prog: Union[Program, ProgramWithValidation]
+        if has_validation:
+            prog = ProgramWithValidation()
+        else:
+            prog = Program()
+        prog.loc = self._span(root)
+
+        prelude_consumed = False
+        for child in children:
+            t = child.type
+            if t == "python_block":
+                # The first top-level python_block, IF it appears before
+                # any other top-level content, becomes the prelude
+                # string. Subsequent python_blocks remain in toplevel_body.
+                if (
+                    not prelude_consumed
+                    and prog.prelude is None
+                    and not prog.toplevel_body
+                    and prog.toplevel_return is None
+                    and not prog.procedures
+                    and not prog.type_defs
+                    and not (isinstance(prog, ProgramWithValidation) and (prog.tests or prog.evals))
+                ):
+                    prog.prelude = self._walk_python_block_code(child)
+                    prelude_consumed = True
+                else:
+                    prog.toplevel_body.append(self._walk_python_block(child))
+            elif t == "procedure_def":
+                prog.procedures.append(self._walk_procedure_def(child))
+            elif t == "type_def":
+                prog.type_defs.append(self._walk_type_def(child))
+            elif t == "validation_block":
+                assert isinstance(prog, ProgramWithValidation)
+                suite = self._walk_validation_block(child)
+                if isinstance(suite, TestSuite):
+                    prog.tests.append(suite)
+                elif isinstance(suite, EvalSuite):
+                    prog.evals.append(suite)
+            elif t == "assign_stmt":
+                prog.toplevel_body.append(self._walk_assign_stmt(child))
+            elif t == "assign_block_stmt":
+                prog.toplevel_body.append(self._walk_assign_block_stmt(child))
+            elif t == "return_stmt":
+                prog.toplevel_return = self._walk_return_stmt(child)
+            elif t == "return_block_stmt":
+                prog.toplevel_return = self._walk_return_block_stmt(child)
+            elif t == "backtick_line_stmt":
+                prog.toplevel_body.append(self._walk_backtick_line_stmt(child))
+            elif t == "template_line":
+                prog.toplevel_body.append(self._walk_template_line(child))
+            elif t in ("block_comment", "line_comment"):
+                # Extras — not part of the AST. Already handled by
+                # tree-sitter; we skip them here.
+                continue
+            elif t == "ERROR" or child.is_error:
+                self._error(child, f"unexpected source at top level")
+            else:
+                self._error(child, f"unexpected top-level node {t!r}")
+
+        # ProgramWithValidation back-compat: expose the lists via the
+        # legacy `_validation_*` attribute names too. Phase 7 removes
+        # this aliasing once consumers migrate to `.tests` / `.evals`.
+        if isinstance(prog, ProgramWithValidation):
+            setattr(prog, "_validation_tests", prog.tests)
+            setattr(prog, "_validation_evals", prog.evals)
+
+        if any(d.severity == "error" for d in self.diagnostics):
+            raise KediParseError(self.diagnostics)
+
+        # Also: tree-sitter errors anywhere in the tree turn into
+        # diagnostics (we'll have raised already if any were severity
+        # "error", so reaching this point means none were).
+        self._collect_tree_errors(self.tree.root_node)
+        if any(d.severity == "error" for d in self.diagnostics):
+            raise KediParseError(self.diagnostics)
+
+        return prog
+
+    # ----- diagnostics helpers -----
+
+    def _span(self, node: Node) -> Span:
+        return _span(node, self.source_path)
+
+    def _error(self, node: Node, message: str, code: Optional[str] = None) -> None:
+        self.diagnostics.append(
+            KediDiagnostic(
+                severity="error",
+                message=message,
+                span=self._span(node),
+                code=code,
+            )
+        )
+
+    def _validate_block_comments(self) -> None:
+        """Enforce legacy `###` block-comment invariants.
+
+        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``
+        in the pre-refactor parser):
+
+          - A line that is exactly ``###`` (after stripping horizontal
+            whitespace) toggles block-comment mode.
+          - Inside a block comment, any occurrence of ``###`` (other
+            than the closing fence) is invalid.
+          - Outside a block comment, ``###`` MUST occupy an entire
+            line — substrings like ``= text ###`` or ``### content``
+            are rejected.
+          - Triple-backtick fenced Python blocks (``\`\`\``) and their
+            contents are exempt: comments inside Python source are
+            normal Python comments, not Kedi block fences.
+          - On EOF, an open block raises "Unterminated block comment".
+        """
+        try:
+            text = self.source.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        lines = text.split("\n")
+        # Drop the trailing empty element from a final '\n'.
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+        in_python = False
+        in_block = False
+        block_open_line: Optional[int] = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Toggle python-block mode on any line that opens or
+            # closes a triple-backtick fence. Legacy `strip_comments`
+            # uses the loose `endswith("```")` heuristic to handle
+            # cases like `= ``` ` (an opening fence with leading `=`
+            # on the same line) and `[x] = ``` `.
+            if stripped == "```" or (
+                "```" in stripped and stripped.endswith("```")
+            ):
+                in_python = not in_python
+                continue
+            if in_python:
+                continue
+            if stripped == "###":
+                if not in_block:
+                    in_block = True
+                    block_open_line = i
+                else:
+                    in_block = False
+                    block_open_line = None
+                continue
+            if in_block:
+                if "###" in stripped:
+                    self._line_error(
+                        i,
+                        "Invalid use of '###' inside block comment",
+                        code="K-BLOCK-COMMENT",
+                    )
+                continue
+            if "###" in stripped:
+                self._line_error(
+                    i,
+                    "'###' must occupy an entire line for block comments",
+                    code="K-BLOCK-COMMENT",
+                )
+        if in_block:
+            self._line_error(
+                block_open_line if block_open_line is not None else 0,
+                "Unterminated block comment",
+                code="K-BLOCK-COMMENT",
+            )
+
+    def _line_error(self, line_index: int, message: str, *, code: Optional[str] = None) -> None:
+        """Record a diagnostic at a specific (0-based) line, full-line span."""
+        try:
+            text = self.source.decode("utf-8")
+        except UnicodeDecodeError:
+            return
+        lines = text.split("\n")
+        line = lines[line_index] if 0 <= line_index < len(lines) else ""
+        # Compute byte range for this line.
+        start = 0
+        for j in range(line_index):
+            start += len(lines[j].encode("utf-8")) + 1  # +1 for '\n'
+        end_byte = start + len(line.encode("utf-8"))
+        span = Span(
+            start_byte=start,
+            end_byte=end_byte,
+            start_line=line_index + 1,
+            start_col=1,
+            end_line=line_index + 1,
+            end_col=max(1, len(line) + 1),
+            source_path=self.source_path,
+        )
+        self.diagnostics.append(
+            KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
+        )
+
+    def _collect_tree_errors(self, node: Node) -> None:
+        """Walk the CST and surface every ERROR / MISSING node as a diagnostic."""
+        if node.has_error and (node.type == "ERROR" or node.is_missing):
+            if node.is_missing:
+                msg = f"missing {node.type!r}"
+            else:
+                msg = "unexpected syntax"
+            self._error(node, msg, code="K-PARSE")
+            return  # don't recurse into ERROR subtrees
+        for child in node.children:
+            if child.has_error:
+                self._collect_tree_errors(child)
+
+    # =================================================================
+    # Procedures
+    # =================================================================
+
+    def _walk_procedure_def(self, node: Node) -> ProcedureDef:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+
+        params: List[str] = []
+        param_type_annos: dict[str, Optional[str]] = {}
+        param_type_exprs: dict[str, Optional[TypeExpr]] = {}
+        any_typed = False
+        param_list = _field(node, "params")
+        if param_list is not None:
+            for param in _named_children(param_list):
+                if param.type != "param":
+                    continue
+                pname_node = _field(param, "name")
+                assert pname_node is not None
+                pname = _identifier_name(self.source, pname_node)
+                params.append(pname)
+                ptype_node = _field(param, "type")
+                if ptype_node is not None:
+                    expr = self._walk_type_expr(ptype_node)
+                    param_type_annos[pname] = self._type_expr_to_str(ptype_node)
+                    param_type_exprs[pname] = expr
+                    any_typed = True
+                else:
+                    param_type_annos[pname] = None
+                    param_type_exprs[pname] = None
+
+        return_type_node = _field(node, "return_type")
+        return_type_anno: Optional[str] = None
+        return_type_expr: Optional[TypeExpr] = None
+        if return_type_node is not None:
+            return_type_anno = self._type_expr_to_str(return_type_node)
+            return_type_expr = self._walk_type_expr(return_type_node)
+
+        proc = ProcedureDef(
+            name=name,
+            params=params,
+            body=[],
+            return_type_annotation=return_type_anno,
+            return_type_expr=return_type_expr,
+            param_type_annotations=param_type_annos if any_typed or params else None,
+            param_type_exprs=param_type_exprs if any_typed or params else None,
+            loc=self._span(node),
+        )
+
+        body_node = _field(node, "body")
+        if body_node is not None:
+            self._walk_block_into(body_node, proc)
+        return proc
+
+    def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
+        for child in _named_children(block_node):
+            stmt = self._walk_stmt(child, proc)
+            if stmt is None:
+                continue
+            proc.body.append(stmt)
+
+    # =================================================================
+    # Statements
+    # =================================================================
+
+    def _walk_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> Optional[Stmt]:
+        t = node.type
+        if t == "procedure_def":
+            nested = self._walk_procedure_def(node)
+            return ProcDefStmt(proc=nested, loc=self._span(node))
+        if t == "type_def_stmt":
+            inner = _named_children(node)
+            if inner and inner[0].type == "type_def":
+                td = self._walk_type_def(inner[0])
+                return TypeDefStmt(typedef=td, loc=self._span(node))
+            self._error(node, "type_def_stmt missing inner type_def")
+            return None
+        if t == "auto_directive":
+            if proc is None:
+                self._error(node, "'> auto:' is only valid inside a procedure body")
+                return None
+            proc.auto_spec = self._walk_auto_directive(node)
+            return None
+        if t == "optimize_directive":
+            if proc is None:
+                self._error(node, "'> optimize:' is only valid inside a procedure body")
+                return None
+            span = self._walk_optimize_directive(node, proc)
+            proc.optimize_spans.append(span)
+            return None
+        if t == "assign_stmt":
+            return self._walk_assign_stmt(node)
+        if t == "assign_block_stmt":
+            return self._walk_assign_block_stmt(node)
+        if t == "return_stmt":
+            return self._walk_return_stmt(node)
+        if t == "return_block_stmt":
+            return self._walk_return_block_stmt(node)
+        if t == "python_block":
+            return self._walk_python_block(node)
+        if t == "backtick_line_stmt":
+            return self._walk_backtick_line_stmt(node)
+        if t == "template_line":
+            return self._walk_template_line(node)
+        if t in ("block_comment", "line_comment"):
+            return None
+        if t == "ERROR" or node.is_error:
+            # Probe the raw text of the ERROR to give callers a better
+            # message for the common malformed-directive cases — in
+            # particular preserving the legacy ``"must have an indented
+            # block"`` substring that several tests assert on.
+            raw = _src_text(self.source, node).strip()
+            if raw.startswith("> optimize"):
+                m = raw.split(":", 2)
+                name = m[1].strip() if len(m) > 1 else ""
+                self._error(
+                    node,
+                    f"Optimize span {name!r} must have an indented block after it",
+                    code="K-OPT-EMPTY",
+                )
+            else:
+                self._error(node, f"unexpected statement node {t!r}")
+            return None
+        # Anything else is an unexpected node — surface a diagnostic
+        # but keep parsing the rest of the body.
+        self._error(node, f"unexpected statement node {t!r}")
+        return None
+
+    def _walk_assign_stmt(self, node: Node) -> AssignStmt:
+        target = _named_children(node)[0]
+        assert target.type == "assign_target"
+        name_node = _field(target, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        type_node = _field(target, "type")
+        type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
+        type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+
+        rhs_node = _field(node, "rhs")
+        # RHS is either an inline_python_expr or a template_expr.
+        if rhs_node is not None and rhs_node.type == "inline_python_expr":
+            code = self._walk_inline_python_expr(rhs_node)
+            seg = PythonExprNativeSegment(code=code, loc=self._span(rhs_node))
+            return AssignStmt(
+                name=name,
+                expr=[seg],
+                type_annotation=type_anno,
+                type_expr=type_expr,
+                loc=self._span(node),
+            )
+        # template_expr
+        segs = self._walk_template_expr(rhs_node) if rhs_node is not None else []
+        return AssignStmt(
+            name=name,
+            expr=segs,
+            type_annotation=type_anno,
+            type_expr=type_expr,
+            loc=self._span(node),
+        )
+
+    def _walk_assign_block_stmt(self, node: Node) -> AssignBlockStmt:
+        target = _named_children(node)[0]
+        name_node = _field(target, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        type_node = _field(target, "type")
+        type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
+        type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+        code_node = _field(node, "code")
+        code = self._dedent_fenced(code_node) if code_node is not None else ""
+        return AssignBlockStmt(
+            name=name,
+            code=code,
+            type_annotation=type_anno,
+            type_expr=type_expr,
+            loc=self._span(node),
+        )
+
+    def _walk_return_stmt(self, node: Node) -> Union[ReturnStmt, ReturnBlockStmt]:
+        value_node = _field(node, "value")
+        # Legacy invariant: `= \`code\`` (sole single-backtick) is a
+        # ``ReturnBlockStmt`` so the runtime preserves the native
+        # Python value (e.g. ``int``) rather than rendering it to a
+        # string. The branch must distinguish ``= \`code\``` from a
+        # ``ReturnStmt`` whose value happens to include a backtick
+        # segment alongside other content (which IS a ReturnStmt with
+        # a single PythonExprNativeSegment, rendered to string).
+        if value_node is not None and value_node.type == "inline_python_expr":
+            code = self._walk_inline_python_expr(value_node)
+            return ReturnBlockStmt(code=code, loc=self._span(node))
+        segs = self._walk_template_expr(value_node) if value_node is not None else []
+        return ReturnStmt(segments=segs, loc=self._span(node))
+
+    def _walk_return_block_stmt(self, node: Node) -> ReturnBlockStmt:
+        code_node = _field(node, "code")
+        code = self._dedent_fenced(code_node) if code_node is not None else ""
+        return ReturnBlockStmt(code=code, loc=self._span(node))
+
+    def _walk_python_block(self, node: Node) -> PythonBlock:
+        return PythonBlock(code=self._walk_python_block_code(node), loc=self._span(node))
+
+    def _walk_python_block_code(self, node: Node) -> str:
+        code_node = _field(node, "code")
+        return self._dedent_fenced(code_node) if code_node is not None else ""
+
+    def _walk_backtick_line_stmt(self, node: Node) -> BacktickLineStmt:
+        # The single child is an inline_python_expr.
+        for child in _named_children(node):
+            if child.type == "inline_python_expr":
+                code = self._walk_inline_python_expr(child)
+                return BacktickLineStmt(code=code, loc=self._span(node))
+        self._error(node, "backtick_line_stmt missing inline_python_expr child")
+        return BacktickLineStmt(code="", loc=self._span(node))
+
+    def _walk_template_line(self, node: Node) -> TemplateLine:
+        # Single named child is template_expr.
+        for child in _named_children(node):
+            if child.type == "template_expr":
+                segs = self._walk_template_expr(child)
+                return TemplateLine(segments=segs, loc=self._span(node))
+        return TemplateLine(segments=[], loc=self._span(node))
+
+    # =================================================================
+    # Type expressions
+    # =================================================================
+
+    def _walk_type_expr(self, node: Node) -> Optional[TypeExpr]:
+        # `type_expr` is a thin wrapper; its sole named child is the
+        # actual term (type_ref / type_apply / type_union / type_python).
+        inner = _named_children(node)
+        if not inner:
+            return None
+        target = inner[0]
+        if target.type == "type_ref":
+            name = _identifier_name(self.source, _field(target, "name") or _named_children(target)[0])
+            return TypeRef(name=name, loc=self._span(target))
+        if target.type == "type_apply":
+            name_node = _field(target, "name")
+            assert name_node is not None
+            name = _identifier_name(self.source, name_node)
+            args = [
+                self._walk_type_expr(arg)
+                for arg in _named_children(target)
+                if arg.type == "type_expr"
+            ]
+            args = [a for a in args if a is not None]
+            return TypeApply(name=name, args=args, loc=self._span(target))
+        if target.type == "type_union":
+            left_node = _field(target, "left")
+            right_node = _field(target, "right")
+            left = self._walk_type_term(left_node) if left_node is not None else None
+            right = self._walk_type_term(right_node) if right_node is not None else None
+            return TypeUnion(left=left, right=right, loc=self._span(target))
+        if target.type == "type_python":
+            body_node = _field(target, "code")
+            code = _decode_type_python_body(self.source, body_node) if body_node is not None else ""
+            return TypePython(code=code, loc=self._span(target))
+        # Unknown type_expr shape
+        self._error(target, f"unexpected type_expr inner {target.type!r}")
+        return None
+
+    def _walk_type_term(self, node: Node) -> Optional[TypeExpr]:
+        """Walk a node that is a `_type_expr_term` alternative (no `type_expr` wrapper)."""
+        t = node.type
+        if t == "type_ref":
+            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            return TypeRef(name=name, loc=self._span(node))
+        if t == "type_apply":
+            name_node = _field(node, "name")
+            assert name_node is not None
+            name = _identifier_name(self.source, name_node)
+            args = [
+                self._walk_type_expr(arg)
+                for arg in _named_children(node)
+                if arg.type == "type_expr"
+            ]
+            args = [a for a in args if a is not None]
+            return TypeApply(name=name, args=args, loc=self._span(node))
+        if t == "type_union":
+            left_node = _field(node, "left")
+            right_node = _field(node, "right")
+            left = self._walk_type_term(left_node) if left_node is not None else None
+            right = self._walk_type_term(right_node) if right_node is not None else None
+            return TypeUnion(left=left, right=right, loc=self._span(node))
+        self._error(node, f"unexpected type term {t!r}")
+        return None
+
+    def _type_expr_to_str(self, node: Node) -> str:
+        """Render a type_expr / inner term back to its source slice.
+
+        Used to populate the legacy ``type_annotation`` string field for
+        consumers (compiler / codegen / optimizer) that have not yet
+        migrated to the structured ``type_expr`` form. Returning the
+        raw source slice means the rendering is byte-perfect — including
+        the backticks for ``type_python`` cases, matching the legacy
+        ``KediType.resolve`` expectation.
+        """
+        return _src_text(self.source, node).strip()
+
+    # =================================================================
+    # Type definitions
+    # =================================================================
+
+    def _walk_type_def(self, node: Node) -> TypeDef:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        fields: List[TypeField] = []
+        seen_names: set[str] = set()
+        field_list = _field(node, "fields")
+        if field_list is not None:
+            for f in _named_children(field_list):
+                if f.type != "type_field":
+                    continue
+                fname_node = _field(f, "name")
+                assert fname_node is not None
+                fname = _identifier_name(self.source, fname_node)
+                if fname in seen_names:
+                    self._error(
+                        f,
+                        f"duplicate field {fname!r} in type {name!r}",
+                        code="K-TYPE-DUP",
+                    )
+                seen_names.add(fname)
+                ftype_node = _field(f, "type")
+                ftype_anno = self._type_expr_to_str(ftype_node) if ftype_node is not None else None
+                ftype_expr = self._walk_type_expr(ftype_node) if ftype_node is not None else None
+                fields.append(
+                    TypeField(
+                        name=fname,
+                        type_annotation=ftype_anno,
+                        type_expr=ftype_expr,
+                        loc=self._span(f),
+                    )
+                )
+        return TypeDef(name=name, fields=fields, loc=self._span(node))
+
+    # =================================================================
+    # Template segments
+    # =================================================================
+
+    def _walk_template_expr(self, node: Node) -> List[Segment]:
+        segs = [self._walk_segment(c) for c in _named_children(node) if c.is_named]
+        # The scanner's text-token rule absorbs any leading horizontal
+        # whitespace of a body line (because tree-sitter cannot
+        # interleave extras with a retried external-scan). The
+        # pre-refactor parser, by contrast, stripped the body indent
+        # before parsing — so its TextSegments did not carry that
+        # indentation. We restore parity here by lstripping the
+        # leading WS off the FIRST segment of each template_expr ONLY
+        # when it's a plain TextSegment. Internal-segment whitespace
+        # (the gap between an `<input>` and the text that follows it)
+        # is preserved.
+        if segs and isinstance(segs[0], TextSegment):
+            first = segs[0]
+            # Find how many leading non-escaped whitespace chars to
+            # strip. An escaped-WS index (from `\s`, `\t`, `\n`) must
+            # be preserved, so we stop stripping at the first such
+            # position.
+            shift = 0
+            for idx, ch in enumerate(first.text):
+                if ch not in (" ", "\t"):
+                    break
+                if idx in first.escaped_whitespace:
+                    break
+                shift += 1
+            if shift:
+                first.text = first.text[shift:]
+                if first.escaped_whitespace:
+                    first.escaped_whitespace = {
+                        i - shift for i in first.escaped_whitespace if i >= shift
+                    }
+        return segs
+
+    def _walk_segment(self, node: Node) -> Segment:
+        t = node.type
+        if t == "text_segment":
+            raw = _src_text(self.source, node)
+            # NOTE: do NOT strip leading/trailing whitespace here. The
+            # runtime in `compiler/evaluation.py:prepare_segments`
+            # already trims the first/last text-segment of an
+            # expression — including the body-indent absorbed by the
+            # scanner's leading-WS rule. Stripping in this walker would
+            # double up: it would also remove meaningful whitespace
+            # that sits BETWEEN segments (e.g. the gap between `<x>`
+            # and `mid` in ``  left   <x>   mid``).
+            text, escaped_positions = unescape_text_with_tracking(raw)
+            return TextSegment(
+                text=text,
+                escaped_whitespace=escaped_positions,
+                loc=self._span(node),
+            )
+        if t == "input_segment":
+            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            return InputSegment(name=name, loc=self._span(node))
+        if t == "call_segment":
+            return self._walk_call_segment(node)
+        if t == "output_segment":
+            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            type_node = _field(node, "type")
+            type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
+            type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+            return OutputSegment(
+                name=name,
+                type_annotation=type_anno,
+                type_expr=type_expr,
+                loc=self._span(node),
+            )
+        if t == "python_expr_segment":
+            # Child is an inline_python_expr.
+            for child in _named_children(node):
+                if child.type == "inline_python_expr":
+                    code = self._walk_inline_python_expr(child)
+                    return PythonExprSegment(code=code, loc=self._span(node))
+            self._error(node, "python_expr_segment missing inline_python_expr child")
+            return PythonExprSegment(code="", loc=self._span(node))
+        self._error(node, f"unexpected segment {t!r}")
+        # Fallback so callers don't need None checks.
+        return TextSegment(text="", loc=self._span(node))
+
+    def _walk_call_segment(self, node: Node) -> CallSegment:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        args: List[CallArg] = []
+        arg_list = _field(node, "args")
+        if arg_list is not None:
+            for arg_node in _named_children(arg_list):
+                if arg_node.type == "call_arg":
+                    args.append(self._walk_call_arg(arg_node))
+        return CallSegment(name=name, args=args, loc=self._span(node))
+
+    def _walk_call_arg(self, node: Node) -> CallArg:
+        r"""Build a CallArg matching the legacy runtime expectations.
+
+        The runtime (``compiler/evaluation._evaluate_arg``) checks for
+        these duck-typed attributes on a ``LiteralArg``:
+
+          - ``__native_backtick__``: arg passes a native Python value
+            (from a bare backtick `` `expr` ``).
+          - ``__python_segment__``: arg is a single ``<\`...\`>`` segment.
+          - ``__call_segment__``: arg is a single ``<func(...)>`` segment.
+          - ``__render_segments__``: arg is a mini-template; render its
+            segments to a string at call time.
+        """
+        children = _named_children(node)
+        if not children:
+            return LiteralArg(value="", loc=self._span(node))
+
+        first = children[0]
+        if first.type == "inline_python_expr":
+            code = self._walk_inline_python_expr(first)
+            lit = LiteralArg(value="__NATIVE_BACKTICK__", loc=self._span(node))
+            setattr(lit, "__native_backtick__", code)
+            return lit
+
+        if first.type == "template_arg":
+            segs = [self._walk_segment_in_call(c) for c in _named_children(first)]
+            lit = LiteralArg(value="__RENDER__", loc=self._span(node))
+            if len(segs) == 1:
+                only = segs[0]
+                if isinstance(only, PythonExprSegment):
+                    setattr(lit, "__python_segment__", only)
+                    return lit
+                if isinstance(only, CallSegment):
+                    setattr(lit, "__call_segment__", only)
+                    return lit
+            setattr(lit, "__render_segments__", segs)
+            return lit
+
+        # Unknown shape — make a best-effort literal.
+        lit = LiteralArg(value=_src_text(self.source, node), loc=self._span(node))
+        return lit
+
+    def _walk_segment_in_call(self, node: Node) -> Segment:
+        """A segment appearing inside a ``template_arg`` (call argument).
+
+        Each call-argument text segment is BOTH the first AND the last
+        text of its enclosing arg expression in the legacy semantics —
+        so we trim both ends here (matching ``parse_call_arguments``,
+        which calls ``raw.strip()`` on the arg before segment-parsing
+        it). Internal whitespace is preserved.
+        """
+        if node.type == "text_in_call_segment":
+            raw = _src_text(self.source, node).strip(" \t")
+            text, escaped_positions = unescape_text_with_tracking(raw)
+            return TextSegment(
+                text=text,
+                escaped_whitespace=escaped_positions,
+                loc=self._span(node),
+            )
+        return self._walk_segment(node)
+
+    # =================================================================
+    # Inline python expression body
+    # =================================================================
+
+    def _walk_inline_python_expr(self, node: Node) -> str:
+        body = _field(node, "code")
+        if body is None:
+            return ""
+        return _decode_inline_python_body(self.source, body)
+
+    # =================================================================
+    # Fenced code dedenting
+    # =================================================================
+
+    def _dedent_fenced(self, code_node: Node) -> str:
+        """Extract and dedent a python_code node's body."""
+        raw = _src_text(self.source, code_node)
+        # Strip the trailing newline (if any) before splitting so we
+        # don't get a phantom empty last line, then re-join.
+        lines = raw.split("\n")
+        if lines and lines[-1] == "":
+            lines = lines[:-1]
+        dedented = dedent_block(lines)
+        return "\n".join(dedented)
+
+    # =================================================================
+    # Directives
+    # =================================================================
+
+    def _walk_auto_directive(self, node: Node) -> AutoSpec:
+        body_node = _field(node, "body")
+        if body_node is None:
+            return AutoSpec(prompt="", loc=self._span(node))
+        prompt_lines: List[str] = []
+        for tline in _named_children(body_node):
+            if tline.type != "template_line":
+                continue
+            # Auto prompts are free text — render the raw source minus
+            # trailing newline, then dedent to remove the body's leading
+            # indentation.
+            expr = next(
+                (c for c in _named_children(tline) if c.type == "template_expr"),
+                None,
+            )
+            if expr is None:
+                prompt_lines.append("")
+            else:
+                prompt_lines.append(_src_text(self.source, expr).rstrip())
+        # Strip common leading indent (the auto body is indented under
+        # the directive header; the user's prompt content typically lives
+        # at one consistent indent level).
+        dedented = dedent_block(prompt_lines)
+        prompt = "\n".join(dedented).strip("\n")
+        return AutoSpec(prompt=prompt, loc=self._span(node))
+
+    def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        body_node = _field(node, "body")
+        template_lines: List[TemplateLine] = []
+        if body_node is not None:
+            for tline in _named_children(body_node):
+                if tline.type != "template_line":
+                    continue
+                tl = self._walk_template_line(tline)
+                template_lines.append(tl)
+        if not template_lines:
+            # Legacy invariant — preserve the exact substring so
+            # ``pytest.raises(ValueError, match="must have an indented block")``
+            # keeps matching.
+            self._error(
+                node,
+                f"Optimize span {name!r} must have an indented block after it",
+                code="K-OPT-EMPTY",
+            )
+        # The optimize span's template_lines are ALSO appended to the
+        # procedure body so they execute normally during a run; the
+        # optimizer mutates these line objects in place.
+        proc.body.extend(template_lines)
+        return OptimizeSpan(
+            name=name,
+            template_lines=template_lines,
+            loc=self._span(node),
+        )
+
+    # =================================================================
+    # Validation blocks
+    # =================================================================
+
+    def _walk_validation_block(self, node: Node) -> Union[TestSuite, EvalSuite, None]:
+        """Walk a `@test:` or `@eval:` block.
+
+        The grammar accepts ``@<kw>:<procedure>:`` with a uniform body
+        rule that allows ``> case:`` (test) or ``> data:`` / ``>
+        test_data:`` / ``> metric:`` (eval) directives. We dispatch
+        here based on the kw text, and emit a structured "Unknown
+        directive" error for any body entry that does not match the
+        chosen suite type.
+        """
+        kw_node = _field(node, "kw")
+        if kw_node is None:
+            self._error(node, "validation block missing keyword")
+            return None
+        kw_text = _src_text(self.source, kw_node)
+        proc_node = _field(node, "procedure")
+        if proc_node is None:
+            self._error(node, "validation block missing procedure name")
+            return None
+        procedure_name = _identifier_name(self.source, proc_node)
+        body = _field(node, "body")
+        body_children = _named_children(body) if body is not None else []
+
+        if kw_text == "test":
+            suite_t = TestSuite(procedure_name=procedure_name, cases=[], loc=self._span(node))
+            for c in body_children:
+                if c.type == "test_case":
+                    suite_t.cases.append(self._walk_test_case(c))
+                elif c.type in ("eval_data", "eval_test_data", "eval_metric"):
+                    self._error(
+                        c,
+                        f"Unknown directive in @test body: {c.type!r}",
+                        code="K-VALID-DIR",
+                    )
+                elif c.type == "ERROR" or c.is_error:
+                    self._error(
+                        c,
+                        "Unknown directive in @test body",
+                        code="K-VALID-DIR",
+                    )
+            return suite_t
+
+        if kw_text == "eval":
+            suite_e = EvalSuite(procedure_name=procedure_name, loc=self._span(node))
+            metric_count = 0
+            for c in body_children:
+                if c.type == "test_case":
+                    self._error(
+                        c,
+                        "Unknown directive in @eval body: 'case' is only valid in @test",
+                        code="K-VALID-DIR",
+                    )
+                elif c.type == "eval_data":
+                    ds = self._walk_eval_dataset(c, is_test=False)
+                    suite_e.datasets[ds.name] = ds
+                elif c.type == "eval_test_data":
+                    ds = self._walk_eval_dataset(c, is_test=True)
+                    suite_e.test_datasets[ds.name] = ds
+                elif c.type == "eval_metric":
+                    metric_count += 1
+                    suite_e.metrics.append(self._walk_eval_metric(c))
+                elif c.type == "ERROR" or c.is_error:
+                    self._error(
+                        c,
+                        "Unknown directive in @eval body",
+                        code="K-VALID-DIR",
+                    )
+            if metric_count > 1:
+                self._error(
+                    node,
+                    "Multiple metrics defined for the same procedure",
+                    code="K-EVAL-MULTI-METRIC",
+                )
+            return suite_e
+
+        self._error(
+            kw_node,
+            f"Unknown validation block keyword {kw_text!r}; expected 'test' or 'eval'",
+            code="K-VALID-KW",
+        )
+        return None
+
+    def _walk_test_case(self, node: Node) -> TestCase:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        body = _field(node, "code")
+        code = ""
+        is_block = False
+        if body is not None:
+            for inner in _named_children(body):
+                if inner.type == "backtick_line_stmt":
+                    # Single-line backtick: extract the inline python
+                    # body (without backticks).
+                    bn = next(
+                        (c for c in _named_children(inner) if c.type == "inline_python_expr"),
+                        None,
+                    )
+                    if bn is not None:
+                        code = self._walk_inline_python_expr(bn)
+                    is_block = False
+                elif inner.type == "python_block":
+                    code = self._walk_python_block_code(inner)
+                    is_block = True
+        return TestCase(name=name, code=code, is_block=is_block, loc=self._span(node))
+
+
+    def _walk_eval_dataset(self, node: Node, *, is_test: bool) -> EvalDataset:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        code, is_block = self._walk_eval_entry_body(_field(node, "body"))
+        return EvalDataset(name=name, code=code, is_block=is_block, loc=self._span(node))
+
+    def _walk_eval_metric(self, node: Node) -> EvalMetric:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        dataset_node = _field(node, "dataset")
+        dataset_name = (
+            _identifier_name(self.source, dataset_node) if dataset_node is not None else None
+        )
+        code, is_block = self._walk_eval_entry_body(_field(node, "body"))
+        return EvalMetric(
+            name=name,
+            code=code,
+            is_block=is_block,
+            dataset_name=dataset_name,
+            loc=self._span(node),
+        )
+
+    def _walk_eval_entry_body(self, body: Optional[Node]) -> tuple[str, bool]:
+        if body is None:
+            return ("", False)
+        for inner in _named_children(body):
+            if inner.type == "return_stmt":
+                # The return's value is either inline_python_expr or
+                # template_expr — eval entries always use the former
+                # in practice.
+                value = _field(inner, "value")
+                if value is not None and value.type == "inline_python_expr":
+                    return (self._walk_inline_python_expr(value), False)
+                if value is not None:
+                    return (_src_text(self.source, value), False)
+                return ("", False)
+            if inner.type == "return_block_stmt":
+                code_node = _field(inner, "code")
+                code = self._dedent_fenced(code_node) if code_node is not None else ""
+                return (code, True)
+        return ("", False)
+
+
+# ---------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------
+
+
+def cst_to_ast(
+    source: bytes,
+    tree: Tree,
+    source_path: Optional[str] = None,
+) -> Union[Program, ProgramWithValidation]:
+    """Walk ``tree`` and produce a Kedi AST.
+
+    Raises :class:`KediParseError` if any error-severity diagnostic was
+    collected (parse errors from tree-sitter or structural-validation
+    issues).
+    """
+    return _Walker(source, tree, source_path).walk_program()

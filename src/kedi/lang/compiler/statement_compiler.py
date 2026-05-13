@@ -15,7 +15,7 @@ from ..ast import (
     Stmt,
     TemplateLine,
 )
-from ..parser.preprocessing import preserve_escaped_whitespace
+from ..parser.escapes import preserve_escaped_whitespace
 from .evaluation import (
     evaluate_assignment_rhs,
     evaluate_python_inline,
@@ -88,7 +88,7 @@ class StatementCompiler:
         """Execute an assignment statement."""
         native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
-        kedi_type = KediType(stmt.type_annotation)
+        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
 
         if native is not None:
             if is_backtick:
@@ -121,7 +121,7 @@ class StatementCompiler:
     def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
         """Execute an assignment with Python block RHS."""
         result = execute_python_block(stmt.code, self.rt, closure_env)
-        kedi_type = KediType(stmt.type_annotation)
+        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
 
         value = result
         if not kedi_type.is_none():
