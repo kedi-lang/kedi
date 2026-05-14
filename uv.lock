@@ -1666,7 +1666,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "python-dotenv" },
     { name = "tree-sitter", specifier = ">=0.25" },
-    { name = "tree-sitter-kedi", git = "https://github.com/kedi-lang/tree-sitter-kedi?rev=e8e0331b27b47b4ba63646c09e2bd786e2f3e87f" },
+    { name = "tree-sitter-kedi", specifier = "==0.1.0" },
     { name = "tree-sitter-python", specifier = ">=0.23" },
 ]
 
@@ -3785,10 +3785,11 @@ wheels = [
 [[package]]
 name = "tree-sitter-kedi"
 version = "0.1.0"
-source = { git = "https://github.com/kedi-lang/tree-sitter-kedi?rev=e8e0331b27b47b4ba63646c09e2bd786e2f3e87f#e8e0331b27b47b4ba63646c09e2bd786e2f3e87f" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tree-sitter" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/b8/72ac8983d45ea887f14a0156bb191bcfdf7ef41b536eb1d5b9b8132c9e02/tree_sitter_kedi-0.1.0.tar.gz", hash = "sha256:e0d6aa83737b10b036f7a49dd5bb4f9ebdc335da9ed970cf59845039ab61a2d9", size = 47200, upload-time = "2026-05-14T18:34:09.655Z" }
 
 [[package]]
 name = "tree-sitter-python"

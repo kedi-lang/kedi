@@ -53,9 +53,6 @@ kedi-lsp = "kedi.lsp.server:main"
 packages = ["src/kedi"]
 include-package-data = true
 
-[tool.uv.sources]
-tree-sitter-kedi = { git = "https://github.com/kedi-lang/tree-sitter-kedi", rev = "e8e0331b27b47b4ba63646c09e2bd786e2f3e87f" }
-
 [tool.black]
 line-length = 100
 target-version = ['py311']
