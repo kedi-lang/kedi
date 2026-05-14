@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - stable
+      - gepa-wip
   pull_request:
 
 jobs:
