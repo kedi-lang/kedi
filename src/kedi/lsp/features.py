@@ -726,9 +726,9 @@ def _describe_ast_node(node) -> Optional[str]:
     if isinstance(node, PythonExprSegment):
         return "**Inline Python expression** `` `…` `` — evaluated and substituted into the prompt."
     if isinstance(node, EvalSuite):
-        return f"**`@eval: {node.procedure}:`** — evaluation block."
+        return f"**`@eval: {node.procedure_name}:`** — evaluation block."
     if isinstance(node, TestSuite):
-        return f"**`@test: {node.procedure}:`** — test block."
+        return f"**`@test: {node.procedure_name}:`** — test block."
     if isinstance(node, EvalDataset):
         return f"**Dataset** `> data: {node.name}` — input rows for evaluation."
     if isinstance(node, EvalMetric):
