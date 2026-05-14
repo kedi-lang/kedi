@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.11'",
@@ -1666,7 +1666,7 @@ requires-dist = [
     { name = "pytest", specifier = ">=8.2" },
     { name = "python-dotenv" },
     { name = "tree-sitter", specifier = ">=0.25" },
-    { name = "tree-sitter-kedi", editable = "tree-sitter-kedi" },
+    { name = "tree-sitter-kedi", git = "https://github.com/kedi-lang/tree-sitter-kedi?rev=e8e0331b27b47b4ba63646c09e2bd786e2f3e87f" },
     { name = "tree-sitter-python", specifier = ">=0.23" },
 ]
 
@@ -3785,7 +3785,10 @@ wheels = [
 [[package]]
 name = "tree-sitter-kedi"
 version = "0.1.0"
-source = { editable = "tree-sitter-kedi" }
+source = { git = "https://github.com/kedi-lang/tree-sitter-kedi?rev=e8e0331b27b47b4ba63646c09e2bd786e2f3e87f#e8e0331b27b47b4ba63646c09e2bd786e2f3e87f" }
+dependencies = [
+    { name = "tree-sitter" },
+]
 
 [[package]]
 name = "tree-sitter-python"
