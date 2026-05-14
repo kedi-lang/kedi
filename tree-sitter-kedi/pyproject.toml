@@ -41,4 +41,4 @@ include = ["tree_sitter_kedi*"]
 "" = "bindings/python"
 
 [tool.setuptools.package-data]
-"tree_sitter_kedi" = ["*.pyi", "py.typed"]
+"tree_sitter_kedi" = ["*.pyi", "py.typed", "queries/*.scm"]

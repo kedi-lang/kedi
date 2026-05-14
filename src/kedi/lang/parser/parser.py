@@ -33,6 +33,13 @@ def _get_parser() -> Parser:
     return _parser
 
 
+def get_language() -> Language:
+    """Return the process-wide Kedi ``Language`` (needed for Query)."""
+    _get_parser()
+    assert _language is not None
+    return _language
+
+
 def parse(source: str) -> Tree:
     """Parse Kedi source text into a tree-sitter ``Tree``.
 
