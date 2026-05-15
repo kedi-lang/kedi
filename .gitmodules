@@ -1,3 +1,9 @@
 [submodule "kedi-vscode"]
 	path = kedi-vscode
 	url = https://github.com/kedi-lang/kedi-vscode
+[submodule "kedi-zed"]
+	path = kedi-zed
+	url = https://github.com/kedi-lang/kedi-zed
+[submodule "tree-sitter-kedi"]
+	path = tree-sitter-kedi
+	url = https://github.com/kedi-lang/tree-sitter-kedi
