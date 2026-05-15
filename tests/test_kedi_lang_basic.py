@@ -25,7 +25,6 @@ def _run(monkeypatch: Any, src: str) -> Any:
 # KediRuntime core API
 # ----------------------
 def test_runtime_city_country(monkeypatch: Any) -> None:
-    import kedi.core as core_mod
 
     rt = core.KediRuntime(adapter=MockAdapter())
 
@@ -44,7 +43,6 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
 
 
 def test_runtime_nested_calls(monkeypatch: Any) -> None:
-    import kedi.core as core_mod
 
     rt = core.KediRuntime(adapter=MockAdapter())
 
@@ -55,7 +53,14 @@ def test_runtime_nested_calls(monkeypatch: Any) -> None:
 
     @rt.procedure
     def get_language(country: str):  # type: ignore[no-redef]
-        rt.m(["The primary language spoken in ", rt.i("country"), " is ", rt.o("language")])  # type: ignore[name-defined]
+        rt.m(
+            [
+                "The primary language spoken in ",
+                rt.i("country"),
+                " is ",
+                rt.o("language"),
+            ]
+        )  # type: ignore[name-defined]
         return rt.i("language")  # type: ignore[name-defined]
 
     @rt.procedure
@@ -65,7 +70,10 @@ def test_runtime_nested_calls(monkeypatch: Any) -> None:
 
     @rt.main
     def main():  # type: ignore[no-redef]
-        return rt.c("translate_greeting", rt.c("get_language", rt.c("get_country_info", "Paris")))  # type: ignore[name-defined]
+        return rt.c(
+            "translate_greeting",
+            rt.c("get_language", rt.c("get_country_info", "Paris")),
+        )  # type: ignore[name-defined]
 
     out = rt.run_main()
     assert isinstance(out, str)
@@ -292,7 +300,7 @@ def test_inline_python_with_variables(monkeypatch: Any) -> None:
 def test_typed_params_basic_sum(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@add(x: int, y: int):\n" "  = <`x + y`>\n\n" "= <add(`2`, `3`)>\n"),
+        ("@add(x: int, y: int):\n  = <`x + y`>\n\n= <add(`2`, `3`)>\n"),
     )
     assert out == "5"
 
@@ -380,7 +388,7 @@ def test_inline_python_nested_call_arguments(monkeypatch: Any) -> None:
 def test_inline_python_with_comparison_and_assert(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@f():\n" "  = <`1 + 1`>\n\n" "= <`assert 5 > 3`>\n"),
+        ("@f():\n  = <`1 + 1`>\n\n= <`assert 5 > 3`>\n"),
     )
     assert out == ""
 
@@ -392,7 +400,7 @@ def test_inline_python_assert_failure_in_return(monkeypatch: Any) -> None:
 
 
 def test_inline_python_assert_failure_in_template_line(monkeypatch: Any) -> None:
-    src = "@p():\n" "  <`assert False`>\n" "  = ok\n\n" "= <p()>\n"
+    src = "@p():\n  <`assert False`>\n  = ok\n\n= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()
@@ -452,7 +460,7 @@ def test_python_block_with_llm_outputs(monkeypatch: Any) -> None:
 def test_assign_basic(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@p(x):\n" "  [y] = <x>\n" "  = <y>\n\n" "= <p(alpha)>\n"),
+        ("@p(x):\n  [y] = <x>\n  = <y>\n\n= <p(alpha)>\n"),
     )
     assert out == "alpha"
 
@@ -616,7 +624,7 @@ def test_typed_outputs_multiple(monkeypatch: Any) -> None:
 def test_typed_output_in_return_context(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@mk():\n  produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n" "= <mk()>\n"),
+        ("@mk():\n  produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n= <mk()>\n"),
     )
     assert out.isdigit()
 

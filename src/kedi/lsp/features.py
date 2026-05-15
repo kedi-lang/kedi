@@ -27,7 +27,7 @@ the server publishes as a semantic-tokens legend.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import importlib.resources
 
@@ -82,7 +82,6 @@ from ..lang.ast import (
     TypeDef,
     TypeExpr,
     TypeField,
-    TypePython,
     TypeRef,
     TypeUnion,
     VarArg,
@@ -134,7 +133,9 @@ def _position_inside(pos: lsp.Position, span: Span) -> bool:
 
 def _segments_of(stmt) -> list:
     """All segment children of a statement (``segments`` or ``expr``)."""
-    return list(getattr(stmt, "segments", []) or []) + list(getattr(stmt, "expr", []) or [])
+    return list(getattr(stmt, "segments", []) or []) + list(
+        getattr(stmt, "expr", []) or []
+    )
 
 
 # =====================================================================
@@ -142,7 +143,9 @@ def _segments_of(stmt) -> list:
 # =====================================================================
 
 
-def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Diagnostic]:
+def compute_diagnostics(
+    source: str, source_path: Optional[str]
+) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
         parse_program(source, source_path=source_path)
@@ -195,10 +198,7 @@ def _resolve_symbol_at(
         if proc.loc is None or not _position_inside(pos, proc.loc):
             continue
         # Cursor on procedure name itself? Use header-line check.
-        if (
-            pos.line + 1 == proc.loc.start_line
-            and _position_in_proc_name(proc, pos)
-        ):
+        if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
             return SymbolRef(
                 kind="procedure",
                 name=proc.name,
@@ -229,7 +229,9 @@ def _resolve_symbol_at(
         if r is not None:
             return r
     if prog.toplevel_return is not None:
-        r = _resolve_in_stmt(prog.toplevel_return, pos, None, proc_by_name, type_by_name)
+        r = _resolve_in_stmt(
+            prog.toplevel_return, pos, None, proc_by_name, type_by_name
+        )
         if r is not None:
             return r
     # Type defs (top-level).
@@ -286,7 +288,11 @@ def _resolve_in_stmt(
     proc_by_name: dict,
     type_by_name: dict,
 ) -> Optional[SymbolRef]:
-    if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
+    if (
+        not hasattr(stmt, "loc")
+        or stmt.loc is None
+        or not _position_inside(pos, stmt.loc)
+    ):
         return None
     # AssignStmt / AssignBlockStmt target name
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
@@ -360,7 +366,7 @@ def _resolve_in_segment(
                 ),
             )
         # Recurse into args.
-        from ..lang.ast import LiteralArg
+
         for arg in seg.args or []:
             for inner_seg_attr in (
                 "__call_segment__",
@@ -541,13 +547,8 @@ def compute_hover(
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
-        text = (
-            f"**Parameter** `{sym.name}`"
-            + (
-                f" of `@{sym.scope_proc.name}`"
-                if sym.scope_proc is not None
-                else ""
-            )
+        text = f"**Parameter** `{sym.name}`" + (
+            f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
         )
     elif sym.kind == "local":
         text = f"**Local** `{sym.name}` — output or assignment in this procedure."
@@ -700,11 +701,15 @@ def _describe_ast_node(node) -> Optional[str]:
     if isinstance(node, ReturnStmt):
         return "**Return** `= …` — final value emitted by this procedure."
     if isinstance(node, ReturnBlockStmt):
-        return "**Python block return** `= ```…``` ` — runs Python and returns its value."
+        return (
+            "**Python block return** `= ```…``` ` — runs Python and returns its value."
+        )
     if isinstance(node, BacktickLineStmt):
         return "**Inline Python statement** `` `…` `` — side-effecting Python line."
     if isinstance(node, PythonBlock):
-        return "**Python block** — top-level ```python``` runs once as the module prelude."
+        return (
+            "**Python block** — top-level ```python``` runs once as the module prelude."
+        )
     if isinstance(node, AutoSpec):
         return "**`> auto:`** — AI-generated procedure prompt; body is the spec."
     if isinstance(node, OptimizeSpan):
@@ -722,7 +727,9 @@ def _describe_ast_node(node) -> Optional[str]:
             f"available as a local below this line."
         )
     if isinstance(node, CallSegment):
-        return f"**Call segment** `<{node.name}(...)>` — invokes another procedure inline."
+        return (
+            f"**Call segment** `<{node.name}(...)>` — invokes another procedure inline."
+        )
     if isinstance(node, PythonExprSegment):
         return "**Inline Python expression** `` `…` `` — evaluated and substituted into the prompt."
     if isinstance(node, EvalSuite):
@@ -738,9 +745,7 @@ def _describe_ast_node(node) -> Optional[str]:
 
 def _proc_signature_markdown(proc: ProcedureDef) -> str:
     annos = proc.param_type_annotations or {}
-    params = ", ".join(
-        f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params
-    )
+    params = ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params)
     sig = f"`@{proc.name}({params})`"
     if proc.return_type_annotation:
         sig += f" → `{proc.return_type_annotation}`"
@@ -757,9 +762,7 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
 
 
 def _type_signature_markdown(td: TypeDef) -> str:
-    fields = ", ".join(
-        f"{f.name}: {f.type_annotation or 'str'}" for f in td.fields
-    )
+    fields = ", ".join(f"{f.name}: {f.type_annotation or 'str'}" for f in td.fields)
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
 
 
@@ -912,7 +915,9 @@ def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
             _collect_type_refs_in_expr(seg.type_expr, name, out)
 
 
-def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Span]) -> None:
+def _collect_type_refs_in_expr(
+    expr: Optional[TypeExpr], name: str, out: List[Span]
+) -> None:
     if expr is None:
         return
     if isinstance(expr, TypeRef) and expr.name == name and expr.loc is not None:
@@ -1002,7 +1007,8 @@ def compute_rename(
         )
         # de-dupe
         if not any(
-            e.range == decl_edit.range and e.new_text == decl_edit.new_text for e in edits
+            e.range == decl_edit.range and e.new_text == decl_edit.new_text
+            for e in edits
         ):
             edits.append(decl_edit)
     return lsp.WorkspaceEdit(changes={uri: edits})
@@ -1033,10 +1039,15 @@ def compute_formatting(source: str) -> List[lsp.TextEdit]:
 
     # Compute end position of the original document.
     if not source:
-        return [lsp.TextEdit(range=lsp.Range(
-            start=lsp.Position(line=0, character=0),
-            end=lsp.Position(line=0, character=0),
-        ), new_text=formatted)]
+        return [
+            lsp.TextEdit(
+                range=lsp.Range(
+                    start=lsp.Position(line=0, character=0),
+                    end=lsp.Position(line=0, character=0),
+                ),
+                new_text=formatted,
+            )
+        ]
     end_line = source.count("\n")
     last_line_start = source.rfind("\n") + 1
     end_char = len(source) - last_line_start
@@ -1123,7 +1134,11 @@ def compute_signature_help(
 
 
 def _innermost_call_at(stmt, pos: lsp.Position) -> Optional[CallSegment]:
-    if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
+    if (
+        not hasattr(stmt, "loc")
+        or stmt.loc is None
+        or not _position_inside(pos, stmt.loc)
+    ):
         return None
     found: Optional[CallSegment] = None
     for seg in _segments_of(stmt):
@@ -1219,7 +1234,11 @@ def compute_inlay_hints(
                 for inner in getattr(arg, "__render_segments__", None) or []:
                     visit_segment(inner, enclosing_proc)
         elif isinstance(seg, OutputSegment):
-            if seg.type_expr is None and seg.type_annotation is None and seg.loc is not None:
+            if (
+                seg.type_expr is None
+                and seg.type_annotation is None
+                and seg.loc is not None
+            ):
                 if not _in_range(seg.loc, rng):
                     return
                 # Position the hint AT the closing `]` so it reads as
@@ -1304,9 +1323,9 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
     if proc.params:
         annos = proc.param_type_annotations or {}
         detail_parts.append(
-            "(" + ", ".join(
-                f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params
-            ) + ")"
+            "("
+            + ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params)
+            + ")"
         )
     if proc.return_type_annotation:
         detail_parts.append(f"-> {proc.return_type_annotation}")
@@ -1315,7 +1334,9 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
         detail=" ".join(detail_parts),
         kind=lsp.SymbolKind.Function,
         range=_span_to_range(proc.loc) if proc.loc else _empty_range(),
-        selection_range=_span_to_range(_proc_name_span(proc)) if proc.loc else _empty_range(),
+        selection_range=_span_to_range(_proc_name_span(proc))
+        if proc.loc
+        else _empty_range(),
         children=children,
     )
 
@@ -1425,41 +1446,41 @@ def _empty_range() -> lsp.Range:
 # reference token types by their index in the legend the server returns
 # at initialization.
 SEMANTIC_TOKEN_TYPES: List[str] = [
-    "namespace",     # 0
-    "type",          # 1
-    "class",         # 2
-    "enum",          # 3
-    "interface",     # 4
-    "struct",        # 5
-    "typeParameter", # 6
-    "parameter",     # 7
-    "variable",      # 8
-    "property",      # 9
-    "enumMember",    # 10
-    "event",         # 11
-    "function",      # 12
-    "method",        # 13
-    "macro",         # 14
-    "keyword",       # 15
-    "modifier",      # 16
-    "comment",       # 17
-    "string",        # 18
-    "number",        # 19
-    "regexp",        # 20
-    "operator",      # 21
-    "decorator",     # 22
+    "namespace",  # 0
+    "type",  # 1
+    "class",  # 2
+    "enum",  # 3
+    "interface",  # 4
+    "struct",  # 5
+    "typeParameter",  # 6
+    "parameter",  # 7
+    "variable",  # 8
+    "property",  # 9
+    "enumMember",  # 10
+    "event",  # 11
+    "function",  # 12
+    "method",  # 13
+    "macro",  # 14
+    "keyword",  # 15
+    "modifier",  # 16
+    "comment",  # 17
+    "string",  # 18
+    "number",  # 19
+    "regexp",  # 20
+    "operator",  # 21
+    "decorator",  # 22
 ]
 SEMANTIC_TOKEN_MODIFIERS: List[str] = [
-    "declaration",   # bit 0  = 1
-    "definition",    # bit 1  = 2
-    "readonly",      # bit 2  = 4
-    "static",        # bit 3  = 8
-    "deprecated",    # bit 4  = 16
-    "abstract",      # bit 5  = 32
-    "async",         # bit 6  = 64
+    "declaration",  # bit 0  = 1
+    "definition",  # bit 1  = 2
+    "readonly",  # bit 2  = 4
+    "static",  # bit 3  = 8
+    "deprecated",  # bit 4  = 16
+    "abstract",  # bit 5  = 32
+    "async",  # bit 6  = 64
     "modification",  # bit 7  = 128
-    "documentation", # bit 8  = 256
-    "defaultLibrary",# bit 9  = 512
+    "documentation",  # bit 8  = 256
+    "defaultLibrary",  # bit 9  = 512
 ]
 
 _TT = {name: i for i, name in enumerate(SEMANTIC_TOKEN_TYPES)}
@@ -1720,9 +1741,7 @@ def _resolve_overlaps(
         # specificity tag. Smaller length wins on tie-break.
         paint: List[Optional[Tuple[int, int, int]]] = [None] * max_col
         # Apply tokens longest-first so shorter ones overwrite.
-        for col, length, ttype, mods in sorted(
-            line_tokens, key=lambda t: -t[1]
-        ):
+        for col, length, ttype, mods in sorted(line_tokens, key=lambda t: -t[1]):
             for i in range(col, col + length):
                 if 0 <= i < max_col:
                     paint[i] = (length, ttype, mods)
@@ -1735,7 +1754,9 @@ def _resolve_overlaps(
                 continue
             _, ttype, mods = slot
             j = i
-            while j < max_col and paint[j] is not None and paint[j][1:] == (ttype, mods):
+            while (
+                j < max_col and paint[j] is not None and paint[j][1:] == (ttype, mods)
+            ):
                 j += 1
             out.append((line, i, j - i, ttype, mods))
             i = j
@@ -1799,13 +1820,15 @@ def compute_python_ranges(source: str) -> List[dict]:
     document that mirrors the Kedi file's coordinate space so requests
     can be forwarded to a Python language server without translation.
     """
-    tree: Tree = _ts_parse(source.encode("utf-8") if isinstance(source, str) else source)
+    tree: Tree = _ts_parse(
+        source.encode("utf-8") if isinstance(source, str) else source
+    )
     src_bytes = source.encode("utf-8") if isinstance(source, str) else source
     out: List[dict] = []
 
     def visit(node: Node) -> None:
         if node.type == "python_code":
-            text = src_bytes[node.start_byte:node.end_byte].decode("utf-8", "replace")
+            text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
             # Dedent matching the AST walker — keeps highlighting
             # positions aligned for Pylance.
             from ..lang.parser.escapes import dedent_block
@@ -1831,7 +1854,7 @@ def compute_python_ranges(source: str) -> List[dict]:
                 }
             )
         elif node.type == "python_inline_body":
-            text = src_bytes[node.start_byte:node.end_byte].decode("utf-8", "replace")
+            text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
             out.append(
                 {
                     "kind": "inline",

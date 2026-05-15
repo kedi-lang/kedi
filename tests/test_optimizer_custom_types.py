@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from typing import List
 
 try:
     from pydantic import BaseModel
+
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
@@ -15,26 +15,25 @@ except ImportError:
 from kedi.lang import parse_program, compile_program
 from kedi.optimization.services import (
     OptimizationDataLoader,
-    MetricFactory,
     TypeResolver,
-    StructuredTypeHandler,
-    DSPyModuleBuilder,
 )
 
 
 # ==================== Pydantic Model Tests ====================
 
+
 @pytest.mark.skipif(not PYDANTIC_AVAILABLE, reason="Pydantic not available")
 def test_pydantic_input_output():
     """Test optimizer with Pydantic model inputs and outputs."""
+
     class Person(BaseModel):
         name: str
         age: int
-    
+
     class Result(BaseModel):
         status: str
         value: int
-    
+
     src = """
 @process(person: Person) -> Result:
   > optimize: analyze:
@@ -44,22 +43,23 @@ def test_pydantic_input_output():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     resolver = TypeResolver(rt)
     proc = prog.procedures[0]
     param_types = resolver.resolve_param_types(proc)
-    
+
     # Should resolve Person type
-    assert 'person' in param_types or len(param_types) >= 0  # Type resolution may vary
+    assert "person" in param_types or len(param_types) >= 0  # Type resolution may vary
 
 
 @pytest.mark.skipif(not PYDANTIC_AVAILABLE, reason="Pydantic not available")
 def test_pydantic_in_dataset():
     """Test loading data with Pydantic models."""
+
     class Person(BaseModel):
         name: str
         age: int
-    
+
     src = """
 @test(p: Person) -> int:
   = `p.age`
@@ -79,17 +79,18 @@ def test_pydantic_in_dataset():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
+
     # Should be able to load data with Pydantic models
-    train_data = loader.load_training_data(eval_suite, 'people')
+    train_data = loader.load_training_data(eval_suite, "people")
     assert len(train_data) == 2
-    assert hasattr(train_data[0][0], 'name')  # First element is Person
+    assert hasattr(train_data[0][0], "name")  # First element is Person
 
 
 # ==================== List[T] Type Tests ====================
+
 
 def test_list_type_annotation():
     """Test type resolver with list annotations."""
@@ -99,13 +100,13 @@ def test_list_type_annotation():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     resolver = TypeResolver(rt)
     proc = prog.procedures[0]
     param_types = resolver.resolve_param_types(proc)
-    
+
     # Should handle list types
-    assert 'items' in param_types or len(param_types) >= 0
+    assert "items" in param_types or len(param_types) >= 0
 
 
 def test_list_in_data():
@@ -126,11 +127,11 @@ def test_list_in_data():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 3
     assert train_data[0] == ([1, 2, 3], 6)
 
@@ -152,16 +153,17 @@ def test_list_output():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 2
     assert train_data[0][1] == 2  # Changed to match x * 2
 
 
 # ==================== Dict Type Tests ====================
+
 
 def test_dict_input():
     """Test procedure with dict input."""
@@ -180,16 +182,17 @@ def test_dict_input():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 2
     assert train_data[0][0] == {"a": 1, "b": 2}
 
 
 # ==================== Tuple Type Tests ====================
+
 
 def test_tuple_input():
     """Test procedure with tuple input."""
@@ -208,16 +211,17 @@ def test_tuple_input():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 2
     assert train_data[0][0] == (3, 4)
 
 
 # ==================== Custom Kedi Type Tests ====================
+
 
 def test_custom_type_resolution():
     """Test resolving custom types defined in Kedi."""
@@ -229,13 +233,13 @@ def test_custom_type_resolution():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     resolver = TypeResolver(rt)
     proc = prog.procedures[0]
     param_types = resolver.resolve_param_types(proc)
-    
+
     # Should handle int type
-    assert 'x' in param_types or len(param_types) >= 0
+    assert "x" in param_types or len(param_types) >= 0
 
 
 def test_mixed_types():
@@ -255,16 +259,17 @@ def test_mixed_types():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 2
     assert train_data[0][0] == (1, "sum", [2, 3])
 
 
 # ==================== Complex Nested Types ====================
+
 
 def test_nested_structures():
     """Test with nested data structures."""
@@ -283,11 +288,11 @@ def test_nested_structures():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 2
     assert train_data[0][0] == {"a": [1, 2], "b": [3, 4]}
 
@@ -310,11 +315,10 @@ def test_optional_types():
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
-    
+
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
-    
-    train_data = loader.load_training_data(eval_suite, 'cases')
+
+    train_data = loader.load_training_data(eval_suite, "cases")
     assert len(train_data) == 3
     assert train_data[1][0] is None
-

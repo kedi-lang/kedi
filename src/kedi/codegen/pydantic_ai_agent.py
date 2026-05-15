@@ -35,7 +35,9 @@ class PydanticAIAgent(CodegenAgent):
     """Agent that generates Python code using Pydantic-AI."""
 
     def __init__(self, model: str | None = None) -> None:
-        self.model = model or os.environ.get("MODEL_NAME") or "openrouter/minimax/minimax-m2.7"
+        self.model = (
+            model or os.environ.get("MODEL_NAME") or "openrouter/minimax/minimax-m2.7"
+        )
         self.adapter = PydanticAdapter(model=self.model)
 
     def generate_tests(
@@ -50,7 +52,9 @@ class PydanticAIAgent(CodegenAgent):
             python_signature, prompt, context, previous_error
         )
 
-        result = self.adapter.produce_sync(template=instruction, output_type=PythonTestOutput)
+        result = self.adapter.produce_sync(
+            template=instruction, output_type=PythonTestOutput
+        )
         return result.test_code
 
     def generate_impl(
@@ -66,5 +70,7 @@ class PydanticAIAgent(CodegenAgent):
             python_signature, prompt, context, python_tests, previous_error
         )
 
-        result = self.adapter.produce_sync(template=instruction, output_type=PythonImplOutput)
+        result = self.adapter.produce_sync(
+            template=instruction, output_type=PythonImplOutput
+        )
         return result.implementation

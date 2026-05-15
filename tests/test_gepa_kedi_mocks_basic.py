@@ -3,6 +3,7 @@
 Verifies that every piece of the RANGE[lo,hi] mock protocol behaves
 deterministically and correctly in isolation, before any end-to-end tests.
 """
+
 from __future__ import annotations
 
 import json
@@ -11,7 +12,6 @@ from typing import Any
 import dspy
 import pytest
 
-from kedi.lang import compile_program, parse_program
 from tests.dspy_mocks import (
     REFLECTION_STEP,
     LMCall,
@@ -19,7 +19,6 @@ from tests.dspy_mocks import (
     PredictCall,
     Recorder,
     RangeAwareAdapter,
-    deterministic_uniform_0_1,
     install_mock_dspy,
     parse_first_range,
     sample_from_range,
@@ -27,6 +26,7 @@ from tests.dspy_mocks import (
 
 
 # ── parse_first_range ────────────────────────────────────────────────
+
 
 class TestParseFirstRange:
     def test_valid_positive(self):
@@ -65,6 +65,7 @@ class TestParseFirstRange:
 
 # ── sample_from_range ────────────────────────────────────────────────
 
+
 class TestSampleFromRange:
     def test_midpoint_positive_range(self):
         ival, fval = sample_from_range("RANGE[10,20]", prefer_midpoint=True)
@@ -95,6 +96,7 @@ class TestSampleFromRange:
 
 
 # ── MockLM optimizer response ────────────────────────────────────────
+
 
 class TestMockLMOptimizer:
     def _call(self, prompt: str) -> dict[str, Any]:
@@ -164,6 +166,7 @@ class TestMockLMOptimizer:
 
 # ── MockLM reflection response ──────────────────────────────────────
 
+
 class TestMockLMReflection:
     def _call(self, prompt: str) -> str:
         lm = MockLM(model="mock/reflection")
@@ -216,6 +219,7 @@ class TestMockLMReflection:
 
 # ── Recorder helpers ─────────────────────────────────────────────────
 
+
 class TestRecorder:
     def test_reset_clears_everything(self):
         Recorder.calls.append(PredictCall(instructions="x", kwargs={}))
@@ -228,9 +232,15 @@ class TestRecorder:
 
     def test_optimizer_and_reflection_call_filters(self):
         Recorder.reset()
-        Recorder.lm_calls.append(LMCall(prompt="a", response="b", model="mock/optimizer"))
-        Recorder.lm_calls.append(LMCall(prompt="c", response="d", model="mock/reflection"))
-        Recorder.lm_calls.append(LMCall(prompt="e", response="f", model="mock/optimizer"))
+        Recorder.lm_calls.append(
+            LMCall(prompt="a", response="b", model="mock/optimizer")
+        )
+        Recorder.lm_calls.append(
+            LMCall(prompt="c", response="d", model="mock/reflection")
+        )
+        Recorder.lm_calls.append(
+            LMCall(prompt="e", response="f", model="mock/optimizer")
+        )
         assert len(Recorder.optimizer_calls()) == 2
         assert len(Recorder.reflection_calls()) == 1
 
@@ -250,6 +260,7 @@ class TestRecorder:
 
 
 # ── RangeAwareAdapter ────────────────────────────────────────────────
+
 
 class TestRangeAwareAdapter:
     def test_int_output(self):
@@ -300,6 +311,7 @@ class TestRangeAwareAdapter:
 
 
 # ── install_mock_dspy integration ────────────────────────────────────
+
 
 class TestInstallMockDspy:
     def test_predict_records_calls(self, monkeypatch: pytest.MonkeyPatch):

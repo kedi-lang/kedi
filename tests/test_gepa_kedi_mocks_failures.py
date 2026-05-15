@@ -3,6 +3,7 @@
 Every test here verifies that the optimizer raises the right error or
 recovers gracefully from bad inputs, and assertions match the test name.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -17,7 +18,6 @@ from tests.dspy_mocks import (
     Recorder,
     RangeAwareAdapter,
     install_mock_dspy,
-    parse_first_range,
     reflection_fail_once,
 )
 
@@ -36,6 +36,7 @@ def _prepare(src: str):
 
 
 # ── Missing output in span → ValueError ─────────────────────────────
+
 
 def test_missing_output_in_span_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
     """A span with no [output] placeholders must raise ValueError."""
@@ -82,6 +83,7 @@ def test_missing_output_in_span_raises_valueerror(monkeypatch: pytest.MonkeyPatc
 
 # ── Empty training data → ValueError ────────────────────────────────
 
+
 def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
     """Empty training data must raise ValueError with a clear message."""
     install_mock_dspy(monkeypatch)
@@ -127,6 +129,7 @@ def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
 
 # ── Bad reflection NaN recovery ──────────────────────────────────────
 
+
 def test_bad_reflection_nan_range_recovers(monkeypatch: pytest.MonkeyPatch):
     """When reflection produces RANGE[NaN,NaN], optimizer still completes
     without crashing. The NaN response is injected by reflection_fail_once()
@@ -169,12 +172,15 @@ def test_bad_reflection_nan_range_recovers(monkeypatch: pytest.MonkeyPatch):
             metric=metric,
         )
 
-    assert isinstance(optimized, dict), "Optimizer must return a dict even after bad reflection"
+    assert isinstance(optimized, dict), (
+        "Optimizer must return a dict even after bad reflection"
+    )
     assert score >= 0.0, "Score must be non-negative"
     assert len(Recorder.lm_calls) > 0, "LM should have been called at least once"
 
 
 # ── Span with no inputs still optimizes ──────────────────────────────
+
 
 def test_span_without_inputs_still_optimizes(monkeypatch: pytest.MonkeyPatch):
     """A span that references no <inputs> from the procedure should still
@@ -229,6 +235,7 @@ def test_span_without_inputs_still_optimizes(monkeypatch: pytest.MonkeyPatch):
 
 
 # ── Empty spans list returns empty ───────────────────────────────────
+
 
 def test_empty_spans_returns_empty(monkeypatch: pytest.MonkeyPatch):
     """Passing an empty spans list should return empty prompts and 0.0 score."""

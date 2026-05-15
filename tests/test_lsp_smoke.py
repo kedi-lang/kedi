@@ -6,9 +6,12 @@ stdio server) so the tests are deterministic and fast.
 
 from __future__ import annotations
 
+import ast
+
 from lsprotocol import types as lsp
 
 from kedi.lsp import features
+from kedi.lsp.python_virtual import compute_python_virtual_document
 
 
 # ---------------------------------------------------------------------
@@ -231,14 +234,7 @@ def test_document_symbols_lists_procedures_and_types():
 
 
 def test_document_symbols_lists_validation_blocks():
-    src = (
-        "@p():\n"
-        "  = ok\n"
-        "\n"
-        "@test: p:\n"
-        "  > case: c1:\n"
-        "    `assert p() == \"ok\"`\n"
-    )
+    src = '@p():\n  = ok\n\n@test: p:\n  > case: c1:\n    `assert p() == "ok"`\n'
     syms = features.compute_document_symbols(src, "/tmp/x.kedi")
     names = [s.name for s in syms]
     assert any("@test: p" in n for n in names)
@@ -271,12 +267,7 @@ def test_formatting_is_noop_for_clean_source():
 
 
 def test_signature_help_inside_call():
-    src = (
-        "@add(x: int, y: int) -> int:\n"
-        "  = `x + y`\n"
-        "\n"
-        "= <add(1, 2)>\n"
-    )
+    src = "@add(x: int, y: int) -> int:\n  = `x + y`\n\n= <add(1, 2)>\n"
     # Cursor between `(` and the first arg.
     sig = features.compute_signature_help(
         source=src,
@@ -306,12 +297,7 @@ def test_signature_help_outside_call_returns_none():
 
 
 def test_inlay_hint_parameter_names_for_call():
-    src = (
-        "@add(x: int, y: int) -> int:\n"
-        "  = `x + y`\n"
-        "\n"
-        "= <add(1, 2)>\n"
-    )
+    src = "@add(x: int, y: int) -> int:\n  = `x + y`\n\n= <add(1, 2)>\n"
     hints = features.compute_inlay_hints(
         source=src,
         source_path="/tmp/x.kedi",
@@ -383,6 +369,94 @@ def test_python_ranges_picks_up_fenced_block():
 def test_python_ranges_empty_for_no_python():
     src = "@p():\n  = ok\n"
     assert features.compute_python_ranges(src) == []
+
+
+def test_python_virtual_document_models_procedure_scope():
+    src = (
+        "@calculate_stats(numbers: list[int]) -> int:\n"
+        "  [total: int] = ```\n"
+        "  return sum(numbers)\n"
+        "  ```\n"
+        "  [count: int] = ```\n"
+        "  return len(numbers)\n"
+        "  ```\n"
+        "  [average: float] = ```\n"
+        "  return total / count if count > 0 else 0\n"
+        "  ```\n"
+        "  = Average of <`count`> numbers is <`average`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    text = virtual["text"]
+    assert "def calculate_stats(numbers: list[int]) -> int: ..." in text
+    assert "def __kedi_scope_calculate_stats(numbers: list[int]) -> int:" in text
+    assert "total: int" in text
+    assert "count: int" in text
+    assert "average: float" in text
+    assert "return total / count if count > 0 else 0" in text
+    assert any(
+        s["kind"] == "parameter"
+        and s["name"] == "numbers"
+        and s["sourceRange"]["start"] == {"line": 0, "character": 17}
+        for s in virtual["symbols"]
+    )
+    assert any(
+        s["kind"] == "local"
+        and s["name"] == "total"
+        and s["sourceRange"]["start"] == {"line": 1, "character": 3}
+        for s in virtual["symbols"]
+    )
+    assert any(
+        s["kind"] == "local"
+        and s["name"] == "average"
+        and s["sourceRange"]["start"] == {"line": 7, "character": 3}
+        for s in virtual["symbols"]
+    )
+    assert any(
+        m["sourceRange"]["start"]["line"] == 8
+        and m["virtualRange"]["start"]["line"] > m["sourceRange"]["start"]["line"]
+        for m in virtual["mappings"]
+    )
+
+
+def test_python_virtual_document_models_type_stub_init_signature():
+    src = "~Person(name, age: int, tags: list[str])\n= ok\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    assert "class Person:" in virtual["text"]
+    assert "    name: str" in virtual["text"]
+    assert "    age: int" in virtual["text"]
+    assert "    tags: list[str]" in virtual["text"]
+    assert (
+        "    def __init__(self, *, name: str, age: int, tags: list[str]) -> None: ..."
+        in virtual["text"]
+    )
+
+
+def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
+    src = (
+        "@get_country(city):\n"
+        "  <city> is located in [country: str].\n"
+        "  = <country>\n"
+        "\n"
+        "@eval: get_country:\n"
+        "  > metric: accuracy:\n"
+        "    = ```\n"
+        '    result = get_country("France")\n'
+        "    return (1.0, result)\n"
+        "    ```\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def get_country(city: Any) -> str: ..." in virtual["text"]
+    assert "def __kedi_metric_get_country_accuracy() -> Any:" in virtual["text"]
+    assert 'result = get_country("France")' in virtual["text"]
+    assert any(r["kind"] == "fenced" for r in virtual["ranges"])
+    assert any(
+        s["kind"] == "procedure"
+        and s["name"] == "get_country"
+        and s["sourceRange"]["start"] == {"line": 0, "character": 1}
+        for s in virtual["symbols"]
+    )
 
 
 # ---------------------------------------------------------------------

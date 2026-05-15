@@ -143,7 +143,7 @@ def test_auto_and_optimize_together():
 def test_mock_optimizer_interface():
     """Test MockOptimizer implements the new interface correctly."""
     optimizer = MockOptimizer()
-    
+
     src = """
 @foo(country):
   > optimize: find_capital:
@@ -151,14 +151,14 @@ def test_mock_optimizer_interface():
 """
     prog = parse_program(src)
     proc = prog.procedures[0]
-    
+
     # Create mock training data
     train_data = [("France", "Paris"), ("Japan", "Tokyo")]
-    
+
     # Create simple metric that returns 1.0 for all inputs
     def simple_metric(input_val, expected_output):
         return (1.0, None)
-    
+
     # Call optimizer with new interface
     result, score = optimizer.optimize_procedure(
         proc_name=proc.name,
@@ -169,13 +169,16 @@ def test_mock_optimizer_interface():
         test_data=None,
         metric=simple_metric,
     )
-    
+
     # Should return optimized prompts (with improvements)
     assert isinstance(result, dict)
     assert len(result) == 1
     assert "find_capital" in result
     # Mock optimizer adds improvements to prompts
-    assert "[capital]" in result["find_capital"] or "Think step by step" in result["find_capital"]
+    assert (
+        "[capital]" in result["find_capital"]
+        or "Think step by step" in result["find_capital"]
+    )
     assert isinstance(score, float)
     assert 0.0 <= score <= 1.0
 
@@ -183,7 +186,7 @@ def test_mock_optimizer_interface():
 def test_mock_optimizer_multi_span():
     """Test MockOptimizer with multiple optimize spans."""
     optimizer = MockOptimizer()
-    
+
     src = """
 @foo(country):
   > optimize: find_capital:
@@ -194,12 +197,12 @@ def test_mock_optimizer_multi_span():
 """
     prog = parse_program(src)
     proc = prog.procedures[0]
-    
+
     train_data = [("France", "Paris")]
-    
+
     def simple_metric(input_val, expected_output):
         return (1.0, None)
-    
+
     result, score = optimizer.optimize_procedure(
         proc_name=proc.name,
         proc_params=proc.params,
@@ -209,7 +212,7 @@ def test_mock_optimizer_multi_span():
         test_data=None,
         metric=simple_metric,
     )
-    
+
     assert len(result) == 2
     assert "find_capital" in result
     assert "find_population" in result
@@ -218,10 +221,10 @@ def test_mock_optimizer_multi_span():
 def test_optimizer_interface_empty_spans():
     """Test optimizer interface with empty spans."""
     optimizer = MockOptimizer()
-    
+
     def simple_metric(input_val, expected_output):
         return (1.0, None)
-    
+
     result, score = optimizer.optimize_procedure(
         proc_name="foo",
         proc_params=["x"],
@@ -231,7 +234,6 @@ def test_optimizer_interface_empty_spans():
         test_data=None,
         metric=simple_metric,
     )
-    
+
     assert result == {}
     assert score == 0.0
-

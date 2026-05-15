@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional
 
-from .agent_adapter.adapters import PydanticAdapter
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
 
@@ -57,9 +56,11 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
 
 def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
     from pathlib import Path
-    from .optimization.services.program_loader import load_program_with_optimized_prompts
+    from .optimization.services.program_loader import (
+        load_program_with_optimized_prompts,
+    )
     from .lang.compiler import compile_program
-    
+
     # Check if src_main is a file path or source code string
     source_path = None
     if isinstance(src_main, str):
@@ -71,22 +72,18 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
                     source_path = candidate_path.resolve()
             except (OSError, ValueError):
                 pass
-    
+
     # Load program with optimized prompts if available (only for file paths)
     if source_path:
         try:
             program = load_program_with_optimized_prompts(source_path)
-            rt = compile_program(program, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+            rt = compile_program(program, adapter=adapter)
         except Exception:
             # Fallback to original loading method
-            rt = _load_program_with_validations(
-                src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-            )
+            rt = _load_program_with_validations(src_main, adapter=adapter)
     else:
         # Source code string - use original loading method
-        rt = _load_program_with_validations(
-            src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-        )
+        rt = _load_program_with_validations(src_main, adapter=adapter)
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -104,15 +101,21 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
                     _eval_python_inline(rt, c.code, {})
                 case_results.append(TestCaseResult(name=c.name, success=True))
             except Exception as e:
-                case_results.append(TestCaseResult(name=c.name, success=False, error=str(e)))
-        results.append(TestRunResult(procedure=suite.procedure_name, cases=case_results))
+                case_results.append(
+                    TestCaseResult(name=c.name, success=False, error=str(e))
+                )
+        results.append(
+            TestRunResult(procedure=suite.procedure_name, cases=case_results)
+        )
     return results
 
 
 def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
     from pathlib import Path
-    from .optimization.services.program_loader import load_program_with_optimized_prompts
-    
+    from .optimization.services.program_loader import (
+        load_program_with_optimized_prompts,
+    )
+
     # Check if src_main is a file path or source code string
     # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path
     source_path = None
@@ -129,35 +132,31 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
             except (OSError, ValueError):
                 # Path resolution failed - likely source code, not a path
                 pass
-    
+
     # Load program with optimized prompts if available (only for file paths)
     if source_path:
         try:
             # Load with optimized prompts
             program = load_program_with_optimized_prompts(source_path)
             # Compile with optimized prompts
-            rt = compile_program(program, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b"))
+            rt = compile_program(program, adapter=adapter)
         except Exception:
             # Fallback to original loading method if optimized prompt loading fails
-            rt = _load_program_with_validations(
-                src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-            )
+            rt = _load_program_with_validations(src_main, adapter=adapter)
     else:
         # Source code string - use original loading method
-        rt = _load_program_with_validations(
-            src_main, adapter=adapter or PydanticAdapter(model="groq:qwen/qwen3-32b")
-        )
+        rt = _load_program_with_validations(src_main, adapter=adapter)
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
-    
+
     for suite in suites:
         metric_results: List[EvalMetricResult] = []
-        
+
         # Evaluate datasets for evaluation (test_data preferred, fallback to training data)
         eval_datasets: dict[str, Any] = {}
-        
+
         from .lang.compiler import _execute_python_block, _eval_python_inline
-        
+
         # Evaluate test datasets first (preferred for evaluation)
         for dataset_name, dataset in suite.test_datasets.items():
             try:
@@ -165,21 +164,25 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                     val = _execute_python_block(dataset.code, rt, {})
                 else:
                     val = _eval_python_inline(rt, dataset.code, {})
-                
+
                 # Ensure it's iterable
                 if not hasattr(val, "__iter__") or isinstance(val, (str, bytes)):
-                    raise ValueError(f"Test data '{dataset_name}' must return an iterable (got {type(val).__name__})")
-                
+                    raise ValueError(
+                        f"Test data '{dataset_name}' must return an iterable (got {type(val).__name__})"
+                    )
+
                 # Convert dict.items() or list to list
                 if isinstance(val, dict):
                     val = list(val.items())
                 else:
                     val = list(val)
-                
+
                 eval_datasets[dataset_name] = val
             except Exception as e:
-                raise RuntimeError(f"Error evaluating test_data '{dataset_name}' in @eval: {suite.procedure_name}: {e}") from e
-        
+                raise RuntimeError(
+                    f"Error evaluating test_data '{dataset_name}' in @eval: {suite.procedure_name}: {e}"
+                ) from e
+
         # Fall back to training datasets for datasets not in test_data
         for dataset_name, dataset in suite.datasets.items():
             if dataset_name not in eval_datasets:
@@ -188,21 +191,25 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                         val = _execute_python_block(dataset.code, rt, {})
                     else:
                         val = _eval_python_inline(rt, dataset.code, {})
-                    
+
                     # Ensure it's iterable
                     if not hasattr(val, "__iter__") or isinstance(val, (str, bytes)):
-                        raise ValueError(f"Training data '{dataset_name}' must return an iterable (got {type(val).__name__})")
-                    
+                        raise ValueError(
+                            f"Training data '{dataset_name}' must return an iterable (got {type(val).__name__})"
+                        )
+
                     # Convert dict.items() or list to list
                     if isinstance(val, dict):
                         val = list(val.items())
                     else:
                         val = list(val)
-                    
+
                     eval_datasets[dataset_name] = val
                 except Exception as e:
-                    raise RuntimeError(f"Error evaluating training data '{dataset_name}' in @eval: {suite.procedure_name}: {e}") from e
-        
+                    raise RuntimeError(
+                        f"Error evaluating training data '{dataset_name}' in @eval: {suite.procedure_name}: {e}"
+                    ) from e
+
         # Evaluate metrics
         for m in suite.metrics:
             if m.dataset_name is None:
@@ -222,24 +229,26 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                 except Exception as e:
                     score = 0.0
                     feedback = f"error: {e}"
-                metric_results.append(EvalMetricResult(name=m.name, score=score, feedback=feedback))
+                metric_results.append(
+                    EvalMetricResult(name=m.name, score=score, feedback=feedback)
+                )
             else:
                 # Dataset-aware metric - iterate over dataset (test_data preferred, fallback to training)
                 dataset_name = m.dataset_name
-                
+
                 # Check dataset exists (test_data or training data)
                 if dataset_name not in eval_datasets:
                     raise ValueError(
                         f"Metric '{m.name}' references dataset '{dataset_name}' but no data (test_data or training data) "
                         f"with this name found in @eval: {suite.procedure_name}."
                     )
-                
+
                 # Use dataset for evaluation
                 eval_data = eval_datasets[dataset_name]
-                
+
                 eval_scores: list[float] = []
                 eval_feedbacks: list[str] = []
-                
+
                 if len(eval_data) == 0:
                     eval_scores.append(0.0)
                     eval_feedbacks.append("no examples")
@@ -272,19 +281,19 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                                 # Single value or non-standard format - use as-is
                                 input_val = example
                                 expected_val = None
-                            
+
                             # Bind dataset name with input value
                             metric_env = {dataset_name: input_val}
-                            
+
                             # Also bind expected output if available (for metrics that need it)
                             if expected_val is not None:
-                                metric_env['expected'] = expected_val
-                            
+                                metric_env["expected"] = expected_val
+
                             if m.is_block:
                                 val = _execute_python_block(m.code, rt, metric_env)
                             else:
                                 val = _eval_python_inline(rt, m.code, metric_env)
-                            
+
                             # Process result
                             if isinstance(val, bool):
                                 score_val = 1.0 if val else 0.0
@@ -295,21 +304,27 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                             else:
                                 score_val = float(val)
                                 feedback_val = None
-                            
+
                             eval_scores.append(score_val)
                             if feedback_val:
                                 eval_feedbacks.append(feedback_val)
                         except Exception as e:
                             eval_scores.append(0.0)
                             eval_feedbacks.append(f"error: {e}")
-                
-                eval_agg_score = sum(eval_scores) / len(eval_scores) if eval_scores else 0.0
-                eval_feedback_str = "; ".join(eval_feedbacks) if eval_feedbacks else None
+
+                eval_agg_score = (
+                    sum(eval_scores) / len(eval_scores) if eval_scores else 0.0
+                )
+                eval_feedback_str = (
+                    "; ".join(eval_feedbacks) if eval_feedbacks else None
+                )
                 metric_results.append(
                     EvalMetricResult(
                         name=m.name, score=eval_agg_score, feedback=eval_feedback_str
                     )
                 )
-        
-        results.append(EvalRunResult(procedure=suite.procedure_name, metrics=metric_results))
+
+        results.append(
+            EvalRunResult(procedure=suite.procedure_name, metrics=metric_results)
+        )
     return results

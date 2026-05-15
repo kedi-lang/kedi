@@ -23,10 +23,10 @@ from ..lang.compiler.environment import KediRuntime
 
 def template_line_to_string(template_line: TemplateLine) -> str:
     """Convert TemplateLine to prompt string.
-    
+
     Args:
         template_line: The template line to convert
-        
+
     Returns:
         String representation with placeholders:
         - TextSegment -> literal text
@@ -48,7 +48,7 @@ def template_line_to_string(template_line: TemplateLine) -> str:
         elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
             # Preserve visibility of dynamic hints in instructions; do not evaluate here
             # Represent as inline code within angle brackets
-            code = getattr(segment, 'code', '')
+            code = getattr(segment, "code", "")
             if code:
                 parts.append(f"<`{code}`>")
             else:
@@ -84,7 +84,9 @@ def span_to_instruction(
     return base
 
 
-def normalize_optimized_prompt_prefix(span: OptimizeSpan, instructions: str | None) -> str:
+def normalize_optimized_prompt_prefix(
+    span: OptimizeSpan, instructions: str | None
+) -> str:
     """Convert a full DSPy instruction string into the stored prefix form.
 
     Kedi persists only the optimized prefix and keeps the original span lines as the
@@ -121,16 +123,16 @@ def render_instruction_lines(
     kwargs: dict[str, object],
 ) -> str:
     """Render optimize span template lines into a concrete instruction string.
-    
+
     Substitutes inputs (<name>), evaluates inline python (both `<`expr`>` and native),
     and evaluates calls. Output placeholders are preserved as textual markers
     (e.g., `[name: type]`) so the instruction still guides the LLM to produce fields.
-    
+
     Args:
         span: Optimize span whose template lines will be rendered
         rt: Active KediRuntime for evaluation
         kwargs: Values to use for substitutions and python evaluation
-    
+
     Returns:
         Concrete instruction string with inputs and expressions resolved while
         preserving output placeholders.
@@ -162,7 +164,9 @@ def render_instruction_lines(
                     parts.append(f"[{segment.name}]")
             elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
                 try:
-                    value = evaluate_python_inline(rt, getattr(segment, "code", ""), kwargs)
+                    value = evaluate_python_inline(
+                        rt, getattr(segment, "code", ""), kwargs
+                    )
                     parts.append(str(value))
                 except Exception:
                     code = getattr(segment, "code", "")
@@ -170,19 +174,20 @@ def render_instruction_lines(
         rendered_lines.append("".join(parts))
     return "\n".join(rendered_lines)
 
+
 def extract_output_fields(span: OptimizeSpan) -> list[tuple[str, str | None]]:
     """Extract output field names and types from an OptimizeSpan.
-    
+
     Args:
         span: The optimize span to analyze
-        
+
     Returns:
         List of (field_name, type_annotation) tuples, preserving order
         type_annotation is None if no type specified
     """
     outputs: list[tuple[str, str | None]] = []
     seen_names: set[str] = set()
-    
+
     for template_line in span.template_lines:
         for segment in template_line.segments:
             if isinstance(segment, OutputSegment):
@@ -190,27 +195,27 @@ def extract_output_fields(span: OptimizeSpan) -> list[tuple[str, str | None]]:
                 if segment.name not in seen_names:
                     outputs.append((segment.name, segment.type_annotation))
                     seen_names.add(segment.name)
-    
+
     return outputs
 
 
 def extract_input_fields(span: OptimizeSpan) -> list[str]:
     """Extract input field names from an OptimizeSpan.
-    
+
     Args:
         span: The optimize span to analyze
-        
+
     Returns:
         List of input field names (e.g., from <name> substitutions)
     """
     inputs: list[str] = []
     seen_names: set[str] = set()
-    
+
     for template_line in span.template_lines:
         for segment in template_line.segments:
             if isinstance(segment, InputSegment):
                 if segment.name not in seen_names:
                     inputs.append(segment.name)
                     seen_names.add(segment.name)
-    
+
     return inputs

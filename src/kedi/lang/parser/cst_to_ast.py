@@ -33,7 +33,7 @@ method per relevant CST node type, plus a small dispatcher
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
@@ -101,7 +101,7 @@ def _span(node: Node, source_path: Optional[str] = None) -> Span:
 
 def _src_text(source: bytes, node: Node) -> str:
     """Extract the raw source slice corresponding to ``node`` as UTF-8."""
-    return source[node.start_byte:node.end_byte].decode("utf-8")
+    return source[node.start_byte : node.end_byte].decode("utf-8")
 
 
 def _identifier_name(source: bytes, node: Node) -> str:
@@ -121,7 +121,11 @@ def _field(node: Node, name: str) -> Optional[Node]:
 
 def _fields(node: Node, name: str) -> List[Node]:
     """Get all named children stored under field ``name``."""
-    return [c for c in node.children if c.is_named and node.field_name_for_child(c.id) == name]
+    return [
+        c
+        for c in node.children
+        if c.is_named and node.field_name_for_child(c.id) == name
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -210,7 +214,10 @@ class _Walker:
                     and prog.toplevel_return is None
                     and not prog.procedures
                     and not prog.type_defs
-                    and not (isinstance(prog, ProgramWithValidation) and (prog.tests or prog.evals))
+                    and not (
+                        isinstance(prog, ProgramWithValidation)
+                        and (prog.tests or prog.evals)
+                    )
                 ):
                     prog.prelude = self._walk_python_block_code(child)
                     prelude_consumed = True
@@ -244,7 +251,7 @@ class _Walker:
                 # tree-sitter; we skip them here.
                 continue
             elif t == "ERROR" or child.is_error:
-                self._error(child, f"unexpected source at top level")
+                self._error(child, "unexpected source at top level")
             else:
                 self._error(child, f"unexpected top-level node {t!r}")
 
@@ -283,7 +290,7 @@ class _Walker:
         )
 
     def _validate_block_comments(self) -> None:
-        """Enforce legacy `###` block-comment invariants.
+        r"""Enforce legacy `###` block-comment invariants.
 
         Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``
         in the pre-refactor parser):
@@ -318,9 +325,7 @@ class _Walker:
             # uses the loose `endswith("```")` heuristic to handle
             # cases like `= ``` ` (an opening fence with leading `=`
             # on the same line) and `[x] = ``` `.
-            if stripped == "```" or (
-                "```" in stripped and stripped.endswith("```")
-            ):
+            if stripped == "```" or ("```" in stripped and stripped.endswith("```")):
                 in_python = not in_python
                 continue
             if in_python:
@@ -354,7 +359,9 @@ class _Walker:
                 code="K-BLOCK-COMMENT",
             )
 
-    def _line_error(self, line_index: int, message: str, *, code: Optional[str] = None) -> None:
+    def _line_error(
+        self, line_index: int, message: str, *, code: Optional[str] = None
+    ) -> None:
         """Record a diagnostic at a specific (0-based) line, full-line span."""
         try:
             text = self.source.decode("utf-8")
@@ -377,7 +384,9 @@ class _Walker:
             source_path=self.source_path,
         )
         self.diagnostics.append(
-            KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
+            KediDiagnostic(
+                severity="error", message=message, span=span, code=code, snippet=line
+            )
         )
 
     def _collect_tree_errors(self, node: Node) -> None:
@@ -593,7 +602,9 @@ class _Walker:
         return ReturnBlockStmt(code=code, loc=self._span(node))
 
     def _walk_python_block(self, node: Node) -> PythonBlock:
-        return PythonBlock(code=self._walk_python_block_code(node), loc=self._span(node))
+        return PythonBlock(
+            code=self._walk_python_block_code(node), loc=self._span(node)
+        )
 
     def _walk_python_block_code(self, node: Node) -> str:
         code_node = _field(node, "code")
@@ -628,7 +639,9 @@ class _Walker:
             return None
         target = inner[0]
         if target.type == "type_ref":
-            name = _identifier_name(self.source, _field(target, "name") or _named_children(target)[0])
+            name = _identifier_name(
+                self.source, _field(target, "name") or _named_children(target)[0]
+            )
             return TypeRef(name=name, loc=self._span(target))
         if target.type == "type_apply":
             name_node = _field(target, "name")
@@ -649,7 +662,11 @@ class _Walker:
             return TypeUnion(left=left, right=right, loc=self._span(target))
         if target.type == "type_python":
             body_node = _field(target, "code")
-            code = _decode_type_python_body(self.source, body_node) if body_node is not None else ""
+            code = (
+                _decode_type_python_body(self.source, body_node)
+                if body_node is not None
+                else ""
+            )
             return TypePython(code=code, loc=self._span(target))
         # Unknown type_expr shape
         self._error(target, f"unexpected type_expr inner {target.type!r}")
@@ -659,7 +676,9 @@ class _Walker:
         """Walk a node that is a `_type_expr_term` alternative (no `type_expr` wrapper)."""
         t = node.type
         if t == "type_ref":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             return TypeRef(name=name, loc=self._span(node))
         if t == "type_apply":
             name_node = _field(node, "name")
@@ -719,8 +738,14 @@ class _Walker:
                     )
                 seen_names.add(fname)
                 ftype_node = _field(f, "type")
-                ftype_anno = self._type_expr_to_str(ftype_node) if ftype_node is not None else None
-                ftype_expr = self._walk_type_expr(ftype_node) if ftype_node is not None else None
+                ftype_anno = (
+                    self._type_expr_to_str(ftype_node)
+                    if ftype_node is not None
+                    else None
+                )
+                ftype_expr = (
+                    self._walk_type_expr(ftype_node) if ftype_node is not None else None
+                )
                 fields.append(
                     TypeField(
                         name=fname,
@@ -787,15 +812,23 @@ class _Walker:
                 loc=self._span(node),
             )
         if t == "input_segment":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             return InputSegment(name=name, loc=self._span(node))
         if t == "call_segment":
             return self._walk_call_segment(node)
         if t == "output_segment":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             type_node = _field(node, "type")
-            type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
-            type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+            type_anno = (
+                self._type_expr_to_str(type_node) if type_node is not None else None
+            )
+            type_expr = (
+                self._walk_type_expr(type_node) if type_node is not None else None
+            )
             return OutputSegment(
                 name=name,
                 type_annotation=type_anno,
@@ -1001,7 +1034,9 @@ class _Walker:
         body_children = _named_children(body) if body is not None else []
 
         if kw_text == "test":
-            suite_t = TestSuite(procedure_name=procedure_name, cases=[], loc=self._span(node))
+            suite_t = TestSuite(
+                procedure_name=procedure_name, cases=[], loc=self._span(node)
+            )
             for c in body_children:
                 if c.type == "test_case":
                     suite_t.cases.append(self._walk_test_case(c))
@@ -1072,7 +1107,11 @@ class _Walker:
                     # Single-line backtick: extract the inline python
                     # body (without backticks).
                     bn = next(
-                        (c for c in _named_children(inner) if c.type == "inline_python_expr"),
+                        (
+                            c
+                            for c in _named_children(inner)
+                            if c.type == "inline_python_expr"
+                        ),
                         None,
                     )
                     if bn is not None:
@@ -1083,13 +1122,14 @@ class _Walker:
                     is_block = True
         return TestCase(name=name, code=code, is_block=is_block, loc=self._span(node))
 
-
     def _walk_eval_dataset(self, node: Node, *, is_test: bool) -> EvalDataset:
         name_node = _field(node, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         code, is_block = self._walk_eval_entry_body(_field(node, "body"))
-        return EvalDataset(name=name, code=code, is_block=is_block, loc=self._span(node))
+        return EvalDataset(
+            name=name, code=code, is_block=is_block, loc=self._span(node)
+        )
 
     def _walk_eval_metric(self, node: Node) -> EvalMetric:
         name_node = _field(node, "name")
@@ -1097,7 +1137,9 @@ class _Walker:
         name = _identifier_name(self.source, name_node)
         dataset_node = _field(node, "dataset")
         dataset_name = (
-            _identifier_name(self.source, dataset_node) if dataset_node is not None else None
+            _identifier_name(self.source, dataset_node)
+            if dataset_node is not None
+            else None
         )
         code, is_block = self._walk_eval_entry_body(_field(node, "body"))
         return EvalMetric(

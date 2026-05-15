@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...core import AgentAdapter, KediRuntime
-from ..ast import Program, ReturnBlockStmt, ReturnStmt
+from ...core import KediRuntime
+from ..ast import Program, ReturnStmt
 from .environment import build_python_env
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type
 
+if TYPE_CHECKING:
+    from ...agent_adapter import AgentAdapter
 
-def compile_program(prog: Program, *, adapter: AgentAdapter | None = None) -> KediRuntime:
+
+def compile_program(
+    prog: Program, *, adapter: AgentAdapter | None = None
+) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
     This is the main entry point for the compiler.

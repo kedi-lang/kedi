@@ -6,10 +6,10 @@ the span's <references>, NOT the enclosing procedure's parameter list.
 Similarly, its output fields come from the span's [outputs], not the
 procedure's return type.
 """
+
 from __future__ import annotations
 
 import warnings
-from typing import Any
 
 import pytest
 
@@ -63,6 +63,7 @@ def _run_optimization(monkeypatch, src, train_data, max_calls=10):
 
 
 # ── Span inputs are span-level, not procedure-level ──────────────────
+
 
 def test_span_inputs_keys_are_span_level(monkeypatch: pytest.MonkeyPatch):
     """Procedure (a, b, c) with [p] = pre-<a>-<b> and span using <p>.
@@ -130,6 +131,7 @@ def test_span_input_values_are_computed_correctly(monkeypatch: pytest.MonkeyPatc
 
 # ── Multiple training examples all use span inputs ───────────────────
 
+
 def test_all_training_examples_use_span_inputs(monkeypatch: pytest.MonkeyPatch):
     """With multiple training examples, EVERY Predict call should use
     span-level inputs, not just the first one."""
@@ -152,7 +154,8 @@ def test_all_training_examples_use_span_inputs(monkeypatch: pytest.MonkeyPatch):
     ```
 """
     _run_optimization(
-        monkeypatch, src,
+        monkeypatch,
+        src,
         [((10, 20), None), ((30, 40), None), ((50, 60), None)],
         max_calls=20,
     )
@@ -169,6 +172,7 @@ def test_all_training_examples_use_span_inputs(monkeypatch: pytest.MonkeyPatch):
 
 
 # ── Span with direct parameter reference ─────────────────────────────
+
 
 def test_span_uses_direct_param_still_isolated(monkeypatch: pytest.MonkeyPatch):
     """If a span references a procedure parameter directly via <param>,
@@ -193,7 +197,8 @@ def test_span_uses_direct_param_still_isolated(monkeypatch: pytest.MonkeyPatch):
     ```
 """
     _run_optimization(
-        monkeypatch, src,
+        monkeypatch,
+        src,
         [(("What is 2+2?", "math", "simple"), None)],
     )
 
@@ -205,6 +210,7 @@ def test_span_uses_direct_param_still_isolated(monkeypatch: pytest.MonkeyPatch):
 
 
 # ── Span outputs differ from procedure return ────────────────────────
+
 
 def test_span_outputs_listed_in_instructions(monkeypatch: pytest.MonkeyPatch):
     """A span with output [x: float] and [label: str] inside a procedure

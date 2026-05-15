@@ -8,10 +8,10 @@ Uses real dspy.GEPA with injected MockLM to verify that:
   4. Inverted feedback hinders convergence
   5. OK feedback stabilizes the range
 """
+
 from __future__ import annotations
 
 import warnings
-from typing import Any, List, Tuple
 
 import pytest
 
@@ -24,7 +24,6 @@ from tests.dspy_mocks import (
     RangeAwareAdapter,
     dist_to_target,
     install_mock_dspy,
-    parse_first_range,
 )
 
 
@@ -70,6 +69,7 @@ _CONVERGENCE_SRC = """
 
 
 # ── Score improvement and range convergence ──────────────────────────
+
 
 def test_optimization_converges_score_improves(monkeypatch: pytest.MonkeyPatch):
     """Target [40,60], initial range [-100,-50].
@@ -125,6 +125,7 @@ def test_optimization_converges_score_improves(monkeypatch: pytest.MonkeyPatch):
 
 # ── Feedback text propagated to reflection ───────────────────────────
 
+
 def test_feedback_text_reaches_reflection_lm(monkeypatch: pytest.MonkeyPatch):
     """The evaluator returns feedback strings like 'TOO_LOW' or 'TOO_HIGH'.
     Verify these strings appear in the reflection LM's input prompts."""
@@ -154,13 +155,16 @@ def test_feedback_text_reaches_reflection_lm(monkeypatch: pytest.MonkeyPatch):
     reflection_prompts = [c.prompt for c in Recorder.reflection_calls()]
     if reflection_prompts:
         all_text = " ".join(reflection_prompts)
-        feedback_found = "TOO_LOW" in all_text or "TOO_HIGH" in all_text or "OK" in all_text
+        feedback_found = (
+            "TOO_LOW" in all_text or "TOO_HIGH" in all_text or "OK" in all_text
+        )
         assert feedback_found, (
             "Expected feedback text (TOO_LOW/TOO_HIGH/OK) in at least one reflection prompt"
         )
 
 
 # ── Inverted feedback diverges or stalls ─────────────────────────────
+
 
 def test_inverted_feedback_hinders_convergence(monkeypatch: pytest.MonkeyPatch):
     """With TOO_LOW and TOO_HIGH swapped, the optimizer should NOT converge
@@ -283,6 +287,7 @@ def test_inverted_feedback_hinders_convergence(monkeypatch: pytest.MonkeyPatch):
 
 # ── OK feedback stabilizes range ─────────────────────────────────────
 
+
 def test_ok_feedback_stabilizes_range(monkeypatch: pytest.MonkeyPatch):
     """When the evaluator always returns OK (score=1.0), the reflection model
     should not shift the range, and the range should remain stable."""
@@ -342,6 +347,7 @@ def test_ok_feedback_stabilizes_range(monkeypatch: pytest.MonkeyPatch):
 
 
 # ── Gradual metric rewards proximity ─────────────────────────────────
+
 
 def test_gradual_metric_drives_incremental_improvement(monkeypatch: pytest.MonkeyPatch):
     """A gradual metric (partial credit for proximity) should drive the

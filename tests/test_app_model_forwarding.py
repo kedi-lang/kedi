@@ -11,7 +11,9 @@ from kedi.tests_runner import (
 )
 
 
-def test_run_evals_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypatch) -> None:
+def test_run_evals_cli_forwards_selected_adapter_model(
+    tmp_path: Path, monkeypatch
+) -> None:
     src = tmp_path / "prog.kedi"
     src.write_text("= ok\n", encoding="utf-8")
 
@@ -28,7 +30,12 @@ def test_run_evals_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
     def fake_run_evals(src_main: str, *, adapter=None):
         seen["run_adapter"] = adapter
-        return [EvalRunResult(procedure="solve", metrics=[EvalMetricResult(name="score", score=1.0, feedback=None)])]
+        return [
+            EvalRunResult(
+                procedure="solve",
+                metrics=[EvalMetricResult(name="score", score=1.0, feedback=None)],
+            )
+        ]
 
     monkeypatch.setattr(app, "maybe_run_codegen", fake_codegen)
     monkeypatch.setattr(app, "_build_runtime_adapter", fake_build)
@@ -47,7 +54,9 @@ def test_run_evals_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
     assert seen["run_adapter"] is sentinel
 
 
-def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypatch) -> None:
+def test_run_tests_cli_forwards_selected_adapter_model(
+    tmp_path: Path, monkeypatch
+) -> None:
     src = tmp_path / "prog.kedi"
     src.write_text("= ok\n", encoding="utf-8")
 
@@ -64,7 +73,9 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
     def fake_run_tests(src_main: str, *, adapter=None):
         seen["run_adapter"] = adapter
-        return [RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])]
+        return [
+            RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])
+        ]
 
     monkeypatch.setattr(app, "maybe_run_codegen", fake_codegen)
     monkeypatch.setattr(app, "_build_runtime_adapter", fake_build)

@@ -1,0 +1,714 @@
+"""Scope-aware virtual Python documents for embedded Kedi Python.
+
+The editor extensions use this module to ask Python tooling about code
+that lives inside Kedi files.  The generated document is ordinary Python
+with Kedi procedures, parameters, and local variables represented as
+static stubs.  Source maps keep editor positions tied to the original
+Kedi regions.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional
+from urllib.parse import unquote, urlparse
+
+from ..lang.ast import (
+    AssignBlockStmt,
+    AssignStmt,
+    BacktickLineStmt,
+    EvalDataset,
+    EvalMetric,
+    EvalSuite,
+    OutputSegment,
+    ProcDefStmt,
+    ProcedureDef,
+    ProgramWithValidation,
+    PythonBlock,
+    PythonExprNativeSegment,
+    PythonExprSegment,
+    ReturnBlockStmt,
+    ReturnStmt,
+    Span,
+    Stmt,
+    TemplateLine,
+    TestCase,
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
+from ..lang.parser import KediParseError, parse_program
+from .features import compute_python_ranges
+
+
+Position = dict[str, int]
+Range = dict[str, Position]
+
+
+@dataclass
+class PythonRegion:
+    kind: str
+    range: Range
+    text: str
+    used: bool = False
+
+
+@dataclass
+class ScopeName:
+    typ: str
+    source_range: Optional[Range]
+
+
+class VirtualBuilder:
+    def __init__(self, source: str, source_path: Optional[str]) -> None:
+        self.source = source
+        self.source_lines = source.splitlines()
+        self.lines: list[str] = []
+        self.mappings: list[dict[str, Any]] = []
+        self.regions: list[dict[str, Any]] = []
+        self.symbols: list[dict[str, Any]] = []
+
+    @property
+    def line(self) -> int:
+        return len(self.lines)
+
+    def add(self, text: str = "") -> int:
+        line = self.line
+        self.lines.append(text)
+        return line
+
+    def add_symbol(
+        self,
+        *,
+        kind: str,
+        name: str,
+        source_range: Optional[Range],
+        virtual_range: Range,
+    ) -> None:
+        if source_range is None:
+            return
+        self.symbols.append(
+            {
+                "kind": kind,
+                "name": name,
+                "sourceRange": source_range,
+                "virtualRange": virtual_range,
+            }
+        )
+
+    def add_mapped_region(self, region: PythonRegion, prefix: str = "") -> Range:
+        virtual_start: Optional[Position] = None
+        virtual_end: Optional[Position] = None
+        src_start = region.range["start"]
+        src_end = region.range["end"]
+        start_line = src_start["line"]
+        end_line = src_end["line"]
+        dedent = (
+            self._common_indent(start_line, end_line) if region.kind == "fenced" else 0
+        )
+
+        for source_line in range(start_line, end_line + 1):
+            if source_line >= len(self.source_lines):
+                continue
+            line_text = self.source_lines[source_line]
+            start_char = src_start["character"] if source_line == start_line else 0
+            end_char = (
+                src_end["character"] if source_line == end_line else len(line_text)
+            )
+            if source_line == end_line and end_char == 0:
+                continue
+            if dedent:
+                start_char = min(
+                    end_char, start_char + min(dedent, _indent_width(line_text))
+                )
+            if end_char < start_char:
+                continue
+
+            body = line_text[start_char:end_char]
+            virtual_line = self.line
+            virtual_start_char = len(prefix)
+            self.add(prefix + body)
+            source_range = {
+                "start": {"line": source_line, "character": start_char},
+                "end": {"line": source_line, "character": end_char},
+            }
+            virtual_range = {
+                "start": {"line": virtual_line, "character": virtual_start_char},
+                "end": {
+                    "line": virtual_line,
+                    "character": virtual_start_char + max(0, end_char - start_char),
+                },
+            }
+            self.mappings.append(
+                {
+                    "sourceRange": source_range,
+                    "virtualRange": virtual_range,
+                    "kind": region.kind,
+                }
+            )
+            if virtual_start is None:
+                virtual_start = dict(virtual_range["start"])
+            virtual_end = dict(virtual_range["end"])
+
+        if virtual_start is None:
+            virtual_start = {"line": self.line, "character": len(prefix)}
+            virtual_end = dict(virtual_start)
+            self.add(prefix)
+
+        virtual_range = {"start": virtual_start, "end": virtual_end or virtual_start}
+        self.regions.append(
+            {
+                "kind": region.kind,
+                "range": region.range,
+                "sourceRange": region.range,
+                "virtualRange": virtual_range,
+                "text": region.text,
+            }
+        )
+        region.used = True
+        return virtual_range
+
+    def _common_indent(self, start_line: int, end_line: int) -> int:
+        indents: list[int] = []
+        for source_line in range(start_line, end_line + 1):
+            if source_line >= len(self.source_lines):
+                continue
+            line_text = self.source_lines[source_line]
+            if line_text.strip():
+                indents.append(_indent_width(line_text))
+        return min(indents) if indents else 0
+
+    def finish(self) -> str:
+        return "\n".join(self.lines) + "\n"
+
+
+class RegionCursor:
+    def __init__(self, ranges: list[dict[str, Any]]) -> None:
+        self.regions = [
+            PythonRegion(kind=r["kind"], range=r["range"], text=r.get("text", ""))
+            for r in ranges
+        ]
+
+    def next(self, kind: str, after: Optional[Span] = None) -> Optional[PythonRegion]:
+        for region in self.regions:
+            if region.used or region.kind != kind:
+                continue
+            if after is not None:
+                start = region.range["start"]
+                if start["line"] + 1 < after.start_line:
+                    continue
+            region.used = True
+            return region
+        return None
+
+
+def compute_python_virtual_document(
+    source: str, source_path: Optional[str] = None
+) -> dict[str, Any]:
+    """Return a virtual Python document plus Kedi/Python source maps."""
+    try:
+        program = parse_program(source, source_path=source_path)
+    except KediParseError:
+        ranges = compute_python_ranges(source)
+        return _fallback_virtual_document(source, ranges)
+
+    cursor = RegionCursor(compute_python_ranges(source))
+    builder = VirtualBuilder(source, source_path)
+    builder.add("from __future__ import annotations")
+    builder.add("from typing import Any")
+    builder.add("")
+
+    for typedef in program.type_defs:
+        _emit_type_stub(builder, typedef)
+    if program.type_defs:
+        builder.add("")
+
+    for proc in program.procedures:
+        _emit_proc_stub(builder, proc)
+    if program.procedures:
+        builder.add("")
+
+    if program.prelude is not None:
+        builder.add("# Kedi prelude")
+        builder.add("def __kedi_prelude__() -> None:")
+        builder.add("    pass")
+        builder.add("")
+
+    if program.toplevel_body or program.toplevel_return is not None:
+        builder.add("def __kedi_toplevel__() -> Any:")
+        scope: dict[str, ScopeName] = {}
+        _emit_statements(builder, cursor, program.toplevel_body, scope, "    ")
+        if program.toplevel_return is not None:
+            _emit_return(builder, cursor, program.toplevel_return, scope, "    ")
+        if not program.toplevel_body and program.toplevel_return is None:
+            builder.add("    pass")
+        builder.add("")
+
+    for proc in program.procedures:
+        _emit_procedure_body(builder, cursor, proc)
+
+    if isinstance(program, ProgramWithValidation):
+        _emit_validation(builder, cursor, program)
+
+    return {
+        "text": builder.finish(),
+        "ranges": builder.regions,
+        "mappings": builder.mappings,
+        "symbols": builder.symbols,
+    }
+
+
+def _fallback_virtual_document(
+    source: str, ranges: list[dict[str, Any]]
+) -> dict[str, Any]:
+    builder = VirtualBuilder(source, None)
+    for r in ranges:
+        builder.add_mapped_region(
+            PythonRegion(kind=r["kind"], range=r["range"], text=r.get("text", ""))
+        )
+    return {
+        "text": builder.finish(),
+        "ranges": builder.regions,
+        "mappings": builder.mappings,
+        "symbols": builder.symbols,
+    }
+
+
+def _emit_type_stub(builder: VirtualBuilder, typedef: TypeDef) -> None:
+    line = builder.add(f"class {typedef.name}:")
+    builder.add_symbol(
+        kind="type",
+        name=typedef.name,
+        source_range=_type_name_range(typedef),
+        virtual_range=_line_range(line, len("class "), typedef.name),
+    )
+    if not typedef.fields:
+        builder.add("    pass")
+    else:
+        for field in typedef.fields:
+            builder.add(
+                f"    {field.name}: {_type_to_python(field.type_expr, field.type_annotation)}"
+            )
+        builder.add(f"    def __init__({_type_init_params(typedef)}) -> None: ...")
+
+
+def _emit_proc_stub(
+    builder: VirtualBuilder, proc: ProcedureDef, prefix: str = ""
+) -> None:
+    params = ", ".join(
+        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
+        for name in proc.params
+    )
+    ret = _type_to_python(
+        proc.return_type_expr, proc.return_type_annotation, default="str"
+    )
+    line = builder.add(f"{prefix}def {proc.name}({params}) -> {ret}: ...")
+    builder.add_symbol(
+        kind="procedure",
+        name=proc.name,
+        source_range=_proc_name_range(proc),
+        virtual_range=_line_range(line, len(prefix) + len("def "), proc.name),
+    )
+
+
+def _emit_procedure_body(
+    builder: VirtualBuilder, cursor: RegionCursor, proc: ProcedureDef
+) -> None:
+    params = ", ".join(
+        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
+        for name in proc.params
+    )
+    ret = _type_to_python(
+        proc.return_type_expr, proc.return_type_annotation, default="str"
+    )
+    signature = f"def __kedi_scope_{proc.name}({params}) -> {ret}:"
+    signature_line = builder.add(signature)
+    scope = {
+        name: ScopeName(
+            typ=_type_to_python(
+                (proc.param_type_exprs or {}).get(name),
+                (proc.param_type_annotations or {}).get(name),
+                default="Any",
+            ),
+            source_range=_param_name_range(builder.source_lines, proc, name),
+        )
+        for name in proc.params
+    }
+    _add_scope_param_symbols(builder, scope, signature_line, signature)
+    before_body = builder.line
+    _emit_statements(builder, cursor, proc.body, scope, "    ")
+    if builder.line == before_body:
+        builder.add("    pass")
+    builder.add("")
+
+
+def _emit_statements(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    statements: Iterable[Stmt],
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    for stmt in statements:
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            _emit_proc_stub(builder, stmt.proc, indent)
+            continue
+        if isinstance(stmt, AssignBlockStmt):
+            _emit_assign_block(builder, cursor, stmt, scope, indent)
+            continue
+        if isinstance(stmt, AssignStmt):
+            _emit_assign_stmt(builder, cursor, stmt, scope, indent)
+            continue
+        if isinstance(stmt, PythonBlock):
+            region = cursor.next("fenced", stmt.loc)
+            if region is not None:
+                builder.add_mapped_region(region, indent)
+            continue
+        if isinstance(stmt, BacktickLineStmt):
+            region = cursor.next("inline", stmt.loc)
+            if region is not None:
+                builder.add_mapped_region(region, indent)
+            continue
+        if isinstance(stmt, TemplateLine):
+            _emit_segments(builder, cursor, stmt, scope, indent)
+            continue
+        if isinstance(stmt, ReturnStmt):
+            _emit_return(builder, cursor, stmt, scope, indent)
+            continue
+        if isinstance(stmt, ReturnBlockStmt):
+            _emit_return(builder, cursor, stmt, scope, indent)
+
+
+def _emit_assign_block(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: AssignBlockStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    typ = _type_to_python(stmt.type_expr, stmt.type_annotation)
+    helper = (
+        f"__kedi_block_{stmt.name}_{stmt.loc.start_line if stmt.loc else len(scope)}"
+    )
+    params = _scope_params(scope)
+    signature = f"{indent}def {helper}({params}) -> {typ}:"
+    signature_line = builder.add(signature)
+    _add_scope_param_symbols(builder, scope, signature_line, signature)
+    region = cursor.next("fenced", stmt.loc)
+    if region is not None:
+        builder.add_mapped_region(region, indent + "    ")
+    else:
+        builder.add(f"{indent}    ...")
+    args = ", ".join(scope.keys())
+    line = builder.add(f"{indent}{stmt.name}: {typ} = {helper}({args})")
+    source_range = _assign_name_range(stmt)
+    builder.add_symbol(
+        kind="local",
+        name=stmt.name,
+        source_range=source_range,
+        virtual_range=_line_range(line, len(indent), stmt.name),
+    )
+    scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
+
+
+def _emit_assign_stmt(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: AssignStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    typ = _type_to_python(stmt.type_expr, stmt.type_annotation)
+    source_range = _assign_name_range(stmt)
+    inline = _single_python_segment(stmt.expr)
+    if inline is not None:
+        line = builder.add(f"{indent}{stmt.name}: {typ} = (")
+        builder.add_symbol(
+            kind="local",
+            name=stmt.name,
+            source_range=source_range,
+            virtual_range=_line_range(line, len(indent), stmt.name),
+        )
+        region = cursor.next("inline", inline.loc)
+        if region is not None:
+            builder.add_mapped_region(region, indent + "    ")
+        else:
+            builder.add(f"{indent}    ...")
+        builder.add(f"{indent})")
+    else:
+        line = builder.add(f"{indent}{stmt.name}: {typ} = ...")
+        builder.add_symbol(
+            kind="local",
+            name=stmt.name,
+            source_range=source_range,
+            virtual_range=_line_range(line, len(indent), stmt.name),
+        )
+        _emit_segments(builder, cursor, stmt, scope, indent)
+    scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
+
+
+def _emit_return(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: ReturnStmt | ReturnBlockStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    if isinstance(stmt, ReturnBlockStmt):
+        region = cursor.next("fenced", stmt.loc)
+        if region is not None:
+            builder.add_mapped_region(region, indent)
+        return
+    _emit_segments(builder, cursor, stmt, scope, indent)
+
+
+def _emit_segments(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: Any,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    for segment in list(getattr(stmt, "segments", []) or []) + list(
+        getattr(stmt, "expr", []) or []
+    ):
+        if isinstance(segment, OutputSegment):
+            typ = _type_to_python(segment.type_expr, segment.type_annotation)
+            line = builder.add(f"{indent}{segment.name}: {typ} = ...")
+            source_range = _output_name_range(segment)
+            builder.add_symbol(
+                kind="local",
+                name=segment.name,
+                source_range=source_range,
+                virtual_range=_line_range(line, len(indent), segment.name),
+            )
+            scope[segment.name] = ScopeName(typ=typ, source_range=source_range)
+        elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
+            region = cursor.next("inline", segment.loc)
+            if region is not None:
+                builder.add_mapped_region(region, indent)
+
+
+def _emit_validation(
+    builder: VirtualBuilder, cursor: RegionCursor, program: ProgramWithValidation
+) -> None:
+    for suite in program.tests:
+        for case in suite.cases:
+            _emit_validation_code(
+                builder, cursor, case, f"__kedi_test_{suite.procedure_name}_{case.name}"
+            )
+    for suite in program.evals:
+        for dataset in list(suite.datasets.values()) + list(
+            suite.test_datasets.values()
+        ):
+            _emit_validation_code(
+                builder,
+                cursor,
+                dataset,
+                f"__kedi_data_{suite.procedure_name}_{dataset.name}",
+            )
+        for metric in suite.metrics:
+            _emit_metric(builder, cursor, suite, metric)
+
+
+def _emit_validation_code(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    item: TestCase | EvalDataset,
+    name: str,
+) -> None:
+    builder.add(f"def {name}() -> Any:")
+    region = cursor.next("fenced" if item.is_block else "inline", item.loc)
+    if region is not None:
+        builder.add_mapped_region(region, "    ")
+    else:
+        builder.add("    pass")
+    builder.add("")
+
+
+def _emit_metric(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    suite: EvalSuite,
+    metric: EvalMetric,
+) -> None:
+    builder.add(f"def __kedi_metric_{suite.procedure_name}_{metric.name}() -> Any:")
+    if metric.dataset_name:
+        builder.add(f"    {metric.dataset_name}: Any = ...")
+    builder.add("    expected: Any = ...")
+    region = cursor.next("fenced" if metric.is_block else "inline", metric.loc)
+    if region is not None:
+        builder.add_mapped_region(region, "    ")
+    else:
+        builder.add("    pass")
+    builder.add("")
+
+
+def _single_python_segment(
+    expr: list[Any],
+) -> Optional[PythonExprNativeSegment | PythonExprSegment]:
+    if len(expr) != 1:
+        return None
+    segment = expr[0]
+    if isinstance(segment, (PythonExprNativeSegment, PythonExprSegment)):
+        return segment
+    return None
+
+
+def _scope_params(scope: dict[str, ScopeName]) -> str:
+    return ", ".join(f"{name}: {info.typ}" for name, info in scope.items())
+
+
+def _add_scope_param_symbols(
+    builder: VirtualBuilder,
+    scope: dict[str, ScopeName],
+    line: int,
+    text: str,
+) -> None:
+    search_from = text.find("(") + 1
+    if search_from <= 0:
+        return
+    for name, info in scope.items():
+        start = text.find(name, search_from)
+        if start == -1:
+            continue
+        builder.add_symbol(
+            kind="parameter",
+            name=name,
+            source_range=info.source_range,
+            virtual_range=_line_range(line, start, name),
+        )
+        search_from = start + len(name)
+
+
+def _line_range(line: int, start: int, text: str) -> Range:
+    return {
+        "start": {"line": line, "character": start},
+        "end": {"line": line, "character": start + len(text)},
+    }
+
+
+def _proc_name_range(proc: ProcedureDef) -> Optional[Range]:
+    if proc.loc is None:
+        return None
+    line = proc.loc.start_line - 1
+    start = proc.loc.start_col
+    return _line_range(line, start, proc.name)
+
+
+def _type_name_range(typedef: TypeDef) -> Optional[Range]:
+    if typedef.loc is None:
+        return None
+    line = typedef.loc.start_line - 1
+    start = typedef.loc.start_col
+    return _line_range(line, start, typedef.name)
+
+
+def _assign_name_range(stmt: AssignStmt | AssignBlockStmt) -> Optional[Range]:
+    if stmt.loc is None:
+        return None
+    line = stmt.loc.start_line - 1
+    start = stmt.loc.start_col
+    return _line_range(line, start, stmt.name)
+
+
+def _output_name_range(segment: OutputSegment) -> Optional[Range]:
+    if segment.loc is None:
+        return None
+    line = segment.loc.start_line - 1
+    start = segment.loc.start_col
+    return _line_range(line, start, segment.name)
+
+
+def _param_name_range(
+    source_lines: list[str],
+    proc: ProcedureDef,
+    name: str,
+) -> Optional[Range]:
+    if proc.loc is None:
+        return None
+    line = proc.loc.start_line - 1
+    if line < 0 or line >= len(source_lines):
+        return None
+    header = source_lines[line]
+    open_paren = header.find("(")
+    close_paren = header.find(")", open_paren + 1)
+    if open_paren == -1:
+        return None
+    if close_paren == -1:
+        close_paren = len(header)
+    params = header[open_paren + 1 : close_paren]
+    offset = 0
+    for chunk in params.split(","):
+        stripped = chunk.lstrip()
+        leading = len(chunk) - len(stripped)
+        candidate = stripped.split(":", 1)[0].strip()
+        if candidate == name:
+            start = open_paren + 1 + offset + leading
+            return _line_range(line, start, name)
+        offset += len(chunk) + 1
+    return None
+
+
+def _indent_width(line: str) -> int:
+    width = 0
+    for char in line:
+        if char == " ":
+            width += 1
+        elif char == "\t":
+            width += 4
+        else:
+            break
+    return width
+
+
+def _type_to_python(
+    expr: Optional[TypeExpr], annotation: Optional[str], *, default: str = "str"
+) -> str:
+    if isinstance(expr, TypePython):
+        return expr.code or default
+    if isinstance(expr, TypeRef):
+        return expr.name or default
+    if isinstance(expr, TypeApply):
+        args = ", ".join(_type_to_python(arg, None) for arg in expr.args)
+        return f"{expr.name}[{args}]" if args else expr.name or default
+    if isinstance(expr, TypeUnion):
+        left = _type_to_python(expr.left, None)
+        right = _type_to_python(expr.right, None)
+        return f"{left} | {right}"
+    if annotation:
+        return annotation
+    return default
+
+
+def _type_init_params(typedef: TypeDef) -> str:
+    if not typedef.fields:
+        return "self"
+    fields = ", ".join(
+        f"{field.name}: {_type_to_python(field.type_expr, field.type_annotation)}"
+        for field in typedef.fields
+    )
+    return f"self, *, {fields}"
+
+
+def main() -> None:
+    payload = json.loads(sys.stdin.read() or "{}")
+    text = payload.get("text", "")
+    source_path = payload.get("sourcePath") or _path_from_uri(payload.get("uri"))
+    json.dump(compute_python_virtual_document(text, source_path), sys.stdout)
+
+
+def _path_from_uri(uri: Any) -> Optional[str]:
+    if not isinstance(uri, str) or not uri.startswith("file://"):
+        return None
+    parsed = urlparse(uri)
+    return unquote(parsed.path)
+
+
+if __name__ == "__main__":
+    main()

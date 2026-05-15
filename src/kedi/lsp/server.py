@@ -1,8 +1,8 @@
 """``kedi-lsp`` server entry point.
 
 Thin protocol wrapper over the functions in :mod:`kedi.lsp.features`.
-Wires every supported LSP feature plus the custom ``kedi/pythonRanges``
-request used by the VS Code extension's embedded-Python forwarding.
+Wires every supported LSP feature plus the custom embedded-Python
+requests used by editor extension forwarding.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from lsprotocol import types as lsp
 from pygls.lsp.server import LanguageServer
 
 from . import features
+from .python_virtual import compute_python_virtual_document
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,10 +44,16 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
     def _did_close(params: lsp.DidCloseTextDocumentParams) -> None:
         server.text_document_publish_diagnostics(
-            lsp.PublishDiagnosticsParams(
-                uri=params.text_document.uri, diagnostics=[]
-            )
+            lsp.PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
         )
+
+    # Some clients send watched-file notifications whenever *.kedi files
+    # change. We do not currently need them because document changes are
+    # driven by open/change/close, but registering a no-op handler keeps
+    # pygls from logging noisy "unknown method" warnings.
+    @server.feature("workspace/didChangeWatchedFiles")
+    def _did_change_watched_files(params: lsp.DidChangeWatchedFilesParams) -> None:
+        return None
 
     # ----- Hover -----
 
@@ -175,7 +182,7 @@ def make_server() -> LanguageServer:
             source_path=_uri_to_path(params.text_document.uri),
         )
 
-    # ----- Custom: kedi/pythonRanges -----
+    # ----- Custom: embedded Python interop -----
 
     @server.feature("kedi/pythonRanges")
     def _python_ranges(params: Any) -> dict:
@@ -184,25 +191,39 @@ def make_server() -> LanguageServer:
         ``params`` is a dict-like with ``textDocument.uri``. We return
         ``{"uri": ..., "ranges": [{kind, range, text}, ...]}``.
         """
-        # pygls/lsprotocol may hand us either a raw dict or a parsed
-        # structure depending on the registration; accept both.
-        uri = None
-        if isinstance(params, dict):
-            td = params.get("textDocument", {})
-            uri = td.get("uri") if isinstance(td, dict) else None
-        else:
-            td = getattr(params, "text_document", None) or getattr(
-                params, "textDocument", None
-            )
-            if td is not None:
-                uri = getattr(td, "uri", None)
+        uri = _text_document_uri(params)
         if uri is None:
             return {"uri": "", "ranges": []}
         doc = server.workspace.get_text_document(uri)
         ranges = features.compute_python_ranges(doc.source)
         return {"uri": uri, "ranges": ranges}
 
+    @server.feature("kedi/pythonVirtualDocument")
+    def _python_virtual_document(params: Any) -> dict:
+        """Return a scope-aware virtual Python document for a Kedi file."""
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "text": "", "ranges": [], "mappings": []}
+        doc = server.workspace.get_text_document(uri)
+        result = compute_python_virtual_document(
+            doc.source,
+            source_path=_uri_to_path(uri),
+        )
+        return {"uri": uri, **result}
+
     return server
+
+
+def _text_document_uri(params: Any) -> Optional[str]:
+    # pygls/lsprotocol may hand us either a raw dict or a parsed
+    # structure depending on the registration; accept both.
+    if isinstance(params, dict):
+        td = params.get("textDocument", {})
+        return td.get("uri") if isinstance(td, dict) else None
+    td = getattr(params, "text_document", None) or getattr(params, "textDocument", None)
+    if td is not None:
+        return getattr(td, "uri", None)
+    return None
 
 
 def _publish_diagnostics(server: LanguageServer, uri: str) -> None:

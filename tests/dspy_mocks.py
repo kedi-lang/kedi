@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
 import pytest
@@ -17,7 +17,9 @@ _RANGE_RE = re.compile(r"RANGE\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\
 REFLECTION_STEP = 100.0
 
 
-def parse_first_range(text: str, default: Tuple[float, float] = (-100.0, -50.0)) -> Tuple[float, float]:
+def parse_first_range(
+    text: str, default: Tuple[float, float] = (-100.0, -50.0)
+) -> Tuple[float, float]:
     """Parse the first RANGE[min,max] token from text. Returns default if absent or invalid."""
     if not isinstance(text, str):
         return default
@@ -40,7 +42,9 @@ def deterministic_uniform_0_1(key: str) -> float:
     return (val % 10_000_000) / 10_000_000.0
 
 
-def sample_from_range(template: str, *, prefer_midpoint: bool = True) -> Tuple[int, float]:
+def sample_from_range(
+    template: str, *, prefer_midpoint: bool = True
+) -> Tuple[int, float]:
     """Produce an (int_value, float_value) determined by RANGE[...] in template."""
     lo, hi = parse_first_range(template)
     if prefer_midpoint:
@@ -51,7 +55,9 @@ def sample_from_range(template: str, *, prefer_midpoint: bool = True) -> Tuple[i
     return (int(round(value)), float(value))
 
 
-def dist_to_target(lo: float, hi: float, target_lo: float = 40.0, target_hi: float = 60.0) -> float:
+def dist_to_target(
+    lo: float, hi: float, target_lo: float = 40.0, target_hi: float = 60.0
+) -> float:
     """Distance from interval [lo,hi] to target [target_lo,target_hi]."""
     if hi < target_lo:
         return target_lo - hi
@@ -63,6 +69,7 @@ def dist_to_target(lo: float, hi: float, target_lo: float = 40.0, target_hi: flo
 # =========
 # Recorder
 # =========
+
 
 @dataclass
 class PredictCall:
@@ -144,12 +151,14 @@ class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
         ival, fval = sample_from_range(template, prefer_midpoint=self.prefer_midpoint)
         lo, hi = parse_first_range(template)
 
-        Recorder.adapter_calls.append({
-            "template": template,
-            "range": (lo, hi),
-            "ival": ival,
-            "fval": fval,
-        })
+        Recorder.adapter_calls.append(
+            {
+                "template": template,
+                "range": (lo, hi),
+                "ival": ival,
+                "fval": fval,
+            }
+        )
 
         data: Dict[str, Any] = {}
         if output_schema:
@@ -211,7 +220,9 @@ class MockLM(BaseLM):
             if isinstance(messages, list) and messages:
                 all_content = []
                 for msg in messages:
-                    content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                    content = (
+                        msg.get("content", "") if isinstance(msg, dict) else str(msg)
+                    )
                     all_content.append(content)
                 prompt_text = "\n".join(all_content)
             else:
@@ -227,12 +238,14 @@ class MockLM(BaseLM):
             response = self._optimizer_response(prompt_text)
 
         Recorder._call_counter += 1
-        Recorder.lm_calls.append(LMCall(
-            prompt=prompt_text,
-            response=response,
-            model=self.model,
-            index=Recorder._call_counter,
-        ))
+        Recorder.lm_calls.append(
+            LMCall(
+                prompt=prompt_text,
+                response=response,
+                model=self.model,
+                index=Recorder._call_counter,
+            )
+        )
 
         from types import SimpleNamespace
 
@@ -284,17 +297,19 @@ class MockLM(BaseLM):
 
         outputs: dict[str, Any] = {}
 
-        field_pattern = r'`([a-zA-Z_][a-zA-Z0-9_]*)`'
+        field_pattern = r"`([a-zA-Z_][a-zA-Z0-9_]*)`"
 
         # Prefer the "output fields" section, then "Respond with JSON" section,
         # finally fall back to all backtick-quoted identifiers.
         output_section_match = re.search(
-            r'Your output fields are:(.*?)(?:All interactions|Respond|In adhering|Notes|$)',
-            prompt, re.DOTALL,
+            r"Your output fields are:(.*?)(?:All interactions|Respond|In adhering|Notes|$)",
+            prompt,
+            re.DOTALL,
         )
         respond_match = re.search(
-            r'Respond with a JSON object.*?fields:\s*(.+?)\.',
-            prompt, re.DOTALL,
+            r"Respond with a JSON object.*?fields:\s*(.+?)\.",
+            prompt,
+            re.DOTALL,
         )
 
         if output_section_match:
@@ -304,14 +319,32 @@ class MockLM(BaseLM):
         else:
             all_found = re.findall(field_pattern, prompt)
             exclude = {
-                'foo', 'bar', 'completed', 'input', 'output', 'fields',
-                'order', 'type', 'json', 'str', 'int', 'float', 'bool',
-                'list', 'dict', 'true', 'false', 'null', 'none',
+                "foo",
+                "bar",
+                "completed",
+                "input",
+                "output",
+                "fields",
+                "order",
+                "type",
+                "json",
+                "str",
+                "int",
+                "float",
+                "bool",
+                "list",
+                "dict",
+                "true",
+                "false",
+                "null",
+                "none",
             }
             output_fields = [f for f in all_found if f.lower() not in exclude]
 
         for fld in output_fields:
-            field_context = prompt[max(0, prompt.find(fld) - 80):prompt.find(fld) + 80].lower()
+            field_context = prompt[
+                max(0, prompt.find(fld) - 80) : prompt.find(fld) + 80
+            ].lower()
 
             if "int" in field_context and "list" not in field_context:
                 outputs[fld] = ival
@@ -322,7 +355,20 @@ class MockLM(BaseLM):
             elif "str" in field_context:
                 outputs[fld] = str(ival)
             else:
-                if any(tok in fld for tok in ['y', 'v', 'w', 'num', 'val', 'count', 'answer', 'result', 'score']):
+                if any(
+                    tok in fld
+                    for tok in [
+                        "y",
+                        "v",
+                        "w",
+                        "num",
+                        "val",
+                        "count",
+                        "answer",
+                        "result",
+                        "score",
+                    ]
+                ):
                     outputs[fld] = ival
                 else:
                     outputs[fld] = str(ival)
@@ -335,7 +381,6 @@ class MockLM(BaseLM):
 
 def install_mock_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Monkeypatch dspy to use real Predict/Module but with mocked LM layer."""
-    import dspy
 
     optimizer_lm = MockLM(model="mock/optimizer")
 
@@ -358,17 +403,19 @@ def install_mock_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
 
         def forward(self, **kwargs):
             instructions = ""
-            if hasattr(self, 'signature'):
+            if hasattr(self, "signature"):
                 sig = self.signature
-                if hasattr(sig, 'instructions'):
+                if hasattr(sig, "instructions"):
                     instructions = sig.instructions or ""
-                elif hasattr(sig, '_instructions'):
+                elif hasattr(sig, "_instructions"):
                     instructions = sig._instructions or ""
 
-            Recorder.calls.append(PredictCall(
-                instructions=instructions,
-                kwargs=dict(kwargs),
-            ))
+            Recorder.calls.append(
+                PredictCall(
+                    instructions=instructions,
+                    kwargs=dict(kwargs),
+                )
+            )
 
             return super().forward(**kwargs)
 

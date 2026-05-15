@@ -7,7 +7,13 @@ from pathlib import Path
 import click
 import dotenv
 
-from kedi.app import maybe_run_codegen, run_evals_cli, run_optimization_cli, run_program_cli, run_tests_cli
+from kedi.app import (
+    maybe_run_codegen,
+    run_evals_cli,
+    run_optimization_cli,
+    run_program_cli,
+    run_tests_cli,
+)
 from kedi.utils import parse_args
 
 dotenv.load_dotenv()
@@ -20,7 +26,9 @@ if SRC_DIR not in sys.path:
 context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 
 
-@click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
+@click.command(
+    context_settings=context_settings, help="Run a .kedi program with KediRuntime"
+)
 @click.argument("source")
 @click.option(
     "--adapter",
@@ -56,7 +64,9 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     help="Number of retry stages for codegen",
 )
 @click.option("--test", is_flag=True, help="Run tests defined with @test: blocks")
-@click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
+@click.option(
+    "--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks"
+)
 @click.option(
     "--optimizer",
     type=click.Choice(["mock", "gepa"]),
@@ -150,7 +160,7 @@ def main(
             f.read()
     except Exception as e:
         click.echo(f"Error reading {source}: {e}", err=True)
-        return 1
+        ctx.exit(1)
     data = parse_args(ctx.args)
     # the data comes from command line arguments
     # should be passed into runtime environment
@@ -162,7 +172,9 @@ def main(
                 source,
                 optimizer=optimizer,
                 optimizer_model=optimizer_model,
-                reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
+                reflection_model=optimizer_reflection_model
+                if optimizer == "gepa"
+                else None,
                 max_metric_calls=optimizer_max_metric_calls,
                 optimizer_model_max_tokens=optimizer_model_max_tokens,
                 reflection_model_max_tokens=optimizer_reflection_model_max_tokens,
@@ -180,7 +192,7 @@ def main(
             if code != 0:
                 ctx.exit(code)
             # Continue after optimization even if --eval is not set
-        
+
         if test or do_eval:
             # Run validations
             if test:
@@ -199,7 +211,9 @@ def main(
                     codegen_model=codegen_model,
                     optimizer=optimizer,
                     optimizer_model=optimizer_model,
-                    reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
+                    reflection_model=optimizer_reflection_model
+                    if optimizer == "gepa"
+                    else None,
                     optimize=False,
                     use_cache=not no_cache,
                 )
@@ -222,12 +236,14 @@ def main(
         )
         if not ok:
             click.echo(err or "Code generation failed.", err=True)
-            return 1
+            ctx.exit(1)
 
         # Execute program
         try:
             code, out = run_program_cli(source, adapter=adapter, model=adapter_model)
             click.echo(out)
+            if code != 0:
+                ctx.exit(code)
             return code
         finally:
             # Clean up cache if --no-cache was used
@@ -239,7 +255,7 @@ def main(
         raise
     except Exception as e:
         click.echo(f"Execution error: {e}", err=True)
-        return 1
+        ctx.exit(1)
 
 
 if __name__ == "__main__":

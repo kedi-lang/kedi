@@ -13,4 +13,9 @@ from .evaluation import execute_python_block as _execute_python_block
 from .program_compiler import compile_program
 from .type_system import KediType
 
-__all__ = ["compile_program", "_eval_python_inline", "_execute_python_block", "KediType"]
+__all__ = [
+    "compile_program",
+    "_eval_python_inline",
+    "_execute_python_block",
+    "KediType",
+]

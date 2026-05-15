@@ -42,7 +42,7 @@ DEFAULT_SOURCE = str(Path(__file__).with_name("aime.kedi"))
 
 def read_metric_score(text: str) -> float:
     """Parse metric score from eval output.
-    
+
     Expected format: "- solve_aime::accuracy: 0.5667"
     """
     for line in text.splitlines():
@@ -61,11 +61,11 @@ def print_optimized_prompt(source: Path):
         data = json.loads(opt.read_text(encoding="utf-8"))
         span = data.get("solve_aime", {}).get("predict")
         if span:
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("Optimized prompt for solve_aime[predict]:")
-            print("="*80)
+            print("=" * 80)
             print(span)
-            print("="*80 + "\n")
+            print("=" * 80 + "\n")
 
 
 def main():
@@ -76,48 +76,48 @@ def main():
     ap.add_argument(
         "--optimizer-model",
         default="openai/gpt-4.1",
-        help="Model for GEPA optimizer (default: openai/gpt-4.1)"
+        help="Model for GEPA optimizer (default: openai/gpt-4.1)",
     )
     ap.add_argument(
         "--reflection-model",
         default="openai/gpt-4.1",
-        help="Model for GEPA reflection (default: openai/gpt-4.1)"
+        help="Model for GEPA reflection (default: openai/gpt-4.1)",
     )
     ap.add_argument(
         "--max-metric-calls",
         type=int,
         default=560,
-        help="GEPA optimization budget (default: 560)"
+        help="GEPA optimization budget (default: 560)",
     )
     args = ap.parse_args()
 
     src = Path(args.source).resolve()
-    
+
     if not src.exists():
         print(f"Error: Source file not found: {src}", file=sys.stderr)
         sys.exit(1)
 
-    print("="*80)
+    print("=" * 80)
     print("AIME Benchmark: Baseline vs GEPA-Optimized")
-    print("="*80)
+    print("=" * 80)
     print(f"Source: {src.name}")
     print(f"Optimizer model: {args.optimizer_model}")
     print(f"Reflection model: {args.reflection_model}")
     print(f"Max metric calls: {args.max_metric_calls}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # Step 1: Baseline evaluation (test set preferred via test_data: train)
     print("Step 1: Running baseline evaluation...")
-    print("-"*80)
+    print("-" * 80)
     code, baseline_out = run_evals_cli(str(src))
     print(baseline_out)
     baseline = read_metric_score(baseline_out)
     print(f"\nBaseline score: {baseline:.4f}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # Step 2: Optimize with GEPA
     print("Step 2: Optimizing with GEPA...")
-    print("-"*80)
+    print("-" * 80)
     code, msg = run_optimization_cli(
         str(src),
         optimizer="gepa",
@@ -133,30 +133,34 @@ def main():
 
     # Step 3: Re-run evals with optimized prompts injected
     print("Step 3: Running optimized evaluation...")
-    print("-"*80)
+    print("-" * 80)
     code, optimized_out = run_evals_cli(str(src))
     print(optimized_out)
     optimized = read_metric_score(optimized_out)
     print(f"\nOptimized score: {optimized:.4f}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # Step 4: Report results
     if not (baseline != baseline or optimized != optimized):  # both are valid numbers
         delta = optimized - baseline
         pct_change = (delta / baseline * 100) if baseline > 0 else 0
-        
-        print("="*80)
+
+        print("=" * 80)
         print("RESULTS SUMMARY")
-        print("="*80)
-        print(f"Baseline:  {baseline:.4f} ({baseline*100:.2f}%)")
-        print(f"Optimized: {optimized:.4f} ({optimized*100:.2f}%)")
+        print("=" * 80)
+        print(f"Baseline:  {baseline:.4f} ({baseline * 100:.2f}%)")
+        print(f"Optimized: {optimized:.4f} ({optimized * 100:.2f}%)")
         print(f"Delta:     {delta:+.4f} ({pct_change:+.2f}%)")
-        print("="*80)
-        
+        print("=" * 80)
+
         if delta > 0:
-            print(f"\n✓ GEPA improved performance by {abs(delta):.4f} ({abs(pct_change):.2f}%)")
+            print(
+                f"\n✓ GEPA improved performance by {abs(delta):.4f} ({abs(pct_change):.2f}%)"
+            )
         elif delta < 0:
-            print(f"\n✗ Performance decreased by {abs(delta):.4f} ({abs(pct_change):.2f}%)")
+            print(
+                f"\n✗ Performance decreased by {abs(delta):.4f} ({abs(pct_change):.2f}%)"
+            )
         else:
             print("\n→ No change in performance")
     else:
@@ -166,4 +170,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

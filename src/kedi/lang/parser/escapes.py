@@ -28,8 +28,22 @@ from typing import List, Tuple
 # Characters that may follow a backslash inside template / call-arg text.
 _ESCAPABLE = frozenset(
     [
-        "<", ">", "[", "]", "=", "@", ",", "\\", "#", "~", "`", "(", ")",
-        "t", "n", "s",
+        "<",
+        ">",
+        "[",
+        "]",
+        "=",
+        "@",
+        ",",
+        "\\",
+        "#",
+        "~",
+        "`",
+        "(",
+        ")",
+        "t",
+        "n",
+        "s",
     ]
 )
 
@@ -136,7 +150,9 @@ def unescape_call_arg_text(text: str) -> str:
     return unescaped
 
 
-def preserve_escaped_whitespace(text: str, escaped_positions: set[int] | None = None) -> str:
+def preserve_escaped_whitespace(
+    text: str, escaped_positions: set[int] | None = None
+) -> str:
     """Trim leading/trailing whitespace, but keep `\\s`-escaped chars in place.
 
     Mirrors the pre-refactor parser's ``preprocessing.preserve_escaped_whitespace``

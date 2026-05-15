@@ -27,7 +27,6 @@ from ..ast import (
     TypeApply,
     TypeDef,
     TypeExpr,
-    TypeField,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -95,9 +94,7 @@ def _resolve_expr(expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
         try:
             result = eval(expr.code, type_env, type_env)
         except Exception as exc:
-            raise TypeError(
-                f"Invalid type expression {expr.code!r}: {exc}"
-            ) from exc
+            raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
         if not _is_valid_type(result):
             raise TypeError(
                 f"Expression {expr.code!r} does not evaluate to a valid type"
@@ -167,7 +164,9 @@ class KediType:
     def is_none(self) -> bool:
         return self._expr is None and self._legacy_str is None
 
-    def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
+    def resolve(
+        self, rt: KediRuntime, env: dict[str, Any] | None = None
+    ) -> Optional[Any]:
         if self._expr is not None:
             type_env = build_type_env(rt, env)
             return _resolve_expr(self._expr, type_env)
@@ -184,7 +183,9 @@ class KediType:
         if resolved is None:
             return None
         try:
-            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+            return TypeAdapter(
+                resolved, config={"strict": True, "arbitrary_types_allowed": True}
+            )
         except Exception:
             return None
 
@@ -213,7 +214,9 @@ class KediType:
 
     # ---- legacy fallback ----
 
-    def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
+    def _legacy_resolve(
+        self, rt: KediRuntime, env: dict[str, Any] | None
+    ) -> Optional[Any]:
         """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
@@ -323,7 +326,9 @@ def assign_value_from_native(
         if kedi_type.is_none():
             if isinstance(native, str):
                 return native
-            raise TypeError("Native non-string assignment requires explicit type annotation")
+            raise TypeError(
+                "Native non-string assignment requires explicit type annotation"
+            )
         if isinstance(native, str):
             try_typ = kedi_type.resolve(rt, env)
             if try_typ is not None and try_typ is not str:
@@ -340,11 +345,20 @@ def assign_value_from_native(
 
 def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
     """Detect the kind of RHS expression."""
-    from ..ast import CallSegment, PythonExprNativeSegment, PythonExprSegment, TextSegment
+    from ..ast import (
+        CallSegment,
+        PythonExprNativeSegment,
+        PythonExprSegment,
+        TextSegment,
+    )
 
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    non_ws = [
+        s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")
+    ]
 
-    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
+    is_backtick_native = len(non_ws) == 1 and isinstance(
+        non_ws[0], PythonExprNativeSegment
+    )
     is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
 
@@ -395,7 +409,9 @@ def _make_init(type_name: str, field_order: list[str], model_class: type[BaseMod
                 raise TypeError(f"Too many positional arguments for {type_name}")
             for name, value in zip(field_order, args):
                 if name in kwargs:
-                    raise TypeError(f"Multiple values for field '{name}' in {type_name}")
+                    raise TypeError(
+                        f"Multiple values for field '{name}' in {type_name}"
+                    )
                 kwargs[name] = value
         super(model_class, self).__init__(**kwargs)
 

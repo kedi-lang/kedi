@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Callable, Tuple
 
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from .codegen.runner import run_codegen
@@ -12,11 +11,34 @@ from .lang import compile_program, parse_program
 from .tests_runner import run_evals, run_tests
 
 
+class _LazyRuntimeAdapter:
+    """Instantiate the real adapter only when runtime actually uses it."""
+
+    def __init__(self, factory: Callable[[], Any]) -> None:
+        self._factory = factory
+        self._inner: Any | None = None
+
+    def _get_inner(self) -> Any:
+        if self._inner is None:
+            self._inner = self._factory()
+        return self._inner
+
+    async def produce(self, *args, **kwargs):
+        return await self._get_inner().produce(*args, **kwargs)
+
+    def produce_sync(self, *args, **kwargs):
+        return self._get_inner().produce_sync(*args, **kwargs)
+
+
 def _build_runtime_adapter(adapter: str, model: str | None):
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "dspy":
-        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
-    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+        return _LazyRuntimeAdapter(
+            lambda: DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+        )
+    return _LazyRuntimeAdapter(
+        lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+    )
 
 
 def run_tests_cli(
@@ -59,13 +81,12 @@ def run_optimization_cli(
     optimizer_fresh: bool = False,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
-    
+
     Returns:
         (exit_code, message) tuple
     """
     from pathlib import Path
-    from typing import Any
-    
+
     from .optimization import get_optimizer
     from .optimization.config import OptimizerConfig
     from .optimization.services import (
@@ -75,10 +96,44 @@ def run_optimization_cli(
         OptimizationResultWriter,
         TypeResolver,
     )
-    
+
     source_path = Path(source).resolve()
-    
-    # Create optimizer configuration
+
+    # Parse and validate before creating any optimizer/runtime adapters.
+    # Missing eval/data should fail deterministically without requiring API keys.
+    text = source_path.read_text(encoding="utf-8")
+    val_path = source_path.with_suffix(".val.kedi")
+    if val_path.exists():
+        text = text + "\n\n" + val_path.read_text(encoding="utf-8")
+    cache_path = source_path.with_suffix(".cache.kedi")
+    if cache_path.exists():
+        text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
+
+    prog = parse_program(text)
+
+    # Find procedures with optimize spans
+    procs_with_optimize = [p for p in prog.procedures if p.optimize_spans]
+    if not procs_with_optimize:
+        return 0, "No procedures with optimize spans found"
+
+    # Find eval suites. `parse_program` returns `ProgramWithValidation`
+    # when `@eval:` blocks are present, exposing them as `.evals`.
+    from .lang.ast import ProgramWithValidation
+
+    evals = prog.evals if isinstance(prog, ProgramWithValidation) else []
+    eval_map = {e.procedure_name: e for e in evals}
+
+    # Validate
+    for proc in procs_with_optimize:
+        if proc.name not in eval_map:
+            return 1, f"Procedure '{proc.name}' needs @eval: {proc.name} suite"
+        if not eval_map[proc.name].datasets:
+            return (
+                1,
+                f"Procedure '{proc.name}' needs training data (> data:) in eval suite",
+            )
+
+    # Create optimizer configuration only after cheap validation passes.
     config = OptimizerConfig.from_cli_options(
         max_metric_calls=max_metric_calls,
         optimizer_model_max_tokens=optimizer_model_max_tokens,
@@ -88,44 +143,37 @@ def run_optimization_cli(
         reflection_minibatch_size=reflection_minibatch_size,
         max_validation_examples=max_validation_examples,
     )
-    
-    # Configure DSPy for GEPA if needed
+
     adapter_for_runtime = None
     if optimizer == "gepa":
         try:
             dspy_config_service = DSPyConfigurationService(config)
-            # Configure main LM (use optimizer_model or default)
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            # Create adapter for runtime so metrics can call procedures
             from .agent_adapter.adapters import DSPyAdapter
+
             adapter_for_runtime = DSPyAdapter(model=main_model)
         except ImportError:
-            return 1, "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai"
+            return (
+                1,
+                "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai",
+            )
     else:
-        # Always create an adapter for runtime so metrics can call procedures
-        # Use the adapter specified via CLI parameters
         model = adapter_model or "groq:qwen/qwen3-32b"
         if adapter == "dspy":
             try:
                 from .agent_adapter.adapters import DSPyAdapter
+
                 adapter_for_runtime = DSPyAdapter(model=model)
             except ImportError:
-                return 1, "DSPy is required for dspy adapter. Install with: pip install dspy-ai"
+                return (
+                    1,
+                    "DSPy is required for dspy adapter. Install with: pip install dspy-ai",
+                )
         else:
             adapter_for_runtime = PydanticAdapter(model=model)
-    
-    # Compile runtime early (needed for services)
-    text = source_path.read_text(encoding="utf-8")
-    val_path = source_path.with_suffix(".val.kedi")
-    if val_path.exists():
-        text = text + "\n\n" + val_path.read_text(encoding="utf-8")
-    cache_path = source_path.with_suffix(".cache.kedi")
-    if cache_path.exists():
-        text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
-    
-    prog = parse_program(text)
+
     result_writer = OptimizationResultWriter(source_path)
 
     if optimizer_fresh:
@@ -150,49 +198,33 @@ def run_optimization_cli(
     # Get optimizer instance
     if optimizer == "gepa":
         from .optimization.gepa import GEPAOptimizer
+
         opt = GEPAOptimizer(config=config, runtime=rt, source_path=source_path)
     else:
         opt = get_optimizer(optimizer)
 
     if not opt:
         return 1, f"Unknown optimizer: {optimizer}"
-    
-    # Find procedures with optimize spans
-    procs_with_optimize = [p for p in prog.procedures if p.optimize_spans]
-    if not procs_with_optimize:
-        return 0, "No procedures with optimize spans found"
-    
-    # Find eval suites. `parse_program` returns `ProgramWithValidation`
-    # when `@eval:` blocks are present, exposing them as `.evals`.
-    from .lang.ast import ProgramWithValidation
 
-    evals = prog.evals if isinstance(prog, ProgramWithValidation) else []
-    eval_map = {e.procedure_name: e for e in evals}
-    
-    # Validate
-    for proc in procs_with_optimize:
-        if proc.name not in eval_map:
-            return 1, f"Procedure '{proc.name}' needs @eval: {proc.name} suite"
-        if not eval_map[proc.name].datasets:
-            return 1, f"Procedure '{proc.name}' needs training data (> data:) in eval suite"
-    
     # Optimize each procedure
     optimized_dict = {}
     train_scores_dict = {}
-    
+
     for proc in procs_with_optimize:
         eval_suite = eval_map[proc.name]
-        
+
         # Load training data using service
-        dataset_name = list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
+        dataset_name = (
+            list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
+        )
         if not dataset_name:
             return 1, f"Procedure '{proc.name}' needs training data"
-        
+
         try:
             train_data = data_loader.load_training_data(eval_suite, dataset_name)
         except Exception as e:
             return 1, str(e)
-        
+
         # Load test data using service
         test_data_list = None
         try:
@@ -200,19 +232,19 @@ def run_optimization_cli(
         except Exception:
             # Test data not available - that's okay
             pass
-        
+
         # Note: Analytical metrics can have None expected outputs
         # The metric function will compute the expected value internally
-        
+
         # Resolve types using service
         param_types = type_resolver.resolve_param_types(proc)
-        
+
         # Get metric from eval suite
         if not eval_suite.metrics:
             return 1, f"Procedure '{proc.name}' needs at least one metric in eval suite"
-        
+
         metric_def = eval_suite.metrics[0]
-        
+
         # Validate metric's dataset exists
         if metric_def.dataset_name:
             if metric_def.dataset_name not in eval_suite.datasets:
@@ -221,12 +253,12 @@ def run_optimization_cli(
                     f"which is not defined in @eval: {proc.name}. "
                     f"Available datasets: {', '.join(eval_suite.datasets.keys())}"
                 )
-        
+
         # Create metric using service
         # Use metric_def.dataset_name if specified, otherwise fall back to dataset_name
         metric_dataset_name = metric_def.dataset_name or dataset_name
         metric_fn = metric_factory.create_metric(metric_def, proc, metric_dataset_name)
-        
+
         # Call optimizer
         try:
             optimized, train_score = opt.optimize_procedure(
@@ -242,16 +274,18 @@ def run_optimization_cli(
             train_scores_dict[proc.name] = train_score
         except Exception as e:
             return 1, f"Optimization error for '{proc.name}': {e}"
-    
+
     # Write results using service
     if optimized_dict:
         optimized_path = result_writer.write_optimized_prompts(optimized_dict)
         result_writer.write_training_scores(train_scores_dict)
-        
+
         # Display results
-        display_text = result_writer.format_prompts_for_display(optimized_dict, optimized_path)
+        display_text = result_writer.format_prompts_for_display(
+            optimized_dict, optimized_path
+        )
         return 0, display_text
-    
+
     return 0, ""
 
 
@@ -272,9 +306,9 @@ def run_evals_cli(
     ``optimize=False`` here so GEPA does not run twice.
     """
     from pathlib import Path
-    
+
     source_path = Path(source).resolve()
-    
+
     # Run optimizer FIRST if requested, before codegen
     if optimize:
         code, msg = run_optimization_cli(
@@ -287,17 +321,17 @@ def run_evals_cli(
         )
         if code != 0:
             return code, msg
-    
+
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
     ok, err = maybe_run_codegen(source, model=codegen_model)
     if not ok:
         return 1, (err or "Code generation failed")
-    
+
     results = run_evals(
         str(source_path),
         adapter=_build_runtime_adapter(adapter, adapter_model),
     )
-    
+
     lines = ["Evals:"]
     for suite in results:
         # Display metrics (evaluated only on test data)
@@ -320,7 +354,8 @@ def maybe_run_codegen(
         prog = parse_program(src_txt)
         # Check for auto_spec (new) or ai_prompt (legacy)
         needs = any(
-            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
+            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None)
+            for p in prog.procedures
         )
         if not needs:
             return True, None
@@ -344,19 +379,31 @@ def maybe_run_codegen(
 
 
 def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[int, str]:
-    import os
     from pathlib import Path
-    from .optimization.services.program_loader import load_program_with_optimized_prompts
-    
+    from .optimization.services.program_loader import (
+        load_program_with_optimized_prompts,
+    )
+
     DEBUG = os.getenv("KEDI_DEBUG_OPTIMIZED", "0") == "1"
-    
+
     source_path = Path(source).resolve()
     if DEBUG:
         print(f"[DEBUG run_program_cli] Source: {source_path}", file=os.sys.stderr)
-    
+
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
-    
+
+    # Prefer offline execution when generated/native code fully covers the
+    # program. Fall back to the configured adapter only if runtime actually
+    # needs LLM-backed template expansion.
+    rt = compile_program(program, adapter=None)
+    try:
+        out = rt.run_main()
+        return 0, ("" if out is None else str(out))
+    except RuntimeError as e:
+        if str(e) != "No adapter provided to KediRuntime":
+            raise
+
     adapter_impl = _build_runtime_adapter(adapter, model)
     rt = compile_program(program, adapter=adapter_impl)
     out = rt.run_main()

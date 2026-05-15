@@ -7,10 +7,10 @@ Tests that:
   3. Spans are optimized in declaration order and each gets its own optimized
      prompt.
 """
+
 from __future__ import annotations
 
 import warnings
-from typing import Any
 
 import pytest
 
@@ -22,7 +22,6 @@ from tests.dspy_mocks import (
     Recorder,
     RangeAwareAdapter,
     install_mock_dspy,
-    parse_first_range,
 )
 
 
@@ -40,6 +39,7 @@ def _prepare(src: str, proc_index: int = 0, eval_index: int = 0):
 
 
 # ── Two spans in ONE procedure ───────────────────────────────────────
+
 
 def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPatch):
     """A single procedure with two optimize spans. Each span gets its own
@@ -110,6 +110,7 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
 
 # ── Two procedures optimized independently ───────────────────────────
 
+
 def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch):
     """Optimize proc_a and proc_b separately. Each targets a different range.
     Results should not interfere with each other."""
@@ -160,7 +161,9 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 """
     # Optimize proc_a
     Recorder.reset()
-    prog_a, rt_a, proc_a, param_types_a, _, metric_a = _prepare(src, proc_index=0, eval_index=0)
+    prog_a, rt_a, proc_a, param_types_a, _, metric_a = _prepare(
+        src, proc_index=0, eval_index=0
+    )
     optimizer_a = GEPAOptimizer(
         config=OptimizerConfig(
             max_metric_calls=120,
@@ -185,7 +188,9 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 
     # Optimize proc_b
     Recorder.reset()
-    prog_b, rt_b, proc_b, param_types_b, _, metric_b = _prepare(src, proc_index=1, eval_index=1)
+    prog_b, rt_b, proc_b, param_types_b, _, metric_b = _prepare(
+        src, proc_index=1, eval_index=1
+    )
     optimizer_b = GEPAOptimizer(
         config=OptimizerConfig(
             max_metric_calls=120,
@@ -226,6 +231,7 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 
 
 # ── Each span gets its own prompt ────────────────────────────────────
+
 
 def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatch):
     """Each span in a multi-span procedure gets a unique optimized prompt.
@@ -299,5 +305,7 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
     # target, the other span's baseline (combined with the first's optimized
     # prefix) may already be at-optimum and have no candidate to adopt.
     seen = "\n".join(c.instructions for c in Recorder.calls)
-    assert "Compute the initial" in seen, "first_step's seed should reach the Predict mock"
+    assert "Compute the initial" in seen, (
+        "first_step's seed should reach the Predict mock"
+    )
     assert "Refine to get" in seen, "second_step's seed should reach the Predict mock"

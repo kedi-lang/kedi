@@ -4,7 +4,6 @@ Tests type checking for parameters, variables, return values, and complex types.
 """
 
 import pytest
-from pydantic_core import ValidationError
 
 from tests.utils_llm import run_without_llm
 
@@ -180,7 +179,8 @@ class TestVariableTypeValidation:
 = <`value`>
 """
         with pytest.raises(
-            TypeError, match="Native non-string assignment requires explicit type annotation"
+            TypeError,
+            match="Native non-string assignment requires explicit type annotation",
         ):
             _run(src)
 

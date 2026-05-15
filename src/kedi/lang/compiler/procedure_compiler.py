@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable
 
-from pydantic import BaseModel
 
 from ...core import KediRuntime
 from ..ast import ProcDefStmt, ProcedureDef
@@ -36,7 +35,9 @@ class ProcedureCompiler:
             self._enforce_param_types(proc, kwargs)
 
             # Setup scoped environment for execution
-            closure_env = ScopedDict(kwargs, readonly=set(proc.params), closure=parent_env)
+            closure_env = ScopedDict(
+                kwargs, readonly=set(proc.params), closure=parent_env
+            )
 
             # Execute body (nested procedures handled dynamically during execution)
             last_return = self.executor.execute(proc, closure_env)
@@ -48,7 +49,10 @@ class ProcedureCompiler:
         return self._create_dynamic_function(proc.name, proc.params, _body)
 
     def _prepare_kwargs(
-        self, proc: ProcedureDef, kwargs: dict[str, Any], parent_env: dict[str, Any] | None
+        self,
+        proc: ProcedureDef,
+        kwargs: dict[str, Any],
+        parent_env: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Prepare kwargs with lexical and global environments."""
         # Merge lexical environment
@@ -96,25 +100,33 @@ class ProcedureCompiler:
                         self.rt, None, provided, allow_str_coercion=False
                     )
                 except Exception:
-                    raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                    raise TypeError(
+                        f"Parameter '{param_name}' does not match annotated type"
+                    )
                 kwargs[param_name] = validated
 
     def _enforce_return_type(
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
-        kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
+        kedi_type = KediType.from_node(
+            proc.return_type_expr, proc.return_type_annotation
+        )
 
         if kedi_type.is_none():
             # Default to str: non-string native returns are illegal
             if last_return is not None and not isinstance(last_return, str):
-                raise TypeError("Return value must be str; annotate function to return non-string")
+                raise TypeError(
+                    "Return value must be str; annotate function to return non-string"
+                )
             return "" if last_return is None else str(last_return)
 
         # Annotated return: strict validate and return validated value
         try:
             # Do not allow string literal coercion for returns
-            return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+            return kedi_type.validate(
+                self.rt, env, last_return, allow_str_coercion=False
+            )
         except Exception:
             raise TypeError("Return value does not match annotated type")
 
@@ -155,7 +167,9 @@ class ProcedureCompiler:
                 procs[name] = old_fn
 
     @staticmethod
-    def _create_dynamic_function(name: str, params: list[str], body: Callable) -> Callable:
+    def _create_dynamic_function(
+        name: str, params: list[str], body: Callable
+    ) -> Callable:
         """Create a function with specific parameter names."""
         param_list = ", ".join(params)
         args_map = ", ".join(f"{n}={n}" for n in params)

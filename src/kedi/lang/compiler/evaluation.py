@@ -29,7 +29,9 @@ def evaluate_call(rt: KediRuntime, seg: CallSegment, local_env: dict[str, Any]) 
     return rt._invoke_procedure(callee, eval_args)
 
 
-def evaluate_python_inline(rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
+def evaluate_python_inline(
+    rt: KediRuntime, code: str, local_env: dict[str, Any]
+) -> Any:
     """Evaluate inline Python expression or statement."""
     env = build_python_env(rt, local_env)
     try:
@@ -63,7 +65,9 @@ def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any]) -> 
         raise RuntimeError(f"Python block error: {e}") from e
 
 
-def execute_inline_side_effects(rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None:
+def execute_inline_side_effects(
+    rt: KediRuntime, code: str, env_map: dict[str, Any]
+) -> None:
     """Execute Python code for side effects, syncing back existing vars only."""
     env_exec = build_python_env(rt, env_map)
     try:
@@ -81,7 +85,11 @@ def execute_inline_side_effects(rt: KediRuntime, code: str, env_map: dict[str, A
 
 
 def prepare_segments(
-    rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str = "template"
+    rt: KediRuntime,
+    segments: list[Segment],
+    kwargs: dict[str, Any],
+    *,
+    context: str = "template",
 ) -> tuple[list[Any], str]:
     """Prepare segments for rt.m() call, building expression and string parts."""
     expr: list[Any] = []
@@ -137,7 +145,9 @@ def evaluate_assignment_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any | None, str]:
     """Evaluate assignment RHS, returning native value if pure expression."""
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    non_ws = [
+        s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")
+    ]
 
     # Single native expression or call
     if len(non_ws) == 1:
@@ -196,7 +206,9 @@ def _stringify_segments(
 
             if seg.escaped_whitespace:
                 # Has escaped whitespace, always apply preserve_escaped_whitespace
-                processed_text = preserve_escaped_whitespace(seg.text, seg.escaped_whitespace)
+                processed_text = preserve_escaped_whitespace(
+                    seg.text, seg.escaped_whitespace
+                )
                 parts.append(processed_text)
             elif is_first and is_last:
                 # Only TextSegment, trim leading and trailing spaces

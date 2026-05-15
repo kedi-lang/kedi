@@ -10,12 +10,12 @@ from ..lang.ast import OptimizeSpan
 
 class OptimizerAdapter(Protocol):
     """Interface for optimizers that can optimize prompts in procedures.
-    
+
     The interface follows the DSPy GEPA pattern where optimizers orchestrate
     training loops using metrics to score candidates. Optimizers are
     implementation-agnostic and receive clean data/metadata.
-        """
-    
+    """
+
     def optimize_procedure(
         self,
         proc_name: str,
@@ -27,7 +27,7 @@ class OptimizerAdapter(Protocol):
         metric: Callable[[Any, Any], tuple[float, str | None]],
     ) -> tuple[dict[str, str], float]:
         """Optimize procedure spans using training data.
-        
+
         Args:
             proc_name: Procedure name
             proc_params: List of procedure parameter names
@@ -40,16 +40,15 @@ class OptimizerAdapter(Protocol):
             metric: Function (input, expected_output) -> (score, feedback).
                 Metric calls procedure internally and compares results.
                 Must always return (float, str | None) tuple.
-        
+
         Returns:
             Tuple of (optimized_prompts, train_score) where:
             - optimized_prompts: Dict mapping span.name -> optimized prompt string
             - train_score: Average metric score over training data (0.0-1.0)
-        
+
         Raises:
             TypeError: If type validation fails for any training example
             ValueError: If train_data is empty or spans is empty
             RuntimeError: If optimization fails
         """
         ...
-

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.lang import parse_program
 from kedi.tests_runner import run_evals
 from tests.mock_adapter import MockAdapter
@@ -229,7 +228,10 @@ def test_eval_non_iterable_data_error(monkeypatch):
 """
     # The error should be raised when trying to evaluate the dataset
     # But since we fall back to training data, the error will occur there
-    with pytest.raises((RuntimeError, ValueError), match="must return an iterable|no data.*with this name"):
+    with pytest.raises(
+        (RuntimeError, ValueError),
+        match="must return an iterable|no data.*with this name",
+    ):
         run_evals(src2, adapter=MockAdapter())
 
 
@@ -306,4 +308,3 @@ def test_eval_multiple_datasets(monkeypatch):
     evals = run_evals(src, adapter=MockAdapter())
     assert len(evals[0].metrics) == 1
     assert evals[0].metrics[0].score == 1.0
-

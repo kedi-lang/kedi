@@ -7,10 +7,10 @@ Tests that the optimizer works correctly when combined with:
   - Optimization preserving non-optimized procedure behavior
   - Complex span inputs with computed values
 """
+
 from __future__ import annotations
 
 import warnings
-from typing import Any
 
 import pytest
 
@@ -22,7 +22,6 @@ from tests.dspy_mocks import (
     Recorder,
     RangeAwareAdapter,
     install_mock_dspy,
-    parse_first_range,
 )
 
 
@@ -67,6 +66,7 @@ def _optimize(monkeypatch, src, train_data, max_calls=40, proc_index=0, eval_ind
 
 # ── Typed int and float outputs ──────────────────────────────────────
 
+
 def test_optimization_with_typed_int_float_outputs(monkeypatch: pytest.MonkeyPatch):
     """Span with both [v: int] and [w: float] outputs.
     MockLM should produce correct types for both."""
@@ -99,6 +99,7 @@ def test_optimization_with_typed_int_float_outputs(monkeypatch: pytest.MonkeyPat
 
 # ── List[str] output type ────────────────────────────────────────────
 
+
 def test_optimization_with_list_str_output(monkeypatch: pytest.MonkeyPatch):
     """Span producing [tags: list[str]] should work through optimization."""
     src = """
@@ -120,13 +121,16 @@ def test_optimization_with_list_str_output(monkeypatch: pytest.MonkeyPatch):
     return (0.5, "NEEDS_TAGS")
     ```
 """
-    optimized, score, proc, _ = _optimize(monkeypatch, src, [("item1", None), ("item2", None)])
+    optimized, score, proc, _ = _optimize(
+        monkeypatch, src, [("item1", None), ("item2", None)]
+    )
 
     assert "tag_span" in optimized
     assert score >= 0.0
 
 
 # ── Python preprocessing before span ─────────────────────────────────
+
 
 def test_optimization_with_python_preprocessing(monkeypatch: pytest.MonkeyPatch):
     """A Python block computes a derived value before the span.
@@ -151,7 +155,8 @@ def test_optimization_with_python_preprocessing(monkeypatch: pytest.MonkeyPatch)
     ```
 """
     optimized, score, proc, _ = _optimize(
-        monkeypatch, src,
+        monkeypatch,
+        src,
         [("hello world foo bar", None), ("one two three", None)],
     )
 
@@ -171,6 +176,7 @@ def test_optimization_with_python_preprocessing(monkeypatch: pytest.MonkeyPatch)
 
 
 # ── Multiline span ───────────────────────────────────────────────────
+
 
 def test_optimization_with_multiline_span(monkeypatch: pytest.MonkeyPatch):
     """A span with multiple template lines. All lines should be part of
@@ -206,6 +212,7 @@ def test_optimization_with_multiline_span(monkeypatch: pytest.MonkeyPatch):
 
 # ── Non-optimized lines preserved ────────────────────────────────────
 
+
 def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPatch):
     """A procedure has both normal template lines and an optimize span.
     After optimization, the non-optimized parts should be unaffected."""
@@ -236,12 +243,13 @@ def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPa
     body_stmts = proc.body
     has_non_opt_template = False
     for stmt in body_stmts:
-        if hasattr(stmt, 'optimized_prompt_prefix'):
-            if stmt.optimized_prompt_prefix is None and hasattr(stmt, 'segments'):
+        if hasattr(stmt, "optimized_prompt_prefix"):
+            if stmt.optimized_prompt_prefix is None and hasattr(stmt, "segments"):
                 has_non_opt_template = True
 
 
 # ── Complex computed span inputs ─────────────────────────────────────
+
 
 def test_complex_span_inputs_forwarding(monkeypatch: pytest.MonkeyPatch):
     """Procedure with complex Python preprocessing that feeds into span.
@@ -279,6 +287,7 @@ def test_complex_span_inputs_forwarding(monkeypatch: pytest.MonkeyPatch):
 
 
 # ── Optimization with test_data split ────────────────────────────────
+
 
 def test_optimization_with_test_data(monkeypatch: pytest.MonkeyPatch):
     """When test_data is provided alongside train_data, GEPA should use

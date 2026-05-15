@@ -27,7 +27,6 @@ from kedi.lang import (
     ProgramWithValidation,
     Span,
     TypeApply,
-    TypeExpr,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -168,14 +167,7 @@ def test_program_returns_plain_program_without_validation():
 
 
 def test_program_returns_with_validation_when_test_block_present():
-    src = (
-        "@p():\n"
-        "  = ok\n"
-        "\n"
-        "@test: p:\n"
-        "  > case: c1:\n"
-        "    `assert p() == \"ok\"`\n"
-    )
+    src = '@p():\n  = ok\n\n@test: p:\n  > case: c1:\n    `assert p() == "ok"`\n'
     prog = parse_program(src)
     assert isinstance(prog, ProgramWithValidation)
     assert len(prog.tests) == 1
@@ -192,7 +184,7 @@ def test_program_returns_with_validation_when_eval_block_present():
         "  > data: cases:\n"
         "    = `[(1, 2), (3, 6)]`\n"
         "  > metric: acc(cases):\n"
-        "    = `(1.0, \"ok\")`\n"
+        '    = `(1.0, "ok")`\n'
     )
     prog = parse_program(src)
     assert isinstance(prog, ProgramWithValidation)
@@ -279,7 +271,7 @@ def test_mixed_return_is_returnstmt_not_block():
     The distinction lets the runtime preserve native values for the
     ``= \\`code\\``` form while stringifying everything else.
     """
-    from kedi.lang.ast import InputSegment, ReturnStmt
+    from kedi.lang.ast import ReturnStmt
 
     prog = parse_program("@p(x: int) -> str:\n  = result is <`x`> here\n")
     body = prog.procedures[0].body
@@ -294,11 +286,11 @@ def test_mixed_return_is_returnstmt_not_block():
 
 
 def test_template_text_escapes_decoded():
-    prog = parse_program("@p():\n  Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n")
-    template_line = prog.procedures[0].body[0]
-    text = "".join(
-        s.text for s in template_line.segments if isinstance(s, TextSegment)
+    prog = parse_program(
+        "@p():\n  Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n"
     )
+    template_line = prog.procedures[0].body[0]
+    text = "".join(s.text for s in template_line.segments if isinstance(s, TextSegment))
     assert "<angle>" in text
     assert "[brackets]" in text
     assert "@at" in text
