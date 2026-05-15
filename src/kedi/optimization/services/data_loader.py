@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...lang.compiler import _execute_python_block, _eval_python_inline
-from ...lang.compiler.environment import KediRuntime
 from ...lang.ast import EvalSuite
+from ...lang.compiler import _eval_python_inline, _execute_python_block
+from ...lang.compiler.environment import KediRuntime
 
 
 class OptimizationDataLoader:

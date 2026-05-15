@@ -12,7 +12,7 @@ except ImportError:
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
-from ..utils import extract_output_fields, extract_input_fields
+from ..utils import extract_input_fields, extract_output_fields
 from .type_handler import StructuredTypeHandler
 
 

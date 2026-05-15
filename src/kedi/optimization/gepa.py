@@ -18,9 +18,9 @@ except ImportError:
     DSPY_AVAILABLE = False
     dspy = None  # type: ignore[assignment]
 
-from ..model_normalization import normalize_for_litellm
 from ..lang.ast import OptimizeSpan
 from ..lang.compiler.environment import KediRuntime
+from ..model_normalization import normalize_for_litellm
 from .config import OptimizerConfig
 from .interfaces import OptimizerAdapter
 from .services.dspy_config import DSPyConfigurationService

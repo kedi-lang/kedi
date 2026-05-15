@@ -17,13 +17,12 @@ from tests.dspy_mocks import (
     LMCall,
     MockLM,
     PredictCall,
-    Recorder,
     RangeAwareAdapter,
+    Recorder,
     install_mock_dspy,
     parse_first_range,
     sample_from_range,
 )
-
 
 # ── parse_first_range ────────────────────────────────────────────────
 

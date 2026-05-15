@@ -161,7 +161,7 @@ def main(
     except Exception as e:
         click.echo(f"Error reading {source}: {e}", err=True)
         ctx.exit(1)
-    data = parse_args(ctx.args)
+    parse_args(ctx.args)
     # the data comes from command line arguments
     # should be passed into runtime environment
     # TL;DR: pass `data` into runtime

@@ -3,29 +3,30 @@
 from __future__ import annotations
 
 import json
-import pytest
 import tempfile
 from pathlib import Path
 
-from kedi.lang import parse_program, compile_program
+import pytest
+
+from kedi.lang import compile_program, parse_program
 from kedi.optimization.config import OptimizerConfig
+from kedi.optimization.services import (
+    DSPyConfigurationService,
+    DSPyExampleFormatter,
+    DSPyModuleBuilder,
+    DSPyPromptExtractor,
+    DSPyScoreCalculator,
+    GEPAMetricWrapper,
+    MetricFactory,
+    OptimizationDataLoader,
+    OptimizationResultWriter,
+    StructuredTypeHandler,
+    TypeResolver,
+)
 from kedi.optimization.services.program_loader import (
     load_program_with_optimized_prompts,
 )
 from kedi.optimization.utils import extract_output_fields
-from kedi.optimization.services import (
-    OptimizationDataLoader,
-    MetricFactory,
-    TypeResolver,
-    DSPyConfigurationService,
-    OptimizationResultWriter,
-    StructuredTypeHandler,
-    DSPyModuleBuilder,
-    DSPyExampleFormatter,
-    GEPAMetricWrapper,
-    DSPyPromptExtractor,
-    DSPyScoreCalculator,
-)
 
 # Skip DSPy-dependent tests if DSPy is not available
 try:

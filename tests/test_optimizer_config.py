@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from kedi.optimization.config import OptimizerConfig
 
 

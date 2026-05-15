@@ -65,11 +65,6 @@ def test_parse_auto_multiline():
 
 def test_parse_unknown_directive_error():
     """Test that unknown directive raises error for explicit directives."""
-    src = """
-@foo():
-  > data: x:
-    Some content
-"""
     # This should fail because "data" is only valid in @eval blocks, not procedures
     # Actually, legacy `>` lines are treated as codegen prompts, so this would work
     # But let's test a truly unknown directive pattern

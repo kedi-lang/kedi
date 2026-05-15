@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 from ...lang.ast import ProcedureDef
 from ...lang.compiler.environment import KediRuntime, build_type_env
 

@@ -196,20 +196,6 @@ def test_eval_unknown_dataset_error(monkeypatch):
 
 def test_eval_non_iterable_data_error(monkeypatch):
     """Test that non-iterable data raises error."""
-    src = """
-@foo(x: int) -> int:
-  = `x + 1`
-
-@eval: foo:
-  > data: bad_data:
-    = ```
-    return "not iterable"  # String is iterable, but we want a list/dict
-    ```
-  > metric: test(bad_data):
-    = ```
-    return 1.0
-    ```
-"""
     # Strings are iterable in Python, so this won't fail on iterability check
     # But let's test with a non-iterable value
     src2 = """

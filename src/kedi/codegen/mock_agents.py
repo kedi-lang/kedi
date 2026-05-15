@@ -92,8 +92,8 @@ class MockPassingAgent:
         if not match:
             return "result = 'ok'\nreturn result\n"
 
-        func_name = match.group(1)
-        params_str = match.group(2).strip()
+        match.group(1)
+        match.group(2).strip()
 
         # Generate generic implementation based on return type
         if "->" in python_signature:

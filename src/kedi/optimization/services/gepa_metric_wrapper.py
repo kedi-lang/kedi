@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
+import weakref
 from collections.abc import Callable
 from typing import Any, Optional
-import weakref
 
 try:
     import dspy
@@ -16,8 +16,9 @@ except ImportError:
     DSPY_AVAILABLE = False
     dspy = None  # type: ignore
 
-from ...lang.ast import OutputSegment, TemplateLine
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
+
+from ...lang.ast import OutputSegment, TemplateLine
 from ..utils import normalize_optimized_prompt_prefix
 
 

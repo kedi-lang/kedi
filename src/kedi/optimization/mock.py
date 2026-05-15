@@ -80,7 +80,7 @@ class MockOptimizer(OptimizerAdapter):
 
             # Track scores for this round
             if round_scores:
-                avg_round_score = sum(round_scores) / len(round_scores)
+                sum(round_scores) / len(round_scores)
                 all_scores.extend(round_scores)
 
         # Calculate final training score as average of all metric calls

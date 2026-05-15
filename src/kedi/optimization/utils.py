@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 from ..lang.ast import (
+    CallSegment,
     InputSegment,
     OptimizeSpan,
-    CallSegment,
     OutputSegment,
+    PythonExprNativeSegment,
+    PythonExprSegment,
     TemplateLine,
     TextSegment,
-    PythonExprSegment,
-    PythonExprNativeSegment,
 )
-
+from ..lang.compiler.environment import KediRuntime
 from ..lang.compiler.evaluation import (
     evaluate_call,
     evaluate_python_inline,
     lookup_value,
 )
-from ..lang.compiler.environment import KediRuntime
 
 
 def template_line_to_string(template_line: TemplateLine) -> str:

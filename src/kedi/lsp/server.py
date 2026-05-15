@@ -17,7 +17,6 @@ from pygls.lsp.server import LanguageServer
 from . import features
 from .python_virtual import compute_python_virtual_document
 
-
 _LOGGER = logging.getLogger(__name__)
 
 

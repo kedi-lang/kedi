@@ -15,8 +15,8 @@ from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
 from tests.dspy_mocks import (
-    Recorder,
     RangeAwareAdapter,
+    Recorder,
     install_mock_dspy,
     reflection_fail_once,
 )

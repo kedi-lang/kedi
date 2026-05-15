@@ -103,7 +103,7 @@ def test_assign_block_type_coercion(monkeypatch: Any) -> None:
     with pytest.raises(
         TypeError
     ):  # type coercion is not allowed, should raise TypeError
-        out = _run(src)
+        _run(src)
 
 
 def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:

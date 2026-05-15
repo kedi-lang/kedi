@@ -8,11 +8,11 @@ from typing import Any
 try:
     import dspy
     from dspy import LM
+    from dspy.adapters.chat_adapter import ChatAdapter
     from dspy.adapters.json_adapter import (
         JSONAdapter,
         _get_structured_outputs_response_format,
     )
-    from dspy.adapters.chat_adapter import ChatAdapter
 
     DSPY_AVAILABLE = True
 except ImportError:

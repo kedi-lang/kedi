@@ -24,7 +24,6 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-
 # Characters that may follow a backslash inside template / call-arg text.
 _ESCAPABLE = frozenset(
     [

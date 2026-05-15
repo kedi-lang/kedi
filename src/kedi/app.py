@@ -380,6 +380,7 @@ def maybe_run_codegen(
 
 def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[int, str]:
     from pathlib import Path
+
     from .optimization.services.program_loader import (
         load_program_with_optimized_prompts,
     )

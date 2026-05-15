@@ -79,7 +79,6 @@ from ..ast import (
 from .diagnostics import KediDiagnostic, KediParseError
 from .escapes import dedent_block, unescape_text_with_tracking
 
-
 # ---------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------

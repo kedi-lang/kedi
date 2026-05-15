@@ -14,7 +14,6 @@ from typing import Optional
 import tree_sitter_kedi
 from tree_sitter import Language, Parser, Tree
 
-
 _lock = Lock()
 _language: Optional[Language] = None
 _parser: Optional[Parser] = None

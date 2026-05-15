@@ -13,7 +13,6 @@ from lsprotocol import types as lsp
 from kedi.lsp import features
 from kedi.lsp.python_virtual import compute_python_virtual_document
 
-
 # ---------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------

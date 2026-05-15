@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable
 
-
 from ...core import KediRuntime
 from ..ast import ProcDefStmt, ProcedureDef
 from .environment import ScopedDict

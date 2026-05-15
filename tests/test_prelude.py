@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import pytest
 
 from kedi.lang import compile_program, parse_program

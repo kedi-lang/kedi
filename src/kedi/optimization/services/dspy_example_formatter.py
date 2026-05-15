@@ -12,8 +12,8 @@ except ImportError:
     DSPY_AVAILABLE = False
     dspy = None  # type: ignore
 
-from ...lang.compiler.environment import KediRuntime
 from ...lang.ast import OptimizeSpan
+from ...lang.compiler.environment import KediRuntime
 
 
 class DSPyExampleFormatter:
@@ -131,7 +131,6 @@ class DSPyExampleFormatter:
         # Slow path: span uses computed intermediate values — must run procedure.
         try:
             # Find the procedure definition in the runtime
-            proc_def = None
             if hasattr(self.runtime, "_main") and self.runtime._main:
                 # Check if it's the main procedure
                 if (

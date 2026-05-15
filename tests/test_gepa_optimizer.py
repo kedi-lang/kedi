@@ -32,10 +32,9 @@ def test_gepa_optimizer_interface():
     [capital] is the capital of <country>.
 """
     prog = parse_program(src)
-    proc = prog.procedures[0]
+    prog.procedures[0]
 
     # Create mock training data
-    train_data = [("France", "Paris"), ("Japan", "Tokyo")]
 
     # Create simple metric
     def simple_metric(input_val, expected_output):

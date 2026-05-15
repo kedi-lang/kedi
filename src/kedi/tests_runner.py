@@ -56,10 +56,11 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
 
 def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
     from pathlib import Path
+
+    from .lang.compiler import compile_program
     from .optimization.services.program_loader import (
         load_program_with_optimized_prompts,
     )
-    from .lang.compiler import compile_program
 
     # Check if src_main is a file path or source code string
     source_path = None
@@ -112,6 +113,7 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
 
 def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
     from pathlib import Path
+
     from .optimization.services.program_loader import (
         load_program_with_optimized_prompts,
     )
@@ -155,7 +157,7 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
         # Evaluate datasets for evaluation (test_data preferred, fallback to training data)
         eval_datasets: dict[str, Any] = {}
 
-        from .lang.compiler import _execute_python_block, _eval_python_inline
+        from .lang.compiler import _eval_python_inline, _execute_python_block
 
         # Evaluate test datasets first (preferred for evaluation)
         for dataset_name, dataset in suite.test_datasets.items():

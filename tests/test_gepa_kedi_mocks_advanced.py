@@ -19,8 +19,8 @@ from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
 from tests.dspy_mocks import (
-    Recorder,
     RangeAwareAdapter,
+    Recorder,
     install_mock_dspy,
 )
 
@@ -241,11 +241,10 @@ def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPa
     assert score >= 0.0
 
     body_stmts = proc.body
-    has_non_opt_template = False
     for stmt in body_stmts:
         if hasattr(stmt, "optimized_prompt_prefix"):
             if stmt.optimized_prompt_prefix is None and hasattr(stmt, "segments"):
-                has_non_opt_template = True
+                pass
 
 
 # ── Complex computed span inputs ─────────────────────────────────────

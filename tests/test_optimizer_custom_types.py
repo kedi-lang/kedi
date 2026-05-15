@@ -12,12 +12,11 @@ except ImportError:
     PYDANTIC_AVAILABLE = False
     BaseModel = object
 
-from kedi.lang import parse_program, compile_program
+from kedi.lang import compile_program, parse_program
 from kedi.optimization.services import (
     OptimizationDataLoader,
     TypeResolver,
 )
-
 
 # ==================== Pydantic Model Tests ====================
 

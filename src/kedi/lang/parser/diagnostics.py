@@ -19,7 +19,6 @@ from typing import List, Literal, Optional
 
 from ..ast import Span
 
-
 Severity = Literal["error", "warning"]
 
 

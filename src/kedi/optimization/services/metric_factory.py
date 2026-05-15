@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ...lang.ast import EvalMetric, ProcedureDef
-from ...lang.compiler import _execute_python_block, _eval_python_inline
+from ...lang.compiler import _eval_python_inline, _execute_python_block
 from ...lang.compiler.environment import KediRuntime
 
 

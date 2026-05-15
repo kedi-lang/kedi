@@ -6,9 +6,9 @@ from kedi import app
 from kedi.tests_runner import (
     EvalMetricResult,
     EvalRunResult,
-    TestCaseResult as CaseResult,
-    TestRunResult as RunResult,
 )
+from kedi.tests_runner import TestCaseResult as CaseResult
+from kedi.tests_runner import TestRunResult as RunResult
 
 
 def test_run_evals_cli_forwards_selected_adapter_model(

@@ -45,7 +45,6 @@ from ..lang.ast import (
 from ..lang.parser import KediParseError, parse_program
 from .features import compute_python_ranges
 
-
 Position = dict[str, int]
 Range = dict[str, Position]
 

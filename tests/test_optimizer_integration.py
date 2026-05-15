@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from kedi.lang import parse_program, compile_program
+import pytest
+
+from kedi.lang import compile_program, parse_program
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.mock import MockOptimizer
 from kedi.optimization.services import (
-    OptimizationDataLoader,
     MetricFactory,
-    TypeResolver,
+    OptimizationDataLoader,
     OptimizationResultWriter,
+    TypeResolver,
 )
 
 try:

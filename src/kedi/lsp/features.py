@@ -26,18 +26,19 @@ the server publishes as a semantic-tokens legend.
 
 from __future__ import annotations
 
+import importlib.resources
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
-import importlib.resources
-
 from lsprotocol import types as lsp
+from tree_sitter import Language as _TSLanguage
 from tree_sitter import (
-    Language as _TSLanguage,
     Node,
-    Parser as _TSParser,
-    Query as _TSQuery,
-    QueryCursor as _TSQueryCursor,
+)
+from tree_sitter import Parser as _TSParser
+from tree_sitter import Query as _TSQuery
+from tree_sitter import QueryCursor as _TSQueryCursor
+from tree_sitter import (
     Tree,
 )
 
@@ -87,7 +88,8 @@ from ..lang.ast import (
     VarArg,
 )
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
-from ..lang.parser.parser import parse as _ts_parse, get_language as _get_kedi_language
+from ..lang.parser.parser import get_language as _get_kedi_language
+from ..lang.parser.parser import parse as _ts_parse
 
 # Kedi highlights + injection queries, loaded from the tree-sitter-kedi
 # wheel's bundled ``queries/`` directory. These are the single source of
