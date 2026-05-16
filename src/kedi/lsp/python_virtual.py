@@ -207,7 +207,10 @@ class RegionCursor:
 
 
 def compute_python_virtual_document(
-    source: str, source_path: Optional[str] = None
+    source: str,
+    source_path: Optional[str] = None,
+    *,
+    focus_line: Optional[int] = None,
 ) -> dict[str, Any]:
     """Return a virtual Python document plus Kedi/Python source maps."""
     try:
@@ -218,6 +221,12 @@ def compute_python_virtual_document(
 
     cursor = RegionCursor(compute_python_ranges(source))
     builder = VirtualBuilder(source, source_path)
+    focused_proc = _find_focused_procedure(program.procedures, focus_line)
+    focus_key = (
+        f"proc:{focused_proc.name}:{focused_proc.loc.start_line}"
+        if focused_proc is not None and focused_proc.loc is not None
+        else None
+    )
     builder.add("from __future__ import annotations")
     builder.add("from typing import Any")
     builder.add("")
@@ -238,7 +247,9 @@ def compute_python_virtual_document(
         builder.add("    pass")
         builder.add("")
 
-    if program.toplevel_body or program.toplevel_return is not None:
+    if focused_proc is None and (
+        program.toplevel_body or program.toplevel_return is not None
+    ):
         builder.add("def __kedi_toplevel__() -> Any:")
         scope: dict[str, ScopeName] = {}
         _emit_statements(builder, cursor, program.toplevel_body, scope, "    ")
@@ -249,9 +260,11 @@ def compute_python_virtual_document(
         builder.add("")
 
     for proc in program.procedures:
+        if focused_proc is not None and proc is not focused_proc:
+            continue
         _emit_procedure_body(builder, cursor, proc)
 
-    if isinstance(program, ProgramWithValidation):
+    if focused_proc is None and isinstance(program, ProgramWithValidation):
         _emit_validation(builder, cursor, program)
 
     return {
@@ -259,6 +272,7 @@ def compute_python_virtual_document(
         "ranges": builder.regions,
         "mappings": builder.mappings,
         "symbols": builder.symbols,
+        "focusKey": focus_key,
     }
 
 
@@ -275,7 +289,22 @@ def _fallback_virtual_document(
         "ranges": builder.regions,
         "mappings": builder.mappings,
         "symbols": builder.symbols,
+        "focusKey": None,
     }
+
+
+def _find_focused_procedure(
+    procedures: list[ProcedureDef], focus_line: Optional[int]
+) -> Optional[ProcedureDef]:
+    if focus_line is None:
+        return None
+    source_line = focus_line + 1
+    for proc in procedures:
+        if proc.loc is None:
+            continue
+        if proc.loc.start_line <= source_line <= proc.loc.end_line:
+            return proc
+    return None
 
 
 def _emit_type_stub(builder: VirtualBuilder, typedef: TypeDef) -> None:
@@ -699,7 +728,46 @@ def main() -> None:
     payload = json.loads(sys.stdin.read() or "{}")
     text = payload.get("text", "")
     source_path = payload.get("sourcePath") or _path_from_uri(payload.get("uri"))
-    json.dump(compute_python_virtual_document(text, source_path), sys.stdout)
+    focus_line = payload.get("focusLine")
+    json.dump(
+        compute_python_virtual_document(text, source_path, focus_line=focus_line),
+        sys.stdout,
+    )
+
+
+def main_loop() -> None:
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        request_id = None
+        try:
+            payload = json.loads(line)
+            request_id = payload.get("id")
+            text = payload.get("text", "")
+            source_path = payload.get("sourcePath") or _path_from_uri(
+                payload.get("uri")
+            )
+            focus_line = payload.get("focusLine")
+            result = compute_python_virtual_document(
+                text,
+                source_path,
+                focus_line=focus_line,
+            )
+            print(
+                json.dumps({"id": request_id, "ok": True, "result": result}),
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "id": request_id,
+                        "ok": False,
+                        "error": str(exc),
+                    }
+                ),
+                flush=True,
+            )
 
 
 def _path_from_uri(uri: Any) -> Optional[str]:

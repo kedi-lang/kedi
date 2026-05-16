@@ -26,7 +26,9 @@ the server publishes as a semantic-tokens legend.
 
 from __future__ import annotations
 
+import builtins as _builtins
 import importlib.resources
+import typing as _typing
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
@@ -108,6 +110,36 @@ try:
 except Exception:  # pragma: no cover
     _KEDI_HIGHLIGHTS_QUERY = None
     _KEDI_INJECTIONS_QUERY = None
+
+try:
+    import typing_extensions as _typing_extensions
+except Exception:  # pragma: no cover - optional runtime dependency in degraded envs
+    _typing_extensions = None
+
+
+def _build_lsp_type_registry() -> dict[str, str]:
+    registry: dict[str, str] = {}
+    for name in dir(_builtins):
+        value = getattr(_builtins, name, None)
+        if isinstance(value, type) and not name.startswith("_"):
+            registry[name] = "builtins"
+    for module, origin in (
+        (_typing, "typing"),
+        (_typing_extensions, "typing_extensions"),
+    ):
+        if module is None:
+            continue
+        for name in getattr(module, "__all__", ()):
+            if not name.startswith("_") and hasattr(module, name):
+                registry.setdefault(name, origin)
+    return registry
+
+
+_LSP_TYPE_REGISTRY = _build_lsp_type_registry()
+
+
+def _known_lsp_type_origin(name: str) -> Optional[str]:
+    return _LSP_TYPE_REGISTRY.get(name)
 
 
 # =====================================================================
@@ -218,6 +250,9 @@ def _resolve_symbol_at(
                     scope_proc=proc,
                     cursor_span=pspan,
                 )
+        r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+        if r is not None:
+            return r
         # Inside the body.
         for stmt in proc.body:
             r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
@@ -238,7 +273,7 @@ def _resolve_symbol_at(
             return r
     # Type defs (top-level).
     for td in prog.type_defs:
-        r = _resolve_in_type_def(td, pos)
+        r = _resolve_in_type_def(td, pos, type_by_name)
         if r is not None:
             return r
     return None
@@ -281,6 +316,17 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
         return []
     return []  # Conservative for now: skip param-decl hit-testing in symbol
     # resolution. The header-level hover branch covers the common case.
+
+
+def _resolve_in_proc_signature_types(
+    proc: ProcedureDef, pos: lsp.Position, type_by_name: dict
+) -> Optional[SymbolRef]:
+    """Resolve type names used in a procedure signature."""
+    for expr in (proc.param_type_exprs or {}).values():
+        r = _resolve_in_type_expr(expr, pos, type_by_name)
+        if r is not None:
+            return r
+    return _resolve_in_type_expr(proc.return_type_expr, pos, type_by_name)
 
 
 def _resolve_in_stmt(
@@ -415,7 +461,9 @@ def _resolve_in_segment(
     return None
 
 
-def _resolve_in_type_def(td: TypeDef, pos: lsp.Position) -> Optional[SymbolRef]:
+def _resolve_in_type_def(
+    td: TypeDef, pos: lsp.Position, type_by_name: dict
+) -> Optional[SymbolRef]:
     if td.loc is None or not _position_inside(pos, td.loc):
         return None
     # `~Name(...)` — the name starts at start_col + 1.
@@ -439,6 +487,9 @@ def _resolve_in_type_def(td: TypeDef, pos: lsp.Position) -> Optional[SymbolRef]:
             ),
         )
     for f in td.fields:
+        r = _resolve_in_type_expr(f.type_expr, pos, type_by_name)
+        if r is not None:
+            return r
         if f.loc is not None and _position_inside(pos, f.loc):
             return SymbolRef(
                 kind="type_field",
@@ -546,6 +597,8 @@ def compute_hover(
         target = type_by_name.get(sym.name)
         if target is not None:
             text = _type_signature_markdown(target)
+        elif (origin := _known_lsp_type_origin(sym.name)) is not None:
+            text = _known_type_markdown(sym.name, origin)
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
@@ -768,6 +821,10 @@ def _type_signature_markdown(td: TypeDef) -> str:
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
 
 
+def _known_type_markdown(name: str, origin: str) -> str:
+    return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
+
+
 # =====================================================================
 # Definition
 # =====================================================================
@@ -831,6 +888,8 @@ def _find_all_references(
             for seg in _segments_of(prog.toplevel_return):
                 _collect_call_refs(seg, sym.name, out)
     elif sym.kind == "type":
+        for td in prog.type_defs:
+            _collect_type_refs_in_type_def(td, sym.name, out)
         for stmt in prog.toplevel_body:
             _collect_type_refs_in_stmt(stmt, sym.name, out)
         for p in prog.procedures:
@@ -917,6 +976,11 @@ def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
             _collect_type_refs_in_expr(seg.type_expr, name, out)
 
 
+def _collect_type_refs_in_type_def(td: TypeDef, name: str, out: List[Span]) -> None:
+    for field in td.fields:
+        _collect_type_refs_in_expr(field.type_expr, name, out)
+
+
 def _collect_type_refs_in_expr(
     expr: Optional[TypeExpr], name: str, out: List[Span]
 ) -> None:
@@ -965,6 +1029,12 @@ def compute_prepare_rename(
     sym = _resolve_symbol_at(prog, pos)
     if sym is None:
         return None
+    if (
+        sym.kind == "type"
+        and sym.declaration_span is None
+        and _known_lsp_type_origin(sym.name) is not None
+    ):
+        return None
     if sym.kind not in (
         "procedure",
         "type",
@@ -991,6 +1061,12 @@ def compute_rename(
         return None
     sym = _resolve_symbol_at(prog, pos)
     if sym is None:
+        return None
+    if (
+        sym.kind == "type"
+        and sym.declaration_span is None
+        and _known_lsp_type_origin(sym.name) is not None
+    ):
         return None
     # Reject non-identifier new names.
     if not _is_identifier(new_name):

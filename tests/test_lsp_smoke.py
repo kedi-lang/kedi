@@ -86,6 +86,131 @@ def test_hover_on_output_segment_shows_type():
     assert "n" in body
 
 
+def test_hover_on_builtin_and_typing_types_is_not_undefined():
+    src = (
+        "@p(items: list[int], x: Optional[str], y: Literal[int]) -> bool:\n"
+        "  Flag: [flag: bool]\n"
+        "  = <x>\n"
+    )
+
+    checks = [
+        ("list", lsp.Position(line=0, character=10), "builtins.list"),
+        ("int", lsp.Position(line=0, character=15), "builtins.int"),
+        ("Optional", lsp.Position(line=0, character=24), "typing.Optional"),
+        ("str", lsp.Position(line=0, character=33), "builtins.str"),
+        ("Literal", lsp.Position(line=0, character=42), "typing.Literal"),
+        ("bool", lsp.Position(line=1, character=15), "builtins.bool"),
+    ]
+
+    for name, pos, origin in checks:
+        hover = features.compute_hover(
+            source=src,
+            source_path="example.kedi",
+            pos=pos,
+        )
+        assert hover is not None, name
+        body = hover.contents.value
+        assert name in body
+        assert origin in body
+        assert f"Kedi type resolved to Python's {origin}." in body
+        assert "Kedi type derived from" not in body
+        assert "Kedi type backed by" not in body
+        assert "Kedi/Python type backed by" not in body
+        assert "not defined" not in body
+
+
+def test_builtin_type_definition_and_rename_are_disabled():
+    src = "@p(x: Optional[str]) -> bool:\n  = <x>\n"
+    uri = "file:///tmp/example.kedi"
+    pos = lsp.Position(line=0, character=6)
+
+    assert (
+        features.compute_definition(
+            source=src,
+            uri=uri,
+            source_path="/tmp/example.kedi",
+            pos=pos,
+        )
+        is None
+    )
+    assert (
+        features.compute_prepare_rename(
+            source=src,
+            source_path="/tmp/example.kedi",
+            pos=pos,
+        )
+        is None
+    )
+    assert (
+        features.compute_rename(
+            source=src,
+            uri=uri,
+            source_path="/tmp/example.kedi",
+            pos=pos,
+            new_name="Maybe",
+        )
+        is None
+    )
+
+
+def test_hover_on_type_definition_builtin_and_typing_types_is_not_undefined():
+    src = "~Person(name: str, friend: Optional[str])\n= ok\n"
+
+    checks = [
+        ("str", lsp.Position(line=0, character=14), "builtins.str"),
+        ("Optional", lsp.Position(line=0, character=27), "typing.Optional"),
+        ("str", lsp.Position(line=0, character=36), "builtins.str"),
+    ]
+
+    for name, pos, origin in checks:
+        hover = features.compute_hover(
+            source=src,
+            source_path="example.kedi",
+            pos=pos,
+        )
+        assert hover is not None, name
+        body = hover.contents.value
+        assert name in body
+        assert origin in body
+        assert "not defined" not in body
+
+
+def test_custom_type_definition_still_jumps_to_kedi_type():
+    src = "~Person(name: str)\n@p(x: Person):\n  = <x>\n"
+    loc = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="/tmp/example.kedi",
+        pos=lsp.Position(line=1, character=6),
+    )
+    assert loc is not None
+    assert loc.range.start.line == 0
+
+
+def test_custom_type_definition_field_type_still_jumps_to_kedi_type():
+    src = "~Person(name: str)\n~Team(member: Person)\n= ok\n"
+    loc = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="/tmp/example.kedi",
+        pos=lsp.Position(line=1, character=14),
+    )
+    assert loc is not None
+    assert loc.range.start.line == 0
+
+
+def test_unknown_type_hover_stays_runtime_resolved():
+    src = "@p(x: UnknownType):\n  = <x>\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=6),
+    )
+    assert hover is not None
+    assert "not defined in this module" in hover.contents.value
+    assert "resolved at runtime" in hover.contents.value
+
+
 def test_hover_on_unparseable_returns_none():
     hover = features.compute_hover(
         source="@p(:\n  ???\n",
@@ -418,6 +543,34 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_can_focus_single_procedure_body():
+    src = (
+        "@alpha(items: list[int]) -> int:\n"
+        "  [total: int] = ```\n"
+        "  return sum(items)\n"
+        "  ```\n"
+        "  = <`total`>\n"
+        "\n"
+        "@beta(name: str) -> str:\n"
+        "  [upper: str] = ```\n"
+        "  return name.upper()\n"
+        "  ```\n"
+        "  = <`upper`>\n"
+        "\n"
+        "= done\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=2)
+    ast.parse(virtual["text"])
+    assert virtual["focusKey"] == "proc:alpha:1"
+    assert "def alpha(items: list[int]) -> int: ..." in virtual["text"]
+    assert "def beta(name: str) -> str: ..." in virtual["text"]
+    assert "def __kedi_scope_alpha(items: list[int]) -> int:" in virtual["text"]
+    assert "return sum(items)" in virtual["text"]
+    assert "def __kedi_scope_beta(name: str) -> str:" not in virtual["text"]
+    assert "return name.upper()" not in virtual["text"]
+    assert "def __kedi_toplevel__() -> Any:" not in virtual["text"]
+
+
 def test_python_virtual_document_models_type_stub_init_signature():
     src = "~Person(name, age: int, tags: list[str])\n= ok\n"
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
@@ -469,3 +622,24 @@ def test_server_can_be_constructed():
     server = make_server()
     assert server is not None
     assert server.name == "kedi-lsp"
+
+
+def test_server_custom_requests_prefer_request_text():
+    from kedi.lsp.server import _request_source
+
+    class Workspace:
+        def get_text_document(self, uri):
+            raise AssertionError("workspace cache should not be read")
+
+    class Server:
+        workspace = Workspace()
+
+    fresh = "@p():\n  [x: int] = ```\n  return 1\n  ```\n  = <`x`>\n"
+    assert (
+        _request_source(
+            Server(),
+            "file:///tmp/x.kedi",
+            {"textDocument": {"uri": "file:///tmp/x.kedi"}, "text": fresh},
+        )
+        == fresh
+    )

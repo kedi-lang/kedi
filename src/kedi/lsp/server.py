@@ -193,8 +193,8 @@ def make_server() -> LanguageServer:
         uri = _text_document_uri(params)
         if uri is None:
             return {"uri": "", "ranges": []}
-        doc = server.workspace.get_text_document(uri)
-        ranges = features.compute_python_ranges(doc.source)
+        source = _request_source(server, uri, params)
+        ranges = features.compute_python_ranges(source)
         return {"uri": uri, "ranges": ranges}
 
     @server.feature("kedi/pythonVirtualDocument")
@@ -202,11 +202,19 @@ def make_server() -> LanguageServer:
         """Return a scope-aware virtual Python document for a Kedi file."""
         uri = _text_document_uri(params)
         if uri is None:
-            return {"uri": "", "text": "", "ranges": [], "mappings": []}
-        doc = server.workspace.get_text_document(uri)
+            return {
+                "uri": "",
+                "text": "",
+                "ranges": [],
+                "mappings": [],
+                "symbols": [],
+                "focusKey": None,
+            }
+        source = _request_source(server, uri, params)
         result = compute_python_virtual_document(
-            doc.source,
+            source,
             source_path=_uri_to_path(uri),
+            focus_line=_request_focus_line(params),
         )
         return {"uri": uri, **result}
 
@@ -222,6 +230,41 @@ def _text_document_uri(params: Any) -> Optional[str]:
     td = getattr(params, "text_document", None) or getattr(params, "textDocument", None)
     if td is not None:
         return getattr(td, "uri", None)
+    return None
+
+
+def _request_source(server: LanguageServer, uri: str, params: Any) -> str:
+    if isinstance(params, dict):
+        text = params.get("text")
+        if isinstance(text, str):
+            return text
+    text = getattr(params, "text", None)
+    if isinstance(text, str):
+        return text
+    return server.workspace.get_text_document(uri).source
+
+
+def _request_focus_line(params: Any) -> Optional[int]:
+    if isinstance(params, dict):
+        focus_line = params.get("focusLine")
+        if isinstance(focus_line, int):
+            return focus_line
+        position = params.get("position")
+        if isinstance(position, dict):
+            line = position.get("line")
+            if isinstance(line, int):
+                return line
+        return None
+    focus_line = getattr(params, "focus_line", None)
+    if focus_line is None:
+        focus_line = getattr(params, "focusLine", None)
+    if isinstance(focus_line, int):
+        return focus_line
+    position = getattr(params, "position", None)
+    if position is not None:
+        line = getattr(position, "line", None)
+        if isinstance(line, int):
+            return line
     return None
 
 
