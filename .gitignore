@@ -225,3 +225,6 @@ mlruns/
 *.kedi.gepa/
 
 .dspy_cache/
+
+# Temporary
+tmp
