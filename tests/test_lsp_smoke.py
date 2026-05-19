@@ -571,6 +571,51 @@ def test_python_virtual_document_can_focus_single_procedure_body():
     assert "def __kedi_toplevel__() -> Any:" not in virtual["text"]
 
 
+def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():
+    src = "= done\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
+    assert "    pass" in virtual["text"]
+
+
+def test_python_virtual_document_emits_ellipsis_for_empty_generated_python_blocks():
+    src = (
+        "@p() -> str:\n"
+        "  [x: int] = ```\n"
+        "  # comment only\n"
+        "  ```\n"
+        "  ```\n"
+        "  # comment only\n"
+        "  ```\n"
+        "  = ok\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def __kedi_block_x_2() -> int:" in virtual["text"]
+    assert "        ..." in virtual["text"]
+    assert "def __kedi_scope_p() -> str:" in virtual["text"]
+    assert "    ..." in virtual["text"]
+
+
+def test_python_virtual_document_emits_ellipsis_for_comment_only_validation_blocks():
+    src = (
+        "@score() -> int:\n"
+        "  = `1`\n"
+        "\n"
+        "@eval: score:\n"
+        "  > metric: check:\n"
+        "    = ```\n"
+        "    # comment only\n"
+        "    ```\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def __kedi_metric_score_check() -> Any:" in virtual["text"]
+    assert "    expected: Any = ..." in virtual["text"]
+    assert "    ..." in virtual["text"]
+
+
 def test_python_virtual_document_models_type_stub_init_signature():
     src = "~Person(name, age: int, tags: list[str])\n= ok\n"
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
@@ -582,6 +627,19 @@ def test_python_virtual_document_models_type_stub_init_signature():
         "    def __init__(self, *, name: str, age: int, tags: list[str]) -> None: ..."
         in virtual["text"]
     )
+
+
+def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types():
+    src = (
+        '~Issue(line: int, severity: `Literal["critical", "low", "medium"]`)\n'
+        "~Review(issues: `list[Issue]`)\n"
+        "@review_code() -> Review:\n"
+        "  = ok\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    assert "from typing import Any, Literal" in virtual["text"]
+    assert 'severity: Literal["critical", "low", "medium"]' in virtual["text"]
+    assert "issues: list[Issue]" in virtual["text"]
 
 
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():

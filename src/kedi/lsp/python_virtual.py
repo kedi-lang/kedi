@@ -10,6 +10,7 @@ Kedi regions.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
@@ -43,7 +44,7 @@ from ..lang.ast import (
     TypeUnion,
 )
 from ..lang.parser import KediParseError, parse_program
-from .features import compute_python_ranges
+from .features import _known_lsp_type_origin, compute_python_ranges
 
 Position = dict[str, int]
 Range = dict[str, Position]
@@ -103,6 +104,7 @@ class VirtualBuilder:
     def add_mapped_region(self, region: PythonRegion, prefix: str = "") -> Range:
         virtual_start: Optional[Position] = None
         virtual_end: Optional[Position] = None
+        emitted_substantive_line = False
         src_start = region.range["start"]
         src_end = region.range["end"]
         start_line = src_start["line"]
@@ -129,6 +131,8 @@ class VirtualBuilder:
                 continue
 
             body = line_text[start_char:end_char]
+            if _has_python_substance(body):
+                emitted_substantive_line = True
             virtual_line = self.line
             virtual_start_char = len(prefix)
             self.add(prefix + body)
@@ -157,7 +161,15 @@ class VirtualBuilder:
         if virtual_start is None:
             virtual_start = {"line": self.line, "character": len(prefix)}
             virtual_end = dict(virtual_start)
-            self.add(prefix)
+            self.add(prefix + "...")
+            emitted_substantive_line = True
+        elif not emitted_substantive_line:
+            virtual_line = self.line
+            self.add(prefix + "...")
+            virtual_end = {
+                "line": virtual_line,
+                "character": len(prefix) + len("..."),
+            }
 
         virtual_range = {"start": virtual_start, "end": virtual_end or virtual_start}
         self.regions.append(
@@ -228,7 +240,8 @@ def compute_python_virtual_document(
         else None
     )
     builder.add("from __future__ import annotations")
-    builder.add("from typing import Any")
+    for import_line in _typing_import_lines(program):
+        builder.add(import_line)
     builder.add("")
 
     for typedef in program.type_defs:
@@ -252,10 +265,11 @@ def compute_python_virtual_document(
     ):
         builder.add("def __kedi_toplevel__() -> Any:")
         scope: dict[str, ScopeName] = {}
+        before_body = builder.line
         _emit_statements(builder, cursor, program.toplevel_body, scope, "    ")
         if program.toplevel_return is not None:
             _emit_return(builder, cursor, program.toplevel_return, scope, "    ")
-        if not program.toplevel_body and program.toplevel_return is None:
+        if builder.line == before_body:
             builder.add("    pass")
         builder.add("")
 
@@ -693,6 +707,88 @@ def _indent_width(line: str) -> int:
         else:
             break
     return width
+
+
+def _has_python_substance(text: str) -> bool:
+    stripped = text.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
+def _typing_import_lines(program: Any) -> list[str]:
+    imports_by_origin: dict[str, set[str]] = {"typing": {"Any"}}
+    for expr in _iter_type_exprs(program):
+        for origin, name in _typing_symbols_in_type_expr(expr):
+            imports_by_origin.setdefault(origin, set()).add(name)
+
+    lines: list[str] = []
+    for origin in ("typing", "typing_extensions"):
+        names = sorted(imports_by_origin.get(origin, ()))
+        if names:
+            lines.append(f"from {origin} import {', '.join(names)}")
+    return lines
+
+
+def _iter_type_exprs(program: Any) -> Iterable[Optional[TypeExpr]]:
+    for typedef in getattr(program, "type_defs", ()):
+        for field in typedef.fields:
+            yield field.type_expr
+    for proc in getattr(program, "procedures", ()):
+        yield proc.return_type_expr
+        for expr in (proc.param_type_exprs or {}).values():
+            yield expr
+        for stmt in proc.body:
+            yield from _iter_stmt_type_exprs(stmt)
+    for stmt in getattr(program, "toplevel_body", ()):
+        yield from _iter_stmt_type_exprs(stmt)
+
+
+def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
+    if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+        yield stmt.type_expr
+    if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+        yield stmt.proc.return_type_expr
+        for expr in (stmt.proc.param_type_exprs or {}).values():
+            yield expr
+        for child in stmt.proc.body:
+            yield from _iter_stmt_type_exprs(child)
+    for segment in list(getattr(stmt, "segments", []) or []) + list(
+        getattr(stmt, "expr", []) or []
+    ):
+        if isinstance(segment, OutputSegment):
+            yield segment.type_expr
+
+
+def _typing_symbols_in_type_expr(expr: Optional[TypeExpr]) -> set[tuple[str, str]]:
+    if expr is None:
+        return set()
+    if isinstance(expr, TypeRef):
+        origin = _known_lsp_type_origin(expr.name)
+        return {(origin, expr.name)} if origin is not None else set()
+    if isinstance(expr, TypeApply):
+        found = set()
+        origin = _known_lsp_type_origin(expr.name)
+        if origin is not None:
+            found.add((origin, expr.name))
+        for arg in expr.args:
+            found.update(_typing_symbols_in_type_expr(arg))
+        return found
+    if isinstance(expr, TypeUnion):
+        found = set()
+        found.update(_typing_symbols_in_type_expr(expr.left))
+        found.update(_typing_symbols_in_type_expr(expr.right))
+        return found
+    if isinstance(expr, TypePython):
+        return _typing_symbols_in_python_type(expr.code)
+    return set()
+
+
+def _typing_symbols_in_python_type(code: str) -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+    for name in set(re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", code)):
+        origin = _known_lsp_type_origin(name)
+        if origin is not None:
+            found.add((origin, name))
+    return found
 
 
 def _type_to_python(
