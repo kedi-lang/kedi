@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -38,7 +39,8 @@ class PydanticAIAgent(CodegenAgent):
         self.model = (
             model or os.environ.get("MODEL_NAME") or "openrouter/minimax/minimax-m2.7"
         )
-        self.adapter = PydanticAdapter(model=self.model)
+
+        self.adapter = PydanticAdapter[None, Any](model=self.model)
 
     def generate_tests(
         self,

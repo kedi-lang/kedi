@@ -3,7 +3,7 @@
 This package provides clean, modular compilation of Kedi programs.
 
 Public API:
-    compile_program(prog, adapter=None) -> KediRuntime
+    compile_program(prog, adapter=None, executor=None) -> KediRuntime
 """
 
 from __future__ import annotations

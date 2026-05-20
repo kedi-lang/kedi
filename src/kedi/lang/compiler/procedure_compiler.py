@@ -165,17 +165,8 @@ class ProcedureCompiler:
             for name, old_fn in saved_procs.items():
                 procs[name] = old_fn
 
-    @staticmethod
     def _create_dynamic_function(
-        name: str, params: list[str], body: Callable
+        self, name: str, params: list[str], body: Callable
     ) -> Callable:
         """Create a function with specific parameter names."""
-        param_list = ", ".join(params)
-        args_map = ", ".join(f"{n}={n}" for n in params)
-        src = f"def _impl({param_list}):\n    return _body({args_map})\n"
-
-        ns: dict[str, Any] = {"_body": body}
-        exec(src, ns, ns)
-        fn = ns["_impl"]
-        fn.__name__ = name
-        return fn
+        return self.rt.executor.create_dynamic_function(name, params, body)

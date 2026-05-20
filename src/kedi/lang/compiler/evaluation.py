@@ -18,7 +18,7 @@ from ..ast import (
     VarArg,
 )
 from ..parser.escapes import preserve_escaped_whitespace
-from .environment import build_python_env, lookup_value
+from .environment import lookup_value
 from .type_system import KediType
 
 
@@ -33,55 +33,19 @@ def evaluate_python_inline(
     rt: KediRuntime, code: str, local_env: dict[str, Any]
 ) -> Any:
     """Evaluate inline Python expression or statement."""
-    env = build_python_env(rt, local_env)
-    try:
-        return eval(code, env, env)
-    except SyntaxError:
-        # Try exec for statements
-        try:
-            exec(code, env, env)
-            return ""
-        except Exception as e:
-            raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
-    except Exception as e:
-        raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
+    return rt.executor.evaluate_inline(rt, code, local_env)
 
 
 def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any]) -> Any:
     """Execute a multi-line Python block with return value."""
-    env_exec = build_python_env(rt, kwargs)
-
-    # Wrap in function to handle parameter scoping correctly
-    param_names = list(kwargs.keys())
-    params_str = ", ".join(param_names)
-    wrapper_src = f"def __kedi_block__({params_str}):\n" + "\n".join(
-        "    " + line for line in code.splitlines()
-    )
-
-    try:
-        exec(wrapper_src, env_exec, env_exec)
-        return env_exec["__kedi_block__"](**kwargs)
-    except Exception as e:
-        raise RuntimeError(f"Python block error: {e}") from e
+    return rt.executor.execute_block(rt, code, kwargs)
 
 
 def execute_inline_side_effects(
     rt: KediRuntime, code: str, env_map: dict[str, Any]
 ) -> None:
     """Execute Python code for side effects, syncing back existing vars only."""
-    env_exec = build_python_env(rt, env_map)
-    try:
-        exec(code, env_exec, env_exec)
-    except Exception as e:
-        raise RuntimeError(f"Inline Python error: {type(e).__name__}: {e}") from e
-
-    # Sync back only existing variables
-    env_rt = rt._current_env.get()
-    for var_name in list(env_map.keys()):
-        if var_name in env_exec:
-            env_map[var_name] = env_exec[var_name]
-            if env_rt is not None:
-                env_rt[var_name] = env_exec[var_name]
+    rt.executor.execute_side_effects(rt, code, env_map)
 
 
 def prepare_segments(

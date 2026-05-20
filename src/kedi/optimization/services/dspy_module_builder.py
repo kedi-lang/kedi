@@ -156,17 +156,11 @@ class DSPyModuleBuilder:
         Returns:
             The resolved Python type
         """
-        from ...lang.compiler.environment import build_type_env
-
-        # Build the type environment from the runtime
-        # This includes prelude imports, globals, and type definitions
-        type_env = build_type_env(self.type_handler.runtime, None)
+        from ...lang.compiler.type_system import KediType
 
         try:
-            # Evaluate the type annotation in the context of the type environment
-            # This handles complex types like list[SimpleMappingRecommendation]
-            resolved_type = eval(type_anno, type_env)
-            return resolved_type
+            resolved_type = KediType(type_anno).resolve(self.type_handler.runtime, None)
+            return resolved_type if resolved_type is not None else str
         except Exception:
             # If resolution fails, fall back to str
             # This ensures we don't break on unknown types

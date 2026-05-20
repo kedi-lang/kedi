@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from ...lang.ast import ProcedureDef
-from ...lang.compiler.environment import KediRuntime, build_type_env
+from ...lang.compiler.environment import KediRuntime
+from ...lang.compiler.type_system import KediType
 
 
 class TypeResolver:
@@ -42,9 +43,6 @@ class TypeResolver:
         if not procedure.param_type_annotations:
             return param_types
 
-        # Build type environment from runtime
-        type_env = build_type_env(self.runtime, {})
-
         # Resolve each parameter's type annotation
         for param_name in procedure.params:
             type_anno = procedure.param_type_annotations.get(param_name)
@@ -52,8 +50,7 @@ class TypeResolver:
                 continue
 
             try:
-                # Evaluate type annotation in type environment
-                resolved_type = eval(type_anno, type_env, type_env)
+                resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
                 # Validate it's actually a type
                 if isinstance(resolved_type, type):
@@ -88,9 +85,6 @@ class TypeResolver:
         if not output_fields:
             return output_types
 
-        # Build type environment from runtime
-        type_env = build_type_env(self.runtime, {})
-
         # Resolve each output field's type annotation
         for field_name, type_anno in output_fields:
             if not type_anno:
@@ -99,8 +93,7 @@ class TypeResolver:
                 continue
 
             try:
-                # Evaluate type annotation in type environment
-                resolved_type = eval(type_anno, type_env, type_env)
+                resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
                 # Validate it's actually a type
                 if isinstance(resolved_type, type):

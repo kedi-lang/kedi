@@ -2,7 +2,7 @@ from typing import Protocol, TypeVar
 
 from typing_extensions import runtime_checkable
 
-T = TypeVar("T")
+T = TypeVar("T", covariant=True)
 
 
 @runtime_checkable
@@ -19,9 +19,7 @@ class AgentAdapter(Protocol[T]):
         """
         pass
 
-    def produce_sync(
-        self, *, template: str, output_schema: dict[str, type], **kwargs
-    ) -> T:
+    def produce_sync(self, *, template: str, output_schema: dict[str, type], **kwargs):
         """
         Synchronous version of the produce method.
         Args:
@@ -31,4 +29,3 @@ class AgentAdapter(Protocol[T]):
         Returns:
             T: The output produced by the agent, matching the specified output type.
         """
-        pass

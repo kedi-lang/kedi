@@ -38,7 +38,7 @@ from .environment import build_type_env
 # ---------------------------------------------------------------------
 
 
-def _lookup_name(name: str, type_env: dict[str, Any]) -> Any:
+def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
     """Resolve a bare type name against the type environment.
 
     Falls back to Python's ``eval`` so builtins (``int``, ``list``, …)
@@ -48,21 +48,23 @@ def _lookup_name(name: str, type_env: dict[str, Any]) -> Any:
     if name in type_env:
         return type_env[name]
     try:
-        return eval(name, type_env, type_env)
+        return rt.executor.evaluate_type_expression(rt, name, type_env)
     except Exception:
         return None
 
 
-def _resolve_expr(expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
+def _resolve_expr(
+    rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]
+) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
-        return _lookup_name(expr.name, type_env)
+        return _lookup_name(rt, expr.name, type_env)
 
     if isinstance(expr, TypeApply):
-        base = _lookup_name(expr.name, type_env)
+        base = _lookup_name(rt, expr.name, type_env)
         if base is None:
             return None
-        args = tuple(_resolve_expr(a, type_env) for a in expr.args)
+        args = tuple(_resolve_expr(rt, a, type_env) for a in expr.args)
         if any(a is None for a in args):
             return None
         try:
@@ -73,8 +75,10 @@ def _resolve_expr(expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
             return None
 
     if isinstance(expr, TypeUnion):
-        left = _resolve_expr(expr.left, type_env) if expr.left is not None else None
-        right = _resolve_expr(expr.right, type_env) if expr.right is not None else None
+        left = _resolve_expr(rt, expr.left, type_env) if expr.left is not None else None
+        right = (
+            _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
+        )
         if left is None or right is None:
             return None
         try:
@@ -91,7 +95,7 @@ def _resolve_expr(expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
         # legacy "Native assignment value does not match annotated
         # type" diagnostic.
         try:
-            result = eval(expr.code, type_env, type_env)
+            result = rt.executor.evaluate_type_expression(rt, expr.code, type_env)
         except Exception as exc:
             raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
         if not _is_valid_type(result):
@@ -168,7 +172,7 @@ class KediType:
     ) -> Optional[Any]:
         if self._expr is not None:
             type_env = build_type_env(rt, env)
-            return _resolve_expr(self._expr, type_env)
+            return _resolve_expr(rt, self._expr, type_env)
         if self._legacy_str:
             return self._legacy_resolve(rt, env)
         return None
@@ -230,12 +234,12 @@ class KediType:
             expr = annotation[1:-1]
             type_env = build_type_env(rt, env)
             try:
-                return eval(expr, type_env, type_env)
+                return rt.executor.evaluate_type_expression(rt, expr, type_env)
             except Exception:
                 return None
         type_env = build_type_env(rt, env)
         try:
-            return eval(annotation, type_env, type_env)
+            return rt.executor.evaluate_type_expression(rt, annotation, type_env)
         except Exception:
             return None
 

@@ -114,6 +114,8 @@ class CodegenManager:
         5. If any impl succeeds and passes tests, return True
         """
         name = proc_header.split("(")[0].strip().lstrip("@")
+        kedi_tests = ""
+        python_tests = ""
 
         if self.is_cached(source_path, name):
             return True

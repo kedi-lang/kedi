@@ -5,34 +5,42 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ...core import KediRuntime
+from ...executors.base import Executor
 from ..ast import Program, ReturnStmt
-from .environment import build_python_env
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type
 
 if TYPE_CHECKING:
-    from ...agent_adapter import AgentAdapter
+    from ...agent_adapter.meta import AgentAdapter
 
 
 def compile_program(
-    prog: Program, *, adapter: AgentAdapter | None = None
+    prog: Program,
+    *,
+    adapter: AgentAdapter | None = None,
+    executor: Executor | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
     This is the main entry point for the compiler.
     """
-    compiler = ProgramCompiler(adapter)
+    compiler = ProgramCompiler(adapter, executor=executor)
     return compiler.compile(prog)
 
 
 class ProgramCompiler:
     """Orchestrates program compilation."""
 
-    def __init__(self, adapter: AgentAdapter | None):
+    def __init__(
+        self,
+        adapter: AgentAdapter | None,
+        *,
+        executor: Executor | None = None,
+    ):
         self.adapter = adapter
-        self.rt = KediRuntime(adapter=adapter)
+        self.rt = KediRuntime(adapter=adapter, executor=executor)
         self.proc_compiler = ProcedureCompiler(self.rt)
         self.executor = StatementExecutor(self.rt)
         self.stmt_compiler = StatementCompiler(self.rt)
@@ -70,13 +78,11 @@ class ProgramCompiler:
 
     def _setup_prelude(self, prelude_code: str) -> None:
         """Execute prelude and store environment."""
-        prelude_kwargs: dict[str, Any] = {}
-        env_exec = build_python_env(self.rt, prelude_kwargs)
-        try:
-            exec(prelude_code, env_exec, env_exec)
-        except Exception as e:
-            raise RuntimeError(f"Python prelude error: {e}") from e
-        setattr(self.rt, "_prelude_env", env_exec)
+        setattr(
+            self.rt,
+            "_prelude_env",
+            self.rt.executor.execute_prelude(self.rt, prelude_code),
+        )
 
     def _setup_main(self, toplevel_body: list, toplevel_return) -> None:
         """Setup main entry point for top-level execution."""

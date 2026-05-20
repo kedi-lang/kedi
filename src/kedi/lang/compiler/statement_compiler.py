@@ -9,6 +9,7 @@ from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
+    ProcedureDef,
     PythonBlock,
     ReturnBlockStmt,
     ReturnStmt,
@@ -155,16 +156,7 @@ class StatementCompiler:
         self, stmt: PythonBlock, closure_env: dict[str, Any]
     ) -> None:
         """Execute a Python block for side effects."""
-        from .environment import build_python_env
-
-        env_exec = build_python_env(self.rt, closure_env)
-        try:
-            exec(stmt.code, env_exec, env_exec)
-        except Exception as e:
-            raise RuntimeError(f"Python block error: {e}") from e
-
-        # Sync back existing variables only
-        self._sync_env(env_exec, closure_env)
+        self.rt.executor.execute_side_effects(self.rt, stmt.code, closure_env)
 
     def execute_backtick_line(
         self, stmt: BacktickLineStmt, closure_env: dict[str, Any]
@@ -178,15 +170,6 @@ class StatementCompiler:
         env = self.rt._current_env.get()
         if env is not None:
             env[name] = value
-
-    def _sync_env(self, source: dict[str, Any], target: dict[str, Any]) -> None:
-        """Sync variables from source to target (existing vars only)."""
-        env_rt = self.rt._current_env.get()
-        for var_name in list(target.keys()):
-            if var_name in source:
-                target[var_name] = source[var_name]
-                if env_rt is not None:
-                    env_rt[var_name] = source[var_name]
 
 
 class StatementExecutor:
@@ -226,7 +209,7 @@ class StatementExecutor:
                     # Register nested procedure dynamically with current closure
                     from .procedure_compiler import ProcedureCompiler
 
-                    child = stmt.proc
+                    child: ProcedureDef = stmt.proc  # type: ignore
                     child.lexical_env = dict(closure_env)
                     proc_compiler = ProcedureCompiler(self.rt)
                     fn_nested = proc_compiler._make_procedure_impl(

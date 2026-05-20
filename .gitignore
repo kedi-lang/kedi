@@ -226,6 +226,9 @@ mlruns/
 
 .dspy_cache/
 
+# Experimental
+src/kedi/executors/experimental.py
+
 # Temporary
 tmp
 kedi-docs/

@@ -15,7 +15,7 @@ from tests.utils_llm import llm_retry
 
 
 def _iter_kedi_files() -> Iterable[Path]:
-    root = Path(__file__).resolve().parent / "kedis"
+    root = Path(__file__).resolve().parent / "files"
     return sorted(p for p in root.glob("*.kedi") if p.is_file())
 
 

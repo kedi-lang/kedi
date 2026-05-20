@@ -13,7 +13,8 @@ except ImportError:
     dspy = None  # type: ignore
 
 from ...agent_adapter.adapters import DSPyAdapter
-from ...lang.compiler.environment import KediRuntime, build_type_env
+from ...lang.compiler.environment import KediRuntime
+from ...lang.compiler.type_system import KediType
 
 
 class StructuredTypeHandler:
@@ -47,7 +48,6 @@ class StructuredTypeHandler:
             Dictionary mapping field names to Python types
         """
         output_schema: dict[str, type] = {}
-        type_env = build_type_env(self.runtime, {})
 
         for field_name, type_anno in output_fields:
             if not type_anno:
@@ -56,8 +56,7 @@ class StructuredTypeHandler:
                 continue
 
             try:
-                # Evaluate type annotation in type environment
-                resolved_type = eval(type_anno, type_env, type_env)
+                resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
                 # Validate it's a type or typing construct
                 if isinstance(resolved_type, type):

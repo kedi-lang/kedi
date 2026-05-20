@@ -14,6 +14,8 @@ from typing import (
     Union,
 )
 
+from .executors.base import DefaultExecutor, Executor
+
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
 
@@ -61,8 +63,14 @@ def c(func_name: str, *args: Any) -> CallExpr:
 class KediRuntime:
     """Isolated kedi runtime with its own registry and environment."""
 
-    def __init__(self, *, adapter: AgentAdapter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        adapter: AgentAdapter | None = None,
+        executor: Executor | None = None,
+    ) -> None:
         self.adapter = adapter
+        self.executor = executor or DefaultExecutor()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
