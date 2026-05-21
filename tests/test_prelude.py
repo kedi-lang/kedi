@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from kedi.lang import compile_program, parse_program
@@ -78,20 +76,18 @@ def test_prelude_overrides_global_for_blocks() -> None:
 
 
 def test_only_first_block_is_prelude() -> None:
-    src = "```\n" "VALUE = 5\n" "```\n" "```\n" "VALUE = 7\n" "```\n" "= <`VALUE`>\n"
+    src = "```\nVALUE = 5\n```\n```\nVALUE = 7\n```\n= <`VALUE`>\n"
     out = _run(src)
     assert out == "5"
 
 
 def test_prelude_math_imports_success() -> None:
-    src = "```\n" "import math\n" "```\n" "= <`int(math.sqrt(9))`>\n"
+    src = "```\nimport math\n```\n= <`int(math.sqrt(9))`>\n"
     out = _run(src)
     assert out == "3"
 
 
 def test_prelude_math_imports_failure() -> None:
-    src = (
-        "```\n" "# dummy\n" "```\n" "\n" "```\n" "import math\n" "```\n" "\n" "= <`math.sqrt(9)`>\n"
-    )
+    src = "```\n# dummy\n```\n\n```\nimport math\n```\n\n= <`math.sqrt(9)`>\n"
     with pytest.raises(Exception):
         _run(src)

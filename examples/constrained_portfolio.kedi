@@ -1,0 +1,209 @@
+#
+# Harder GEPA target than knapsack or weighted interval scheduling:
+# maximize project value under budget + staffing constraints with prerequisites,
+# exclusions, and tie-breaking rules.
+#
+
+```
+import itertools
+import re
+
+PROJECT_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)\(c\s*=\s*(\d+),\s*h\s*=\s*(\d+),\s*v\s*=\s*(\d+),\s*req\s*=\s*([A-Za-z0-9_|-]+),\s*ban\s*=\s*([A-Za-z0-9_|-]+)\)"
+)
+
+def parse_links(text):
+    if text == "-":
+        return tuple()
+    return tuple(part for part in text.split("|") if part)
+
+def parse_projects(text):
+    projects = []
+    for name, cost, heads, value, req, ban in PROJECT_RE.findall(text):
+        projects.append(
+            {
+                "name": name,
+                "cost": int(cost),
+                "heads": int(heads),
+                "value": int(value),
+                "req": parse_links(req),
+                "ban": parse_links(ban),
+            }
+        )
+    if not projects:
+        raise ValueError(f"Could not parse any projects from: {text!r}")
+    return projects
+
+def portfolio_totals(subset):
+    return (
+        sum(project["cost"] for project in subset),
+        sum(project["heads"] for project in subset),
+        sum(project["value"] for project in subset),
+    )
+
+def is_feasible(subset, budget, head_limit):
+    names = {project["name"] for project in subset}
+    cost, heads, _ = portfolio_totals(subset)
+    if cost > budget or heads > head_limit:
+        return False
+    for project in subset:
+        for req in project["req"]:
+            if req not in names:
+                return False
+        for banned in project["ban"]:
+            if banned in names:
+                return False
+    return True
+
+def exact_best_portfolio(projects, budget, head_limit):
+    best = None
+    for r in range(len(projects) + 1):
+        for subset in itertools.combinations(projects, r):
+            if not is_feasible(subset, budget, head_limit):
+                continue
+            names = tuple(sorted(project["name"] for project in subset))
+            cost, heads, value = portfolio_totals(subset)
+            candidate = (-value, cost, heads, names)
+            if best is None or candidate < best:
+                best = candidate
+    if best is None:
+        return (tuple(), 0, 0, 0)
+    neg_value, cost, heads, names = best
+    return (names, cost, heads, -neg_value)
+
+def validate_selection(projects_by_name, chosen_names, budget, head_limit):
+    subset = []
+    seen = set()
+    for raw_name in chosen_names:
+        name = str(raw_name)
+        if name in seen:
+            raise ValueError(f"duplicate project {name}")
+        seen.add(name)
+        project = projects_by_name.get(name)
+        if project is None:
+            raise ValueError(f"unknown project {name}")
+        subset.append(project)
+    if not is_feasible(subset, budget, head_limit):
+        raise ValueError("selected portfolio is infeasible")
+    return portfolio_totals(subset)
+```
+
+~PortfolioDecision(chosen_projects: list[str], total_cost: int, total_heads: int, total_value: int)
+
+@solve_constrained_portfolio(projects: str, budget: int, head_limit: int) -> PortfolioDecision:
+  > optimize: solver:
+    Projects: <projects>
+    Budget limit: <budget>
+    Staffing limit: <head_limit>
+    Each project lists cost, staffing, value, prerequisites, and exclusions.
+    A project with prerequisites X|Y can only be chosen if X and Y are also chosen.
+    A project with exclusions X|Y cannot be chosen together with X or Y.
+    Choose the feasible portfolio with maximum total value.
+    Tie-break in this exact order:
+    1. lower total cost
+    2. lower total staffing
+    3. lexicographically smaller sorted project list
+    Return chosen project names sorted ascending.
+    Reasoning: [reasoning: str]
+    Chosen projects: [chosen_projects: list[str]]
+    Total cost: [total_cost: int]
+    Total staffing: [total_heads: int]
+    Total value: [total_value: int]
+
+  = `PortfolioDecision(chosen_projects=chosen_projects, total_cost=total_cost, total_heads=total_heads, total_value=total_value)`
+
+@eval: solve_constrained_portfolio:
+  > data: problems:
+    = ```
+    return [
+        ((
+            "A(c=3,h=2,v=8,req=-,ban=F), B(c=2,h=1,v=4,req=A,ban=-), C(c=4,h=3,v=11,req=-,ban=E), D(c=2,h=2,v=5,req=B,ban=-), E(c=5,h=3,v=12,req=-,ban=C), F(c=3,h=1,v=6,req=-,ban=A), G(c=2,h=2,v=5,req=D,ban=-), H(c=1,h=1,v=2,req=-,ban=-)",
+            10,
+            7,
+        ), None),
+        ((
+            "A(c=4,h=2,v=9,req=-,ban=E), B(c=3,h=2,v=7,req=-,ban=F), C(c=2,h=1,v=4,req=A,ban=-), D(c=3,h=3,v=8,req=B,ban=-), E(c=5,h=4,v=15,req=-,ban=A), F(c=4,h=2,v=10,req=-,ban=B), G(c=2,h=1,v=5,req=C|D,ban=-), H(c=1,h=1,v=2,req=-,ban=-)",
+            11,
+            7,
+        ), None),
+        ((
+            "A(c=3,h=2,v=6,req=-,ban=-), B(c=3,h=2,v=6,req=-,ban=-), C(c=6,h=4,v=12,req=-,ban=-), D(c=2,h=1,v=5,req=A,ban=-), E(c=2,h=1,v=5,req=B,ban=-), F(c=4,h=2,v=9,req=-,ban=G), G(c=4,h=2,v=9,req=-,ban=F), H(c=1,h=1,v=1,req=-,ban=-)",
+            8,
+            5,
+        ), None),
+        ((
+            "P(c=2,h=1,v=3,req=-,ban=-), Q(c=3,h=2,v=7,req=P,ban=T), R(c=4,h=2,v=8,req=-,ban=-), S(c=2,h=2,v=5,req=Q,ban=-), T(c=5,h=3,v=12,req=-,ban=Q), U(c=1,h=1,v=2,req=-,ban=-), V(c=3,h=1,v=6,req=R,ban=-), W(c=2,h=1,v=4,req=U,ban=-)",
+            10,
+            6,
+        ), None),
+    ]
+    ```
+
+  > test_data: problems:
+    = ```
+    return [
+        ((
+            "M(c=4,h=3,v=10,req=-,ban=Q), N(c=2,h=1,v=4,req=M,ban=-), O(c=3,h=2,v=7,req=-,ban=-), P(c=2,h=2,v=6,req=O,ban=-), Q(c=5,h=3,v=13,req=-,ban=M), R(c=1,h=1,v=2,req=-,ban=-), S(c=3,h=1,v=5,req=N|P,ban=-), T(c=2,h=1,v=4,req=-,ban=-)",
+            11,
+            7,
+        ), None),
+        ((
+            "A1(c=2,h=1,v=4,req=-,ban=-), A2(c=2,h=1,v=4,req=A1,ban=-), B1(c=4,h=3,v=10,req=-,ban=E1), B2(c=3,h=2,v=7,req=B1,ban=-), C1(c=5,h=3,v=11,req=-,ban=-), D1(c=1,h=1,v=2,req=-,ban=-), E1(c=4,h=2,v=9,req=-,ban=B1), F1(c=2,h=2,v=5,req=A2|D1,ban=-), G1(c=3,h=1,v=6,req=-,ban=-)",
+            12,
+            7,
+        ), None),
+        ((
+            "K1(c=3,h=2,v=6,req=-,ban=-), K2(c=3,h=2,v=6,req=-,ban=-), L1(c=2,h=1,v=4,req=K1,ban=-), L2(c=2,h=1,v=4,req=K2,ban=-), M1(c=6,h=4,v=13,req=-,ban=-), N1(c=4,h=2,v=8,req=-,ban=O1), O1(c=4,h=2,v=8,req=-,ban=N1), P1(c=1,h=1,v=1,req=-,ban=-)",
+            10,
+            6,
+        ), None),
+    ]
+    ```
+
+  > metric: optimality(problems):
+    = ```
+    projects_str, budget, head_limit = problems
+    projects = parse_projects(projects_str)
+    best_names, best_cost, best_heads, best_value = exact_best_portfolio(projects, budget, head_limit)
+    projects_by_name = {project["name"]: project for project in projects}
+
+    result = solve_constrained_portfolio(projects_str, budget, head_limit)
+
+    try:
+        chosen_names = list(result.chosen_projects)
+        reported_cost = int(result.total_cost)
+        reported_heads = int(result.total_heads)
+        reported_value = int(result.total_value)
+        selected_cost, selected_heads, selected_value = validate_selection(
+            projects_by_name,
+            chosen_names,
+            budget,
+            head_limit,
+        )
+    except Exception as exc:
+        return (0.0, f"Invalid portfolio: {exc}. Optimal set is {best_names} with value {best_value}.")
+
+    normalized_names = tuple(sorted(str(name) for name in chosen_names))
+    consistency = (
+        (1.0 if reported_cost == selected_cost else 0.0)
+        + (1.0 if reported_heads == selected_heads else 0.0)
+        + (1.0 if reported_value == selected_value else 0.0)
+    ) / 3.0
+    optimality = selected_value / max(1, best_value)
+    exact_choice = 1.0 if (
+        normalized_names == best_names
+        and selected_cost == best_cost
+        and selected_heads == best_heads
+        and selected_value == best_value
+    ) else 0.0
+
+    if exact_choice == 1.0 and consistency == 1.0:
+        return (1.0, f"Optimal portfolio {best_names} with cost {best_cost}, staffing {best_heads}, value {best_value}.")
+
+    score = round(0.7 * optimality + 0.2 * consistency + 0.1 * exact_choice, 6)
+    return (
+        score,
+        f"Selected {normalized_names} with cost {selected_cost}, staffing {selected_heads}, value {selected_value}; optimal is {best_names} with cost {best_cost}, staffing {best_heads}, value {best_value}.",
+    )
+    ```
+

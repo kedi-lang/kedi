@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 from ..lang import parse_program
 from ..lang.ast import ProcedureDef
@@ -50,9 +50,16 @@ def run_codegen(
     )
     success_all = True
     for proc in procs:
-        prompt = getattr(proc, "ai_prompt", None)
+        # Check for new auto_spec first, fall back to legacy ai_prompt
+        auto_spec = getattr(proc, "auto_spec", None)
+        if auto_spec:
+            prompt = auto_spec.prompt
+        else:
+            prompt = getattr(proc, "ai_prompt", None)
+
         if not prompt:
             continue
+
         # Always process AI-prompted procedures; cache may already exist and be skipped by manager
         header = _reconstruct_header(proc)
         ok = mgr.orchestrate_generation(Path(source_path), header, prompt, spec="")

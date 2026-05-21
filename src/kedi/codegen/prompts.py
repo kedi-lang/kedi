@@ -13,12 +13,14 @@ def build_context_section(context: ProgramContext) -> str:
         parts.append(f"# Preamble code:\n{context.preamble}")
 
     if context.type_definitions:
-        parts.append(f"# Available types:\n" + "\n\n".join(context.type_definitions))
+        parts.append("# Available types:\n" + "\n\n".join(context.type_definitions))
     else:
         parts.append("# Available types: (none)")
 
     if context.procedure_definitions:
-        parts.append(f"# Available functions:\n" + "\n\n".join(context.procedure_definitions))
+        parts.append(
+            "# Available functions:\n" + "\n\n".join(context.procedure_definitions)
+        )
     else:
         parts.append("# Available functions: (none)")
 
@@ -26,7 +28,10 @@ def build_context_section(context: ProgramContext) -> str:
 
 
 def build_test_generation_prompt(
-    python_signature: str, prompt: str, context: ProgramContext, previous_error: str | None = None
+    python_signature: str,
+    prompt: str,
+    context: ProgramContext,
+    previous_error: str | None = None,
 ) -> str:
     """Build complete prompt for test generation."""
     parts = []

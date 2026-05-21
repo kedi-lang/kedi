@@ -70,5 +70,3 @@ note = "Demo run"
 <`print("Report:", compose_report(city))`>
 <`print("Note:", note)`>
 = Done
-
-

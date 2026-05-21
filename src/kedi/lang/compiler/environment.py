@@ -107,7 +107,9 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
     return env
 
 
-def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]) -> None:
+def _add_type_env(
+    rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]
+) -> None:
     """Add type environment and handle Pydantic model coercion."""
     stack = getattr(rt, "_type_env_stack", None)
     if not isinstance(stack, list) or not stack:

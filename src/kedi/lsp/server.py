@@ -1,0 +1,288 @@
+"""``kedi-lsp`` server entry point.
+
+Thin protocol wrapper over the functions in :mod:`kedi.lsp.features`.
+Wires every supported LSP feature plus the custom embedded-Python
+requests used by editor extension forwarding.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, List, Optional
+from urllib.parse import unquote, urlparse
+
+from lsprotocol import types as lsp
+from pygls.lsp.server import LanguageServer
+
+from . import features
+from .python_virtual import compute_python_virtual_document
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _uri_to_path(uri: str) -> Optional[str]:
+    parsed = urlparse(uri)
+    if parsed.scheme != "file":
+        return None
+    return unquote(parsed.path)
+
+
+def make_server() -> LanguageServer:
+    server = LanguageServer(name="kedi-lsp", version="0.1.0")
+
+    # ----- Document lifecycle: re-parse + publish diagnostics -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
+    def _did_open(params: lsp.DidOpenTextDocumentParams) -> None:
+        _publish_diagnostics(server, params.text_document.uri)
+
+    @server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)
+    def _did_change(params: lsp.DidChangeTextDocumentParams) -> None:
+        _publish_diagnostics(server, params.text_document.uri)
+
+    @server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
+    def _did_close(params: lsp.DidCloseTextDocumentParams) -> None:
+        server.text_document_publish_diagnostics(
+            lsp.PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
+        )
+
+    # Some clients send watched-file notifications whenever *.kedi files
+    # change. We do not currently need them because document changes are
+    # driven by open/change/close, but registering a no-op handler keeps
+    # pygls from logging noisy "unknown method" warnings.
+    @server.feature("workspace/didChangeWatchedFiles")
+    def _did_change_watched_files(params: lsp.DidChangeWatchedFilesParams) -> None:
+        return None
+
+    # ----- Hover -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_HOVER)
+    def _hover(params: lsp.HoverParams) -> Optional[lsp.Hover]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_hover(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+        )
+
+    # ----- Definition -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)
+    def _definition(params: lsp.DefinitionParams) -> Optional[lsp.Location]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_definition(
+            source=doc.source,
+            uri=params.text_document.uri,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+        )
+
+    # ----- References -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_REFERENCES)
+    def _references(params: lsp.ReferenceParams) -> List[lsp.Location]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_references(
+            source=doc.source,
+            uri=params.text_document.uri,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+            include_declaration=params.context.include_declaration,
+        )
+
+    # ----- Document symbols -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_DOCUMENT_SYMBOL)
+    def _document_symbol(
+        params: lsp.DocumentSymbolParams,
+    ) -> List[lsp.DocumentSymbol]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_document_symbols(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+        )
+
+    # ----- Rename (prepare + apply) -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)
+    def _prepare_rename(params: lsp.PrepareRenameParams) -> Optional[lsp.Range]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_prepare_rename(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+        )
+
+    @server.feature(lsp.TEXT_DOCUMENT_RENAME)
+    def _rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_rename(
+            source=doc.source,
+            uri=params.text_document.uri,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+            new_name=params.new_name,
+        )
+
+    # ----- Formatting -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_FORMATTING)
+    def _formatting(params: lsp.DocumentFormattingParams) -> List[lsp.TextEdit]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_formatting(doc.source)
+
+    # ----- Signature help -----
+
+    @server.feature(
+        lsp.TEXT_DOCUMENT_SIGNATURE_HELP,
+        lsp.SignatureHelpOptions(trigger_characters=["(", ","]),
+    )
+    def _signature_help(
+        params: lsp.SignatureHelpParams,
+    ) -> Optional[lsp.SignatureHelp]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_signature_help(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+        )
+
+    # ----- Inlay hints -----
+
+    @server.feature(lsp.TEXT_DOCUMENT_INLAY_HINT)
+    def _inlay_hint(params: lsp.InlayHintParams) -> List[lsp.InlayHint]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_inlay_hints(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+            rng=params.range,
+        )
+
+    # ----- Semantic tokens (full document) -----
+
+    @server.feature(
+        lsp.TEXT_DOCUMENT_SEMANTIC_TOKENS_FULL,
+        lsp.SemanticTokensRegistrationOptions(
+            legend=lsp.SemanticTokensLegend(
+                token_types=features.SEMANTIC_TOKEN_TYPES,
+                token_modifiers=features.SEMANTIC_TOKEN_MODIFIERS,
+            ),
+            full=True,
+            range=False,
+            document_selector=None,
+        ),
+    )
+    def _semantic_tokens_full(
+        params: lsp.SemanticTokensParams,
+    ) -> lsp.SemanticTokens:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        return features.compute_semantic_tokens_full(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+        )
+
+    # ----- Custom: embedded Python interop -----
+
+    @server.feature("kedi/pythonRanges")
+    def _python_ranges(params: Any) -> dict:
+        """Return all Python regions in a Kedi document.
+
+        ``params`` is a dict-like with ``textDocument.uri``. We return
+        ``{"uri": ..., "ranges": [{kind, range, text}, ...]}``.
+        """
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "ranges": []}
+        source = _request_source(server, uri, params)
+        ranges = features.compute_python_ranges(source)
+        return {"uri": uri, "ranges": ranges}
+
+    @server.feature("kedi/pythonVirtualDocument")
+    def _python_virtual_document(params: Any) -> dict:
+        """Return a scope-aware virtual Python document for a Kedi file."""
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {
+                "uri": "",
+                "text": "",
+                "ranges": [],
+                "mappings": [],
+                "symbols": [],
+                "focusKey": None,
+            }
+        source = _request_source(server, uri, params)
+        result = compute_python_virtual_document(
+            source,
+            source_path=_uri_to_path(uri),
+            focus_line=_request_focus_line(params),
+        )
+        return {"uri": uri, **result}
+
+    return server
+
+
+def _text_document_uri(params: Any) -> Optional[str]:
+    # pygls/lsprotocol may hand us either a raw dict or a parsed
+    # structure depending on the registration; accept both.
+    if isinstance(params, dict):
+        td = params.get("textDocument", {})
+        return td.get("uri") if isinstance(td, dict) else None
+    td = getattr(params, "text_document", None) or getattr(params, "textDocument", None)
+    if td is not None:
+        return getattr(td, "uri", None)
+    return None
+
+
+def _request_source(server: LanguageServer, uri: str, params: Any) -> str:
+    if isinstance(params, dict):
+        text = params.get("text")
+        if isinstance(text, str):
+            return text
+    text = getattr(params, "text", None)
+    if isinstance(text, str):
+        return text
+    return server.workspace.get_text_document(uri).source
+
+
+def _request_focus_line(params: Any) -> Optional[int]:
+    if isinstance(params, dict):
+        focus_line = params.get("focusLine")
+        if isinstance(focus_line, int):
+            return focus_line
+        position = params.get("position")
+        if isinstance(position, dict):
+            line = position.get("line")
+            if isinstance(line, int):
+                return line
+        return None
+    focus_line = getattr(params, "focus_line", None)
+    if focus_line is None:
+        focus_line = getattr(params, "focusLine", None)
+    if isinstance(focus_line, int):
+        return focus_line
+    position = getattr(params, "position", None)
+    if position is not None:
+        line = getattr(position, "line", None)
+        if isinstance(line, int):
+            return line
+    return None
+
+
+def _publish_diagnostics(server: LanguageServer, uri: str) -> None:
+    doc = server.workspace.get_text_document(uri)
+    diagnostics = features.compute_diagnostics(
+        source=doc.source, source_path=_uri_to_path(uri)
+    )
+    server.text_document_publish_diagnostics(
+        lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
+    )
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    server = make_server()
+    server.start_io()
+
+
+if __name__ == "__main__":
+    main()

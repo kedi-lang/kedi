@@ -17,7 +17,10 @@ from .translator import (
 
 class CodegenManager:
     def __init__(
-        self, agent: CodegenAgent, config: CodegenConfig | None = None, use_cache: bool = True
+        self,
+        agent: CodegenAgent,
+        config: CodegenConfig | None = None,
+        use_cache: bool = True,
     ) -> None:
         self.agent = agent
         self.config = config or CodegenConfig()
@@ -51,11 +54,15 @@ class CodegenManager:
             context.preamble = program.prelude
 
         # Type definitions - convert to Python BaseModel classes
-        context.type_definitions = [kedi_typedef_to_python_class(td) for td in program.type_defs]
+        context.type_definitions = [
+            kedi_typedef_to_python_class(td) for td in program.type_defs
+        ]
 
         # Procedure definitions (exclude AI-generated ones) - convert to Python function signatures
         context.procedure_definitions = [
-            kedi_procedure_to_python_signature(pd) for pd in program.procedures if not pd.ai_prompt
+            kedi_procedure_to_python_signature(pd)
+            for pd in program.procedures
+            if not pd.auto_spec and not getattr(pd, "ai_prompt", None)
         ]
 
         return context
@@ -107,6 +114,8 @@ class CodegenManager:
         5. If any impl succeeds and passes tests, return True
         """
         name = proc_header.split("(")[0].strip().lstrip("@")
+        kedi_tests = ""
+        python_tests = ""
 
         if self.is_cached(source_path, name):
             return True
@@ -115,7 +124,7 @@ class CodegenManager:
         try:
             program = parse_program(source_path.read_text(encoding="utf-8"))
             context = self.extract_context_from_ast(program)
-        except Exception as e:
+        except Exception:
             context = ProgramContext()
 
         # Convert Kedi signature to Python signature

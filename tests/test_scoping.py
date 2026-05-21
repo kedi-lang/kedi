@@ -45,13 +45,13 @@ def test_python_block_modifies_existing_kedi_var_only(monkeypatch: Any) -> None:
 
 
 def test_new_python_names_do_not_leak_to_kedi(monkeypatch: Any) -> None:
-    src = "@p():\n" "  ```\n" "  z = 'new'\n" "  ```\n" "  = <z>\n\n" "= <p()>\n"
+    src = "@p():\n  ```\n  z = 'new'\n  ```\n  = <z>\n\n= <p()>\n"
     with pytest.raises(Exception):
         _run(src)
 
 
 def test_inline_python_reads_globals_and_locals(monkeypatch: Any) -> None:
-    src = "[g: int] = `2`\n" "@p(x):\n" "  = <`str(g + int(x))`>\n\n" "= <p(5)>\n"
+    src = "[g: int] = `2`\n@p(x):\n  = <`str(g + int(x))`>\n\n= <p(5)>\n"
     out = _run(src)
     assert out == "7"
 
@@ -99,11 +99,11 @@ def test_inline_name_error_yields_empty(monkeypatch: Any) -> None:
 
 
 def test_assign_block_type_coercion(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n" "  [n: int] = ```\n" "  return '5'\n" "  ```\n" "  = <`str(n*2)`>\n\n" "= <p()>\n"
-    )
-    with pytest.raises(TypeError):  # type coercion is not allowed, should raise TypeError
-        out = _run(src)
+    src = "@p():\n  [n: int] = ```\n  return '5'\n  ```\n  = <`str(n*2)`>\n\n= <p()>\n"
+    with pytest.raises(
+        TypeError
+    ):  # type coercion is not allowed, should raise TypeError
+        _run(src)
 
 
 def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:
@@ -120,6 +120,6 @@ def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:
 
 
 def test_inline_substitution_reads_globals(monkeypatch: Any) -> None:
-    src = "[x] = value\n" "= <x>\n"
+    src = "[x] = value\n= <x>\n"
     out = _run(src)
     assert out == "value"

@@ -2,9 +2,22 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
-from kedi.agent_adapter import AgentAdapter
+from .executors.base import DefaultExecutor, Executor
+
+if TYPE_CHECKING:
+    from kedi.agent_adapter import AgentAdapter
 
 # -----------------------------
 # Kedi runtime implementation
@@ -50,8 +63,14 @@ def c(func_name: str, *args: Any) -> CallExpr:
 class KediRuntime:
     """Isolated kedi runtime with its own registry and environment."""
 
-    def __init__(self, *, adapter: AgentAdapter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        adapter: AgentAdapter | None = None,
+        executor: Executor | None = None,
+    ) -> None:
         self.adapter = adapter
+        self.executor = executor or DefaultExecutor()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
@@ -150,7 +169,9 @@ class KediRuntime:
             else result
         )
 
-    def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
+    def _kedi_run(
+        self, expressions: Sequence[Expression], env: ValueEnv
+    ) -> Dict[str, Any]:
         NotFound = object()
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
@@ -185,7 +206,9 @@ class KediRuntime:
         if self.adapter is None:
             raise RuntimeError("No adapter provided to KediRuntime")
 
-        result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+        result = self.adapter.produce_sync(
+            template=question, output_schema=typed_fields
+        )
 
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute

@@ -20,12 +20,10 @@ def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
-            last_exc: Exception | None = None
             for attempt in range(tries):
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
-                    last_exc = e
+                except Exception:
                     if attempt == tries - 1:
                         raise
                     if delay_s > 0:

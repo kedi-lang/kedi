@@ -5,8 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable
 
-from pydantic import BaseModel
-
 from ...core import KediRuntime
 from ..ast import ProcDefStmt, ProcedureDef
 from .environment import ScopedDict
@@ -36,7 +34,9 @@ class ProcedureCompiler:
             self._enforce_param_types(proc, kwargs)
 
             # Setup scoped environment for execution
-            closure_env = ScopedDict(kwargs, readonly=set(proc.params), closure=parent_env)
+            closure_env = ScopedDict(
+                kwargs, readonly=set(proc.params), closure=parent_env
+            )
 
             # Execute body (nested procedures handled dynamically during execution)
             last_return = self.executor.execute(proc, closure_env)
@@ -48,7 +48,10 @@ class ProcedureCompiler:
         return self._create_dynamic_function(proc.name, proc.params, _body)
 
     def _prepare_kwargs(
-        self, proc: ProcedureDef, kwargs: dict[str, Any], parent_env: dict[str, Any] | None
+        self,
+        proc: ProcedureDef,
+        kwargs: dict[str, Any],
+        parent_env: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Prepare kwargs with lexical and global environments."""
         # Merge lexical environment
@@ -70,12 +73,19 @@ class ProcedureCompiler:
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
-        if not proc.param_type_annotations:
+        if not (proc.param_type_annotations or proc.param_type_exprs):
             return
 
+        param_exprs = proc.param_type_exprs or {}
+        param_strs = proc.param_type_annotations or {}
+
         for param_name in proc.params:
-            expected = proc.param_type_annotations.get(param_name)
-            kedi_type = KediType(expected if expected else "str")
+            kedi_type = KediType.from_node(
+                param_exprs.get(param_name),
+                param_strs.get(param_name),
+            )
+            if kedi_type.is_none():
+                kedi_type = KediType("str")
 
             if param_name not in kwargs:
                 raise TypeError(f"Missing parameter: {param_name}")
@@ -89,25 +99,33 @@ class ProcedureCompiler:
                         self.rt, None, provided, allow_str_coercion=False
                     )
                 except Exception:
-                    raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                    raise TypeError(
+                        f"Parameter '{param_name}' does not match annotated type"
+                    )
                 kwargs[param_name] = validated
 
     def _enforce_return_type(
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
-        kedi_type = KediType(proc.return_type_annotation)
+        kedi_type = KediType.from_node(
+            proc.return_type_expr, proc.return_type_annotation
+        )
 
         if kedi_type.is_none():
             # Default to str: non-string native returns are illegal
             if last_return is not None and not isinstance(last_return, str):
-                raise TypeError("Return value must be str; annotate function to return non-string")
+                raise TypeError(
+                    "Return value must be str; annotate function to return non-string"
+                )
             return "" if last_return is None else str(last_return)
 
         # Annotated return: strict validate and return validated value
         try:
             # Do not allow string literal coercion for returns
-            return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+            return kedi_type.validate(
+                self.rt, env, last_return, allow_str_coercion=False
+            )
         except Exception:
             raise TypeError("Return value does not match annotated type")
 
@@ -147,15 +165,8 @@ class ProcedureCompiler:
             for name, old_fn in saved_procs.items():
                 procs[name] = old_fn
 
-    @staticmethod
-    def _create_dynamic_function(name: str, params: list[str], body: Callable) -> Callable:
+    def _create_dynamic_function(
+        self, name: str, params: list[str], body: Callable
+    ) -> Callable:
         """Create a function with specific parameter names."""
-        param_list = ", ".join(params)
-        args_map = ", ".join(f"{n}={n}" for n in params)
-        src = f"def _impl({param_list}):\n    return _body({args_map})\n"
-
-        ns: dict[str, Any] = {"_body": body}
-        exec(src, ns, ns)
-        fn = ns["_impl"]
-        fn.__name__ = name
-        return fn
+        return self.rt.executor.create_dynamic_function(name, params, body)

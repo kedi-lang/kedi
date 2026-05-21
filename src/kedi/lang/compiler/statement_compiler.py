@@ -9,13 +9,14 @@ from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
+    ProcedureDef,
     PythonBlock,
     ReturnBlockStmt,
     ReturnStmt,
     Stmt,
     TemplateLine,
 )
-from ..parser.preprocessing import preserve_escaped_whitespace
+from ..parser.escapes import preserve_escaped_whitespace
 from .evaluation import (
     evaluate_assignment_rhs,
     evaluate_python_inline,
@@ -34,10 +35,39 @@ class StatementCompiler:
         self.rt = rt
 
     def compile_template_line(self, stmt: TemplateLine) -> Callable:
-        """Compile a template line to a function."""
+        """Compile a template line to a function.
+
+        If the template has an optimized_prompt_prefix, it is prepended to the
+        original seed prompt (with proper type annotations) at evaluation time.
+        This allows GEPA to output plain text without needing correct type names,
+        while preserving the original prompt's type annotations for proper resolution.
+        """
 
         def _fn(**kwargs: Any) -> Any:
-            expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
+            # If an override is provided, short-circuit LLM invocation and inject values.
+            if stmt.optimized_output_override is not None:
+                env = self.rt._current_env.get()
+                if env is None:
+                    raise RuntimeError(
+                        "Template override requires active runtime environment"
+                    )
+                for key, value in stmt.optimized_output_override.items():
+                    env[key] = value
+                    kwargs[key] = value
+                return stmt.optimized_output_override
+
+            # If there's an optimized prompt prefix, prepend it to the segments
+            # This allows GEPA to output plain text while preserving type annotations
+            segments_to_use = stmt.segments
+            if stmt.optimized_prompt_prefix:
+                from ..ast import TextSegment
+
+                # Prepend optimized text, then original seed prompt with types
+                # Use two newlines for better separation between optimized and seed prompts
+                optimized_text = TextSegment(text=stmt.optimized_prompt_prefix + "\n\n")
+                segments_to_use = [optimized_text] + stmt.segments
+
+            expr, _ = prepare_segments(self.rt, segments_to_use, kwargs)
             return self.rt.m(expr)
 
         return _fn
@@ -46,12 +76,16 @@ class StatementCompiler:
         """Compile a return statement to a function."""
 
         def _fn(**kwargs: Any) -> Any:
-            rendered = render_expression(self.rt, stmt.segments, kwargs, context="return")
+            rendered = render_expression(
+                self.rt, stmt.segments, kwargs, context="return"
+            )
             return rendered
 
         return _fn
 
-    def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
+    def compile_return_block(
+        self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]
+    ) -> Any:
         """Execute a return block and return its value."""
         code = stmt.code
         if "\n" in code or code.strip().startswith("return"):
@@ -62,7 +96,7 @@ class StatementCompiler:
         """Execute an assignment statement."""
         native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
-        kedi_type = KediType(stmt.type_annotation)
+        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
 
         if native is not None:
             if is_backtick:
@@ -81,21 +115,27 @@ class StatementCompiler:
                     try:
                         value = kedi_type.validate(self.rt, closure_env, value)
                     except Exception:
-                        raise TypeError("Native assignment value does not match annotated type")
+                        raise TypeError(
+                            "Native assignment value does not match annotated type"
+                        )
         else:
             value = rendered
             if not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception:
-                    raise TypeError("Native assignment value does not match annotated type")
+                    raise TypeError(
+                        "Native assignment value does not match annotated type"
+                    )
 
         self._set_value(stmt.name, value, closure_env)
 
-    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
+    def execute_assignment_block(
+        self, stmt: AssignBlockStmt, closure_env: dict[str, Any]
+    ) -> None:
         """Execute an assignment with Python block RHS."""
         result = execute_python_block(stmt.code, self.rt, closure_env)
-        kedi_type = KediType(stmt.type_annotation)
+        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
 
         value = result
         if not kedi_type.is_none():
@@ -106,24 +146,21 @@ class StatementCompiler:
                 raise TypeError("Native assignment value does not match annotated type")
         else:
             if not isinstance(value, str):
-                raise TypeError("Native non-string assignment requires explicit type annotation")
+                raise TypeError(
+                    "Native non-string assignment requires explicit type annotation"
+                )
 
         self._set_value(stmt.name, value, closure_env)
 
-    def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
+    def execute_python_block(
+        self, stmt: PythonBlock, closure_env: dict[str, Any]
+    ) -> None:
         """Execute a Python block for side effects."""
-        from .environment import build_python_env
+        self.rt.executor.execute_side_effects(self.rt, stmt.code, closure_env)
 
-        env_exec = build_python_env(self.rt, closure_env)
-        try:
-            exec(stmt.code, env_exec, env_exec)
-        except Exception as e:
-            raise RuntimeError(f"Python block error: {e}") from e
-
-        # Sync back existing variables only
-        self._sync_env(env_exec, closure_env)
-
-    def execute_backtick_line(self, stmt: BacktickLineStmt, closure_env: dict[str, Any]) -> None:
+    def execute_backtick_line(
+        self, stmt: BacktickLineStmt, closure_env: dict[str, Any]
+    ) -> None:
         """Execute a single-line Python statement for side effects."""
         execute_inline_side_effects(self.rt, stmt.code, closure_env)
 
@@ -133,15 +170,6 @@ class StatementCompiler:
         env = self.rt._current_env.get()
         if env is not None:
             env[name] = value
-
-    def _sync_env(self, source: dict[str, Any], target: dict[str, Any]) -> None:
-        """Sync variables from source to target (existing vars only)."""
-        env_rt = self.rt._current_env.get()
-        for var_name in list(target.keys()):
-            if var_name in source:
-                target[var_name] = source[var_name]
-                if env_rt is not None:
-                    env_rt[var_name] = source[var_name]
 
 
 class StatementExecutor:
@@ -181,10 +209,12 @@ class StatementExecutor:
                     # Register nested procedure dynamically with current closure
                     from .procedure_compiler import ProcedureCompiler
 
-                    child = stmt.proc
+                    child: ProcedureDef = stmt.proc  # type: ignore
                     child.lexical_env = dict(closure_env)
                     proc_compiler = ProcedureCompiler(self.rt)
-                    fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
+                    fn_nested = proc_compiler._make_procedure_impl(
+                        child, child.lexical_env
+                    )
 
                     # Save existing procedure if present, track new ones
                     procs = self.rt._procedures
@@ -213,7 +243,9 @@ class StatementExecutor:
                             self.rt, stmt.segments, closure_env
                         )
                         last_return = (
-                            native if native is not None else preserve_escaped_whitespace(rendered)
+                            native
+                            if native is not None
+                            else preserve_escaped_whitespace(rendered)
                         )
                     else:
                         last_return = self.compiler.compile_return(stmt)(**closure_env)
@@ -238,8 +270,7 @@ class StatementExecutor:
         self, stmt: Stmt, env: dict[str, Any], is_toplevel: bool = False
     ) -> None:
         """Execute a single statement (for top-level execution)."""
-        from ..ast import ProcDefStmt, TypeDefStmt
-        from .type_system import register_type
+        from ..ast import ProcDefStmt
 
         if isinstance(stmt, TemplateLine):
             self.compiler.compile_template_line(stmt)(**env)

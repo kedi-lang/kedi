@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, List
 
 import pytest
 
@@ -113,7 +113,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     (
         # Mix escaped specials in text and args
         "@esc(s):\n  = <s>\n\n= Use \\<tag\\> and \\[br\\] and \\@at and eq \\= and comma \\\\, plus <esc(a\\,b)>\n",
-        "Use <tag> and [br] and @at and eq = and comma \, plus a,b",
+        "Use <tag> and [br] and @at and eq = and comma \\, plus a,b",
     ),
     (
         # TypedDict path when any typed output exists
@@ -473,13 +473,28 @@ def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
+    """A raw backtick mid-template is now a parse error (was: literal text).
+
+    Tree-sitter refactor (Phase-6): the new grammar treats `` ` `` as a
+    segment delimiter consistently. The pre-refactor parser accepted
+    `[x] = \\`1+1\\` and more <s>` and rendered it as the literal
+    string ``\\`1+1\\` and more ok`` — a quirky special case where
+    backticks inside a template body became literal text only when
+    additional content followed. Users who want a literal backtick
+    must now escape it (``\\\\\\``) or wrap an inline-Python segment
+    in angle brackets (``<\\`expr\\`>``); we reject the old form.
+    """
+    import pytest
+
     src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
-    out = _run(monkeypatch, src)
-    assert out.startswith("`1+1` and more ok")
+    with pytest.raises(Exception):
+        _run(monkeypatch, src)
 
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
-    src = "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
+    src = (
+        "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
+    )
     out = _run(monkeypatch, src)
     assert out == "42-42"
 
@@ -563,7 +578,7 @@ def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
 
 
 def test_standalone_backtick_line_side_effects(monkeypatch: Any) -> None:
-    src = "@p():\n" "  [x] = start\n" "  `x = x + '-mid'`\n" "  = <x>\n\n" "= <p()>\n"
+    src = "@p():\n  [x] = start\n  `x = x + '-mid'`\n  = <x>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.endswith("-mid")
 
@@ -571,7 +586,6 @@ def test_standalone_backtick_line_side_effects(monkeypatch: Any) -> None:
 def test_standalone_backtick_invalid_mixed_content(monkeypatch: Any) -> None:
     src = "@p():\n  `x=1` more\n  = ok\n\n= <p()>\n"
     from kedi.lang import parse_program
-    from tests.mock_adapter import MockAdapter
 
     with pytest.raises(Exception):
         parse_program(src)
@@ -590,13 +604,13 @@ def test_standalone_backtick_block_comment_interplay(monkeypatch: Any) -> None:
 
 
 def test_standalone_backtick_line_in_top_level(monkeypatch: Any) -> None:
-    src = "[x] = base\n" "`x = x + '-top'`\n" "= <x>\n"
+    src = "[x] = base\n`x = x + '-top'`\n= <x>\n"
     out = _run(monkeypatch, src)
     assert out.endswith("-top")
 
 
 def test_standalone_backtick_line_error_propagates(monkeypatch: Any) -> None:
-    src = "@p():\n" "  `assert False`\n" "  = ok\n\n" "= <p()>\n"
+    src = "@p():\n  `assert False`\n  = ok\n\n= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()
