@@ -5,6 +5,7 @@ from dspy import LM
 from pydantic import BaseModel, create_model
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
+from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
@@ -20,10 +21,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     Adapter to use Pydantic AI agents.
     """
 
-    def __init__(self, model: str | None = None, **kwargs):
+    def __init__(self, model: str | Model | None = None, **kwargs):
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
-        m = normalize_for_pydantic_ai(model) if model is not None else None
-        super().__init__(m, **kwargs)
+        if isinstance(model, str):
+            model = normalize_for_pydantic_ai(model) if model is not None else None
+        super().__init__(model, **kwargs)
 
     @staticmethod
     def type_builder(output_schema: dict[str, type]) -> type[OutputDataT]:
@@ -35,7 +37,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             type: A Pydantic model class based on the provided schema.
         """
         assert output_schema, "Output schema cannot be empty."
-        field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
+        field_definitions = {
+            field: (type_, ...) for field, type_ in output_schema.items()
+        }
         return create_model("_OutputModel", __base__=BaseModel, **field_definitions)  # type: ignore[return-value]
 
     async def produce(
@@ -70,7 +74,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         Synchronous version of produce method.
         """
         return asyncio.run(
-            self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
+            self.produce(
+                template, output_schema=output_schema, output_type=output_type, **kwargs
+            )
         )
 
 
@@ -96,7 +102,9 @@ class DSPyAdapter:
         )
 
     @staticmethod
-    async def type_builder(output_schema: dict[str, type], **kwargs) -> type[dspy.Signature]:
+    async def type_builder(
+        output_schema: dict[str, type], **kwargs
+    ) -> type[dspy.Signature]:
         """
         Type builder to create a dictionary schema from a given output type.
         Args:
@@ -141,4 +149,6 @@ class DSPyAdapter:
         """
         Synchronous version of produce method.
         """
-        return asyncio.run(self.produce(template, output_schema=output_schema, **kwargs))
+        return asyncio.run(
+            self.produce(template, output_schema=output_schema, **kwargs)
+        )
