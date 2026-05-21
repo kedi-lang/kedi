@@ -59,7 +59,7 @@ A Kedi program consists of:
 
 ```kedi
 # This is an inline comment
-Use ## to escape a literal # character
+Use \# to escape a literal # character
 
 ###
 This is a block comment.
