@@ -45,9 +45,7 @@ class DSPyPromptExtractor:
 
         # Extract prompt for each span
         for i, span in enumerate(spans):
-            predictor = self._find_predictor_for_span(
-                predictors, optimized_module, span, i
-            )
+            predictor = self._find_predictor_for_span(predictors, optimized_module, span, i)
             prompt = self._extract_prompt_from_predictor(predictor, span)
             optimized_prompts[span.name] = prompt
 
@@ -142,10 +140,7 @@ class DSPyPromptExtractor:
 
         # Filter out default DSPy signature instructions
         default_pattern = "Given the fields"
-        if (
-            default_pattern not in instructions
-            or len(instructions) > len(default_pattern) + 50
-        ):
+        if default_pattern not in instructions or len(instructions) > len(default_pattern) + 50:
             return normalize_optimized_prompt_prefix(span, instructions)
 
         return normalize_optimized_prompt_prefix(span, span_to_instruction(span))

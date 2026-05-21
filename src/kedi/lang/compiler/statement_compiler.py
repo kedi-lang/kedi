@@ -48,9 +48,7 @@ class StatementCompiler:
             if stmt.optimized_output_override is not None:
                 env = self.rt._current_env.get()
                 if env is None:
-                    raise RuntimeError(
-                        "Template override requires active runtime environment"
-                    )
+                    raise RuntimeError("Template override requires active runtime environment")
                 for key, value in stmt.optimized_output_override.items():
                     env[key] = value
                     kwargs[key] = value
@@ -76,16 +74,12 @@ class StatementCompiler:
         """Compile a return statement to a function."""
 
         def _fn(**kwargs: Any) -> Any:
-            rendered = render_expression(
-                self.rt, stmt.segments, kwargs, context="return"
-            )
+            rendered = render_expression(self.rt, stmt.segments, kwargs, context="return")
             return rendered
 
         return _fn
 
-    def compile_return_block(
-        self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]
-    ) -> Any:
+    def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
         code = stmt.code
         if "\n" in code or code.strip().startswith("return"):
@@ -115,24 +109,18 @@ class StatementCompiler:
                     try:
                         value = kedi_type.validate(self.rt, closure_env, value)
                     except Exception:
-                        raise TypeError(
-                            "Native assignment value does not match annotated type"
-                        )
+                        raise TypeError("Native assignment value does not match annotated type")
         else:
             value = rendered
             if not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception:
-                    raise TypeError(
-                        "Native assignment value does not match annotated type"
-                    )
+                    raise TypeError("Native assignment value does not match annotated type")
 
         self._set_value(stmt.name, value, closure_env)
 
-    def execute_assignment_block(
-        self, stmt: AssignBlockStmt, closure_env: dict[str, Any]
-    ) -> None:
+    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
         """Execute an assignment with Python block RHS."""
         result = execute_python_block(stmt.code, self.rt, closure_env)
         kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
@@ -146,21 +134,15 @@ class StatementCompiler:
                 raise TypeError("Native assignment value does not match annotated type")
         else:
             if not isinstance(value, str):
-                raise TypeError(
-                    "Native non-string assignment requires explicit type annotation"
-                )
+                raise TypeError("Native non-string assignment requires explicit type annotation")
 
         self._set_value(stmt.name, value, closure_env)
 
-    def execute_python_block(
-        self, stmt: PythonBlock, closure_env: dict[str, Any]
-    ) -> None:
+    def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
         """Execute a Python block for side effects."""
         self.rt.executor.execute_side_effects(self.rt, stmt.code, closure_env)
 
-    def execute_backtick_line(
-        self, stmt: BacktickLineStmt, closure_env: dict[str, Any]
-    ) -> None:
+    def execute_backtick_line(self, stmt: BacktickLineStmt, closure_env: dict[str, Any]) -> None:
         """Execute a single-line Python statement for side effects."""
         execute_inline_side_effects(self.rt, stmt.code, closure_env)
 
@@ -212,9 +194,7 @@ class StatementExecutor:
                     child: ProcedureDef = stmt.proc  # type: ignore
                     child.lexical_env = dict(closure_env)
                     proc_compiler = ProcedureCompiler(self.rt)
-                    fn_nested = proc_compiler._make_procedure_impl(
-                        child, child.lexical_env
-                    )
+                    fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
                     # Save existing procedure if present, track new ones
                     procs = self.rt._procedures
@@ -243,9 +223,7 @@ class StatementExecutor:
                             self.rt, stmt.segments, closure_env
                         )
                         last_return = (
-                            native
-                            if native is not None
-                            else preserve_escaped_whitespace(rendered)
+                            native if native is not None else preserve_escaped_whitespace(rendered)
                         )
                     else:
                         last_return = self.compiler.compile_return(stmt)(**closure_env)

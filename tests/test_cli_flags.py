@@ -13,9 +13,7 @@ def test_cli_optimizer_flag(tmp_path: Path) -> None:
     srcp = tmp_path / "test.kedi"
     valp = tmp_path / "test.val.kedi"
 
-    srcp.write_text(
-        "@foo(x: int) -> int:\n  = `x * 2`\n\n= <foo(`5`)>\n", encoding="utf-8"
-    )
+    srcp.write_text("@foo(x: int) -> int:\n  = `x * 2`\n\n= <foo(`5`)>\n", encoding="utf-8")
     valp.write_text(
         "@eval: foo:\n  > data: inputs:\n    = `[(1, 2), (3, 6)]`\n"
         "  > metric: accuracy(inputs):\n    = `1.0`\n",

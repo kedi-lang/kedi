@@ -55,9 +55,7 @@ class KediDiagnostic:
         if self.snippet:
             caret_col = max(self.span.start_col - 1, 0)
             caret_len = max(self.span.end_col - self.span.start_col, 1)
-            head += (
-                f"\n    {self.snippet.rstrip()}\n    {' ' * caret_col}{'^' * caret_len}"
-            )
+            head += f"\n    {self.snippet.rstrip()}\n    {' ' * caret_col}{'^' * caret_len}"
         return head
 
 

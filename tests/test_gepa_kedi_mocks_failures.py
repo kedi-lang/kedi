@@ -172,9 +172,7 @@ def test_bad_reflection_nan_range_recovers(monkeypatch: pytest.MonkeyPatch):
             metric=metric,
         )
 
-    assert isinstance(optimized, dict), (
-        "Optimizer must return a dict even after bad reflection"
-    )
+    assert isinstance(optimized, dict), "Optimizer must return a dict even after bad reflection"
     assert score >= 0.0, "Score must be non-negative"
     assert len(Recorder.lm_calls) > 0, "LM should have been called at least once"
 
@@ -229,9 +227,9 @@ def test_span_without_inputs_still_optimizes(monkeypatch: pytest.MonkeyPatch):
     assert score >= 0.0
 
     for call in Recorder.calls:
-        assert "seed" not in call.kwargs, (
-            "Span has no <seed> reference, so seed should not be forwarded to Predict"
-        )
+        assert (
+            "seed" not in call.kwargs
+        ), "Span has no <seed> reference, so seed should not be forwarded to Predict"
 
 
 # ── Empty spans list returns empty ───────────────────────────────────

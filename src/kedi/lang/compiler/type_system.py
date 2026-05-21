@@ -53,9 +53,7 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
         return None
 
 
-def _resolve_expr(
-    rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]
-) -> Optional[Any]:
+def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
         return _lookup_name(rt, expr.name, type_env)
@@ -76,9 +74,7 @@ def _resolve_expr(
 
     if isinstance(expr, TypeUnion):
         left = _resolve_expr(rt, expr.left, type_env) if expr.left is not None else None
-        right = (
-            _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
-        )
+        right = _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
         if left is None or right is None:
             return None
         try:
@@ -99,9 +95,7 @@ def _resolve_expr(
         except Exception as exc:
             raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
         if not _is_valid_type(result):
-            raise TypeError(
-                f"Expression {expr.code!r} does not evaluate to a valid type"
-            )
+            raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
         return result
 
     return None
@@ -167,9 +161,7 @@ class KediType:
     def is_none(self) -> bool:
         return self._expr is None and self._legacy_str is None
 
-    def resolve(
-        self, rt: KediRuntime, env: dict[str, Any] | None = None
-    ) -> Optional[Any]:
+    def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
         if self._expr is not None:
             type_env = build_type_env(rt, env)
             return _resolve_expr(rt, self._expr, type_env)
@@ -186,9 +178,7 @@ class KediType:
         if resolved is None:
             return None
         try:
-            return TypeAdapter(
-                resolved, config={"strict": True, "arbitrary_types_allowed": True}
-            )
+            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
         except Exception:
             return None
 
@@ -217,9 +207,7 @@ class KediType:
 
     # ---- legacy fallback ----
 
-    def _legacy_resolve(
-        self, rt: KediRuntime, env: dict[str, Any] | None
-    ) -> Optional[Any]:
+    def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
         """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
@@ -302,9 +290,7 @@ def register_type(rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]) -
             kedi_type = KediType(TypeRef(name="str"))
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
-            raise TypeError(
-                f"Unknown type annotation {kedi_type!s} in type {typedef.name}"
-            )
+            raise TypeError(f"Unknown type annotation {kedi_type!s} in type {typedef.name}")
         annotations[field.name] = resolved
 
     namespace["__annotations__"] = annotations
@@ -329,9 +315,7 @@ def assign_value_from_native(
         if kedi_type.is_none():
             if isinstance(native, str):
                 return native
-            raise TypeError(
-                "Native non-string assignment requires explicit type annotation"
-            )
+            raise TypeError("Native non-string assignment requires explicit type annotation")
         if isinstance(native, str):
             try_typ = kedi_type.resolve(rt, env)
             if try_typ is not None and try_typ is not str:
@@ -355,13 +339,9 @@ def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
         TextSegment,
     )
 
-    non_ws = [
-        s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")
-    ]
+    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
 
-    is_backtick_native = len(non_ws) == 1 and isinstance(
-        non_ws[0], PythonExprNativeSegment
-    )
+    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
     is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
 
@@ -412,9 +392,7 @@ def _make_init(type_name: str, field_order: list[str], model_class: type[BaseMod
                 raise TypeError(f"Too many positional arguments for {type_name}")
             for name, value in zip(field_order, args):
                 if name in kwargs:
-                    raise TypeError(
-                        f"Multiple values for field '{name}' in {type_name}"
-                    )
+                    raise TypeError(f"Multiple values for field '{name}' in {type_name}")
                 kwargs[name] = value
         super(model_class, self).__init__(**kwargs)
 

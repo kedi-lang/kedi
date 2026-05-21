@@ -153,9 +153,7 @@ def test_type_definition_in_block_comment_ignored():
 def test_pre_python_block_cannot_use_future_type():
     with pytest.raises(Exception):
         compile_program(
-            parse_program(
-                "```\nvalue = Item(name='x', qty=4)\n```\n~Item(name, qty:int)\n= ok\n"
-            )
+            parse_program("```\nvalue = Item(name='x', qty=4)\n```\n~Item(name, qty:int)\n= ok\n")
         )
 
 

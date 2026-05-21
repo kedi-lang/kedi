@@ -17,17 +17,11 @@ class Executor(Protocol):
 
     def set_debug_exporter(self, exporter: ExecutorDebugExporter | None) -> None: ...
 
-    def evaluate_inline(
-        self, rt: KediRuntime, code: str, local_env: dict[str, Any]
-    ) -> Any: ...
+    def evaluate_inline(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any: ...
 
-    def execute_block(
-        self, rt: KediRuntime, code: str, local_env: dict[str, Any]
-    ) -> Any: ...
+    def execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any: ...
 
-    def execute_side_effects(
-        self, rt: KediRuntime, code: str, env_map: dict[str, Any]
-    ) -> None: ...
+    def execute_side_effects(self, rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None: ...
 
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]: ...
 
@@ -35,9 +29,7 @@ class Executor(Protocol):
         self, name: str, params: list[str], body: Callable[..., Any]
     ) -> Callable[..., Any]: ...
 
-    def evaluate_type_expression(
-        self, rt: KediRuntime, code: str, env: dict[str, Any]
-    ) -> Any: ...
+    def evaluate_type_expression(self, rt: KediRuntime, code: str, env: dict[str, Any]) -> Any: ...
 
 
 class DefaultExecutor:
@@ -53,9 +45,7 @@ class DefaultExecutor:
     def set_debug_exporter(self, exporter: ExecutorDebugExporter | None) -> None:
         self.debug_exporter = exporter
 
-    def evaluate_inline(
-        self, rt: KediRuntime, code: str, local_env: dict[str, Any]
-    ) -> Any:
+    def evaluate_inline(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
         self._emit_debug(
             "execution_started",
             "evaluate_inline",
@@ -96,9 +86,7 @@ class DefaultExecutor:
                     error=str(exc),
                     mode="exec_after_syntax_error",
                 )
-                raise RuntimeError(
-                    f"Inline Python error: {type(exc).__name__}: {exc}"
-                ) from exc
+                raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -109,13 +97,9 @@ class DefaultExecutor:
                 error=str(exc),
                 mode="eval",
             )
-            raise RuntimeError(
-                f"Inline Python error: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
 
-    def execute_block(
-        self, rt: KediRuntime, code: str, local_env: dict[str, Any]
-    ) -> Any:
+    def execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
         self._emit_debug(
             "execution_started",
             "execute_block",
@@ -149,9 +133,7 @@ class DefaultExecutor:
             )
             raise RuntimeError(f"Python block error: {exc}") from exc
 
-    def execute_side_effects(
-        self, rt: KediRuntime, code: str, env_map: dict[str, Any]
-    ) -> None:
+    def execute_side_effects(self, rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None:
         self._emit_debug(
             "execution_started",
             "execute_side_effects",
@@ -170,9 +152,7 @@ class DefaultExecutor:
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            raise RuntimeError(
-                f"Inline Python error: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
         self._sync_existing_variables(rt, env_map, env)
         self._emit_debug(
             "execution_completed",
@@ -229,9 +209,7 @@ class DefaultExecutor:
         )
         return fn
 
-    def evaluate_type_expression(
-        self, rt: KediRuntime, code: str, env: dict[str, Any]
-    ) -> Any:
+    def evaluate_type_expression(self, rt: KediRuntime, code: str, env: dict[str, Any]) -> Any:
         self._emit_debug(
             "execution_started",
             "evaluate_type_expression",
@@ -256,9 +234,7 @@ class DefaultExecutor:
         )
         return result
 
-    def _build_python_env(
-        self, rt: KediRuntime, local_env: dict[str, Any]
-    ) -> dict[str, Any]:
+    def _build_python_env(self, rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
         from ..lang.compiler.environment import build_python_env
 
         return build_python_env(rt, local_env)

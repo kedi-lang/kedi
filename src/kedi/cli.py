@@ -26,9 +26,7 @@ if SRC_DIR not in sys.path:
 context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 
 
-@click.command(
-    context_settings=context_settings, help="Run a .kedi program with KediRuntime"
-)
+@click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
 @click.argument("source")
 @click.option(
     "--adapter",
@@ -64,9 +62,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     help="Number of retry stages for codegen",
 )
 @click.option("--test", is_flag=True, help="Run tests defined with @test: blocks")
-@click.option(
-    "--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks"
-)
+@click.option("--eval", "do_eval", is_flag=True, help="Run evals defined with @eval: blocks")
 @click.option(
     "--optimizer",
     type=click.Choice(["mock", "gepa"]),
@@ -172,9 +168,7 @@ def main(
                 source,
                 optimizer=optimizer,
                 optimizer_model=optimizer_model,
-                reflection_model=optimizer_reflection_model
-                if optimizer == "gepa"
-                else None,
+                reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
                 max_metric_calls=optimizer_max_metric_calls,
                 optimizer_model_max_tokens=optimizer_model_max_tokens,
                 reflection_model_max_tokens=optimizer_reflection_model_max_tokens,
@@ -211,9 +205,7 @@ def main(
                     codegen_model=codegen_model,
                     optimizer=optimizer,
                     optimizer_model=optimizer_model,
-                    reflection_model=optimizer_reflection_model
-                    if optimizer == "gepa"
-                    else None,
+                    reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
                     optimize=False,
                     use_cache=not no_cache,
                 )

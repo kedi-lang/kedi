@@ -52,9 +52,7 @@ def load_program_with_optimized_prompts(
 
     if debug:
         has_prompts = prompt_loader.has_optimized_prompts()
-        print(
-            f"[DEBUG] Checking for optimized prompts: {has_prompts}", file=os.sys.stderr
-        )
+        print(f"[DEBUG] Checking for optimized prompts: {has_prompts}", file=os.sys.stderr)
         if has_prompts:
             print(
                 f"[DEBUG] Optimized path: {prompt_loader.optimized_path}",

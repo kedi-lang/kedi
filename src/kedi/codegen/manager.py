@@ -54,9 +54,7 @@ class CodegenManager:
             context.preamble = program.prelude
 
         # Type definitions - convert to Python BaseModel classes
-        context.type_definitions = [
-            kedi_typedef_to_python_class(td) for td in program.type_defs
-        ]
+        context.type_definitions = [kedi_typedef_to_python_class(td) for td in program.type_defs]
 
         # Procedure definitions (exclude AI-generated ones) - convert to Python function signatures
         context.procedure_definitions = [

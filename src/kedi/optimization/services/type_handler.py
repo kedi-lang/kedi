@@ -61,9 +61,9 @@ class StructuredTypeHandler:
                 # Validate it's a type or typing construct
                 if isinstance(resolved_type, type):
                     output_schema[field_name] = resolved_type
-                elif hasattr(resolved_type, "__origin__") or str(
-                    type(resolved_type)
-                ).startswith("<class 'typing."):
+                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
+                    "<class 'typing."
+                ):
                     # Handle typing constructs (List, Dict, etc.)
                     output_schema[field_name] = resolved_type  # type: ignore
                 else:
@@ -145,10 +145,7 @@ class StructuredTypeHandler:
                         # Find matching field in output_schema
                         matching_field = None
                         for schema_name in output_schema.keys():
-                            if (
-                                schema_name == adapter_field_name
-                                or schema_name == out_name
-                            ):
+                            if schema_name == adapter_field_name or schema_name == out_name:
                                 matching_field = schema_name
                                 break
 
@@ -202,6 +199,4 @@ class StructuredTypeHandler:
         Returns:
             DSPy Signature object or string signature
         """
-        return asyncio.run(
-            self.create_dspy_signature(inputs, output_fields, use_string_signature)
-        )
+        return asyncio.run(self.create_dspy_signature(inputs, output_fields, use_string_signature))
