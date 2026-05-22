@@ -6,6 +6,7 @@ Handles variable lookup, environment building, and context management.
 from __future__ import annotations
 
 import builtins
+import linecache
 import typing
 from typing import Any
 
@@ -13,6 +14,7 @@ import typing_extensions
 from pydantic import BaseModel
 
 from ...core import KediRuntime
+from ..procedure_introspection import get_procedure_metadata
 
 
 def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
@@ -59,7 +61,7 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, An
 
     # Wrap procedures as callables
     for name, fn in rt._procedures.items():
-        env[name] = _make_proc_wrapper(rt, name)
+        env[name] = _make_proc_wrapper(rt, name, fn, local_env)
 
     return env
 
@@ -132,8 +134,37 @@ def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any
                 env[key] = wrapped
 
 
-def _make_proc_wrapper(rt: KediRuntime, proc_name: str):
-    """Create a callable wrapper for a procedure."""
+def _make_proc_wrapper(
+    rt: KediRuntime,
+    proc_name: str,
+    proc_fn: Any,
+    local_env: dict[str, Any],
+):
+    """Create a Python-facing callable wrapper for a procedure."""
+    metadata = get_procedure_metadata(proc_fn)
+    if metadata is None:
+        return _make_generic_proc_wrapper(rt, proc_name)
+
+    display_source = metadata.display_source()
+    executable_source = metadata.executable_source()
+    filename = f"<kedi-proc:{proc_name}:{id(proc_fn)}>"
+    linecache.cache[filename] = (
+        len(display_source),
+        None,
+        display_source.splitlines(True),
+        filename,
+    )
+    namespace = build_type_env(rt, local_env)
+    namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(rt._get_proc(proc_name), args)
+    try:
+        exec(compile(executable_source, filename, "exec", dont_inherit=True), namespace, namespace)
+    except Exception:
+        return _make_generic_proc_wrapper(rt, proc_name)
+    return namespace[metadata.name]
+
+
+def _make_generic_proc_wrapper(rt: KediRuntime, proc_name: str):
+    """Create the fallback callable wrapper for a non-Kedi procedure."""
 
     def wrapper(*args: Any):
         callee = rt._get_proc(proc_name)

@@ -44,6 +44,7 @@ from ..lang.ast import (
     TypeUnion,
 )
 from ..lang.parser import KediParseError, parse_program
+from ..lang.type_render import type_expr_to_python
 from .features import _known_lsp_type_origin, compute_python_ranges
 
 Position = dict[str, int]
@@ -264,7 +265,7 @@ def compute_python_virtual_document(
             builder.add("    pass")
         builder.add("")
 
-    for proc in program.procedures:
+    for proc in _all_procedures(program.procedures):
         if focused_proc is not None and proc is not focused_proc:
             continue
         _emit_procedure_body(builder, cursor, proc)
@@ -302,12 +303,39 @@ def _find_focused_procedure(
     if focus_line is None:
         return None
     source_line = focus_line + 1
+    return _find_deepest_procedure_at_line(procedures, source_line)
+
+
+def _find_deepest_procedure_at_line(
+    procedures: Iterable[ProcedureDef], source_line: int
+) -> Optional[ProcedureDef]:
     for proc in procedures:
-        if proc.loc is None:
+        if proc.loc is None or not (proc.loc.start_line <= source_line <= proc.loc.end_line):
             continue
-        if proc.loc.start_line <= source_line <= proc.loc.end_line:
-            return proc
+        nested = _find_deepest_procedure_at_line(_nested_procedures(proc), source_line)
+        return nested or proc
     return None
+
+
+def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
+    return [
+        stmt.proc
+        for stmt in proc.body
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+    ]
+
+
+def _all_procedures(procedures: Iterable[ProcedureDef]) -> list[ProcedureDef]:
+    out: list[ProcedureDef] = []
+
+    def visit(proc: ProcedureDef) -> None:
+        out.append(proc)
+        for child in _nested_procedures(proc):
+            visit(child)
+
+    for proc in procedures:
+        visit(proc)
+    return out
 
 
 def _emit_type_stub(builder: VirtualBuilder, typedef: TypeDef) -> None:
@@ -370,6 +398,43 @@ def _emit_procedure_body(builder: VirtualBuilder, cursor: RegionCursor, proc: Pr
     builder.add("")
 
 
+def _emit_nested_procedure(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    proc: ProcedureDef,
+    indent: str,
+) -> None:
+    params = ", ".join(
+        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
+        for name in proc.params
+    )
+    ret = _type_to_python(proc.return_type_expr, proc.return_type_annotation, default="str")
+    signature = f"{indent}def {proc.name}({params}) -> {ret}:"
+    signature_line = builder.add(signature)
+    scope = {
+        name: ScopeName(
+            typ=_type_to_python(
+                (proc.param_type_exprs or {}).get(name),
+                (proc.param_type_annotations or {}).get(name),
+                default="Any",
+            ),
+            source_range=_param_name_range(builder.source_lines, proc, name),
+        )
+        for name in proc.params
+    }
+    builder.add_symbol(
+        kind="procedure",
+        name=proc.name,
+        source_range=_proc_name_range(proc),
+        virtual_range=_line_range(signature_line, len(indent) + len("def "), proc.name),
+    )
+    _add_scope_param_symbols(builder, scope, signature_line, signature)
+    before_body = builder.line
+    _emit_statements(builder, cursor, proc.body, scope, indent + "    ")
+    if builder.line == before_body:
+        builder.add(f"{indent}    pass")
+
+
 def _emit_statements(
     builder: VirtualBuilder,
     cursor: RegionCursor,
@@ -379,7 +444,7 @@ def _emit_statements(
 ) -> None:
     for stmt in statements:
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
-            _emit_proc_stub(builder, stmt.proc, indent)
+            _emit_nested_procedure(builder, cursor, stmt.proc, indent)
             continue
         if isinstance(stmt, AssignBlockStmt):
             _emit_assign_block(builder, cursor, stmt, scope, indent)
@@ -771,20 +836,7 @@ def _typing_symbols_in_python_type(code: str) -> set[tuple[str, str]]:
 def _type_to_python(
     expr: Optional[TypeExpr], annotation: Optional[str], *, default: str = "str"
 ) -> str:
-    if isinstance(expr, TypePython):
-        return expr.code or default
-    if isinstance(expr, TypeRef):
-        return expr.name or default
-    if isinstance(expr, TypeApply):
-        args = ", ".join(_type_to_python(arg, None) for arg in expr.args)
-        return f"{expr.name}[{args}]" if args else expr.name or default
-    if isinstance(expr, TypeUnion):
-        left = _type_to_python(expr.left, None)
-        right = _type_to_python(expr.right, None)
-        return f"{left} | {right}"
-    if annotation:
-        return annotation
-    return default
+    return type_expr_to_python(expr, annotation, default=default)
 
 
 def _type_init_params(typedef: TypeDef) -> str:

@@ -62,6 +62,29 @@ def test_hover_on_procedure_header_shows_signature():
     assert "str" in body
 
 
+def test_hover_on_nested_procedure_header_shows_signature():
+    src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=4)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "bar" in body
+    assert "name: str" in body
+    assert "str" in body
+
+
+def test_hover_on_nested_text_segment_works():
+    src = "@foo():\n  @bar():\n    Hello world\n    = Done\n  = dn\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=8)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Text segment" in body
+    assert "Hello world" in body
+
+
 def test_hover_on_input_segment():
     src = "@p(name):\n  Hello, <name>!\n  = done\n"
     hover = features.compute_hover(
@@ -243,6 +266,27 @@ def test_definition_jumps_to_procedure():
     assert loc is not None
     assert loc.uri == "file:///tmp/example.kedi"
     assert loc.range.start.line == 0
+
+
+def test_definition_jumps_to_nested_procedure():
+    src = (
+        "@foo():\n"
+        "  @bar() -> str:\n"
+        "    = done\n"
+        "  = <bar()>\n"
+        "\n"
+        "= <foo()>\n"
+    )
+    loc = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="/tmp/example.kedi",
+        pos=lsp.Position(line=3, character=6),
+    )
+    assert loc is not None
+    assert loc.range.start.line == 1
+
+
 
 
 def test_definition_returns_none_for_non_reference():
@@ -569,6 +613,46 @@ def test_python_virtual_document_can_focus_single_procedure_body():
     assert "def __kedi_scope_beta(name: str) -> str:" not in virtual["text"]
     assert "return name.upper()" not in virtual["text"]
     assert "def __kedi_toplevel__() -> Any:" not in virtual["text"]
+
+
+def test_python_virtual_document_includes_nested_procedure_body():
+    src = (
+        "@foo() -> str:\n"
+        "  @bar(name: str) -> str:\n"
+        "    [upper: str] = ```\n"
+        "    return name.upper()\n"
+        "    ```\n"
+        "    = <`upper`>\n"
+        "  = <bar(ok)>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def bar(name: str) -> str:" in virtual["text"]
+    assert "return name.upper()" in virtual["text"]
+    assert any(
+        s["kind"] == "procedure"
+        and s["name"] == "bar"
+        and s["sourceRange"]["start"] == {"line": 1, "character": 3}
+        for s in virtual["symbols"]
+    )
+
+
+def test_python_virtual_document_can_focus_nested_procedure_body():
+    src = (
+        "@foo() -> str:\n"
+        "  @bar(name: str) -> str:\n"
+        "    [upper: str] = ```\n"
+        "    return name.upper()\n"
+        "    ```\n"
+        "    = <`upper`>\n"
+        "  = <bar(ok)>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
+    ast.parse(virtual["text"])
+    assert virtual["focusKey"] == "proc:bar:2"
+    assert "def __kedi_scope_bar(name: str) -> str:" in virtual["text"]
+    assert "return name.upper()" in virtual["text"]
+    assert "def __kedi_scope_foo() -> str:" not in virtual["text"]
 
 
 def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():

@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from ...core import KediRuntime
 from ..ast import ProcDefStmt, ProcedureDef
+from ..procedure_introspection import attach_procedure_metadata
 from .environment import ScopedDict
 from .statement_compiler import StatementExecutor
 from .type_system import KediType
@@ -43,7 +44,8 @@ class ProcedureCompiler:
             return self._enforce_return_type(proc, last_return, closure_env)
 
         # Create dynamic function with proper signature
-        return self._create_dynamic_function(proc.name, proc.params, _body)
+        fn = self._create_dynamic_function(proc.name, proc.params, _body)
+        return attach_procedure_metadata(fn, proc)
 
     def _prepare_kwargs(
         self,

@@ -70,6 +70,7 @@ from ..lang.ast import (
     InputSegment,
     OptimizeSpan,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
     Program,
     ProgramWithValidation,
@@ -218,41 +219,14 @@ def _resolve_symbol_at(
     prog: Union[Program, ProgramWithValidation], pos: lsp.Position
 ) -> Optional[SymbolRef]:
     """Identify what the cursor is on. Returns ``None`` if nothing useful."""
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
     type_by_name = {t.name: t for t in prog.type_defs}
 
     # Walk procedures first — they own the deepest spans.
     for proc in prog.procedures:
-        if proc.loc is None or not _position_inside(pos, proc.loc):
-            continue
-        # Cursor on procedure name itself? Use header-line check.
-        if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
-            return SymbolRef(
-                kind="procedure",
-                name=proc.name,
-                declaration_span=proc.loc,
-                scope_proc=None,
-                cursor_span=_proc_name_span(proc),
-            )
-        # Parameter declarations.
-        for pname, pspan in _param_decls(proc):
-            if _position_inside(pos, pspan):
-                return SymbolRef(
-                    kind="param_decl",
-                    name=pname,
-                    declaration_span=pspan,
-                    scope_proc=proc,
-                    cursor_span=pspan,
-                )
-        r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+        r = _resolve_in_procedure(proc, pos, proc_by_name, type_by_name)
         if r is not None:
             return r
-        # Inside the body.
-        for stmt in proc.body:
-            r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
-            if r is not None:
-                return r
-        return None
 
     # Top-level
     for stmt in prog.toplevel_body:
@@ -266,6 +240,45 @@ def _resolve_symbol_at(
     # Type defs (top-level).
     for td in prog.type_defs:
         r = _resolve_in_type_def(td, pos, type_by_name)
+        if r is not None:
+            return r
+    return None
+
+
+def _resolve_in_procedure(
+    proc: ProcedureDef,
+    pos: lsp.Position,
+    proc_by_name: dict,
+    type_by_name: dict,
+) -> Optional[SymbolRef]:
+    if proc.loc is None or not _position_inside(pos, proc.loc):
+        return None
+    for child in _nested_procedures(proc):
+        r = _resolve_in_procedure(child, pos, proc_by_name, type_by_name)
+        if r is not None:
+            return r
+    if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
+        return SymbolRef(
+            kind="procedure",
+            name=proc.name,
+            declaration_span=proc.loc,
+            scope_proc=None,
+            cursor_span=_proc_name_span(proc),
+        )
+    for pname, pspan in _param_decls(proc):
+        if _position_inside(pos, pspan):
+            return SymbolRef(
+                kind="param_decl",
+                name=pname,
+                declaration_span=pspan,
+                scope_proc=proc,
+                cursor_span=pspan,
+            )
+    r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+    if r is not None:
+        return r
+    for stmt in proc.body:
+        r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
         if r is not None:
             return r
     return None
@@ -548,6 +561,29 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
     return None
 
 
+def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
+    from ..lang.ast import ProcDefStmt
+
+    return [
+        stmt.proc
+        for stmt in proc.body
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+    ]
+
+
+def _all_procedures(prog: Union[Program, ProgramWithValidation]) -> list[ProcedureDef]:
+    out: list[ProcedureDef] = []
+
+    def visit(proc: ProcedureDef) -> None:
+        out.append(proc)
+        for child in _nested_procedures(proc):
+            visit(child)
+
+    for proc in prog.procedures:
+        visit(proc)
+    return out
+
+
 # =====================================================================
 # Hover
 # =====================================================================
@@ -568,7 +604,7 @@ def compute_hover(
         return _generic_hover(prog, pos)
 
     range_ = _span_to_range(sym.cursor_span)
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
     type_by_name = {t.name: t for t in prog.type_defs}
 
     if sym.kind == "procedure":
@@ -655,6 +691,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(node.auto_spec)
             for span in node.optimize_spans or []:
                 visit(span)
+            return
+        if isinstance(node, ProcDefStmt) and node.proc is not None:
+            visit(node.proc)
             return
         if isinstance(node, OptimizeSpan):
             for tl in node.template_lines or []:
@@ -1124,11 +1163,11 @@ def compute_signature_help(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
 
     # Find the innermost call_segment containing the cursor.
     target_call: Optional[CallSegment] = None
-    for proc in prog.procedures:
+    for proc in _all_procedures(prog):
         if proc.loc is None or not _position_inside(pos, proc.loc):
             continue
         for stmt in proc.body:
@@ -1244,7 +1283,7 @@ def compute_inlay_hints(
     except KediParseError:
         return []
     out: List[lsp.InlayHint] = []
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
 
     def visit_stmt(stmt, enclosing_proc: Optional[ProcedureDef]) -> None:
         for seg in _segments_of(stmt):
@@ -1297,7 +1336,7 @@ def compute_inlay_hints(
                     )
                 )
 
-    for proc in prog.procedures:
+    for proc in _all_procedures(prog):
         for stmt in proc.body:
             visit_stmt(stmt, proc)
     for stmt in prog.toplevel_body:
