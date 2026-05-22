@@ -18,7 +18,9 @@ def build_context_section(context: ProgramContext) -> str:
         parts.append("# Available types: (none)")
 
     if context.procedure_definitions:
-        parts.append("# Available functions:\n" + "\n\n".join(context.procedure_definitions))
+        parts.append(
+            "# Available functions:\n" + "\n\n".join(context.procedure_definitions)
+        )
     else:
         parts.append("# Available functions: (none)")
 

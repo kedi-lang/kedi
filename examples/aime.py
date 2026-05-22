@@ -154,9 +154,13 @@ def main():
         print("=" * 80)
 
         if delta > 0:
-            print(f"\n✓ GEPA improved performance by {abs(delta):.4f} ({abs(pct_change):.2f}%)")
+            print(
+                f"\n✓ GEPA improved performance by {abs(delta):.4f} ({abs(pct_change):.2f}%)"
+            )
         elif delta < 0:
-            print(f"\n✗ Performance decreased by {abs(delta):.4f} ({abs(pct_change):.2f}%)")
+            print(
+                f"\n✗ Performance decreased by {abs(delta):.4f} ({abs(pct_change):.2f}%)"
+            )
         else:
             print("\n→ No change in performance")
     else:

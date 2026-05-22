@@ -15,7 +15,9 @@ except ImportError:
     GEPAOptimizer = None
 
 
-@pytest.mark.skipif(not GEPAOptimizer, reason="DSPy not available or GEPA optimizer not importable")
+@pytest.mark.skipif(
+    not GEPAOptimizer, reason="DSPy not available or GEPA optimizer not importable"
+)
 def test_gepa_optimizer_interface():
     """Test GEPA optimizer implements the interface correctly."""
     from kedi.optimization.config import OptimizerConfig

@@ -29,7 +29,9 @@ def evaluate_call(rt: KediRuntime, seg: CallSegment, local_env: dict[str, Any]) 
     return rt._invoke_procedure(callee, eval_args)
 
 
-def evaluate_python_inline(rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
+def evaluate_python_inline(
+    rt: KediRuntime, code: str, local_env: dict[str, Any]
+) -> Any:
     """Evaluate inline Python expression or statement."""
     return rt.executor.evaluate_inline(rt, code, local_env)
 
@@ -39,7 +41,9 @@ def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any]) -> 
     return rt.executor.execute_block(rt, code, kwargs)
 
 
-def execute_inline_side_effects(rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None:
+def execute_inline_side_effects(
+    rt: KediRuntime, code: str, env_map: dict[str, Any]
+) -> None:
     """Execute Python code for side effects, syncing back existing vars only."""
     rt.executor.execute_side_effects(rt, code, env_map)
 
@@ -105,7 +109,9 @@ def evaluate_assignment_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any | None, str]:
     """Evaluate assignment RHS, returning native value if pure expression."""
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    non_ws = [
+        s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")
+    ]
 
     # Single native expression or call
     if len(non_ws) == 1:
@@ -164,7 +170,9 @@ def _stringify_segments(
 
             if seg.escaped_whitespace:
                 # Has escaped whitespace, always apply preserve_escaped_whitespace
-                processed_text = preserve_escaped_whitespace(seg.text, seg.escaped_whitespace)
+                processed_text = preserve_escaped_whitespace(
+                    seg.text, seg.escaped_whitespace
+                )
                 parts.append(processed_text)
             elif is_first and is_last:
                 # Only TextSegment, trim leading and trailing spaces

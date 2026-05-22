@@ -20,7 +20,8 @@ class ProcedurePythonMetadata:
 
     def _signature(self) -> str:
         annotated_params = ", ".join(
-            f"{name}: {typ}" for name, typ in zip(self.params, self.param_types, strict=False)
+            f"{name}: {typ}"
+            for name, typ in zip(self.params, self.param_types, strict=False)
         )
         return f"def {self.name}({annotated_params}) -> {self.return_type}:"
 
@@ -39,7 +40,9 @@ class ProcedurePythonMetadata:
         return f"{self._signature()}\n    return {call}\n"
 
 
-def attach_procedure_metadata(fn: Callable[..., Any], proc: ProcedureDef) -> Callable[..., Any]:
+def attach_procedure_metadata(
+    fn: Callable[..., Any], proc: ProcedureDef
+) -> Callable[..., Any]:
     metadata = ProcedurePythonMetadata(
         name=proc.name,
         params=tuple(proc.params),

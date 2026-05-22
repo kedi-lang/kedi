@@ -169,7 +169,9 @@ class KediRuntime:
             else result
         )
 
-    def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
+    def _kedi_run(
+        self, expressions: Sequence[Expression], env: ValueEnv
+    ) -> Dict[str, Any]:
         NotFound = object()
         prompt_parts: List[str] = []
         outputs: List[OutputExpr] = []
@@ -204,7 +206,9 @@ class KediRuntime:
         if self.adapter is None:
             raise RuntimeError("No adapter provided to KediRuntime")
 
-        result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+        result = self.adapter.produce_sync(
+            template=question, output_schema=typed_fields
+        )
 
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute

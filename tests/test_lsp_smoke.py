@@ -269,14 +269,7 @@ def test_definition_jumps_to_procedure():
 
 
 def test_definition_jumps_to_nested_procedure():
-    src = (
-        "@foo():\n"
-        "  @bar() -> str:\n"
-        "    = done\n"
-        "  = <bar()>\n"
-        "\n"
-        "= <foo()>\n"
-    )
+    src = "@foo():\n  @bar() -> str:\n    = done\n  = <bar()>\n\n= <foo()>\n"
     loc = features.compute_definition(
         source=src,
         uri="file:///tmp/example.kedi",
@@ -285,8 +278,6 @@ def test_definition_jumps_to_nested_procedure():
     )
     assert loc is not None
     assert loc.range.start.line == 1
-
-
 
 
 def test_definition_returns_none_for_non_reference():

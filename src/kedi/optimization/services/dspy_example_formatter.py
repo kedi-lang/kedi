@@ -73,7 +73,9 @@ class DSPyExampleFormatter:
 
             # If span provided, compute span inputs from procedure parameters
             if span and proc_name:
-                span_inputs = self._compute_span_inputs(span, proc_name, proc_input_dict)
+                span_inputs = self._compute_span_inputs(
+                    span, proc_name, proc_input_dict
+                )
                 if idx == 1 or idx % 5 == 0 or idx == total:
                     print(f"   Formatting example {idx}/{total}...", flush=True)
                 input_fields = list(span_inputs.keys())
@@ -144,7 +146,10 @@ class DSPyExampleFormatter:
             proc = self.runtime._procedures.get(proc_name)
             if not proc:
                 # Fallback: return proc_inputs as strings
-                return {k: str(v) for k, v in list(proc_inputs.items())[: len(span_input_names)]}
+                return {
+                    k: str(v)
+                    for k, v in list(proc_inputs.items())[: len(span_input_names)]
+                }
 
             # Create environment with procedure inputs
             env = dict(proc_inputs)
@@ -186,4 +191,6 @@ class DSPyExampleFormatter:
             pass
 
         # Fallback: return proc_inputs as strings
-        return {k: str(v) for k, v in list(proc_inputs.items())[: len(span_input_names)]}
+        return {
+            k: str(v) for k, v in list(proc_inputs.items())[: len(span_input_names)]
+        }

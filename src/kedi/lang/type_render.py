@@ -43,4 +43,6 @@ def procedure_param_type_to_python(
 
 
 def procedure_return_type_to_python(proc: ProcedureDef, *, default: str = "str") -> str:
-    return type_expr_to_python(proc.return_type_expr, proc.return_type_annotation, default=default)
+    return type_expr_to_python(
+        proc.return_type_expr, proc.return_type_annotation, default=default
+    )

@@ -109,7 +109,9 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
     return env
 
 
-def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]) -> None:
+def _add_type_env(
+    rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]
+) -> None:
     """Add type environment and handle Pydantic model coercion."""
     stack = getattr(rt, "_type_env_stack", None)
     if not isinstance(stack, list) or not stack:
@@ -155,9 +157,15 @@ def _make_proc_wrapper(
         filename,
     )
     namespace = build_type_env(rt, local_env)
-    namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(rt._get_proc(proc_name), args)
+    namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(
+        rt._get_proc(proc_name), args
+    )
     try:
-        exec(compile(executable_source, filename, "exec", dont_inherit=True), namespace, namespace)
+        exec(
+            compile(executable_source, filename, "exec", dont_inherit=True),
+            namespace,
+            namespace,
+        )
     except Exception:
         return _make_generic_proc_wrapper(rt, proc_name)
     return namespace[metadata.name]

@@ -118,7 +118,9 @@ def test_markdown_debug_exporter_renders_human_readable_sections(tmp_path: Path)
     assert "https://example.com" in content
 
 
-def test_markdown_debug_exporter_generates_default_filename(tmp_path: Path, monkeypatch):
+def test_markdown_debug_exporter_generates_default_filename(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
 
     exporter = MarkdownDebugExporter(default_name="sample.kedi")

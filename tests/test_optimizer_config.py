@@ -37,13 +37,17 @@ def test_optimizer_config_from_cli_options():
 
 def test_optimizer_config_get_max_tokens():
     """Test get_optimizer_max_tokens and get_reflection_max_tokens."""
-    config = OptimizerConfig(optimizer_model_max_tokens=2000, reflection_model_max_tokens=32000)
+    config = OptimizerConfig(
+        optimizer_model_max_tokens=2000, reflection_model_max_tokens=32000
+    )
 
     assert config.get_optimizer_max_tokens() == 2000
     assert config.get_reflection_max_tokens() == 32000
 
     # Test with different values
-    config2 = OptimizerConfig(optimizer_model_max_tokens=16000, reflection_model_max_tokens=64000)
+    config2 = OptimizerConfig(
+        optimizer_model_max_tokens=16000, reflection_model_max_tokens=64000
+    )
     assert config2.get_optimizer_max_tokens() == 16000
     assert config2.get_reflection_max_tokens() == 64000
 

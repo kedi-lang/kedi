@@ -34,7 +34,9 @@ class OptimizationResultWriter:
             Path to written file
         """
         # Create filename: source.kedi -> source.kedi.optimized.json
-        optimized_path = self.source_path.with_suffix(self.source_path.suffix + ".optimized.json")
+        optimized_path = self.source_path.with_suffix(
+            self.source_path.suffix + ".optimized.json"
+        )
 
         # Serialize to JSON with indentation
         json_str = json.dumps(optimized_prompts, indent=2, ensure_ascii=False)
@@ -114,7 +116,9 @@ class OptimizationResultWriter:
 
     def delete_existing_optimized_files(self) -> None:
         """Delete existing optimized files to ensure fresh optimization."""
-        optimized_path = self.source_path.with_suffix(self.source_path.suffix + ".optimized.json")
+        optimized_path = self.source_path.with_suffix(
+            self.source_path.suffix + ".optimized.json"
+        )
         scores_path = self.source_path.with_suffix(
             self.source_path.suffix + ".optimized_scores.json"
         )

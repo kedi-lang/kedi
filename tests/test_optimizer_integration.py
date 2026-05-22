@@ -110,7 +110,9 @@ def test_optimization_result_writer_integration():
         train_scores = {"test": 0.95}
         writer.write_training_scores(train_scores)
 
-        scores_path = source_path.with_suffix(source_path.suffix + ".optimized_scores.json")
+        scores_path = source_path.with_suffix(
+            source_path.suffix + ".optimized_scores.json"
+        )
         assert scores_path.exists()
 
         # Verify content is valid JSON

@@ -16,7 +16,9 @@ def test_python_interop_exposes_stub_signature_name_and_source() -> None:
     signature = rt.executor.evaluate_inline(
         rt, "str(inspect.signature(kedi_proc))", {"inspect": inspect}
     )
-    source = rt.executor.evaluate_inline(rt, "inspect.getsource(kedi_proc)", {"inspect": inspect})
+    source = rt.executor.evaluate_inline(
+        rt, "inspect.getsource(kedi_proc)", {"inspect": inspect}
+    )
 
     assert name == "kedi_proc"
     assert signature == "(x: int, y: int) -> int"
@@ -54,7 +56,7 @@ def test_nested_procedure_python_interop_uses_nested_stub() -> None:
         "    = `value + 1`\n"
         "  [info: str] = ```\n"
         "  import inspect\n"
-        "  return f\"{inner.__name__}|{inspect.signature(inner)}|{inspect.getsource(inner)}\"\n"
+        '  return f"{inner.__name__}|{inspect.signature(inner)}|{inspect.getsource(inner)}"\n'
         "  ```\n"
         "  = <info>\n\n"
         "= <outer()>\n"

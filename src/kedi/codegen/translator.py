@@ -37,7 +37,9 @@ def kedi_typedef_to_python_class(typedef: TypeDef) -> str:
     else:
         for field in typedef.fields:
             type_hint = (
-                kedi_type_to_python(field.type_annotation) if field.type_annotation else "str"
+                kedi_type_to_python(field.type_annotation)
+                if field.type_annotation
+                else "str"
             )
             lines.append(f"    {field.name}: {type_hint}")
 
@@ -67,7 +69,9 @@ def kedi_procedure_to_python_signature(proc: ProcedureDef) -> str:
             param_list.append(f"{param_name}: str")
 
     return_type = (
-        kedi_type_to_python(proc.return_type_annotation) if proc.return_type_annotation else "str"
+        kedi_type_to_python(proc.return_type_annotation)
+        if proc.return_type_annotation
+        else "str"
     )
 
     lines = [
@@ -159,7 +163,9 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
             # Find minimum indentation from non-empty lines
             non_empty_lines = [line for line in body_lines if line.strip()]
             if non_empty_lines:
-                min_indent = min(len(line) - len(line.lstrip()) for line in non_empty_lines)
+                min_indent = min(
+                    len(line) - len(line.lstrip()) for line in non_empty_lines
+                )
 
                 for line in body_lines:
                     stripped = line.strip()
@@ -169,7 +175,11 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
                         and not stripped.startswith("'''")
                     ):
                         # Remove common leading indent, add Kedi indent (4 spaces)
-                        dedented = line[min_indent:] if len(line) > min_indent else line.lstrip()
+                        dedented = (
+                            line[min_indent:]
+                            if len(line) > min_indent
+                            else line.lstrip()
+                        )
                         lines.append(f"    {dedented}")
 
             lines.append("    ```")
