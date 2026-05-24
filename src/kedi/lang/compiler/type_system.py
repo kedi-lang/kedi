@@ -17,10 +17,11 @@ constructs ``KediType`` from a ``TypeExpr``.
 
 from __future__ import annotations
 
+import copy
 import shlex
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 
 from ...core import KediRuntime
 from ..ast import (
@@ -290,14 +291,25 @@ def is_value_compatible(
         return False
 
 
-def register_type(rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
+def register_type(
+    rt: KediRuntime,
+    typedef: TypeDef,
+    type_env: dict[str, Any],
+    local_env: dict[str, Any] | None = None,
+) -> None:
     """Register a custom type definition as a Pydantic model."""
     annotations: dict[str, Any] = {}
-    namespace: dict[str, Any] = {}
+    field_defs: dict[str, tuple[Any, Any]] = {}
+    default_env = build_type_env(rt, local_env or {})
 
     for field in typedef.fields:
         kedi_type = KediType.from_node(field.type_expr, field.type_annotation)
         if kedi_type.is_none():
+            if field.default_expr is not None:
+                raise TypeError(
+                    f"Defaulted field {field.name!r} in type {typedef.name} "
+                    "requires a type annotation"
+                )
             # Untyped field defaults to `str` (legacy behaviour).
             kedi_type = KediType(TypeRef(name="str"))
         resolved = kedi_type.resolve(rt, env=type_env)
@@ -306,15 +318,47 @@ def register_type(rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]) -
                 f"Unknown type annotation {kedi_type!s} in type {typedef.name}"
             )
         annotations[field.name] = resolved
+        if field.default_expr is None:
+            field_defs[field.name] = (resolved, ...)
+        else:
+            default_value = rt.executor.evaluate_type_expression(
+                rt, field.default_expr, default_env
+            )
+            field_defs[field.name] = (
+                resolved,
+                _pydantic_default(default_value),
+            )
 
-    namespace["__annotations__"] = annotations
     field_order = [field.name for field in typedef.fields]
 
-    new_model = type(typedef.name, (BaseModel,), namespace)
+    new_model = create_model(typedef.name, __base__=BaseModel, **field_defs)
     setattr(new_model, "__init__", _make_init(typedef.name, field_order, new_model))
 
     type_env[typedef.name] = new_model
     type_env[f"__{typedef.name}_fields__"] = annotations
+
+
+def _pydantic_default(value: Any) -> Any:
+    if _is_immutable_default(value):
+        return Field(default=value)
+    return Field(default_factory=_default_factory(copy.deepcopy(value)))
+
+
+def _default_factory(value: Any):
+    def factory() -> Any:
+        return copy.deepcopy(value)
+
+    return factory
+
+
+def _is_immutable_default(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bytes, int, float, bool)):
+        return True
+    if isinstance(value, tuple):
+        return all(_is_immutable_default(item) for item in value)
+    if isinstance(value, frozenset):
+        return all(_is_immutable_default(item) for item in value)
+    return False
 
 
 def assign_value_from_native(

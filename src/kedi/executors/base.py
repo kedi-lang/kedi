@@ -32,7 +32,11 @@ class Executor(Protocol):
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]: ...
 
     def create_dynamic_function(
-        self, name: str, params: list[str], body: Callable[..., Any]
+        self,
+        name: str,
+        params: list[str],
+        body: Callable[..., Any],
+        defaults: dict[str, Any] | None = None,
     ) -> Callable[..., Any]: ...
 
     def evaluate_type_expression(
@@ -205,7 +209,11 @@ class DefaultExecutor:
         return env
 
     def create_dynamic_function(
-        self, name: str, params: list[str], body: Callable[..., Any]
+        self,
+        name: str,
+        params: list[str],
+        body: Callable[..., Any],
+        defaults: dict[str, Any] | None = None,
     ) -> Callable[..., Any]:
         self._emit_debug(
             "execution_started",
@@ -213,10 +221,19 @@ class DefaultExecutor:
             function_name=name,
             args=params,
         )
-        param_list = ", ".join(params)
+        defaults = defaults or {}
+        namespace: dict[str, Any] = {"_body": body}
+        param_specs: list[str] = []
+        for index, param in enumerate(params):
+            if param in defaults:
+                default_name = f"__kedi_default_{index}"
+                namespace[default_name] = defaults[param]
+                param_specs.append(f"{param}={default_name}")
+            else:
+                param_specs.append(param)
+        param_list = ", ".join(param_specs)
         args_map = ", ".join(f"{param}={param}" for param in params)
         src = f"def _impl({param_list}):\n    return _body({args_map})\n"
-        namespace: dict[str, Any] = {"_body": body}
         exec(src, namespace, namespace)
         fn = namespace["_impl"]
         fn.__name__ = name

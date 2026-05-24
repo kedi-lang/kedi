@@ -8,7 +8,7 @@ from typing import Any, Callable
 from ...core import KediRuntime
 from ..ast import ProcDefStmt, ProcedureDef
 from ..procedure_introspection import attach_procedure_metadata
-from .environment import ScopedDict
+from .environment import ScopedDict, build_python_env
 from .statement_compiler import StatementExecutor
 from .type_system import KediType
 
@@ -45,9 +45,22 @@ class ProcedureCompiler:
             # Enforce return type
             return self._enforce_return_type(proc, last_return, closure_env)
 
+        defaults = self._evaluate_param_defaults(proc, parent_env)
+
         # Create dynamic function with proper signature
-        fn = self._create_dynamic_function(proc.name, proc.params, _body)
-        return attach_procedure_metadata(fn, proc)
+        fn = self._create_dynamic_function(proc.name, proc.params, _body, defaults)
+        return attach_procedure_metadata(fn, proc, defaults)
+
+    def _evaluate_param_defaults(
+        self, proc: ProcedureDef, parent_env: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        if not proc.param_defaults:
+            return {}
+        env = build_python_env(self.rt, parent_env or {})
+        return {
+            name: self.rt.executor.evaluate_type_expression(self.rt, code, env)
+            for name, code in proc.param_defaults.items()
+        }
 
     def _prepare_kwargs(
         self,
@@ -86,8 +99,6 @@ class ProcedureCompiler:
                 param_exprs.get(param_name),
                 param_strs.get(param_name),
             )
-            if kedi_type.is_none():
-                kedi_type = KediType("str")
 
             if param_name not in kwargs:
                 raise TypeError(f"Missing parameter: {param_name}")
@@ -168,7 +179,11 @@ class ProcedureCompiler:
                 procs[name] = old_fn
 
     def _create_dynamic_function(
-        self, name: str, params: list[str], body: Callable
+        self,
+        name: str,
+        params: list[str],
+        body: Callable,
+        defaults: dict[str, Any] | None = None,
     ) -> Callable:
         """Create a function with specific parameter names."""
-        return self.rt.executor.create_dynamic_function(name, params, body)
+        return self.rt.executor.create_dynamic_function(name, params, body, defaults)

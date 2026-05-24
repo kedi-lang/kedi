@@ -157,6 +157,7 @@ def _make_proc_wrapper(
         filename,
     )
     namespace = build_type_env(rt, local_env)
+    namespace.update(metadata.default_namespace())
     namespace["__kedi_call__"] = lambda *args: rt._invoke_procedure(
         rt._get_proc(proc_name), args
     )

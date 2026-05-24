@@ -613,6 +613,8 @@ def compute_hover(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
+    if _position_in_header_inline_python(source, pos):
+        return None
     sym = _resolve_symbol_at(prog, pos)
     if sym is None:
         # Fall back to "generic statement" hover so the cursor inside
@@ -773,7 +775,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _type_signature_markdown(node)
     if isinstance(node, TypeField):
         ann = node.type_annotation or "str"
-        return f"**Type field** `{node.name}: {ann}` — member of a Kedi type."
+        default = f" = `{node.default_expr}`" if node.default_expr is not None else ""
+        return f"**Type field** `{node.name}: {ann}{default}` — member of a Kedi type."
     if isinstance(node, TemplateLine):
         return (
             "**Template line** — text the LLM sees as a prompt segment. "
@@ -838,8 +841,7 @@ def _describe_ast_node(node) -> Optional[str]:
 
 
 def _proc_signature_markdown(proc: ProcedureDef) -> str:
-    annos = proc.param_type_annotations or {}
-    params = ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params)
+    params = ", ".join(_format_proc_param(proc, p) for p in proc.params)
     sig = f"`@{proc.name}({params})`"
     if proc.return_type_annotation:
         sig += f" → `{proc.return_type_annotation}`"
@@ -856,8 +858,24 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
 
 
 def _type_signature_markdown(td: TypeDef) -> str:
-    fields = ", ".join(f"{f.name}: {f.type_annotation or 'str'}" for f in td.fields)
+    fields = ", ".join(_format_type_field(f) for f in td.fields)
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
+
+
+def _format_proc_param(proc: ProcedureDef, name: str) -> str:
+    ann = (proc.param_type_annotations or {}).get(name)
+    piece = f"{name}: {ann}" if ann else name
+    default = (proc.param_defaults or {}).get(name)
+    if default is not None:
+        piece += f" = `{default}`"
+    return piece
+
+
+def _format_type_field(field: TypeField) -> str:
+    piece = f"{field.name}: {field.type_annotation or 'str'}"
+    if field.default_expr is not None:
+        piece += f" = `{field.default_expr}`"
+    return piece
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
@@ -1219,14 +1237,13 @@ def compute_signature_help(
         return None
 
     # Build signature label and parameter ranges.
-    annos = target.param_type_annotations or {}
     params_label_parts: List[str] = []
     param_infos: List[lsp.ParameterInformation] = []
     cursor_byte_offset = 0  # within the label string
     label_prefix = f"@{target.name}("
     cursor_byte_offset = len(label_prefix)
     for i, pname in enumerate(target.params):
-        piece = f"{pname}: {annos[pname]}" if annos.get(pname) else pname
+        piece = _format_proc_param(target, pname)
         params_label_parts.append(piece)
         start = cursor_byte_offset
         end = cursor_byte_offset + len(piece)
@@ -1937,17 +1954,28 @@ def compute_python_ranges(source: str) -> List[dict]:
     document that mirrors the Kedi file's coordinate space so requests
     can be forwarded to a Python language server without translation.
     """
+    return _collect_python_ranges(source, include_header_inline=False)
+
+
+def compute_header_python_ranges(source: str) -> List[dict]:
+    return _collect_python_ranges(source, include_regular_inline=False)
+
+
+def _collect_python_ranges(
+    source: str,
+    *,
+    include_header_inline: bool = True,
+    include_regular_inline: bool = True,
+) -> List[dict]:
     tree: Tree = _ts_parse(
         source.encode("utf-8") if isinstance(source, str) else source
     )
     src_bytes = source.encode("utf-8") if isinstance(source, str) else source
     out: List[dict] = []
 
-    def visit(node: Node) -> None:
+    def visit(node: Node, parents: tuple[Node, ...] = ()) -> None:
         if node.type == "python_code":
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
-            # Dedent matching the AST walker — keeps highlighting
-            # positions aligned for Pylance.
             from ..lang.parser.escapes import dedent_block
 
             lines = text.split("\n")
@@ -1957,39 +1985,79 @@ def compute_python_ranges(source: str) -> List[dict]:
             out.append(
                 {
                     "kind": "fenced",
-                    "range": {
-                        "start": {
-                            "line": node.start_point[0],
-                            "character": node.start_point[1],
-                        },
-                        "end": {
-                            "line": node.end_point[0],
-                            "character": node.end_point[1],
-                        },
-                    },
+                    "range": _node_range(node),
                     "text": dedented,
                 }
             )
         elif node.type == "python_inline_body":
+            header_owner = _header_inline_owner(parents)
+            if header_owner is not None and not include_header_inline:
+                return
+            if header_owner is None and not include_regular_inline:
+                return
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
-            out.append(
-                {
-                    "kind": "inline",
-                    "range": {
-                        "start": {
-                            "line": node.start_point[0],
-                            "character": node.start_point[1],
-                        },
-                        "end": {
-                            "line": node.end_point[0],
-                            "character": node.end_point[1],
-                        },
-                    },
-                    "text": text,
-                }
-            )
+            item = {
+                "kind": "inline",
+                "range": _node_range(node),
+                "text": text,
+            }
+            if header_owner is not None:
+                item.update(header_owner)
+            out.append(item)
         for c in node.children:
-            visit(c)
+            visit(c, parents + (node,))
 
     visit(tree.root_node)
     return out
+
+
+def _position_in_header_inline_python(source: str, pos: lsp.Position) -> bool:
+    for region in compute_header_python_ranges(source):
+        if _position_in_range(pos, region["range"]):
+            return True
+    return False
+
+
+def _position_in_range(pos: lsp.Position, range_: dict) -> bool:
+    start = range_["start"]
+    end = range_["end"]
+    if pos.line < start["line"] or pos.line > end["line"]:
+        return False
+    if pos.line == start["line"] and pos.character < start["character"]:
+        return False
+    if pos.line == end["line"] and pos.character >= end["character"]:
+        return False
+    return True
+
+
+def _node_range(node: Node) -> dict:
+    return {
+        "start": {"line": node.start_point[0], "character": node.start_point[1]},
+        "end": {"line": node.end_point[0], "character": node.end_point[1]},
+    }
+
+
+def _header_inline_owner(parents: tuple[Node, ...]) -> Optional[dict]:
+    owner = next(
+        (
+            parent
+            for parent in reversed(parents)
+            if parent.type in {"param", "type_field"}
+        ),
+        None,
+    )
+    if owner is None:
+        return None
+    container = next(
+        (
+            parent
+            for parent in reversed(parents)
+            if parent.type in {"procedure_def", "type_def"}
+        ),
+        None,
+    )
+    return {
+        "ownerKind": owner.type,
+        "containerKind": container.type if container is not None else None,
+        "containerLine": container.start_point[0] if container is not None else None,
+    }

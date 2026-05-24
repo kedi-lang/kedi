@@ -41,7 +41,10 @@ def kedi_typedef_to_python_class(typedef: TypeDef) -> str:
                 if field.type_annotation
                 else "str"
             )
-            lines.append(f"    {field.name}: {type_hint}")
+            default = (
+                f" = {field.default_expr}" if field.default_expr is not None else ""
+            )
+            lines.append(f"    {field.name}: {type_hint}{default}")
 
     return "\n".join(lines)
 
@@ -62,11 +65,15 @@ def kedi_procedure_to_python_signature(proc: ProcedureDef) -> str:
         if proc.param_type_annotations and param_name in proc.param_type_annotations:
             type_hint = proc.param_type_annotations[param_name]
             if type_hint:
-                param_list.append(f"{param_name}: {kedi_type_to_python(type_hint)}")
+                piece = f"{param_name}: {kedi_type_to_python(type_hint)}"
             else:
-                param_list.append(f"{param_name}: str")
+                piece = f"{param_name}: str"
         else:
-            param_list.append(f"{param_name}: str")
+            piece = f"{param_name}: str"
+        default = (proc.param_defaults or {}).get(param_name)
+        if default is not None:
+            piece += f" = {default}"
+        param_list.append(piece)
 
     return_type = (
         kedi_type_to_python(proc.return_type_annotation)

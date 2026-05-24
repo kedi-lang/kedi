@@ -413,6 +413,9 @@ class _Walker:
         params: List[str] = []
         param_type_annos: dict[str, Optional[str]] = {}
         param_type_exprs: dict[str, Optional[TypeExpr]] = {}
+        param_defaults: dict[str, str] = {}
+        seen_params: set[str] = set()
+        seen_default = False
         any_typed = False
         param_list = _field(node, "params")
         if param_list is not None:
@@ -422,6 +425,13 @@ class _Walker:
                 pname_node = _field(param, "name")
                 assert pname_node is not None
                 pname = _identifier_name(self.source, pname_node)
+                if pname in seen_params:
+                    self._error(
+                        param,
+                        f"duplicate parameter {pname!r} in procedure {name!r}",
+                        code="K-PARAM-DUP",
+                    )
+                seen_params.add(pname)
                 params.append(pname)
                 ptype_node = _field(param, "type")
                 if ptype_node is not None:
@@ -432,6 +442,16 @@ class _Walker:
                 else:
                     param_type_annos[pname] = None
                     param_type_exprs[pname] = None
+                default_node = _field(param, "default")
+                if default_node is not None:
+                    seen_default = True
+                    param_defaults[pname] = self._walk_inline_python_expr(default_node)
+                elif seen_default:
+                    self._error(
+                        param,
+                        "required parameter cannot follow a defaulted parameter",
+                        code="K-PARAM-ORDER",
+                    )
 
         return_type_node = _field(node, "return_type")
         return_type_anno: Optional[str] = None
@@ -448,6 +468,7 @@ class _Walker:
             return_type_expr=return_type_expr,
             param_type_annotations=param_type_annos if any_typed or params else None,
             param_type_exprs=param_type_exprs if any_typed or params else None,
+            param_defaults=param_defaults or None,
             loc=self._span(node),
         )
 
@@ -721,6 +742,7 @@ class _Walker:
         name = _identifier_name(self.source, name_node)
         fields: List[TypeField] = []
         seen_names: set[str] = set()
+        seen_default = False
         field_list = _field(node, "fields")
         if field_list is not None:
             for f in _named_children(field_list):
@@ -745,11 +767,29 @@ class _Walker:
                 ftype_expr = (
                     self._walk_type_expr(ftype_node) if ftype_node is not None else None
                 )
+                default_node = _field(f, "default")
+                default_expr = None
+                if default_node is not None:
+                    seen_default = True
+                    if ftype_node is None:
+                        self._error(
+                            f,
+                            "defaulted type field requires a type annotation",
+                            code="K-TYPE-DEFAULT-ANNOTATION",
+                        )
+                    default_expr = self._walk_inline_python_expr(default_node)
+                elif seen_default:
+                    self._error(
+                        f,
+                        "required field cannot follow a defaulted field",
+                        code="K-TYPE-FIELD-ORDER",
+                    )
                 fields.append(
                     TypeField(
                         name=fname,
                         type_annotation=ftype_anno,
                         type_expr=ftype_expr,
+                        default_expr=default_expr,
                         loc=self._span(f),
                     )
                 )

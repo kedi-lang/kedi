@@ -39,13 +39,18 @@ from ..lang.ast import (
     TypeApply,
     TypeDef,
     TypeExpr,
+    TypeField,
     TypePython,
     TypeRef,
     TypeUnion,
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
-from .features import _known_lsp_type_origin, compute_python_ranges
+from .features import (
+    _known_lsp_type_origin,
+    compute_header_python_ranges,
+    compute_python_ranges,
+)
 
 Position = dict[str, int]
 Range = dict[str, Position]
@@ -99,6 +104,30 @@ class VirtualBuilder:
                 "name": name,
                 "sourceRange": source_range,
                 "virtualRange": virtual_range,
+            }
+        )
+
+    def add_synthetic_inline_region(
+        self,
+        *,
+        source_range: Range,
+        virtual_range: Range,
+        text: str,
+    ) -> None:
+        self.mappings.append(
+            {
+                "sourceRange": source_range,
+                "virtualRange": virtual_range,
+                "kind": "inline",
+            }
+        )
+        self.regions.append(
+            {
+                "kind": "inline",
+                "range": source_range,
+                "sourceRange": source_range,
+                "virtualRange": virtual_range,
+                "text": text,
             }
         )
 
@@ -211,8 +240,7 @@ class RegionCursor:
             if region.used or region.kind != kind:
                 continue
             if after is not None:
-                start = region.range["start"]
-                if start["line"] + 1 < after.start_line:
+                if not _range_within_span(region.range, after):
                     continue
             region.used = True
             return region
@@ -233,6 +261,7 @@ def compute_python_virtual_document(
         return _fallback_virtual_document(source, ranges)
 
     cursor = RegionCursor(compute_python_ranges(source))
+    header_defaults = _index_header_default_ranges(compute_header_python_ranges(source))
     builder = VirtualBuilder(source, source_path)
     focused_proc = _find_focused_procedure(program.procedures, focus_line)
     focus_key = (
@@ -246,7 +275,7 @@ def compute_python_virtual_document(
     builder.add("")
 
     for typedef in program.type_defs:
-        _emit_type_stub(builder, typedef)
+        _emit_type_stub(builder, typedef, header_defaults)
     if program.type_defs:
         builder.add("")
 
@@ -267,7 +296,14 @@ def compute_python_virtual_document(
         builder.add("def __kedi_toplevel__() -> Any:")
         scope: dict[str, ScopeName] = {}
         before_body = builder.line
-        _emit_statements(builder, cursor, program.toplevel_body, scope, "    ")
+        _emit_statements(
+            builder,
+            cursor,
+            program.toplevel_body,
+            scope,
+            "    ",
+            header_defaults,
+        )
         if program.toplevel_return is not None:
             _emit_return(builder, cursor, program.toplevel_return, scope, "    ")
         if builder.line == before_body:
@@ -277,10 +313,13 @@ def compute_python_virtual_document(
     for proc in _all_procedures(program.procedures):
         if focused_proc is not None and proc is not focused_proc:
             continue
-        _emit_procedure_body(builder, cursor, proc)
+        _emit_procedure_body(builder, cursor, proc, header_defaults)
 
     if focused_proc is None and isinstance(program, ProgramWithValidation):
-        _emit_validation(builder, cursor, program)
+        procedure_map = {
+            proc.name: proc for proc in _all_procedures(program.procedures)
+        }
+        _emit_validation(builder, cursor, program, procedure_map)
 
     return {
         "text": builder.finish(),
@@ -351,7 +390,11 @@ def _all_procedures(procedures: Iterable[ProcedureDef]) -> list[ProcedureDef]:
     return out
 
 
-def _emit_type_stub(builder: VirtualBuilder, typedef: TypeDef) -> None:
+def _emit_type_stub(
+    builder: VirtualBuilder,
+    typedef: TypeDef,
+    header_defaults: dict[str, dict[int, list[Range]]],
+) -> None:
     line = builder.add(f"class {typedef.name}:")
     builder.add_symbol(
         kind="type",
@@ -362,20 +405,28 @@ def _emit_type_stub(builder: VirtualBuilder, typedef: TypeDef) -> None:
     if not typedef.fields:
         builder.add("    pass")
     else:
+        default_ranges = list(
+            header_defaults.get("type_field", {}).get(_container_line(typedef), [])
+        )
         for field in typedef.fields:
-            builder.add(
-                f"    {field.name}: {_type_to_python(field.type_expr, field.type_annotation)}"
-            )
+            field_line_text = f"    {_type_field_to_python(field)}"
+            field_line = builder.add(field_line_text)
+            if field.default_expr is not None and default_ranges:
+                source_range = default_ranges.pop(0)
+                _add_default_expr_region(
+                    builder,
+                    source_range=source_range,
+                    line=field_line,
+                    line_text=field_line_text,
+                    expr=field.default_expr,
+                )
         builder.add(f"    def __init__({_type_init_params(typedef)}) -> None: ...")
 
 
 def _emit_proc_stub(
     builder: VirtualBuilder, proc: ProcedureDef, prefix: str = ""
 ) -> None:
-    params = ", ".join(
-        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
-        for name in proc.params
-    )
+    params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
     ret = _type_to_python(
         proc.return_type_expr, proc.return_type_annotation, default="str"
     )
@@ -389,17 +440,24 @@ def _emit_proc_stub(
 
 
 def _emit_procedure_body(
-    builder: VirtualBuilder, cursor: RegionCursor, proc: ProcedureDef
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    proc: ProcedureDef,
+    header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
-    params = ", ".join(
-        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
-        for name in proc.params
-    )
+    params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
     ret = _type_to_python(
         proc.return_type_expr, proc.return_type_annotation, default="str"
     )
     signature = f"def __kedi_scope_{proc.name}({params}) -> {ret}:"
     signature_line = builder.add(signature)
+    _add_proc_default_regions(
+        builder,
+        proc,
+        signature_line=signature_line,
+        signature=signature,
+        header_defaults=header_defaults,
+    )
     scope = {
         name: ScopeName(
             typ=_type_to_python(
@@ -413,7 +471,7 @@ def _emit_procedure_body(
     }
     _add_scope_param_symbols(builder, scope, signature_line, signature)
     before_body = builder.line
-    _emit_statements(builder, cursor, proc.body, scope, "    ")
+    _emit_statements(builder, cursor, proc.body, scope, "    ", header_defaults)
     if builder.line == before_body:
         builder.add("    pass")
     builder.add("")
@@ -424,16 +482,21 @@ def _emit_nested_procedure(
     cursor: RegionCursor,
     proc: ProcedureDef,
     indent: str,
+    header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
-    params = ", ".join(
-        f"{name}: {_type_to_python((proc.param_type_exprs or {}).get(name), (proc.param_type_annotations or {}).get(name), default='Any')}"
-        for name in proc.params
-    )
+    params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
     ret = _type_to_python(
         proc.return_type_expr, proc.return_type_annotation, default="str"
     )
     signature = f"{indent}def {proc.name}({params}) -> {ret}:"
     signature_line = builder.add(signature)
+    _add_proc_default_regions(
+        builder,
+        proc,
+        signature_line=signature_line,
+        signature=signature,
+        header_defaults=header_defaults,
+    )
     scope = {
         name: ScopeName(
             typ=_type_to_python(
@@ -453,7 +516,14 @@ def _emit_nested_procedure(
     )
     _add_scope_param_symbols(builder, scope, signature_line, signature)
     before_body = builder.line
-    _emit_statements(builder, cursor, proc.body, scope, indent + "    ")
+    _emit_statements(
+        builder,
+        cursor,
+        proc.body,
+        scope,
+        indent + "    ",
+        header_defaults,
+    )
     if builder.line == before_body:
         builder.add(f"{indent}    pass")
 
@@ -464,10 +534,11 @@ def _emit_statements(
     statements: Iterable[Stmt],
     scope: dict[str, ScopeName],
     indent: str,
+    header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
     for stmt in statements:
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
-            _emit_nested_procedure(builder, cursor, stmt.proc, indent)
+            _emit_nested_procedure(builder, cursor, stmt.proc, indent, header_defaults)
             continue
         if isinstance(stmt, AssignBlockStmt):
             _emit_assign_block(builder, cursor, stmt, scope, indent)
@@ -606,7 +677,10 @@ def _emit_segments(
 
 
 def _emit_validation(
-    builder: VirtualBuilder, cursor: RegionCursor, program: ProgramWithValidation
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    program: ProgramWithValidation,
+    procedure_map: dict[str, ProcedureDef],
 ) -> None:
     for suite in program.tests:
         for case in suite.cases:
@@ -624,7 +698,13 @@ def _emit_validation(
                 f"__kedi_data_{suite.procedure_name}_{dataset.name}",
             )
         for metric in suite.metrics:
-            _emit_metric(builder, cursor, suite, metric)
+            _emit_metric(
+                builder,
+                cursor,
+                suite,
+                metric,
+                procedure_map.get(suite.procedure_name),
+            )
 
 
 def _emit_validation_code(
@@ -647,11 +727,17 @@ def _emit_metric(
     cursor: RegionCursor,
     suite: EvalSuite,
     metric: EvalMetric,
+    procedure: Optional[ProcedureDef],
 ) -> None:
     builder.add(f"def __kedi_metric_{suite.procedure_name}_{metric.name}() -> Any:")
     if metric.dataset_name:
         builder.add(f"    {metric.dataset_name}: Any = ...")
     builder.add("    expected: Any = ...")
+    if procedure is not None:
+        for name in procedure.params:
+            if name == metric.dataset_name:
+                continue
+            builder.add(f"    {name}: Any = ...")
     region = cursor.next("fenced" if metric.is_block else "inline", metric.loc)
     if region is not None:
         builder.add_mapped_region(region, "    ")
@@ -702,6 +788,20 @@ def _line_range(line: int, start: int, text: str) -> Range:
         "start": {"line": line, "character": start},
         "end": {"line": line, "character": start + len(text)},
     }
+
+
+def _range_within_span(range_: Range, span: Span) -> bool:
+    start = range_["start"]
+    end = range_["end"]
+    start_line = start["line"] + 1
+    end_line = end["line"] + 1
+    if start_line < span.start_line or end_line > span.end_line:
+        return False
+    if start_line == span.start_line and start["character"] + 1 < span.start_col:
+        return False
+    if end_line == span.end_line and end["character"] + 1 > span.end_col:
+        return False
+    return True
 
 
 def _proc_name_range(proc: ProcedureDef) -> Optional[Range]:
@@ -764,6 +864,77 @@ def _param_name_range(
             return _line_range(line, start, name)
         offset += len(chunk) + 1
     return None
+
+
+def _index_header_default_ranges(
+    ranges: list[dict[str, Any]],
+) -> dict[str, dict[int, list[Range]]]:
+    indexed: dict[str, dict[int, list[Range]]] = {}
+    for item in ranges:
+        owner_kind = item.get("ownerKind")
+        container_line = item.get("containerLine")
+        if owner_kind is None or container_line is None:
+            continue
+        indexed.setdefault(owner_kind, {}).setdefault(container_line, []).append(
+            item["range"]
+        )
+    return indexed
+
+
+def _container_line(node: ProcedureDef | TypeDef) -> int:
+    if node.loc is None:
+        return -1
+    return node.loc.start_line - 1
+
+
+def _add_proc_default_regions(
+    builder: VirtualBuilder,
+    proc: ProcedureDef,
+    *,
+    signature_line: int,
+    signature: str,
+    header_defaults: dict[str, dict[int, list[Range]]],
+) -> None:
+    default_ranges = list(
+        header_defaults.get("param", {}).get(_container_line(proc), [])
+    )
+    if not default_ranges:
+        return
+    search_from = signature.find("(") + 1
+    for name in proc.params:
+        piece = _proc_param_to_python(proc, name)
+        start = signature.find(piece, search_from)
+        if start == -1:
+            continue
+        default_expr = (proc.param_defaults or {}).get(name)
+        if default_expr is not None and default_ranges:
+            source_range = default_ranges.pop(0)
+            expr_start = signature.find(default_expr, start, start + len(piece))
+            if expr_start != -1:
+                builder.add_synthetic_inline_region(
+                    source_range=source_range,
+                    virtual_range=_line_range(signature_line, expr_start, default_expr),
+                    text=default_expr,
+                )
+        search_from = start + len(piece)
+
+
+def _add_default_expr_region(
+    builder: VirtualBuilder,
+    *,
+    source_range: Range,
+    line: int,
+    line_text: str,
+    expr: str,
+) -> None:
+    start = line_text.find(expr)
+    if start == -1:
+        return
+    builder.add_synthetic_inline_region(
+        source_range=source_range,
+        virtual_range=_line_range(line, start, expr),
+        text=expr,
+    )
 
 
 def _indent_width(line: str) -> int:
@@ -866,14 +1037,32 @@ def _type_to_python(
     return type_expr_to_python(expr, annotation, default=default)
 
 
+def _proc_param_to_python(proc: ProcedureDef, name: str) -> str:
+    typ = _type_to_python(
+        (proc.param_type_exprs or {}).get(name),
+        (proc.param_type_annotations or {}).get(name),
+        default="Any",
+    )
+    piece = f"{name}: {typ}"
+    default = (proc.param_defaults or {}).get(name)
+    if default is not None:
+        piece += f" = {default}"
+    return piece
+
+
+def _type_field_to_python(field: TypeField) -> str:
+    typ = _type_to_python(field.type_expr, field.type_annotation)
+    piece = f"{field.name}: {typ}"
+    if field.default_expr is not None:
+        piece += f" = {field.default_expr}"
+    return piece
+
+
 def _type_init_params(typedef: TypeDef) -> str:
     if not typedef.fields:
         return "self"
-    fields = ", ".join(
-        f"{field.name}: {_type_to_python(field.type_expr, field.type_annotation)}"
-        for field in typedef.fields
-    )
-    return f"self, *, {fields}"
+    fields = ", ".join(_type_field_to_python(field) for field in typedef.fields)
+    return f"self, {fields}"
 
 
 def main() -> None:

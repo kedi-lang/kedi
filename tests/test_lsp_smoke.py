@@ -62,6 +62,42 @@ def test_hover_on_procedure_header_shows_signature():
     assert "str" in body
 
 
+def test_hover_on_defaulted_procedure_header_shows_defaults():
+    src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "text: str" in body
+    assert 'style = `"brief"`' in body
+
+
+def test_python_ranges_exclude_header_inline_defaults():
+    src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
+    ranges = features.compute_python_ranges(src)
+    assert ranges == [
+        {
+            "kind": "inline",
+            "range": {
+                "start": {"line": 1, "character": 5},
+                "end": {"line": 1, "character": 22},
+            },
+            "text": 'f"Hello, {name}!"',
+        }
+    ]
+
+
+def test_hover_on_header_default_expression_defers_to_python():
+    src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=24),
+    )
+    assert hover is None
+
+
 def test_hover_on_nested_procedure_header_shows_signature():
     src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
     hover = features.compute_hover(
@@ -196,6 +232,18 @@ def test_hover_on_type_definition_builtin_and_typing_types_is_not_undefined():
         assert name in body
         assert origin in body
         assert "not defined" not in body
+
+
+def test_hover_on_type_definition_shows_field_defaults():
+    src = "~Person(name: str, salary: int = `0`)\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=1),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "salary: int = `0`" in body
 
 
 def test_custom_type_definition_still_jumps_to_kedi_type():
@@ -699,9 +747,50 @@ def test_python_virtual_document_models_type_stub_init_signature():
     assert "    age: int" in virtual["text"]
     assert "    tags: list[str]" in virtual["text"]
     assert (
-        "    def __init__(self, *, name: str, age: int, tags: list[str]) -> None: ..."
+        "    def __init__(self, name: str, age: int, tags: list[str]) -> None: ..."
         in virtual["text"]
     )
+
+
+def test_python_virtual_document_models_defaulted_signatures():
+    src = (
+        "~Person(name: str, salary: int = `0`)\n"
+        "@make(name: str, salary: int = `0`) -> Person:\n"
+        "  = `Person(name, salary)`\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "    salary: int = 0" in virtual["text"]
+    assert (
+        "    def __init__(self, name: str, salary: int = 0) -> None: ..."
+        in virtual["text"]
+    )
+    assert "def make(name: str, salary: int = 0) -> Person: ..." in virtual["text"]
+    assert (
+        "def __kedi_scope_make(name: str, salary: int = 0) -> Person:"
+        in virtual["text"]
+    )
+    assert any(region["text"] == "0" for region in virtual["ranges"])
+
+
+def test_python_virtual_document_maps_header_default_expression():
+    src = (
+        "@get_name() -> str:\n"
+        "  = Mert\n"
+        "@say_hi(name: str = `get_name()`) -> str:\n"
+        '  = `f"Hello, {name}!"`\n'
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    mapped = [
+        region
+        for region in virtual["ranges"]
+        if region["text"] == "get_name()"
+        and region["range"]["start"] == {"line": 2, "character": 21}
+        and region["range"]["end"] == {"line": 2, "character": 31}
+    ]
+    assert len(mapped) == 1
+    assert mapped[0]["virtualRange"]["start"]["line"] >= 0
 
 
 def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types():
@@ -742,6 +831,30 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
         and s["sourceRange"]["start"] == {"line": 0, "character": 1}
         for s in virtual["symbols"]
     )
+    assert "    city: Any = ..." in virtual["text"]
+    assert 'result = get_country("France")' in virtual["text"]
+
+
+def test_python_virtual_document_models_metric_scope_params_as_any():
+    src = (
+        "@solve_knapsack(problems, capacity):\n"
+        "  = ok\n"
+        "\n"
+        "@eval: solve_knapsack:\n"
+        "  > metric: accuracy(problems):\n"
+        "    = ```\n"
+        "    items_str, capacity = problems\n"
+        "    pred = solve_knapsack(items_str, capacity)\n"
+        "    return pred\n"
+        "    ```\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def __kedi_metric_solve_knapsack_accuracy() -> Any:" in virtual["text"]
+    assert "    problems: Any = ..." in virtual["text"]
+    assert "    capacity: Any = ..." in virtual["text"]
+    assert "    items_str, capacity = problems" in virtual["text"]
+    assert "    pred = solve_knapsack(items_str, capacity)" in virtual["text"]
 
 
 # ---------------------------------------------------------------------

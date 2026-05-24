@@ -38,10 +38,14 @@ class RecordingExecutor:
         return self._delegate.execute_prelude(rt, code)
 
     def create_dynamic_function(
-        self, name: str, params: list[str], body: Callable[..., Any]
+        self,
+        name: str,
+        params: list[str],
+        body: Callable[..., Any],
+        defaults: dict[str, Any] | None = None,
     ) -> Callable[..., Any]:
         self.calls.append("create_dynamic_function")
-        return self._delegate.create_dynamic_function(name, params, body)
+        return self._delegate.create_dynamic_function(name, params, body, defaults)
 
     def evaluate_type_expression(self, rt, code: str, env: dict[str, Any]) -> Any:
         self.calls.append("evaluate_type_expression")
