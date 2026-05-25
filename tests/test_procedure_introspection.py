@@ -67,3 +67,61 @@ def test_nested_procedure_python_interop_uses_nested_stub() -> None:
     assert '"""This stub is generated for Python introspection."""' in out
     assert "return __kedi_call__(value)" in out
     assert "wrapper(*args: Any)" not in out
+
+
+def test_type_init_exposes_stub_signature_and_source() -> None:
+    src = (
+        "~Person(name: str, salary: int = `0`)\n"
+        "[person: Person] = `Person('Ada')`\n"
+        "= ok\n"
+    )
+    rt = _runtime(src)
+
+    signature = rt.executor.evaluate_inline(
+        rt, "str(inspect.signature(Person.__init__))", {"inspect": inspect}
+    )
+    source = rt.executor.evaluate_inline(
+        rt, "inspect.getsource(Person.__init__)", {"inspect": inspect}
+    )
+    salary = rt.executor.evaluate_inline(rt, "Person('Ada').salary", {})
+
+    assert signature == "(self, name: str, salary: int = 0) -> None"
+    assert source == (
+        "def __init__(self, name: str, salary: int = 0) -> None:\n"
+        '    """This stub is generated for Python introspection."""\n'
+        "    __kedi_model_init__(self, name=name, salary=salary)\n"
+    )
+    assert salary == 0
+    assert "_init(self, *args" not in source
+
+
+def test_type_class_and_new_expose_stub_source() -> None:
+    src = "~Person(user: str, salary: float = `100000`)\n= ok\n"
+    rt = _runtime(src)
+
+    class_source = rt.executor.evaluate_inline(
+        rt, "inspect.getsource(Person)", {"inspect": inspect}
+    )
+    new_source = rt.executor.evaluate_inline(
+        rt, "inspect.getsource(Person.__new__)", {"inspect": inspect}
+    )
+
+    assert class_source == (
+        "class Person:\n"
+        '    """This stub is generated for Python introspection."""\n'
+        "    user: str\n"
+        "    salary: float = 100000\n"
+        "\n"
+        '    def __new__(cls, user: str, salary: float = 100000) -> "Person":\n'
+        '        """This stub is generated for Python introspection."""\n'
+        "        return __kedi_model_new__(cls, user=user, salary=salary)\n"
+        "\n"
+        "    def __init__(self, user: str, salary: float = 100000) -> None:\n"
+        '        """This stub is generated for Python introspection."""\n'
+        "        __kedi_model_init__(self, user=user, salary=salary)\n"
+    )
+    assert new_source == (
+        'def __new__(cls, user: str, salary: float = 100000) -> "Person":\n'
+        '    """This stub is generated for Python introspection."""\n'
+        "    return __kedi_model_new__(cls, user=user, salary=salary)\n"
+    )

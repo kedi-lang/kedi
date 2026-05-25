@@ -9,6 +9,7 @@ Kedi regions.
 
 from __future__ import annotations
 
+import ast as py_ast
 import json
 import re
 import sys
@@ -285,9 +286,30 @@ def compute_python_virtual_document(
         builder.add("")
 
     if program.prelude is not None:
-        builder.add("# Kedi prelude")
-        builder.add("def __kedi_prelude__() -> None:")
-        builder.add("    pass")
+        prelude_region = cursor.next("fenced")
+        if _should_emit_full_module_python(prelude_region, focus_line):
+            if prelude_region is not None:
+                builder.add_mapped_region(prelude_region)
+            else:
+                for line in program.prelude.splitlines():
+                    builder.add(line)
+        else:
+            _emit_python_module_stub(builder, program.prelude)
+        builder.add("")
+
+    leading_toplevel_python, remaining_toplevel = _split_leading_toplevel_python(
+        program.toplevel_body
+    )
+    for stmt in leading_toplevel_python:
+        region = cursor.next("fenced", stmt.loc)
+        if _should_emit_full_module_python(region, focus_line):
+            if region is not None:
+                builder.add_mapped_region(region)
+            else:
+                for line in stmt.code.splitlines():
+                    builder.add(line)
+        else:
+            _emit_python_module_stub(builder, stmt.code)
         builder.add("")
 
     if focused_proc is None and (
@@ -299,7 +321,7 @@ def compute_python_virtual_document(
         _emit_statements(
             builder,
             cursor,
-            program.toplevel_body,
+            remaining_toplevel,
             scope,
             "    ",
             header_defaults,
@@ -367,6 +389,179 @@ def _find_deepest_procedure_at_line(
         nested = _find_deepest_procedure_at_line(_nested_procedures(proc), source_line)
         return nested or proc
     return None
+
+
+def _split_leading_toplevel_python(
+    statements: list[Stmt],
+) -> tuple[list[PythonBlock], list[Stmt]]:
+    leading: list[PythonBlock] = []
+    index = 0
+    while index < len(statements) and isinstance(statements[index], PythonBlock):
+        leading.append(statements[index])
+        index += 1
+    return leading, statements[index:]
+
+
+def _should_emit_full_module_python(
+    region: Optional[PythonRegion], focus_line: Optional[int]
+) -> bool:
+    if focus_line is None:
+        return True
+    if region is None:
+        return False
+    return region.range["start"]["line"] <= focus_line < region.range["end"]["line"]
+
+
+def _emit_python_module_stub(builder: VirtualBuilder, code: str) -> None:
+    try:
+        module = py_ast.parse(code)
+    except SyntaxError:
+        builder.add("# Kedi Python module block omitted from this focused view.")
+        return
+
+    emitted = False
+    for stmt in module.body:
+        emitted = _emit_python_stub_stmt(builder, stmt) or emitted
+    if not emitted:
+        builder.add("# Kedi Python module block omitted from this focused view.")
+
+
+def _emit_python_stub_stmt(builder: VirtualBuilder, stmt: py_ast.stmt) -> bool:
+    if isinstance(stmt, py_ast.Import):
+        emitted = False
+        for alias in stmt.names:
+            name = alias.asname or alias.name.split(".", 1)[0]
+            builder.add(f"{name}: Any = ...")
+            emitted = True
+        return emitted
+    if isinstance(stmt, py_ast.ImportFrom):
+        emitted = False
+        for alias in stmt.names:
+            if alias.name == "*":
+                continue
+            name = alias.asname or alias.name
+            if name in {"Field"}:
+                builder.add(f"def {name}(*args: Any, **kwargs: Any) -> Any: ...")
+            elif name[:1].isupper():
+                builder.add(f"class {name}: ...")
+            else:
+                builder.add(f"{name}: Any = ...")
+            emitted = True
+        return emitted
+    if isinstance(stmt, py_ast.ClassDef):
+        _emit_python_class_stub(builder, stmt)
+        return True
+    if isinstance(stmt, (py_ast.FunctionDef, py_ast.AsyncFunctionDef)):
+        builder.add(_python_function_stub(stmt))
+        return True
+    names = _assigned_python_names(stmt)
+    for name in names:
+        builder.add(f"{name}: Any = ...")
+    return bool(names)
+
+
+def _emit_python_class_stub(builder: VirtualBuilder, stmt: py_ast.ClassDef) -> None:
+    builder.add(f"class {stmt.name}:")
+    fields = _python_class_fields(stmt)
+    methods = [
+        item
+        for item in stmt.body
+        if isinstance(item, (py_ast.FunctionDef, py_ast.AsyncFunctionDef))
+    ]
+    if not fields and not methods:
+        builder.add("    pass")
+        return
+    for name, typ, _has_default in fields:
+        builder.add(f"    {name}: {typ}")
+    if fields:
+        params = ", ".join(
+            _python_class_init_param(name, typ, has_default)
+            for name, typ, has_default in fields
+        )
+        builder.add(f"    def __init__(self, {params}) -> None: ...")
+    for method in methods:
+        builder.add(f"    {_python_function_stub(method)}")
+
+
+def _python_class_fields(stmt: py_ast.ClassDef) -> list[tuple[str, str, bool]]:
+    fields: list[tuple[str, str, bool]] = []
+    for item in stmt.body:
+        if isinstance(item, py_ast.AnnAssign) and isinstance(item.target, py_ast.Name):
+            fields.append(
+                (
+                    item.target.id,
+                    _unparse_or_any(item.annotation),
+                    _python_field_has_default(item.value),
+                )
+            )
+        elif isinstance(item, py_ast.Assign):
+            for target in item.targets:
+                if isinstance(target, py_ast.Name):
+                    fields.append((target.id, "Any", True))
+    return fields
+
+
+def _python_field_has_default(value: Optional[py_ast.expr]) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, py_ast.Call) and _python_call_name(value.func) == "Field":
+        if not value.args:
+            return any(keyword.arg == "default" for keyword in value.keywords)
+        first = value.args[0]
+        return not (isinstance(first, py_ast.Constant) and first.value is Ellipsis)
+    return True
+
+
+def _python_class_init_param(name: str, typ: str, has_default: bool) -> str:
+    piece = f"{name}: {typ}"
+    if has_default:
+        piece += " = ..."
+    return piece
+
+
+def _python_function_stub(stmt: py_ast.FunctionDef | py_ast.AsyncFunctionDef) -> str:
+    prefix = "async def" if isinstance(stmt, py_ast.AsyncFunctionDef) else "def"
+    args = py_ast.unparse(stmt.args)
+    ret = f" -> {_unparse_or_any(stmt.returns)}" if stmt.returns is not None else ""
+    return f"{prefix} {stmt.name}({args}){ret}: ..."
+
+
+def _assigned_python_names(stmt: py_ast.stmt) -> list[str]:
+    names: list[str] = []
+    if isinstance(stmt, py_ast.Assign):
+        for target in stmt.targets:
+            names.extend(_target_python_names(target))
+    elif isinstance(stmt, py_ast.AnnAssign):
+        names.extend(_target_python_names(stmt.target))
+    return names
+
+
+def _target_python_names(target: py_ast.expr) -> list[str]:
+    if isinstance(target, py_ast.Name):
+        return [target.id]
+    if isinstance(target, (py_ast.Tuple, py_ast.List)):
+        names: list[str] = []
+        for item in target.elts:
+            names.extend(_target_python_names(item))
+        return names
+    return []
+
+
+def _python_call_name(expr: py_ast.expr) -> str:
+    if isinstance(expr, py_ast.Name):
+        return expr.id
+    if isinstance(expr, py_ast.Attribute):
+        return expr.attr
+    return ""
+
+
+def _unparse_or_any(expr: Optional[py_ast.AST]) -> str:
+    if expr is None:
+        return "Any"
+    try:
+        return py_ast.unparse(expr)
+    except Exception:
+        return "Any"
 
 
 def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:

@@ -26,6 +26,7 @@ the server publishes as a semantic-tokens legend.
 
 from __future__ import annotations
 
+import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
@@ -637,6 +638,10 @@ def compute_hover(
             text = _type_signature_markdown(target)
         elif (origin := _known_lsp_type_origin(sym.name)) is not None:
             text = _known_type_markdown(sym.name, origin)
+        elif sym.name in _prelude_defined_names(prog.prelude):
+            text = _prelude_type_markdown(sym.name)
+        elif sym.name in _module_scope_python_names(prog):
+            text = _python_module_scope_type_markdown(sym.name)
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
@@ -880,6 +885,50 @@ def _format_type_field(field: TypeField) -> str:
 
 def _known_type_markdown(name: str, origin: str) -> str:
     return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
+
+
+def _prelude_type_markdown(name: str) -> str:
+    return f"`{name}`\n\nKedi type defined in the Python prelude."
+
+
+def _python_module_scope_type_markdown(name: str) -> str:
+    return f"`{name}`\n\nKedi type defined in a top-level Python block."
+
+
+def _prelude_defined_names(code: str | None) -> set[str]:
+    if not code:
+        return set()
+    try:
+        module = _py_ast.parse(code)
+    except SyntaxError:
+        return set()
+
+    names: set[str] = set()
+    for stmt in module.body:
+        if isinstance(
+            stmt, (_py_ast.ClassDef, _py_ast.FunctionDef, _py_ast.AsyncFunctionDef)
+        ):
+            names.add(stmt.name)
+        elif isinstance(stmt, (_py_ast.Import, _py_ast.ImportFrom)):
+            for alias in stmt.names:
+                names.add(alias.asname or alias.name.split(".")[-1])
+        elif isinstance(stmt, (_py_ast.Assign, _py_ast.AnnAssign)):
+            targets = (
+                stmt.targets if isinstance(stmt, _py_ast.Assign) else [stmt.target]
+            )
+            for target in targets:
+                if isinstance(target, _py_ast.Name):
+                    names.add(target.id)
+    return names
+
+
+def _module_scope_python_names(prog: Program | ProgramWithValidation) -> set[str]:
+    names: set[str] = set()
+    for stmt in prog.toplevel_body:
+        if not isinstance(stmt, PythonBlock):
+            break
+        names.update(_prelude_defined_names(stmt.code))
+    return names
 
 
 # =====================================================================

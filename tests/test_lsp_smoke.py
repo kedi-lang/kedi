@@ -291,6 +291,59 @@ def test_hover_on_unparseable_returns_none():
     assert hover is None
 
 
+def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=8, character=19),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Person" in body
+    assert "defined in the Python prelude" in body
+    assert "not defined in this module" not in body
+
+
+def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():
+    src = (
+        "```\n"
+        "import this\n"
+        "```\n\n"
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=12, character=19),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Person" in body
+    assert "defined in a top-level Python block" in body
+    assert "not defined in this module" not in body
+
+
 # ---------------------------------------------------------------------
 # Definition
 # ---------------------------------------------------------------------
@@ -700,6 +753,90 @@ def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():
     ast.parse(virtual["text"])
     assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
     assert "    pass" in virtual["text"]
+
+
+def test_python_virtual_document_includes_prelude_symbols_for_toplevel_scope():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert "person: Person = ..." in virtual["text"]
+    assert "    person" in virtual["text"]
+
+
+def test_focused_virtual_document_stubs_unfocused_module_python():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=9)
+    ast.parse(virtual["text"])
+    assert "from pydantic import BaseModel, Field" not in virtual["text"]
+    assert "class BaseModel: ..." in virtual["text"]
+    assert "def Field(*args: Any, **kwargs: Any) -> Any: ..." in virtual["text"]
+    assert "class Person:" in virtual["text"]
+    assert "def __init__(self, name: str, age: int) -> None: ..." in virtual["text"]
+    assert "person: Person = ..." in virtual["text"]
+
+
+def test_focused_virtual_document_keeps_focused_module_python_mapped():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        "    name: str\n"
+        "```\n\n"
+        "= <`Person(name='Ada')`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
+    ast.parse(virtual["text"])
+    assert "from pydantic import BaseModel" in virtual["text"]
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert any(region["range"]["start"]["line"] == 1 for region in virtual["ranges"])
+
+
+def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
+    src = (
+        "```\n"
+        "import this\n"
+        "```\n\n"
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "import this" in virtual["text"]
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
+    assert "    person: Person = ..." in virtual["text"]
 
 
 def test_python_virtual_document_emits_ellipsis_for_empty_generated_python_blocks():

@@ -32,6 +32,7 @@ from ..ast import (
     TypeRef,
     TypeUnion,
 )
+from ..type_introspection import make_type_init
 from .environment import build_type_env
 
 # ---------------------------------------------------------------------
@@ -300,6 +301,7 @@ def register_type(
     """Register a custom type definition as a Pydantic model."""
     annotations: dict[str, Any] = {}
     field_defs: dict[str, tuple[Any, Any]] = {}
+    default_values: dict[str, Any] = {}
     default_env = build_type_env(rt, local_env or {})
 
     for field in typedef.fields:
@@ -324,15 +326,25 @@ def register_type(
             default_value = rt.executor.evaluate_type_expression(
                 rt, field.default_expr, default_env
             )
+            default_values[field.name] = default_value
             field_defs[field.name] = (
                 resolved,
                 _pydantic_default(default_value),
             )
 
-    field_order = [field.name for field in typedef.fields]
-
     new_model = create_model(typedef.name, __base__=BaseModel, **field_defs)
-    setattr(new_model, "__init__", _make_init(typedef.name, field_order, new_model))
+    init_namespace = build_type_env(rt, local_env or {})
+    init_namespace[typedef.name] = new_model
+    setattr(
+        new_model,
+        "__init__",
+        make_type_init(
+            typedef,
+            new_model,
+            default_values=default_values,
+            namespace=init_namespace,
+        ),
+    )
 
     type_env[typedef.name] = new_model
     type_env[f"__{typedef.name}_fields__"] = annotations
@@ -447,22 +459,6 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         annotation = getattr(field, "annotation", str) or str
         data[name] = _convert_basic_literal(raw, annotation)
     return data
-
-
-def _make_init(type_name: str, field_order: list[str], model_class: type[BaseModel]):
-    def _init(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            if len(args) > len(field_order):
-                raise TypeError(f"Too many positional arguments for {type_name}")
-            for name, value in zip(field_order, args):
-                if name in kwargs:
-                    raise TypeError(
-                        f"Multiple values for field '{name}' in {type_name}"
-                    )
-                kwargs[name] = value
-        super(model_class, self).__init__(**kwargs)
-
-    return _init
 
 
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:
