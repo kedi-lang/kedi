@@ -616,6 +616,10 @@ def compute_hover(
         return None
     if _position_in_header_inline_python(source, pos):
         return None
+    if (doc_hover := _docstring_hover(prog, pos)) is not None:
+        return doc_hover
+    if _position_in_comment(source, pos):
+        return None
     sym = _resolve_symbol_at(prog, pos)
     if sym is None:
         # Fall back to "generic statement" hover so the cursor inside
@@ -684,6 +688,44 @@ def _generic_hover(prog, pos: lsp.Position) -> Optional[lsp.Hover]:
         contents=lsp.MarkupContent(kind=lsp.MarkupKind.Markdown, value=text),
         range=_span_to_range(target.loc),
     )
+
+
+def _docstring_hover(
+    prog: Program | ProgramWithValidation, pos: lsp.Position
+) -> Optional[lsp.Hover]:
+    for proc in _all_procedures(prog):
+        if proc.docstring_loc is None or not _position_inside(pos, proc.docstring_loc):
+            continue
+        return lsp.Hover(
+            contents=lsp.MarkupContent(
+                kind=lsp.MarkupKind.Markdown,
+                value=_proc_signature_markdown(proc),
+            ),
+            range=_span_to_range(proc.docstring_loc),
+        )
+    return None
+
+
+def _position_in_comment(source: str, pos: lsp.Position) -> bool:
+    tree = _ts_parse(source.encode("utf-8"))
+
+    def visit(node: Node) -> bool:
+        if node.type in {"line_comment", "block_comment"}:
+            span = Span(
+                start_byte=node.start_byte,
+                end_byte=node.end_byte,
+                start_line=node.start_point[0] + 1,
+                start_col=node.start_point[1] + 1,
+                end_line=node.end_point[0] + 1,
+                end_col=node.end_point[1] + 1,
+            )
+            return _position_inside(pos, span)
+        for child in node.children:
+            if child.is_named and visit(child):
+                return True
+        return False
+
+    return visit(tree.root_node)
 
 
 def _smallest_enclosing(prog, pos: lsp.Position):
@@ -859,6 +901,8 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
             + ", ".join(s.name for s in proc.optimize_spans)
             + "."
         )
+    if proc.docstring:
+        return f"{sig}\n\n{desc}\n\n{proc.docstring}"
     return f"{sig}\n\n{desc}"
 
 
@@ -1758,6 +1802,24 @@ def _capture_to_token(name: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _procedure_docstring_nodes(root: Node) -> List[Node]:
+    out: List[Node] = []
+
+    def visit(node: Node) -> None:
+        if node.type == "procedure_def":
+            body = node.child_by_field_name("body")
+            if body is not None:
+                named = [child for child in body.children if child.is_named]
+                if named and named[0].type == "block_comment":
+                    out.append(named[0])
+        for child in node.children:
+            if child.is_named:
+                visit(child)
+
+    visit(root)
+    return out
+
+
 def compute_semantic_tokens_full(
     source: str, source_path: Optional[str]
 ) -> lsp.SemanticTokens:
@@ -1798,9 +1860,19 @@ def compute_semantic_tokens_full(
                 python_byte_ranges.append(
                     (region_node.start_byte, region_node.end_byte)
                 )
+    docstring_nodes = _procedure_docstring_nodes(tree.root_node)
+    docstring_byte_ranges = [
+        (node.start_byte, node.end_byte) for node in docstring_nodes
+    ]
 
     def in_python_region(node: Node) -> bool:
         for s, e in python_byte_ranges:
+            if node.start_byte >= s and node.end_byte <= e:
+                return True
+        return False
+
+    def in_docstring_region(node: Node) -> bool:
+        for s, e in docstring_byte_ranges:
             if node.start_byte >= s and node.end_byte <= e:
                 return True
         return False
@@ -1850,8 +1922,13 @@ def compute_semantic_tokens_full(
             emit_node,
             base_line=0,
             base_col=0,
-            skip_if=in_python_region,
+            skip_if=lambda node: in_python_region(node) or in_docstring_region(node),
         )
+    docstring_token = _capture_to_token("variable")
+    if docstring_token is not None:
+        ttype, mods = docstring_token
+        for node in docstring_nodes:
+            emit_node(node, ttype, mods)
 
     # ---- 2. Embedded Python regions via injections.scm ---------------
     if (

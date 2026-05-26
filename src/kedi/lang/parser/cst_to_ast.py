@@ -118,6 +118,15 @@ def _field(node: Node, name: str) -> Optional[Node]:
     return node.child_by_field_name(name)
 
 
+def _decode_block_comment_body(text: str) -> str:
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return ""
+    inner = lines[1:-1]
+    dedented = dedent_block(inner)
+    return "\n".join(dedented).strip("\n")
+
+
 def _fields(node: Node, name: str) -> List[Node]:
     """Get all named children stored under field ``name``."""
     return [
@@ -474,6 +483,13 @@ class _Walker:
 
         body_node = _field(node, "body")
         if body_node is not None:
+            first_named = _named_children(body_node)
+            if first_named and first_named[0].type == "block_comment":
+                comment = first_named[0]
+                proc.docstring = _decode_block_comment_body(
+                    _src_text(self.source, comment)
+                )
+                proc.docstring_loc = self._span(comment)
             self._walk_block_into(body_node, proc)
         return proc
 

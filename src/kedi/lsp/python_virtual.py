@@ -625,7 +625,13 @@ def _emit_proc_stub(
     ret = _type_to_python(
         proc.return_type_expr, proc.return_type_annotation, default="str"
     )
-    line = builder.add(f"{prefix}def {proc.name}({params}) -> {ret}: ...")
+    if proc.docstring:
+        line = builder.add(f"{prefix}def {proc.name}({params}) -> {ret}:")
+        for doc_line in _docstring_lines(proc.docstring, prefix + "    "):
+            builder.add(doc_line)
+        builder.add(f"{prefix}    ...")
+    else:
+        line = builder.add(f"{prefix}def {proc.name}({params}) -> {ret}: ...")
     builder.add_symbol(
         kind="procedure",
         name=proc.name,
@@ -666,6 +672,9 @@ def _emit_procedure_body(
     }
     _add_scope_param_symbols(builder, scope, signature_line, signature)
     before_body = builder.line
+    if proc.docstring:
+        for doc_line in _docstring_lines(proc.docstring, "    "):
+            builder.add(doc_line)
     _emit_statements(builder, cursor, proc.body, scope, "    ", header_defaults)
     if builder.line == before_body:
         builder.add("    pass")
@@ -711,6 +720,9 @@ def _emit_nested_procedure(
     )
     _add_scope_param_symbols(builder, scope, signature_line, signature)
     before_body = builder.line
+    if proc.docstring:
+        for doc_line in _docstring_lines(proc.docstring, indent + "    "):
+            builder.add(doc_line)
     _emit_statements(
         builder,
         cursor,
@@ -721,6 +733,17 @@ def _emit_nested_procedure(
     )
     if builder.line == before_body:
         builder.add(f"{indent}    pass")
+
+
+def _docstring_lines(docstring: str, indent: str) -> list[str]:
+    escaped = docstring.replace('"""', '\\"""')
+    lines = escaped.splitlines() or [""]
+    if len(lines) == 1:
+        return [f'{indent}"""{lines[0]}"""']
+    out = [f'{indent}"""{lines[0]}']
+    out.extend(f"{indent}{line}" for line in lines[1:-1])
+    out.append(f'{indent}{lines[-1]}"""')
+    return out
 
 
 def _emit_statements(

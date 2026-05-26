@@ -13,6 +13,19 @@ from lsprotocol import types as lsp
 from kedi.lsp import features
 from kedi.lsp.python_virtual import compute_python_virtual_document
 
+
+def _decode_semantic_tokens(data: list[int]) -> list[tuple[int, int, int, int, int]]:
+    out: list[tuple[int, int, int, int, int]] = []
+    line = 0
+    col = 0
+    for d_line, d_col, length, token_type, token_mods in zip(
+        data[0::5], data[1::5], data[2::5], data[3::5], data[4::5], strict=False
+    ):
+        line += d_line
+        col = col + d_col if d_line == 0 else d_col
+        out.append((line, col, length, token_type, token_mods))
+    return out
+
 # ---------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------
@@ -71,6 +84,55 @@ def test_hover_on_defaulted_procedure_header_shows_defaults():
     body = hover.contents.value
     assert "text: str" in body
     assert 'style = `"brief"`' in body
+
+
+def test_hover_on_procedure_header_includes_docstring():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  Keep the answer concise.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "translate" in body
+    assert "Translate the provided text." in body
+    assert "Keep the answer concise." in body
+
+
+def test_hover_on_docstring_comment_uses_procedure_docstring():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=6)
+    )
+    assert hover is not None
+    assert "translate" in hover.contents.value
+    assert "Translate the provided text." in hover.contents.value
+
+
+def test_hover_on_regular_block_comment_stays_none():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  = <text>\n"
+        "  ###\n"
+        "  Not a docstring.\n"
+        "  ###\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=3, character=6)
+    )
+    assert hover is None
 
 
 def test_python_ranges_exclude_header_inline_defaults():
@@ -605,6 +667,35 @@ def test_semantic_tokens_legend_constants():
     assert features.SEMANTIC_TOKEN_MODIFIERS[0] == "declaration"
 
 
+def test_semantic_tokens_docstring_comment_uses_variable_token():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    assert any(line == 1 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 2 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+
+
+def test_semantic_tokens_regular_block_comment_stays_comment_token():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  = <text>\n"
+        "  ###\n"
+        "  Not a docstring.\n"
+        "  ###\n"
+    )
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+    comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")
+    assert any(line == 2 and token_type == comment_type for line, _, _, token_type, _ in decoded)
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------
@@ -677,6 +768,24 @@ def test_python_virtual_document_models_procedure_scope():
         and m["virtualRange"]["start"]["line"] > m["sourceRange"]["start"]["line"]
         for m in virtual["mappings"]
     )
+
+
+def test_python_virtual_document_includes_procedure_docstring():
+    src = (
+        "@calculate_stats(numbers: list[int]) -> int:\n"
+        "  ###\n"
+        "  Compute aggregate metrics.\n"
+        "  Reuses Python locals below.\n"
+        "  ###\n"
+        "  [total: int] = ```\n"
+        "  return sum(numbers)\n"
+        "  ```\n"
+        "  = <`str(total)`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    text = virtual["text"]
+    assert '"""Compute aggregate metrics.' in text
+    assert "Reuses Python locals below." in text
 
 
 def test_python_virtual_document_can_focus_single_procedure_body():

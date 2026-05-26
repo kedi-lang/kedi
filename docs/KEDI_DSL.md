@@ -69,6 +69,7 @@ It can span multiple lines.
 
 - Inline: Everything after `#` is ignored; use `##` for literal `#`
 - Block: Lines containing only `###` (trimmed) start/end blocks; must appear in matching pairs
+- Procedure docstrings: if the first statement inside a procedure body is a block comment, its body becomes the procedure's Python `__doc__` and is surfaced in editor hovers / virtual stubs
 
 ### Template Lines
 

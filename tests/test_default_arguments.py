@@ -111,6 +111,5 @@ def test_python_interop_stub_exposes_defaulted_signature_and_source() -> None:
     assert signature == "(x: int, y: int = 1) -> int"
     assert source == (
         "def kedi_proc(x: int, y: int = 1) -> int:\n"
-        '    """This stub is generated for Python introspection."""\n'
         "    return __kedi_call__(x, y)\n"
     )

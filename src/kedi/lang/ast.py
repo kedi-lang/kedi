@@ -257,6 +257,8 @@ class ProcedureDef:
     name: str
     params: List[str]
     body: List[Stmt] = field(default_factory=list)
+    docstring: Optional[str] = None
+    docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     return_type_annotation: Optional[str] = None
     return_type_expr: Optional[TypeExpr] = None
     # Maps parameter name to legacy string annotation. Kept for

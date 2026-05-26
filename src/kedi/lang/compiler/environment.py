@@ -169,7 +169,10 @@ def _make_proc_wrapper(
         )
     except Exception:
         return _make_generic_proc_wrapper(rt, proc_name)
-    return namespace[metadata.name]
+    wrapper = namespace[metadata.name]
+    wrapper.__doc__ = metadata.docstring
+    setattr(wrapper, "__kedi_procedure_metadata__", metadata)
+    return wrapper
 
 
 def _make_generic_proc_wrapper(rt: KediRuntime, proc_name: str):

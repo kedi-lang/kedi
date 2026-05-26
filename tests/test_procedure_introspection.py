@@ -24,10 +24,35 @@ def test_python_interop_exposes_stub_signature_name_and_source() -> None:
     assert signature == "(x: int, y: int) -> int"
     assert source == (
         "def kedi_proc(x: int, y: int) -> int:\n"
-        '    """This stub is generated for Python introspection."""\n'
         "    return __kedi_call__(x, y)\n"
     )
     assert "wrapper(*args: Any)" not in source
+    assert rt.executor.evaluate_inline(rt, "kedi_proc.__doc__", {}) is None
+
+
+def test_python_interop_docstring_uses_first_multiline_comment() -> None:
+    rt = _runtime(
+        "@kedi_proc(x: int) -> int:\n"
+        "  ###\n"
+        "  Add one to the input.\n"
+        "  Keeps the prose as the Python docstring.\n"
+        "  ###\n"
+        "  = `x + 1`\n\n"
+        "= ok\n"
+    )
+
+    source = rt.executor.evaluate_inline(
+        rt, "inspect.getsource(kedi_proc)", {"inspect": inspect}
+    )
+    doc = rt.executor.evaluate_inline(rt, "kedi_proc.__doc__", {})
+
+    assert source == (
+        "def kedi_proc(x: int) -> int:\n"
+        '    """Add one to the input.\n'
+        "    Keeps the prose as the Python docstring.\"\"\"\n"
+        "    return __kedi_call__(x)\n"
+    )
+    assert doc == "Add one to the input.\nKeeps the prose as the Python docstring."
 
 
 def test_python_interop_stub_keeps_typed_annotations() -> None:
@@ -64,7 +89,6 @@ def test_nested_procedure_python_interop_uses_nested_stub() -> None:
     out = _runtime(src).run_main()
 
     assert out.startswith("inner|(value: int) -> int|def inner(value: int) -> int:\n")
-    assert '"""This stub is generated for Python introspection."""' in out
     assert "return __kedi_call__(value)" in out
     assert "wrapper(*args: Any)" not in out
 
