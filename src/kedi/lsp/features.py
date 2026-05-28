@@ -26,6 +26,7 @@ the server publishes as a semantic-tokens legend.
 
 from __future__ import annotations
 
+import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
@@ -70,6 +71,7 @@ from ..lang.ast import (
     InputSegment,
     OptimizeSpan,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
     Program,
     ProgramWithValidation,
@@ -167,7 +169,9 @@ def _position_inside(pos: lsp.Position, span: Span) -> bool:
 
 def _segments_of(stmt) -> list:
     """All segment children of a statement (``segments`` or ``expr``)."""
-    return list(getattr(stmt, "segments", []) or []) + list(getattr(stmt, "expr", []) or [])
+    return list(getattr(stmt, "segments", []) or []) + list(
+        getattr(stmt, "expr", []) or []
+    )
 
 
 # =====================================================================
@@ -175,7 +179,9 @@ def _segments_of(stmt) -> list:
 # =====================================================================
 
 
-def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Diagnostic]:
+def compute_diagnostics(
+    source: str, source_path: Optional[str]
+) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
         parse_program(source, source_path=source_path)
@@ -186,7 +192,9 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
 
 def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
     severity = (
-        lsp.DiagnosticSeverity.Error if d.severity == "error" else lsp.DiagnosticSeverity.Warning
+        lsp.DiagnosticSeverity.Error
+        if d.severity == "error"
+        else lsp.DiagnosticSeverity.Warning
     )
     return lsp.Diagnostic(
         range=_span_to_range(d.span),
@@ -218,41 +226,14 @@ def _resolve_symbol_at(
     prog: Union[Program, ProgramWithValidation], pos: lsp.Position
 ) -> Optional[SymbolRef]:
     """Identify what the cursor is on. Returns ``None`` if nothing useful."""
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
     type_by_name = {t.name: t for t in prog.type_defs}
 
     # Walk procedures first — they own the deepest spans.
     for proc in prog.procedures:
-        if proc.loc is None or not _position_inside(pos, proc.loc):
-            continue
-        # Cursor on procedure name itself? Use header-line check.
-        if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
-            return SymbolRef(
-                kind="procedure",
-                name=proc.name,
-                declaration_span=proc.loc,
-                scope_proc=None,
-                cursor_span=_proc_name_span(proc),
-            )
-        # Parameter declarations.
-        for pname, pspan in _param_decls(proc):
-            if _position_inside(pos, pspan):
-                return SymbolRef(
-                    kind="param_decl",
-                    name=pname,
-                    declaration_span=pspan,
-                    scope_proc=proc,
-                    cursor_span=pspan,
-                )
-        r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+        r = _resolve_in_procedure(proc, pos, proc_by_name, type_by_name)
         if r is not None:
             return r
-        # Inside the body.
-        for stmt in proc.body:
-            r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
-            if r is not None:
-                return r
-        return None
 
     # Top-level
     for stmt in prog.toplevel_body:
@@ -260,12 +241,53 @@ def _resolve_symbol_at(
         if r is not None:
             return r
     if prog.toplevel_return is not None:
-        r = _resolve_in_stmt(prog.toplevel_return, pos, None, proc_by_name, type_by_name)
+        r = _resolve_in_stmt(
+            prog.toplevel_return, pos, None, proc_by_name, type_by_name
+        )
         if r is not None:
             return r
     # Type defs (top-level).
     for td in prog.type_defs:
         r = _resolve_in_type_def(td, pos, type_by_name)
+        if r is not None:
+            return r
+    return None
+
+
+def _resolve_in_procedure(
+    proc: ProcedureDef,
+    pos: lsp.Position,
+    proc_by_name: dict,
+    type_by_name: dict,
+) -> Optional[SymbolRef]:
+    if proc.loc is None or not _position_inside(pos, proc.loc):
+        return None
+    for child in _nested_procedures(proc):
+        r = _resolve_in_procedure(child, pos, proc_by_name, type_by_name)
+        if r is not None:
+            return r
+    if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
+        return SymbolRef(
+            kind="procedure",
+            name=proc.name,
+            declaration_span=proc.loc,
+            scope_proc=None,
+            cursor_span=_proc_name_span(proc),
+        )
+    for pname, pspan in _param_decls(proc):
+        if _position_inside(pos, pspan):
+            return SymbolRef(
+                kind="param_decl",
+                name=pname,
+                declaration_span=pspan,
+                scope_proc=proc,
+                cursor_span=pspan,
+            )
+    r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+    if r is not None:
+        return r
+    for stmt in proc.body:
+        r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
         if r is not None:
             return r
     return None
@@ -328,7 +350,11 @@ def _resolve_in_stmt(
     proc_by_name: dict,
     type_by_name: dict,
 ) -> Optional[SymbolRef]:
-    if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
+    if (
+        not hasattr(stmt, "loc")
+        or stmt.loc is None
+        or not _position_inside(pos, stmt.loc)
+    ):
         return None
     # AssignStmt / AssignBlockStmt target name
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
@@ -410,7 +436,9 @@ def _resolve_in_segment(
             ):
                 inner = getattr(arg, inner_seg_attr, None)
                 if inner is not None:
-                    r = _resolve_in_segment(inner, pos, proc, proc_by_name, type_by_name)
+                    r = _resolve_in_segment(
+                        inner, pos, proc, proc_by_name, type_by_name
+                    )
                     if r is not None:
                         return r
             rendered = getattr(arg, "__render_segments__", None) or []
@@ -447,7 +475,9 @@ def _resolve_in_segment(
     return None
 
 
-def _resolve_in_type_def(td: TypeDef, pos: lsp.Position, type_by_name: dict) -> Optional[SymbolRef]:
+def _resolve_in_type_def(
+    td: TypeDef, pos: lsp.Position, type_by_name: dict
+) -> Optional[SymbolRef]:
     if td.loc is None or not _position_inside(pos, td.loc):
         return None
     # `~Name(...)` — the name starts at start_col + 1.
@@ -548,6 +578,29 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
     return None
 
 
+def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
+    from ..lang.ast import ProcDefStmt
+
+    return [
+        stmt.proc
+        for stmt in proc.body
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+    ]
+
+
+def _all_procedures(prog: Union[Program, ProgramWithValidation]) -> list[ProcedureDef]:
+    out: list[ProcedureDef] = []
+
+    def visit(proc: ProcedureDef) -> None:
+        out.append(proc)
+        for child in _nested_procedures(proc):
+            visit(child)
+
+    for proc in prog.procedures:
+        visit(proc)
+    return out
+
+
 # =====================================================================
 # Hover
 # =====================================================================
@@ -561,6 +614,12 @@ def compute_hover(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
+    if _position_in_header_inline_python(source, pos):
+        return None
+    if (doc_hover := _docstring_hover(prog, pos)) is not None:
+        return doc_hover
+    if _position_in_comment(source, pos):
+        return None
     sym = _resolve_symbol_at(prog, pos)
     if sym is None:
         # Fall back to "generic statement" hover so the cursor inside
@@ -568,7 +627,7 @@ def compute_hover(
         return _generic_hover(prog, pos)
 
     range_ = _span_to_range(sym.cursor_span)
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
     type_by_name = {t.name: t for t in prog.type_defs}
 
     if sym.kind == "procedure":
@@ -583,6 +642,10 @@ def compute_hover(
             text = _type_signature_markdown(target)
         elif (origin := _known_lsp_type_origin(sym.name)) is not None:
             text = _known_type_markdown(sym.name, origin)
+        elif sym.name in _prelude_defined_names(prog.prelude):
+            text = _prelude_type_markdown(sym.name)
+        elif sym.name in _module_scope_python_names(prog):
+            text = _python_module_scope_type_markdown(sym.name)
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
@@ -627,6 +690,44 @@ def _generic_hover(prog, pos: lsp.Position) -> Optional[lsp.Hover]:
     )
 
 
+def _docstring_hover(
+    prog: Program | ProgramWithValidation, pos: lsp.Position
+) -> Optional[lsp.Hover]:
+    for proc in _all_procedures(prog):
+        if proc.docstring_loc is None or not _position_inside(pos, proc.docstring_loc):
+            continue
+        return lsp.Hover(
+            contents=lsp.MarkupContent(
+                kind=lsp.MarkupKind.Markdown,
+                value=_proc_signature_markdown(proc),
+            ),
+            range=_span_to_range(proc.docstring_loc),
+        )
+    return None
+
+
+def _position_in_comment(source: str, pos: lsp.Position) -> bool:
+    tree = _ts_parse(source.encode("utf-8"))
+
+    def visit(node: Node) -> bool:
+        if node.type in {"line_comment", "block_comment"}:
+            span = Span(
+                start_byte=node.start_byte,
+                end_byte=node.end_byte,
+                start_line=node.start_point[0] + 1,
+                start_col=node.start_point[1] + 1,
+                end_line=node.end_point[0] + 1,
+                end_col=node.end_point[1] + 1,
+            )
+            return _position_inside(pos, span)
+        for child in node.children:
+            if child.is_named and visit(child):
+                return True
+        return False
+
+    return visit(tree.root_node)
+
+
 def _smallest_enclosing(prog, pos: lsp.Position):
     """Walk the AST and return the deepest node whose ``loc`` contains ``pos``.
 
@@ -655,6 +756,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(node.auto_spec)
             for span in node.optimize_spans or []:
                 visit(span)
+            return
+        if isinstance(node, ProcDefStmt) and node.proc is not None:
+            visit(node.proc)
             return
         if isinstance(node, OptimizeSpan):
             for tl in node.template_lines or []:
@@ -718,7 +822,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _type_signature_markdown(node)
     if isinstance(node, TypeField):
         ann = node.type_annotation or "str"
-        return f"**Type field** `{node.name}: {ann}` — member of a Kedi type."
+        default = f" = `{node.default_expr}`" if node.default_expr is not None else ""
+        return f"**Type field** `{node.name}: {ann}{default}` — member of a Kedi type."
     if isinstance(node, TemplateLine):
         return (
             "**Template line** — text the LLM sees as a prompt segment. "
@@ -740,11 +845,15 @@ def _describe_ast_node(node) -> Optional[str]:
     if isinstance(node, ReturnStmt):
         return "**Return** `= …` — final value emitted by this procedure."
     if isinstance(node, ReturnBlockStmt):
-        return "**Python block return** `= ```…``` ` — runs Python and returns its value."
+        return (
+            "**Python block return** `= ```…``` ` — runs Python and returns its value."
+        )
     if isinstance(node, BacktickLineStmt):
         return "**Inline Python statement** `` `…` `` — side-effecting Python line."
     if isinstance(node, PythonBlock):
-        return "**Python block** — top-level ```python``` runs once as the module prelude."
+        return (
+            "**Python block** — top-level ```python``` runs once as the module prelude."
+        )
     if isinstance(node, AutoSpec):
         return "**`> auto:`** — AI-generated procedure prompt; body is the spec."
     if isinstance(node, OptimizeSpan):
@@ -762,7 +871,9 @@ def _describe_ast_node(node) -> Optional[str]:
             f"available as a local below this line."
         )
     if isinstance(node, CallSegment):
-        return f"**Call segment** `<{node.name}(...)>` — invokes another procedure inline."
+        return (
+            f"**Call segment** `<{node.name}(...)>` — invokes another procedure inline."
+        )
     if isinstance(node, PythonExprSegment):
         return "**Inline Python expression** `` `…` `` — evaluated and substituted into the prompt."
     if isinstance(node, EvalSuite):
@@ -777,8 +888,7 @@ def _describe_ast_node(node) -> Optional[str]:
 
 
 def _proc_signature_markdown(proc: ProcedureDef) -> str:
-    annos = proc.param_type_annotations or {}
-    params = ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params)
+    params = ", ".join(_format_proc_param(proc, p) for p in proc.params)
     sig = f"`@{proc.name}({params})`"
     if proc.return_type_annotation:
         sig += f" → `{proc.return_type_annotation}`"
@@ -791,16 +901,78 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
             + ", ".join(s.name for s in proc.optimize_spans)
             + "."
         )
+    if proc.docstring:
+        return f"{sig}\n\n{desc}\n\n{proc.docstring}"
     return f"{sig}\n\n{desc}"
 
 
 def _type_signature_markdown(td: TypeDef) -> str:
-    fields = ", ".join(f"{f.name}: {f.type_annotation or 'str'}" for f in td.fields)
+    fields = ", ".join(_format_type_field(f) for f in td.fields)
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
+
+
+def _format_proc_param(proc: ProcedureDef, name: str) -> str:
+    ann = (proc.param_type_annotations or {}).get(name)
+    piece = f"{name}: {ann}" if ann else name
+    default = (proc.param_defaults or {}).get(name)
+    if default is not None:
+        piece += f" = `{default}`"
+    return piece
+
+
+def _format_type_field(field: TypeField) -> str:
+    piece = f"{field.name}: {field.type_annotation or 'str'}"
+    if field.default_expr is not None:
+        piece += f" = `{field.default_expr}`"
+    return piece
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
     return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
+
+
+def _prelude_type_markdown(name: str) -> str:
+    return f"`{name}`\n\nKedi type defined in the Python prelude."
+
+
+def _python_module_scope_type_markdown(name: str) -> str:
+    return f"`{name}`\n\nKedi type defined in a top-level Python block."
+
+
+def _prelude_defined_names(code: str | None) -> set[str]:
+    if not code:
+        return set()
+    try:
+        module = _py_ast.parse(code)
+    except SyntaxError:
+        return set()
+
+    names: set[str] = set()
+    for stmt in module.body:
+        if isinstance(
+            stmt, (_py_ast.ClassDef, _py_ast.FunctionDef, _py_ast.AsyncFunctionDef)
+        ):
+            names.add(stmt.name)
+        elif isinstance(stmt, (_py_ast.Import, _py_ast.ImportFrom)):
+            for alias in stmt.names:
+                names.add(alias.asname or alias.name.split(".")[-1])
+        elif isinstance(stmt, (_py_ast.Assign, _py_ast.AnnAssign)):
+            targets = (
+                stmt.targets if isinstance(stmt, _py_ast.Assign) else [stmt.target]
+            )
+            for target in targets:
+                if isinstance(target, _py_ast.Name):
+                    names.add(target.id)
+    return names
+
+
+def _module_scope_python_names(prog: Program | ProgramWithValidation) -> set[str]:
+    names: set[str] = set()
+    for stmt in prog.toplevel_body:
+        if not isinstance(stmt, PythonBlock):
+            break
+        names.update(_prelude_defined_names(stmt.code))
+    return names
 
 
 # =====================================================================
@@ -959,7 +1131,9 @@ def _collect_type_refs_in_type_def(td: TypeDef, name: str, out: List[Span]) -> N
         _collect_type_refs_in_expr(field.type_expr, name, out)
 
 
-def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Span]) -> None:
+def _collect_type_refs_in_expr(
+    expr: Optional[TypeExpr], name: str, out: List[Span]
+) -> None:
     if expr is None:
         return
     if isinstance(expr, TypeRef) and expr.name == name and expr.loc is not None:
@@ -1056,9 +1230,14 @@ def compute_rename(
         edits.append(lsp.TextEdit(range=_span_to_range(s), new_text=new_name))
     # Always include the declaration identifier explicitly.
     if sym.cursor_span is not None:
-        decl_edit = lsp.TextEdit(range=_span_to_range(sym.cursor_span), new_text=new_name)
+        decl_edit = lsp.TextEdit(
+            range=_span_to_range(sym.cursor_span), new_text=new_name
+        )
         # de-dupe
-        if not any(e.range == decl_edit.range and e.new_text == decl_edit.new_text for e in edits):
+        if not any(
+            e.range == decl_edit.range and e.new_text == decl_edit.new_text
+            for e in edits
+        ):
             edits.append(decl_edit)
     return lsp.WorkspaceEdit(changes={uri: edits})
 
@@ -1124,11 +1303,11 @@ def compute_signature_help(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
 
     # Find the innermost call_segment containing the cursor.
     target_call: Optional[CallSegment] = None
-    for proc in prog.procedures:
+    for proc in _all_procedures(prog):
         if proc.loc is None or not _position_inside(pos, proc.loc):
             continue
         for stmt in proc.body:
@@ -1151,14 +1330,13 @@ def compute_signature_help(
         return None
 
     # Build signature label and parameter ranges.
-    annos = target.param_type_annotations or {}
     params_label_parts: List[str] = []
     param_infos: List[lsp.ParameterInformation] = []
     cursor_byte_offset = 0  # within the label string
     label_prefix = f"@{target.name}("
     cursor_byte_offset = len(label_prefix)
     for i, pname in enumerate(target.params):
-        piece = f"{pname}: {annos[pname]}" if annos.get(pname) else pname
+        piece = _format_proc_param(target, pname)
         params_label_parts.append(piece)
         start = cursor_byte_offset
         end = cursor_byte_offset + len(piece)
@@ -1183,7 +1361,11 @@ def compute_signature_help(
 
 
 def _innermost_call_at(stmt, pos: lsp.Position) -> Optional[CallSegment]:
-    if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
+    if (
+        not hasattr(stmt, "loc")
+        or stmt.loc is None
+        or not _position_inside(pos, stmt.loc)
+    ):
         return None
     found: Optional[CallSegment] = None
     for seg in _segments_of(stmt):
@@ -1244,7 +1426,7 @@ def compute_inlay_hints(
     except KediParseError:
         return []
     out: List[lsp.InlayHint] = []
-    proc_by_name = {p.name: p for p in prog.procedures}
+    proc_by_name = {p.name: p for p in _all_procedures(prog)}
 
     def visit_stmt(stmt, enclosing_proc: Optional[ProcedureDef]) -> None:
         for seg in _segments_of(stmt):
@@ -1279,7 +1461,11 @@ def compute_inlay_hints(
                 for inner in getattr(arg, "__render_segments__", None) or []:
                     visit_segment(inner, enclosing_proc)
         elif isinstance(seg, OutputSegment):
-            if seg.type_expr is None and seg.type_annotation is None and seg.loc is not None:
+            if (
+                seg.type_expr is None
+                and seg.type_annotation is None
+                and seg.loc is not None
+            ):
                 if not _in_range(seg.loc, rng):
                     return
                 # Position the hint AT the closing `]` so it reads as
@@ -1297,7 +1483,7 @@ def compute_inlay_hints(
                     )
                 )
 
-    for proc in prog.procedures:
+    for proc in _all_procedures(prog):
         for stmt in proc.body:
             visit_stmt(stmt, proc)
     for stmt in prog.toplevel_body:
@@ -1321,7 +1507,9 @@ def _in_range(loc: Span, rng: lsp.Range) -> bool:
 # =====================================================================
 
 
-def compute_document_symbols(source: str, source_path: Optional[str]) -> List[lsp.DocumentSymbol]:
+def compute_document_symbols(
+    source: str, source_path: Optional[str]
+) -> List[lsp.DocumentSymbol]:
     try:
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
@@ -1362,7 +1550,9 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
     if proc.params:
         annos = proc.param_type_annotations or {}
         detail_parts.append(
-            "(" + ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params) + ")"
+            "("
+            + ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params)
+            + ")"
         )
     if proc.return_type_annotation:
         detail_parts.append(f"-> {proc.return_type_annotation}")
@@ -1371,7 +1561,9 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
         detail=" ".join(detail_parts),
         kind=lsp.SymbolKind.Function,
         range=_span_to_range(proc.loc) if proc.loc else _empty_range(),
-        selection_range=_span_to_range(_proc_name_span(proc)) if proc.loc else _empty_range(),
+        selection_range=_span_to_range(_proc_name_span(proc))
+        if proc.loc
+        else _empty_range(),
         children=children,
     )
 
@@ -1610,7 +1802,27 @@ def _capture_to_token(name: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp.SemanticTokens:
+def _procedure_docstring_nodes(root: Node) -> List[Node]:
+    out: List[Node] = []
+
+    def visit(node: Node) -> None:
+        if node.type == "procedure_def":
+            body = node.child_by_field_name("body")
+            if body is not None:
+                named = [child for child in body.children if child.is_named]
+                if named and named[0].type == "block_comment":
+                    out.append(named[0])
+        for child in node.children:
+            if child.is_named:
+                visit(child)
+
+    visit(root)
+    return out
+
+
+def compute_semantic_tokens_full(
+    source: str, source_path: Optional[str]
+) -> lsp.SemanticTokens:
     """Run tree-sitter highlight queries and emit LSP semantic tokens.
 
     The pipeline mirrors what editors like Neovim/Helix do natively
@@ -1645,10 +1857,22 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
         cursor = _TSQueryCursor(_KEDI_INJECTIONS_QUERY)
         for _pat_idx, caps in cursor.matches(tree.root_node):
             for region_node in caps.get("injection.content", []):
-                python_byte_ranges.append((region_node.start_byte, region_node.end_byte))
+                python_byte_ranges.append(
+                    (region_node.start_byte, region_node.end_byte)
+                )
+    docstring_nodes = _procedure_docstring_nodes(tree.root_node)
+    docstring_byte_ranges = [
+        (node.start_byte, node.end_byte) for node in docstring_nodes
+    ]
 
     def in_python_region(node: Node) -> bool:
         for s, e in python_byte_ranges:
+            if node.start_byte >= s and node.end_byte <= e:
+                return True
+        return False
+
+    def in_docstring_region(node: Node) -> bool:
+        for s, e in docstring_byte_ranges:
             if node.start_byte >= s and node.end_byte <= e:
                 return True
         return False
@@ -1658,7 +1882,9 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
             return
         raw.append((line, col, length, ttype, mods))
 
-    def emit_node(node: Node, ttype: int, mods: int, base_line: int = 0, base_col: int = 0) -> None:
+    def emit_node(
+        node: Node, ttype: int, mods: int, base_line: int = 0, base_col: int = 0
+    ) -> None:
         sl, sc = node.start_point
         el, ec = node.end_point
         # Translate from the embedded sub-tree's coordinates back to
@@ -1696,11 +1922,20 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
             emit_node,
             base_line=0,
             base_col=0,
-            skip_if=in_python_region,
+            skip_if=lambda node: in_python_region(node) or in_docstring_region(node),
         )
+    docstring_token = _capture_to_token("variable")
+    if docstring_token is not None:
+        ttype, mods = docstring_token
+        for node in docstring_nodes:
+            emit_node(node, ttype, mods)
 
     # ---- 2. Embedded Python regions via injections.scm ---------------
-    if python_byte_ranges and _PY_PARSER is not None and _PY_HIGHLIGHTS_QUERY is not None:
+    if (
+        python_byte_ranges
+        and _PY_PARSER is not None
+        and _PY_HIGHLIGHTS_QUERY is not None
+    ):
         cursor = _TSQueryCursor(_KEDI_INJECTIONS_QUERY)
         for _pat_idx, caps in cursor.matches(tree.root_node):
             for region_node in caps.get("injection.content", []):
@@ -1779,7 +2014,9 @@ def _resolve_overlaps(
                 continue
             _, ttype, mods = slot
             j = i
-            while j < max_col and paint[j] is not None and paint[j][1:] == (ttype, mods):
+            while (
+                j < max_col and paint[j] is not None and paint[j][1:] == (ttype, mods)
+            ):
                 j += 1
             out.append((line, i, j - i, ttype, mods))
             i = j
@@ -1843,15 +2080,28 @@ def compute_python_ranges(source: str) -> List[dict]:
     document that mirrors the Kedi file's coordinate space so requests
     can be forwarded to a Python language server without translation.
     """
-    tree: Tree = _ts_parse(source.encode("utf-8") if isinstance(source, str) else source)
+    return _collect_python_ranges(source, include_header_inline=False)
+
+
+def compute_header_python_ranges(source: str) -> List[dict]:
+    return _collect_python_ranges(source, include_regular_inline=False)
+
+
+def _collect_python_ranges(
+    source: str,
+    *,
+    include_header_inline: bool = True,
+    include_regular_inline: bool = True,
+) -> List[dict]:
+    tree: Tree = _ts_parse(
+        source.encode("utf-8") if isinstance(source, str) else source
+    )
     src_bytes = source.encode("utf-8") if isinstance(source, str) else source
     out: List[dict] = []
 
-    def visit(node: Node) -> None:
+    def visit(node: Node, parents: tuple[Node, ...] = ()) -> None:
         if node.type == "python_code":
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
-            # Dedent matching the AST walker — keeps highlighting
-            # positions aligned for Pylance.
             from ..lang.parser.escapes import dedent_block
 
             lines = text.split("\n")
@@ -1861,39 +2111,79 @@ def compute_python_ranges(source: str) -> List[dict]:
             out.append(
                 {
                     "kind": "fenced",
-                    "range": {
-                        "start": {
-                            "line": node.start_point[0],
-                            "character": node.start_point[1],
-                        },
-                        "end": {
-                            "line": node.end_point[0],
-                            "character": node.end_point[1],
-                        },
-                    },
+                    "range": _node_range(node),
                     "text": dedented,
                 }
             )
         elif node.type == "python_inline_body":
+            header_owner = _header_inline_owner(parents)
+            if header_owner is not None and not include_header_inline:
+                return
+            if header_owner is None and not include_regular_inline:
+                return
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
-            out.append(
-                {
-                    "kind": "inline",
-                    "range": {
-                        "start": {
-                            "line": node.start_point[0],
-                            "character": node.start_point[1],
-                        },
-                        "end": {
-                            "line": node.end_point[0],
-                            "character": node.end_point[1],
-                        },
-                    },
-                    "text": text,
-                }
-            )
+            item = {
+                "kind": "inline",
+                "range": _node_range(node),
+                "text": text,
+            }
+            if header_owner is not None:
+                item.update(header_owner)
+            out.append(item)
         for c in node.children:
-            visit(c)
+            visit(c, parents + (node,))
 
     visit(tree.root_node)
     return out
+
+
+def _position_in_header_inline_python(source: str, pos: lsp.Position) -> bool:
+    for region in compute_header_python_ranges(source):
+        if _position_in_range(pos, region["range"]):
+            return True
+    return False
+
+
+def _position_in_range(pos: lsp.Position, range_: dict) -> bool:
+    start = range_["start"]
+    end = range_["end"]
+    if pos.line < start["line"] or pos.line > end["line"]:
+        return False
+    if pos.line == start["line"] and pos.character < start["character"]:
+        return False
+    if pos.line == end["line"] and pos.character >= end["character"]:
+        return False
+    return True
+
+
+def _node_range(node: Node) -> dict:
+    return {
+        "start": {"line": node.start_point[0], "character": node.start_point[1]},
+        "end": {"line": node.end_point[0], "character": node.end_point[1]},
+    }
+
+
+def _header_inline_owner(parents: tuple[Node, ...]) -> Optional[dict]:
+    owner = next(
+        (
+            parent
+            for parent in reversed(parents)
+            if parent.type in {"param", "type_field"}
+        ),
+        None,
+    )
+    if owner is None:
+        return None
+    container = next(
+        (
+            parent
+            for parent in reversed(parents)
+            if parent.type in {"procedure_def", "type_def"}
+        ),
+        None,
+    )
+    return {
+        "ownerKind": owner.type,
+        "containerKind": container.type if container is not None else None,
+        "containerLine": container.start_point[0] if container is not None else None,
+    }

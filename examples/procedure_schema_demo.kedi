@@ -1,0 +1,16 @@
+~SearchRequest(queries: list[str], limit: int = `5`)
+
+@search_docs(request: SearchRequest, include_snippets: bool = `True`) -> str:
+  ###
+  Search indexed sources using a typed request payload.
+
+  Args:
+    request (SearchRequest): The search request payload.
+    include_snippets (bool): Whether to include snippets in the search results.
+  Returns:
+    str: The search results.
+  ###
+  [query_count: int] = ```
+return len(request.queries)
+```
+  = `f"queries={request.queries}|limit={request.limit}|include={include_snippets}|count={query_count}"`

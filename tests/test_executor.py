@@ -38,10 +38,14 @@ class RecordingExecutor:
         return self._delegate.execute_prelude(rt, code)
 
     def create_dynamic_function(
-        self, name: str, params: list[str], body: Callable[..., Any]
+        self,
+        name: str,
+        params: list[str],
+        body: Callable[..., Any],
+        defaults: dict[str, Any] | None = None,
     ) -> Callable[..., Any]:
         self.calls.append("create_dynamic_function")
-        return self._delegate.create_dynamic_function(name, params, body)
+        return self._delegate.create_dynamic_function(name, params, body, defaults)
 
     def evaluate_type_expression(self, rt, code: str, env: dict[str, Any]) -> Any:
         self.calls.append("evaluate_type_expression")
@@ -118,7 +122,9 @@ def test_markdown_debug_exporter_renders_human_readable_sections(tmp_path: Path)
     assert "https://example.com" in content
 
 
-def test_markdown_debug_exporter_generates_default_filename(tmp_path: Path, monkeypatch):
+def test_markdown_debug_exporter_generates_default_filename(
+    tmp_path: Path, monkeypatch
+):
     monkeypatch.chdir(tmp_path)
 
     exporter = MarkdownDebugExporter(default_name="sample.kedi")

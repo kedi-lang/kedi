@@ -62,7 +62,9 @@ class OptimizationDataLoader:
             else:
                 val = _eval_python_inline(self.runtime, dataset.code, {})
         except Exception as e:
-            raise RuntimeError(f"Error loading training data '{dataset.name}': {e}") from e
+            raise RuntimeError(
+                f"Error loading training data '{dataset.name}': {e}"
+            ) from e
 
         # Validate and convert to list
         data_list = self._convert_to_list(val, dataset.name)
@@ -102,7 +104,9 @@ class OptimizationDataLoader:
             else:
                 val = _eval_python_inline(self.runtime, test_dataset.code, {})
         except Exception as e:
-            raise RuntimeError(f"Error loading test data '{test_dataset.name}': {e}") from e
+            raise RuntimeError(
+                f"Error loading test data '{test_dataset.name}': {e}"
+            ) from e
 
         # Validate and convert to list
         data_list = self._convert_to_list(val, test_dataset.name)
@@ -129,7 +133,8 @@ class OptimizationDataLoader:
         # Validate it's iterable
         if not hasattr(val, "__iter__") or isinstance(val, (str, bytes)):
             raise ValueError(
-                f"Data '{dataset_name}' must return an iterable " f"(got {type(val).__name__})"
+                f"Data '{dataset_name}' must return an iterable "
+                f"(got {type(val).__name__})"
             )
 
         # Convert dict.items() to list

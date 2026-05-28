@@ -13,6 +13,20 @@ from lsprotocol import types as lsp
 from kedi.lsp import features
 from kedi.lsp.python_virtual import compute_python_virtual_document
 
+
+def _decode_semantic_tokens(data: list[int]) -> list[tuple[int, int, int, int, int]]:
+    out: list[tuple[int, int, int, int, int]] = []
+    line = 0
+    col = 0
+    for d_line, d_col, length, token_type, token_mods in zip(
+        data[0::5], data[1::5], data[2::5], data[3::5], data[4::5], strict=False
+    ):
+        line += d_line
+        col = col + d_col if d_line == 0 else d_col
+        out.append((line, col, length, token_type, token_mods))
+    return out
+
+
 # ---------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------
@@ -60,6 +74,110 @@ def test_hover_on_procedure_header_shows_signature():
     assert "translate" in body
     assert "text: str" in body
     assert "str" in body
+
+
+def test_hover_on_defaulted_procedure_header_shows_defaults():
+    src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "text: str" in body
+    assert 'style = `"brief"`' in body
+
+
+def test_hover_on_procedure_header_includes_docstring():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  Keep the answer concise.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "translate" in body
+    assert "Translate the provided text." in body
+    assert "Keep the answer concise." in body
+
+
+def test_hover_on_docstring_comment_uses_procedure_docstring():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=6)
+    )
+    assert hover is not None
+    assert "translate" in hover.contents.value
+    assert "Translate the provided text." in hover.contents.value
+
+
+def test_hover_on_regular_block_comment_stays_none():
+    src = (
+        "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
+    )
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=3, character=6)
+    )
+    assert hover is None
+
+
+def test_python_ranges_exclude_header_inline_defaults():
+    src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
+    ranges = features.compute_python_ranges(src)
+    assert ranges == [
+        {
+            "kind": "inline",
+            "range": {
+                "start": {"line": 1, "character": 5},
+                "end": {"line": 1, "character": 22},
+            },
+            "text": 'f"Hello, {name}!"',
+        }
+    ]
+
+
+def test_hover_on_header_default_expression_defers_to_python():
+    src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=24),
+    )
+    assert hover is None
+
+
+def test_hover_on_nested_procedure_header_shows_signature():
+    src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=4)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "bar" in body
+    assert "name: str" in body
+    assert "str" in body
+
+
+def test_hover_on_nested_text_segment_works():
+    src = "@foo():\n  @bar():\n    Hello world\n    = Done\n  = dn\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=8)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Text segment" in body
+    assert "Hello world" in body
 
 
 def test_hover_on_input_segment():
@@ -175,6 +293,18 @@ def test_hover_on_type_definition_builtin_and_typing_types_is_not_undefined():
         assert "not defined" not in body
 
 
+def test_hover_on_type_definition_shows_field_defaults():
+    src = "~Person(name: str, salary: int = `0`)\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=1),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "salary: int = `0`" in body
+
+
 def test_custom_type_definition_still_jumps_to_kedi_type():
     src = "~Person(name: str)\n@p(x: Person):\n  = <x>\n"
     loc = features.compute_definition(
@@ -220,6 +350,59 @@ def test_hover_on_unparseable_returns_none():
     assert hover is None
 
 
+def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=8, character=19),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Person" in body
+    assert "defined in the Python prelude" in body
+    assert "not defined in this module" not in body
+
+
+def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():
+    src = (
+        "```\n"
+        "import this\n"
+        "```\n\n"
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=12, character=19),
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "Person" in body
+    assert "defined in a top-level Python block" in body
+    assert "not defined in this module" not in body
+
+
 # ---------------------------------------------------------------------
 # Definition
 # ---------------------------------------------------------------------
@@ -243,6 +426,18 @@ def test_definition_jumps_to_procedure():
     assert loc is not None
     assert loc.uri == "file:///tmp/example.kedi"
     assert loc.range.start.line == 0
+
+
+def test_definition_jumps_to_nested_procedure():
+    src = "@foo():\n  @bar() -> str:\n    = done\n  = <bar()>\n\n= <foo()>\n"
+    loc = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="/tmp/example.kedi",
+        pos=lsp.Position(line=3, character=6),
+    )
+    assert loc is not None
+    assert loc.range.start.line == 1
 
 
 def test_definition_returns_none_for_non_reference():
@@ -469,6 +664,40 @@ def test_semantic_tokens_legend_constants():
     assert features.SEMANTIC_TOKEN_MODIFIERS[0] == "declaration"
 
 
+def test_semantic_tokens_docstring_comment_uses_variable_token():
+    src = (
+        "@translate(text: str) -> str:\n"
+        "  ###\n"
+        "  Translate the provided text.\n"
+        "  ###\n"
+        "  = <text>\n"
+    )
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    assert any(
+        line == 1 and token_type == variable_type
+        for line, _, _, token_type, _ in decoded
+    )
+    assert any(
+        line == 2 and token_type == variable_type
+        for line, _, _, token_type, _ in decoded
+    )
+
+
+def test_semantic_tokens_regular_block_comment_stays_comment_token():
+    src = (
+        "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
+    )
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+    comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")
+    assert any(
+        line == 2 and token_type == comment_type
+        for line, _, _, token_type, _ in decoded
+    )
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------
@@ -543,6 +772,24 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_includes_procedure_docstring():
+    src = (
+        "@calculate_stats(numbers: list[int]) -> int:\n"
+        "  ###\n"
+        "  Compute aggregate metrics.\n"
+        "  Reuses Python locals below.\n"
+        "  ###\n"
+        "  [total: int] = ```\n"
+        "  return sum(numbers)\n"
+        "  ```\n"
+        "  = <`str(total)`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    text = virtual["text"]
+    assert '"""Compute aggregate metrics.' in text
+    assert "Reuses Python locals below." in text
+
+
 def test_python_virtual_document_can_focus_single_procedure_body():
     src = (
         "@alpha(items: list[int]) -> int:\n"
@@ -571,12 +818,136 @@ def test_python_virtual_document_can_focus_single_procedure_body():
     assert "def __kedi_toplevel__() -> Any:" not in virtual["text"]
 
 
+def test_python_virtual_document_includes_nested_procedure_body():
+    src = (
+        "@foo() -> str:\n"
+        "  @bar(name: str) -> str:\n"
+        "    [upper: str] = ```\n"
+        "    return name.upper()\n"
+        "    ```\n"
+        "    = <`upper`>\n"
+        "  = <bar(ok)>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def bar(name: str) -> str:" in virtual["text"]
+    assert "return name.upper()" in virtual["text"]
+    assert any(
+        s["kind"] == "procedure"
+        and s["name"] == "bar"
+        and s["sourceRange"]["start"] == {"line": 1, "character": 3}
+        for s in virtual["symbols"]
+    )
+
+
+def test_python_virtual_document_can_focus_nested_procedure_body():
+    src = (
+        "@foo() -> str:\n"
+        "  @bar(name: str) -> str:\n"
+        "    [upper: str] = ```\n"
+        "    return name.upper()\n"
+        "    ```\n"
+        "    = <`upper`>\n"
+        "  = <bar(ok)>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
+    ast.parse(virtual["text"])
+    assert virtual["focusKey"] == "proc:bar:2"
+    assert "def __kedi_scope_bar(name: str) -> str:" in virtual["text"]
+    assert "return name.upper()" in virtual["text"]
+    assert "def __kedi_scope_foo() -> str:" not in virtual["text"]
+
+
 def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():
     src = "= done\n"
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
     assert "    pass" in virtual["text"]
+
+
+def test_python_virtual_document_includes_prelude_symbols_for_toplevel_scope():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert "person: Person = ..." in virtual["text"]
+    assert "    person" in virtual["text"]
+
+
+def test_focused_virtual_document_stubs_unfocused_module_python():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=9)
+    ast.parse(virtual["text"])
+    assert "from pydantic import BaseModel, Field" not in virtual["text"]
+    assert "class BaseModel: ..." in virtual["text"]
+    assert "def Field(*args: Any, **kwargs: Any) -> Any: ..." in virtual["text"]
+    assert "class Person:" in virtual["text"]
+    assert "def __init__(self, name: str, age: int) -> None: ..." in virtual["text"]
+    assert "person: Person = ..." in virtual["text"]
+
+
+def test_focused_virtual_document_keeps_focused_module_python_mapped():
+    src = (
+        "```\n"
+        "from pydantic import BaseModel\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        "    name: str\n"
+        "```\n\n"
+        "= <`Person(name='Ada')`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
+    ast.parse(virtual["text"])
+    assert "from pydantic import BaseModel" in virtual["text"]
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert any(region["range"]["start"]["line"] == 1 for region in virtual["ranges"])
+
+
+def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
+    src = (
+        "```\n"
+        "import this\n"
+        "```\n\n"
+        "```\n"
+        "from pydantic import BaseModel, Field\n"
+        "\n"
+        "class Person(BaseModel):\n"
+        '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
+        "    age: int = Field(gt=50)\n"
+        "```\n\n"
+        "Fake me a [person: Person]\n"
+        "\n"
+        "= <`person`>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "import this" in virtual["text"]
+    assert "class Person(BaseModel):" in virtual["text"]
+    assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
+    assert "    person: Person = ..." in virtual["text"]
 
 
 def test_python_virtual_document_emits_ellipsis_for_empty_generated_python_blocks():
@@ -624,9 +995,50 @@ def test_python_virtual_document_models_type_stub_init_signature():
     assert "    age: int" in virtual["text"]
     assert "    tags: list[str]" in virtual["text"]
     assert (
-        "    def __init__(self, *, name: str, age: int, tags: list[str]) -> None: ..."
+        "    def __init__(self, name: str, age: int, tags: list[str]) -> None: ..."
         in virtual["text"]
     )
+
+
+def test_python_virtual_document_models_defaulted_signatures():
+    src = (
+        "~Person(name: str, salary: int = `0`)\n"
+        "@make(name: str, salary: int = `0`) -> Person:\n"
+        "  = `Person(name, salary)`\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "    salary: int = 0" in virtual["text"]
+    assert (
+        "    def __init__(self, name: str, salary: int = 0) -> None: ..."
+        in virtual["text"]
+    )
+    assert "def make(name: str, salary: int = 0) -> Person: ..." in virtual["text"]
+    assert (
+        "def __kedi_scope_make(name: str, salary: int = 0) -> Person:"
+        in virtual["text"]
+    )
+    assert any(region["text"] == "0" for region in virtual["ranges"])
+
+
+def test_python_virtual_document_maps_header_default_expression():
+    src = (
+        "@get_name() -> str:\n"
+        "  = Mert\n"
+        "@say_hi(name: str = `get_name()`) -> str:\n"
+        '  = `f"Hello, {name}!"`\n'
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    mapped = [
+        region
+        for region in virtual["ranges"]
+        if region["text"] == "get_name()"
+        and region["range"]["start"] == {"line": 2, "character": 21}
+        and region["range"]["end"] == {"line": 2, "character": 31}
+    ]
+    assert len(mapped) == 1
+    assert mapped[0]["virtualRange"]["start"]["line"] >= 0
 
 
 def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types():
@@ -667,6 +1079,30 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
         and s["sourceRange"]["start"] == {"line": 0, "character": 1}
         for s in virtual["symbols"]
     )
+    assert "    city: Any = ..." in virtual["text"]
+    assert 'result = get_country("France")' in virtual["text"]
+
+
+def test_python_virtual_document_models_metric_scope_params_as_any():
+    src = (
+        "@solve_knapsack(problems, capacity):\n"
+        "  = ok\n"
+        "\n"
+        "@eval: solve_knapsack:\n"
+        "  > metric: accuracy(problems):\n"
+        "    = ```\n"
+        "    items_str, capacity = problems\n"
+        "    pred = solve_knapsack(items_str, capacity)\n"
+        "    return pred\n"
+        "    ```\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def __kedi_metric_solve_knapsack_accuracy() -> Any:" in virtual["text"]
+    assert "    problems: Any = ..." in virtual["text"]
+    assert "    capacity: Any = ..." in virtual["text"]
+    assert "    items_str, capacity = problems" in virtual["text"]
+    assert "    pred = solve_knapsack(items_str, capacity)" in virtual["text"]
 
 
 # ---------------------------------------------------------------------

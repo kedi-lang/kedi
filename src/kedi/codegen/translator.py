@@ -37,9 +37,14 @@ def kedi_typedef_to_python_class(typedef: TypeDef) -> str:
     else:
         for field in typedef.fields:
             type_hint = (
-                kedi_type_to_python(field.type_annotation) if field.type_annotation else "str"
+                kedi_type_to_python(field.type_annotation)
+                if field.type_annotation
+                else "str"
             )
-            lines.append(f"    {field.name}: {type_hint}")
+            default = (
+                f" = {field.default_expr}" if field.default_expr is not None else ""
+            )
+            lines.append(f"    {field.name}: {type_hint}{default}")
 
     return "\n".join(lines)
 
@@ -60,14 +65,20 @@ def kedi_procedure_to_python_signature(proc: ProcedureDef) -> str:
         if proc.param_type_annotations and param_name in proc.param_type_annotations:
             type_hint = proc.param_type_annotations[param_name]
             if type_hint:
-                param_list.append(f"{param_name}: {kedi_type_to_python(type_hint)}")
+                piece = f"{param_name}: {kedi_type_to_python(type_hint)}"
             else:
-                param_list.append(f"{param_name}: str")
+                piece = f"{param_name}: str"
         else:
-            param_list.append(f"{param_name}: str")
+            piece = f"{param_name}: str"
+        default = (proc.param_defaults or {}).get(param_name)
+        if default is not None:
+            piece += f" = {default}"
+        param_list.append(piece)
 
     return_type = (
-        kedi_type_to_python(proc.return_type_annotation) if proc.return_type_annotation else "str"
+        kedi_type_to_python(proc.return_type_annotation)
+        if proc.return_type_annotation
+        else "str"
     )
 
     lines = [
@@ -159,7 +170,9 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
             # Find minimum indentation from non-empty lines
             non_empty_lines = [line for line in body_lines if line.strip()]
             if non_empty_lines:
-                min_indent = min(len(line) - len(line.lstrip()) for line in non_empty_lines)
+                min_indent = min(
+                    len(line) - len(line.lstrip()) for line in non_empty_lines
+                )
 
                 for line in body_lines:
                     stripped = line.strip()
@@ -169,7 +182,11 @@ def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
                         and not stripped.startswith("'''")
                     ):
                         # Remove common leading indent, add Kedi indent (4 spaces)
-                        dedented = line[min_indent:] if len(line) > min_indent else line.lstrip()
+                        dedented = (
+                            line[min_indent:]
+                            if len(line) > min_indent
+                            else line.lstrip()
+                        )
                         lines.append(f"    {dedented}")
 
             lines.append("    ```")

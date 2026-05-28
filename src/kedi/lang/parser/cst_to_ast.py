@@ -118,9 +118,22 @@ def _field(node: Node, name: str) -> Optional[Node]:
     return node.child_by_field_name(name)
 
 
+def _decode_block_comment_body(text: str) -> str:
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return ""
+    inner = lines[1:-1]
+    dedented = dedent_block(inner)
+    return "\n".join(dedented).strip("\n")
+
+
 def _fields(node: Node, name: str) -> List[Node]:
     """Get all named children stored under field ``name``."""
-    return [c for c in node.children if c.is_named and node.field_name_for_child(c.id) == name]
+    return [
+        c
+        for c in node.children
+        if c.is_named and node.field_name_for_child(c.id) == name
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -209,7 +222,10 @@ class _Walker:
                     and prog.toplevel_return is None
                     and not prog.procedures
                     and not prog.type_defs
-                    and not (isinstance(prog, ProgramWithValidation) and (prog.tests or prog.evals))
+                    and not (
+                        isinstance(prog, ProgramWithValidation)
+                        and (prog.tests or prog.evals)
+                    )
                 ):
                     prog.prelude = self._walk_python_block_code(child)
                     prelude_consumed = True
@@ -351,7 +367,9 @@ class _Walker:
                 code="K-BLOCK-COMMENT",
             )
 
-    def _line_error(self, line_index: int, message: str, *, code: Optional[str] = None) -> None:
+    def _line_error(
+        self, line_index: int, message: str, *, code: Optional[str] = None
+    ) -> None:
         """Record a diagnostic at a specific (0-based) line, full-line span."""
         try:
             text = self.source.decode("utf-8")
@@ -374,7 +392,9 @@ class _Walker:
             source_path=self.source_path,
         )
         self.diagnostics.append(
-            KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
+            KediDiagnostic(
+                severity="error", message=message, span=span, code=code, snippet=line
+            )
         )
 
     def _collect_tree_errors(self, node: Node) -> None:
@@ -402,6 +422,9 @@ class _Walker:
         params: List[str] = []
         param_type_annos: dict[str, Optional[str]] = {}
         param_type_exprs: dict[str, Optional[TypeExpr]] = {}
+        param_defaults: dict[str, str] = {}
+        seen_params: set[str] = set()
+        seen_default = False
         any_typed = False
         param_list = _field(node, "params")
         if param_list is not None:
@@ -411,6 +434,13 @@ class _Walker:
                 pname_node = _field(param, "name")
                 assert pname_node is not None
                 pname = _identifier_name(self.source, pname_node)
+                if pname in seen_params:
+                    self._error(
+                        param,
+                        f"duplicate parameter {pname!r} in procedure {name!r}",
+                        code="K-PARAM-DUP",
+                    )
+                seen_params.add(pname)
                 params.append(pname)
                 ptype_node = _field(param, "type")
                 if ptype_node is not None:
@@ -421,6 +451,16 @@ class _Walker:
                 else:
                     param_type_annos[pname] = None
                     param_type_exprs[pname] = None
+                default_node = _field(param, "default")
+                if default_node is not None:
+                    seen_default = True
+                    param_defaults[pname] = self._walk_inline_python_expr(default_node)
+                elif seen_default:
+                    self._error(
+                        param,
+                        "required parameter cannot follow a defaulted parameter",
+                        code="K-PARAM-ORDER",
+                    )
 
         return_type_node = _field(node, "return_type")
         return_type_anno: Optional[str] = None
@@ -437,11 +477,19 @@ class _Walker:
             return_type_expr=return_type_expr,
             param_type_annotations=param_type_annos if any_typed or params else None,
             param_type_exprs=param_type_exprs if any_typed or params else None,
+            param_defaults=param_defaults or None,
             loc=self._span(node),
         )
 
         body_node = _field(node, "body")
         if body_node is not None:
+            first_named = _named_children(body_node)
+            if first_named and first_named[0].type == "block_comment":
+                comment = first_named[0]
+                proc.docstring = _decode_block_comment_body(
+                    _src_text(self.source, comment)
+                )
+                proc.docstring_loc = self._span(comment)
             self._walk_block_into(body_node, proc)
         return proc
 
@@ -590,7 +638,9 @@ class _Walker:
         return ReturnBlockStmt(code=code, loc=self._span(node))
 
     def _walk_python_block(self, node: Node) -> PythonBlock:
-        return PythonBlock(code=self._walk_python_block_code(node), loc=self._span(node))
+        return PythonBlock(
+            code=self._walk_python_block_code(node), loc=self._span(node)
+        )
 
     def _walk_python_block_code(self, node: Node) -> str:
         code_node = _field(node, "code")
@@ -648,7 +698,11 @@ class _Walker:
             return TypeUnion(left=left, right=right, loc=self._span(target))
         if target.type == "type_python":
             body_node = _field(target, "code")
-            code = _decode_type_python_body(self.source, body_node) if body_node is not None else ""
+            code = (
+                _decode_type_python_body(self.source, body_node)
+                if body_node is not None
+                else ""
+            )
             return TypePython(code=code, loc=self._span(target))
         # Unknown type_expr shape
         self._error(target, f"unexpected type_expr inner {target.type!r}")
@@ -658,7 +712,9 @@ class _Walker:
         """Walk a node that is a `_type_expr_term` alternative (no `type_expr` wrapper)."""
         t = node.type
         if t == "type_ref":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             return TypeRef(name=name, loc=self._span(node))
         if t == "type_apply":
             name_node = _field(node, "name")
@@ -702,6 +758,7 @@ class _Walker:
         name = _identifier_name(self.source, name_node)
         fields: List[TypeField] = []
         seen_names: set[str] = set()
+        seen_default = False
         field_list = _field(node, "fields")
         if field_list is not None:
             for f in _named_children(field_list):
@@ -718,13 +775,37 @@ class _Walker:
                     )
                 seen_names.add(fname)
                 ftype_node = _field(f, "type")
-                ftype_anno = self._type_expr_to_str(ftype_node) if ftype_node is not None else None
-                ftype_expr = self._walk_type_expr(ftype_node) if ftype_node is not None else None
+                ftype_anno = (
+                    self._type_expr_to_str(ftype_node)
+                    if ftype_node is not None
+                    else None
+                )
+                ftype_expr = (
+                    self._walk_type_expr(ftype_node) if ftype_node is not None else None
+                )
+                default_node = _field(f, "default")
+                default_expr = None
+                if default_node is not None:
+                    seen_default = True
+                    if ftype_node is None:
+                        self._error(
+                            f,
+                            "defaulted type field requires a type annotation",
+                            code="K-TYPE-DEFAULT-ANNOTATION",
+                        )
+                    default_expr = self._walk_inline_python_expr(default_node)
+                elif seen_default:
+                    self._error(
+                        f,
+                        "required field cannot follow a defaulted field",
+                        code="K-TYPE-FIELD-ORDER",
+                    )
                 fields.append(
                     TypeField(
                         name=fname,
                         type_annotation=ftype_anno,
                         type_expr=ftype_expr,
+                        default_expr=default_expr,
                         loc=self._span(f),
                     )
                 )
@@ -786,15 +867,23 @@ class _Walker:
                 loc=self._span(node),
             )
         if t == "input_segment":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             return InputSegment(name=name, loc=self._span(node))
         if t == "call_segment":
             return self._walk_call_segment(node)
         if t == "output_segment":
-            name = _identifier_name(self.source, _field(node, "name") or _named_children(node)[0])
+            name = _identifier_name(
+                self.source, _field(node, "name") or _named_children(node)[0]
+            )
             type_node = _field(node, "type")
-            type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
-            type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+            type_anno = (
+                self._type_expr_to_str(type_node) if type_node is not None else None
+            )
+            type_expr = (
+                self._walk_type_expr(type_node) if type_node is not None else None
+            )
             return OutputSegment(
                 name=name,
                 type_annotation=type_anno,
@@ -1000,7 +1089,9 @@ class _Walker:
         body_children = _named_children(body) if body is not None else []
 
         if kw_text == "test":
-            suite_t = TestSuite(procedure_name=procedure_name, cases=[], loc=self._span(node))
+            suite_t = TestSuite(
+                procedure_name=procedure_name, cases=[], loc=self._span(node)
+            )
             for c in body_children:
                 if c.type == "test_case":
                     suite_t.cases.append(self._walk_test_case(c))
@@ -1071,7 +1162,11 @@ class _Walker:
                     # Single-line backtick: extract the inline python
                     # body (without backticks).
                     bn = next(
-                        (c for c in _named_children(inner) if c.type == "inline_python_expr"),
+                        (
+                            c
+                            for c in _named_children(inner)
+                            if c.type == "inline_python_expr"
+                        ),
                         None,
                     )
                     if bn is not None:
@@ -1087,7 +1182,9 @@ class _Walker:
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         code, is_block = self._walk_eval_entry_body(_field(node, "body"))
-        return EvalDataset(name=name, code=code, is_block=is_block, loc=self._span(node))
+        return EvalDataset(
+            name=name, code=code, is_block=is_block, loc=self._span(node)
+        )
 
     def _walk_eval_metric(self, node: Node) -> EvalMetric:
         name_node = _field(node, "name")
@@ -1095,7 +1192,9 @@ class _Walker:
         name = _identifier_name(self.source, name_node)
         dataset_node = _field(node, "dataset")
         dataset_name = (
-            _identifier_name(self.source, dataset_node) if dataset_node is not None else None
+            _identifier_name(self.source, dataset_node)
+            if dataset_node is not None
+            else None
         )
         code, is_block = self._walk_eval_entry_body(_field(node, "body"))
         return EvalMetric(

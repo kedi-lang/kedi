@@ -56,9 +56,9 @@ class TypeResolver:
                 if isinstance(resolved_type, type):
                     param_types[param_name] = resolved_type
                 # Handle typing constructs (List, Dict, etc.)
-                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
-                    "<class 'typing."
-                ):
+                elif hasattr(resolved_type, "__origin__") or str(
+                    type(resolved_type)
+                ).startswith("<class 'typing."):
                     # Store typing constructs as-is (they're still valid)
                     param_types[param_name] = resolved_type  # type: ignore
             except Exception:
@@ -99,9 +99,9 @@ class TypeResolver:
                 if isinstance(resolved_type, type):
                     output_types[field_name] = resolved_type
                 # Handle typing constructs
-                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
-                    "<class 'typing."
-                ):
+                elif hasattr(resolved_type, "__origin__") or str(
+                    type(resolved_type)
+                ).startswith("<class 'typing."):
                     output_types[field_name] = resolved_type  # type: ignore
                 else:
                     # Fallback to str if type resolution fails

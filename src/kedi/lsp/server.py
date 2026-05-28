@@ -270,7 +270,9 @@ def _request_focus_line(params: Any) -> Optional[int]:
 
 def _publish_diagnostics(server: LanguageServer, uri: str) -> None:
     doc = server.workspace.get_text_document(uri)
-    diagnostics = features.compute_diagnostics(source=doc.source, source_path=_uri_to_path(uri))
+    diagnostics = features.compute_diagnostics(
+        source=doc.source, source_path=_uri_to_path(uri)
+    )
     server.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
     )

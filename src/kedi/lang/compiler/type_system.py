@@ -17,10 +17,12 @@ constructs ``KediType`` from a ``TypeExpr``.
 
 from __future__ import annotations
 
+import copy
+import json
 import shlex
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, create_model
 
 from ...core import KediRuntime
 from ..ast import (
@@ -31,6 +33,7 @@ from ..ast import (
     TypeRef,
     TypeUnion,
 )
+from ..type_introspection import make_type_init
 from .environment import build_type_env
 
 # ---------------------------------------------------------------------
@@ -53,7 +56,9 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
         return None
 
 
-def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
+def _resolve_expr(
+    rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]
+) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
         return _lookup_name(rt, expr.name, type_env)
@@ -74,7 +79,9 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
 
     if isinstance(expr, TypeUnion):
         left = _resolve_expr(rt, expr.left, type_env) if expr.left is not None else None
-        right = _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
+        right = (
+            _resolve_expr(rt, expr.right, type_env) if expr.right is not None else None
+        )
         if left is None or right is None:
             return None
         try:
@@ -95,7 +102,9 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         except Exception as exc:
             raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
         if not _is_valid_type(result):
-            raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
+            raise TypeError(
+                f"Expression {expr.code!r} does not evaluate to a valid type"
+            )
         return result
 
     return None
@@ -161,7 +170,9 @@ class KediType:
     def is_none(self) -> bool:
         return self._expr is None and self._legacy_str is None
 
-    def resolve(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
+    def resolve(
+        self, rt: KediRuntime, env: dict[str, Any] | None = None
+    ) -> Optional[Any]:
         if self._expr is not None:
             type_env = build_type_env(rt, env)
             return _resolve_expr(rt, self._expr, type_env)
@@ -178,7 +189,9 @@ class KediType:
         if resolved is None:
             return None
         try:
-            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+            return TypeAdapter(
+                resolved, config={"strict": True, "arbitrary_types_allowed": True}
+            )
         except Exception:
             return None
 
@@ -207,7 +220,9 @@ class KediType:
 
     # ---- legacy fallback ----
 
-    def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
+    def _legacy_resolve(
+        self, rt: KediRuntime, env: dict[str, Any] | None
+    ) -> Optional[Any]:
         """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
@@ -257,14 +272,17 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value
     if isinstance(value, dict):
-        return model.model_validate(value)
+        return model(**value)
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("{") and text.endswith("}"):
-            return model.model_validate_json(text)
+            loaded = json.loads(text)
+            if isinstance(loaded, dict):
+                return model(**loaded)
+            raise ValueError(f"Cannot coerce non-object JSON to {model.__name__}")
         parsed = _parse_model_repr(text, model)
         if parsed is not None:
-            return model.model_validate(parsed)
+            return model(**parsed)
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 
@@ -278,29 +296,85 @@ def is_value_compatible(
         return False
 
 
-def register_type(rt: KediRuntime, typedef: TypeDef, type_env: dict[str, Any]) -> None:
+def register_type(
+    rt: KediRuntime,
+    typedef: TypeDef,
+    type_env: dict[str, Any],
+    local_env: dict[str, Any] | None = None,
+) -> None:
     """Register a custom type definition as a Pydantic model."""
     annotations: dict[str, Any] = {}
-    namespace: dict[str, Any] = {}
+    field_defs: dict[str, tuple[Any, Any]] = {}
+    default_values: dict[str, Any] = {}
+    default_env = build_type_env(rt, local_env or {})
 
     for field in typedef.fields:
         kedi_type = KediType.from_node(field.type_expr, field.type_annotation)
         if kedi_type.is_none():
+            if field.default_expr is not None:
+                raise TypeError(
+                    f"Defaulted field {field.name!r} in type {typedef.name} "
+                    "requires a type annotation"
+                )
             # Untyped field defaults to `str` (legacy behaviour).
             kedi_type = KediType(TypeRef(name="str"))
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
-            raise TypeError(f"Unknown type annotation {kedi_type!s} in type {typedef.name}")
+            raise TypeError(
+                f"Unknown type annotation {kedi_type!s} in type {typedef.name}"
+            )
         annotations[field.name] = resolved
+        if field.default_expr is None:
+            field_defs[field.name] = (resolved, ...)
+        else:
+            default_value = rt.executor.evaluate_type_expression(
+                rt, field.default_expr, default_env
+            )
+            default_values[field.name] = default_value
+            field_defs[field.name] = (
+                resolved,
+                _pydantic_default(default_value),
+            )
 
-    namespace["__annotations__"] = annotations
-    field_order = [field.name for field in typedef.fields]
-
-    new_model = type(typedef.name, (BaseModel,), namespace)
-    setattr(new_model, "__init__", _make_init(typedef.name, field_order, new_model))
+    new_model = create_model(typedef.name, __base__=BaseModel, **field_defs)
+    init_namespace = build_type_env(rt, local_env or {})
+    init_namespace[typedef.name] = new_model
+    setattr(
+        new_model,
+        "__init__",
+        make_type_init(
+            typedef,
+            new_model,
+            default_values=default_values,
+            namespace=init_namespace,
+        ),
+    )
 
     type_env[typedef.name] = new_model
     type_env[f"__{typedef.name}_fields__"] = annotations
+
+
+def _pydantic_default(value: Any) -> Any:
+    if _is_immutable_default(value):
+        return Field(default=value)
+    return Field(default_factory=_default_factory(copy.deepcopy(value)))
+
+
+def _default_factory(value: Any):
+    def factory() -> Any:
+        return copy.deepcopy(value)
+
+    return factory
+
+
+def _is_immutable_default(value: Any) -> bool:
+    if value is None or isinstance(value, (str, bytes, int, float, bool)):
+        return True
+    if isinstance(value, tuple):
+        return all(_is_immutable_default(item) for item in value)
+    if isinstance(value, frozenset):
+        return all(_is_immutable_default(item) for item in value)
+    return False
 
 
 def assign_value_from_native(
@@ -315,7 +389,9 @@ def assign_value_from_native(
         if kedi_type.is_none():
             if isinstance(native, str):
                 return native
-            raise TypeError("Native non-string assignment requires explicit type annotation")
+            raise TypeError(
+                "Native non-string assignment requires explicit type annotation"
+            )
         if isinstance(native, str):
             try_typ = kedi_type.resolve(rt, env)
             if try_typ is not None and try_typ is not str:
@@ -339,9 +415,13 @@ def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
         TextSegment,
     )
 
-    non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
+    non_ws = [
+        s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")
+    ]
 
-    is_backtick_native = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprNativeSegment)
+    is_backtick_native = len(non_ws) == 1 and isinstance(
+        non_ws[0], PythonExprNativeSegment
+    )
     is_angle_pure = len(non_ws) == 1 and isinstance(non_ws[0], PythonExprSegment)
     is_call_only = len(non_ws) == 1 and isinstance(non_ws[0], CallSegment)
 
@@ -383,20 +463,6 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         annotation = getattr(field, "annotation", str) or str
         data[name] = _convert_basic_literal(raw, annotation)
     return data
-
-
-def _make_init(type_name: str, field_order: list[str], model_class: type[BaseModel]):
-    def _init(self, *args: Any, **kwargs: Any) -> None:
-        if args:
-            if len(args) > len(field_order):
-                raise TypeError(f"Too many positional arguments for {type_name}")
-            for name, value in zip(field_order, args):
-                if name in kwargs:
-                    raise TypeError(f"Multiple values for field '{name}' in {type_name}")
-                kwargs[name] = value
-        super(model_class, self).__init__(**kwargs)
-
-    return _init
 
 
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:

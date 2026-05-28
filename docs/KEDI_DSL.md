@@ -69,6 +69,7 @@ It can span multiple lines.
 
 - Inline: Everything after `#` is ignored; use `##` for literal `#`
 - Block: Lines containing only `###` (trimmed) start/end blocks; must appear in matching pairs
+- Procedure docstrings: if the first statement inside a procedure body is a block comment, its body becomes the procedure's Python `__doc__` and is surfaced in editor hovers / virtual stubs
 
 ### Template Lines
 
@@ -207,6 +208,19 @@ Message: <greet(Alice)>
 ```
 
 Supported types: `str`, `int`, `float`, `bool`, `list[T]`, plus any custom types defined in your program.
+
+### Default Parameters
+
+Procedure parameters can have single-line inline Python defaults:
+
+```kedi
+@format_count(count: int, label = `"items"`) -> str:
+  = `f"{count} {label}"`
+
+= <format_count(`3`)>
+```
+
+Required positional parameters must come before defaulted parameters, matching Python function semantics. Untyped parameters with defaults keep their native Python value; Kedi does not infer or coerce their type.
 
 You can use either regular or backtick-wrapped type annotations for parameters and return types. They work interchangeably and provide the same type safety guarantees.
 
@@ -388,6 +402,16 @@ return Person(name="Bob", age=25, email="bob@example.com")
 ````
 
 Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable assignments. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
+
+Type fields can also have single-line inline Python defaults:
+
+```kedi
+~Person(name: str, salary: int = `0`, tags: list[str] = `[]`)
+
+= <`Person("Ada").model_dump_json()`>
+```
+
+Defaulted type fields must be annotated. Required fields must come before defaulted fields. Generated Kedi types are Pydantic `BaseModel` subclasses, so keyword construction and model APIs such as `model_dump_json()` remain available; Kedi also supports positional construction in field order.
 
 ## Advanced Features
 

@@ -13,6 +13,7 @@ dependencies = [
     "click",
     "pytest>=8.2",
     "pydantic>=2",
+    "docstring-parser>=0.18",
     "python-dotenv",
     "pydantic-settings",
     "pydantic-ai>=1.0.17",
@@ -52,6 +53,9 @@ kedi-lsp = "kedi.lsp.server:main"
 [tool.hatch.build]
 packages = ["src/kedi"]
 include-package-data = true
+
+[tool.uv.sources]
+tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 
 [tool.black]
 line-length = 100

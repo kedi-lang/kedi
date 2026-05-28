@@ -285,7 +285,9 @@ def test_mixed_return_is_returnstmt_not_block():
 
 
 def test_template_text_escapes_decoded():
-    prog = parse_program("@p():\n  Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n")
+    prog = parse_program(
+        "@p():\n  Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n"
+    )
     template_line = prog.procedures[0].body[0]
     text = "".join(s.text for s in template_line.segments if isinstance(s, TextSegment))
     assert "<angle>" in text

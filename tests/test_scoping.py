@@ -100,7 +100,9 @@ def test_inline_name_error_yields_empty(monkeypatch: Any) -> None:
 
 def test_assign_block_type_coercion(monkeypatch: Any) -> None:
     src = "@p():\n  [n: int] = ```\n  return '5'\n  ```\n  = <`str(n*2)`>\n\n= <p()>\n"
-    with pytest.raises(TypeError):  # type coercion is not allowed, should raise TypeError
+    with pytest.raises(
+        TypeError
+    ):  # type coercion is not allowed, should raise TypeError
         _run(src)
 
 

@@ -228,6 +228,7 @@ class TypeField:
     name: str
     type_annotation: Optional[str] = None
     type_expr: Optional[TypeExpr] = None
+    default_expr: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
@@ -256,13 +257,18 @@ class ProcedureDef:
     name: str
     params: List[str]
     body: List[Stmt] = field(default_factory=list)
+    docstring: Optional[str] = None
+    docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     return_type_annotation: Optional[str] = None
     return_type_expr: Optional[TypeExpr] = None
     # Maps parameter name to legacy string annotation. Kept for
     # backward-compat; ``param_type_exprs`` is the new structured form.
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
     param_type_exprs: Optional[dict[str, Optional[TypeExpr]]] = None
-    lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
+    param_defaults: Optional[dict[str, str]] = None
+    lexical_env: Optional[dict[str, Any]] = field(
+        default=None, repr=False, compare=False
+    )
     # Legacy AI-prompt-only spec (superseded by `auto_spec`).
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None

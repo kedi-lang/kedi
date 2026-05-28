@@ -95,7 +95,9 @@ def test_mock_optimizer_type_validation_multi_param():
     # Create a span for testing
     span = OptimizeSpan(
         name="test_span",
-        template_lines=[TemplateLine(segments=[TextSegment(text="[result] from <x> and <y>")])],
+        template_lines=[
+            TemplateLine(segments=[TextSegment(text="[result] from <x> and <y>")])
+        ],
     )
 
     # Should fail type validation - wrong tuple length

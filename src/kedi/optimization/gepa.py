@@ -83,7 +83,9 @@ class GEPAOptimizer(OptimizerAdapter):
         """Per-span directory for DSPy GEPA ``log_dir`` (``gepa_state.bin`` resume)."""
         if not self.source_path:
             return None
-        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in f"{proc_name}__{span_name}")
+        safe = "".join(
+            c if c.isalnum() or c in "._-" else "_" for c in f"{proc_name}__{span_name}"
+        )
         return self.source_path.parent / f"{self.source_path.name}.gepa" / safe
 
     def optimize_procedure(
@@ -173,7 +175,9 @@ class GEPAOptimizer(OptimizerAdapter):
             )
             print("   ✅ Reflection LM created successfully (with call tracing)")
         else:
-            print("\n⚠️  No reflection model configured - GEPA will use default LM for reflection")
+            print(
+                "\n⚠️  No reflection model configured - GEPA will use default LM for reflection"
+            )
 
         optimized_prompts: dict[str, str] = {}
         span_scores: list[float] = []
@@ -182,14 +186,18 @@ class GEPAOptimizer(OptimizerAdapter):
         original_prefixes: dict[str, str | None] = {}
         for span in spans:
             if span.template_lines:
-                original_prefixes[span.name] = span.template_lines[0].optimized_prompt_prefix
+                original_prefixes[span.name] = span.template_lines[
+                    0
+                ].optimized_prompt_prefix
             else:
                 original_prefixes[span.name] = None
 
         try:
             for span_idx, span in enumerate(spans, 1):
                 print(f"\n{'=' * 80}")
-                print(f"GEPA Optimization: Span {span_idx}/{len(spans)} - '{span.name}'")
+                print(
+                    f"GEPA Optimization: Span {span_idx}/{len(spans)} - '{span.name}'"
+                )
                 print(f"{'=' * 80}")
 
                 # Prepare training/validation examples
@@ -202,7 +210,9 @@ class GEPAOptimizer(OptimizerAdapter):
                     test_list_full = list(test_list)
                     # Trim test set if max_validation_examples is configured
                     if self.config.max_validation_examples is not None:
-                        test_list_full = test_list_full[: self.config.max_validation_examples]
+                        test_list_full = test_list_full[
+                            : self.config.max_validation_examples
+                        ]
                     val_examples = self.example_formatter.format_examples(
                         test_list_full, proc_params, span=span, proc_name=proc_name
                     )
@@ -213,10 +223,14 @@ class GEPAOptimizer(OptimizerAdapter):
 
                 print(f"   Training examples: {len(train_examples)}")
                 print(f"   Validation examples: {len(val_examples)}")
-                print(f"   Max metric calls (from config): {self.config.max_metric_calls}")
+                print(
+                    f"   Max metric calls (from config): {self.config.max_metric_calls}"
+                )
 
                 print(f"\n🔧 Building DSPy module for span '{span.name}'...")
-                dspy_module = self.module_builder.build_module(span, proc_params, param_types)
+                dspy_module = self.module_builder.build_module(
+                    span, proc_params, param_types
+                )
 
                 # Metric used during GEPA optimization - points at the module being optimized
                 # Obtain proc_def for sibling span overrides during metric evaluation
@@ -232,10 +246,14 @@ class GEPAOptimizer(OptimizerAdapter):
 
                 print("\n🚀 Starting GEPA optimization...")
                 print(f"   Optimizer model: {self.config.optimizer_model or 'default'}")
-                print(f"   Reflection model: {self.config.reflection_model or 'default'}")
+                print(
+                    f"   Reflection model: {self.config.reflection_model or 'default'}"
+                )
                 print(f"   Reflection LM object: {reflection_lm}")
                 if reflection_lm:
-                    print(f"   Reflection LM model: {getattr(reflection_lm, 'model', 'unknown')}")
+                    print(
+                        f"   Reflection LM model: {getattr(reflection_lm, 'model', 'unknown')}"
+                    )
                 print(f"\n{'─' * 80}")
 
                 print("\n🔨 Creating GEPA optimizer...")
@@ -270,7 +288,9 @@ class GEPAOptimizer(OptimizerAdapter):
                     track_stats=True,
                     log_dir=str(gepa_log_dir) if gepa_log_dir is not None else None,
                 )
-                print(f"   Reflection minibatch size: {self.config.reflection_minibatch_size}")
+                print(
+                    f"   Reflection minibatch size: {self.config.reflection_minibatch_size}"
+                )
                 print("   ✅ GEPA optimizer created successfully")
 
                 est_seconds = len(train_examples) * 25
@@ -307,17 +327,25 @@ class GEPAOptimizer(OptimizerAdapter):
                 # Extract optimized prompt for this span
                 print("\n🔍 Extracting optimized prompt...")
                 previous_instruction = span_to_instruction(span)
-                extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
-                optimized_prompt = normalize_optimized_prompt_prefix(span, extracted.get(span.name))
+                extracted = self.prompt_extractor.extract_prompts(
+                    optimized_module, [span]
+                )
+                optimized_prompt = normalize_optimized_prompt_prefix(
+                    span, extracted.get(span.name)
+                )
                 if optimized_prompt is not None:
                     optimized_prompts[span.name] = optimized_prompt
                     if span.template_lines:
-                        span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
+                        span.template_lines[0].optimized_prompt_prefix = (
+                            optimized_prompt or None
+                        )
 
                     effective_instruction = span_to_instruction(span)
                     print(f"   Previous seed length: {len(previous_instruction)} chars")
                     print(f"   Optimized prefix length: {len(optimized_prompt)} chars")
-                    print(f"   Effective prompt length: {len(effective_instruction)} chars")
+                    print(
+                        f"   Effective prompt length: {len(effective_instruction)} chars"
+                    )
 
                     if effective_instruction == previous_instruction:
                         print("   ⚠️  Prompt appears unchanged")
@@ -334,7 +362,9 @@ class GEPAOptimizer(OptimizerAdapter):
                     self._save_prompts_immediately(proc_name, optimized_prompts)
                 else:
                     print("   ❌ No optimized prompt found")
-                    warnings.warn(f"No optimized prompt found for span '{span.name}'", UserWarning)
+                    warnings.warn(
+                        f"No optimized prompt found for span '{span.name}'", UserWarning
+                    )
                     continue
 
                 # Re-wrap metric with the optimized module for scoring
@@ -378,7 +408,9 @@ class GEPAOptimizer(OptimizerAdapter):
 
             if hasattr(fn, "__code__"):
                 closure_vars = inspect.getclosurevars(fn)
-                proc = closure_vars.nonlocals.get("proc") or closure_vars.globals.get("proc")
+                proc = closure_vars.nonlocals.get("proc") or closure_vars.globals.get(
+                    "proc"
+                )
                 return proc
         except Exception:
             return None

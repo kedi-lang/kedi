@@ -43,9 +43,7 @@ class GEPAMetricWrapper:
     """
 
     def __init__(self) -> None:
-        self._prediction_cache: "weakref.WeakKeyDictionary[Any, tuple[float, Optional[str]]]" = (
-            weakref.WeakKeyDictionary()
-        )
+        self._prediction_cache: "weakref.WeakKeyDictionary[Any, tuple[float, Optional[str]]]" = weakref.WeakKeyDictionary()
         # Fallback cache keyed by id() for objects that are not weakref-able
         self._prediction_id_cache: dict[int, tuple[float, Optional[str]]] = {}
         # Serializes apply/restore of span.template_lines mutations across
@@ -114,7 +112,9 @@ class GEPAMetricWrapper:
                 ) or self._lookup_cached_feedback(pred)
                 if cached is not None:
                     cached_score, cached_feedback = cached
-                    return ScoreWithFeedback(score=cached_score, feedback=cached_feedback or "")
+                    return ScoreWithFeedback(
+                        score=cached_score, feedback=cached_feedback or ""
+                    )
 
                 input_val = self._extract_input(example_obj, proc_params)
                 expected_output = getattr(example_obj, "_expected", None)
@@ -140,8 +140,12 @@ class GEPAMetricWrapper:
                                 )
 
                         if module_ref:
-                            optimized_prompt = self._extract_current_instructions(module_ref)
-                            prompt_handle = self._apply_prompt_prefix(span, optimized_prompt)
+                            optimized_prompt = self._extract_current_instructions(
+                                module_ref
+                            )
+                            prompt_handle = self._apply_prompt_prefix(
+                                span, optimized_prompt
+                            )
 
                         score, feedback = kedi_metric(input_val, expected_output)
                         score_float = float(score)
@@ -161,8 +165,12 @@ class GEPAMetricWrapper:
                             flush=True,
                         )
 
-                        payload = ScoreWithFeedback(score=score_float, feedback=feedback_text or "")
-                        self._store_cached_feedback(prediction_obj, score_float, feedback_text)
+                        payload = ScoreWithFeedback(
+                            score=score_float, feedback=feedback_text or ""
+                        )
+                        self._store_cached_feedback(
+                            prediction_obj, score_float, feedback_text
+                        )
                         self._store_cached_feedback(pred, score_float, feedback_text)
                         return payload
                     finally:
@@ -184,7 +192,9 @@ class GEPAMetricWrapper:
                     flush=True,
                 )
 
-                payload = ScoreWithFeedback(score=0.0, feedback=f"GEPA metric error: {error_msg}")
+                payload = ScoreWithFeedback(
+                    score=0.0, feedback=f"GEPA metric error: {error_msg}"
+                )
                 self._store_cached_feedback(pred, 0.0, payload.feedback)
                 return payload
 
@@ -214,7 +224,11 @@ class GEPAMetricWrapper:
 
     def _apply_prompt_prefix(self, span: Any, instructions: str | None):
         """Temporarily apply optimized instructions to the span's first line."""
-        if instructions is None or not span or not getattr(span, "template_lines", None):
+        if (
+            instructions is None
+            or not span
+            or not getattr(span, "template_lines", None)
+        ):
             return None
         first_line = span.template_lines[0]
         original = first_line.optimized_prompt_prefix
@@ -336,7 +350,9 @@ class GEPAMetricWrapper:
         if isinstance(feedback, dspy.Prediction):
             # Avoid recursive nesting; extract textual portion
             text = getattr(feedback, "feedback", None)
-            return str(text) if text is not None else str(getattr(feedback, "score", ""))
+            return (
+                str(text) if text is not None else str(getattr(feedback, "score", ""))
+            )
         return str(feedback)
 
     def _lookup_cached_feedback(

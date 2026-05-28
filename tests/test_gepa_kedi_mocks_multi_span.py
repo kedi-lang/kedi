@@ -103,9 +103,9 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
     assert len(proc.optimize_spans) == 2, "Procedure should have 2 optimize spans"
     assert "span_a" in optimized, "span_a should have an optimized prompt"
     assert "span_b" in optimized, "span_b should have an optimized prompt"
-    assert (
-        optimized["span_a"] != optimized["span_b"]
-    ), "Different spans should get different optimized prompts"
+    assert optimized["span_a"] != optimized["span_b"], (
+        "Different spans should get different optimized prompts"
+    )
 
 
 # ── Two procedures optimized independently ───────────────────────────
@@ -161,7 +161,9 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 """
     # Optimize proc_a
     Recorder.reset()
-    prog_a, rt_a, proc_a, param_types_a, _, metric_a = _prepare(src, proc_index=0, eval_index=0)
+    prog_a, rt_a, proc_a, param_types_a, _, metric_a = _prepare(
+        src, proc_index=0, eval_index=0
+    )
     optimizer_a = GEPAOptimizer(
         config=OptimizerConfig(
             max_metric_calls=120,
@@ -186,7 +188,9 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
 
     # Optimize proc_b
     Recorder.reset()
-    prog_b, rt_b, proc_b, param_types_b, _, metric_b = _prepare(src, proc_index=1, eval_index=1)
+    prog_b, rt_b, proc_b, param_types_b, _, metric_b = _prepare(
+        src, proc_index=1, eval_index=1
+    )
     optimizer_b = GEPAOptimizer(
         config=OptimizerConfig(
             max_metric_calls=120,
@@ -301,5 +305,7 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
     # target, the other span's baseline (combined with the first's optimized
     # prefix) may already be at-optimum and have no candidate to adopt.
     seen = "\n".join(c.instructions for c in Recorder.calls)
-    assert "Compute the initial" in seen, "first_step's seed should reach the Predict mock"
+    assert "Compute the initial" in seen, (
+        "first_step's seed should reach the Predict mock"
+    )
     assert "Refine to get" in seen, "second_step's seed should reach the Predict mock"

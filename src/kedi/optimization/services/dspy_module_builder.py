@@ -72,7 +72,9 @@ class DSPyModuleBuilder:
         span_outputs = extract_output_fields(span)
 
         if not span_outputs:
-            raise ValueError(f"Optimize span '{span.name}' must have at least one output field")
+            raise ValueError(
+                f"Optimize span '{span.name}' must have at least one output field"
+            )
 
         # Create signature with span inputs (not procedure parameters) and span outputs
         # This ensures DSPy sees the actual span-level inputs like <prettified_architecture>
@@ -142,7 +144,9 @@ class DSPyModuleBuilder:
             **field_definitions,
         )
 
-    def _resolve_type_annotation(self, type_anno: str, param_types: dict[str, type]) -> type:
+    def _resolve_type_annotation(
+        self, type_anno: str, param_types: dict[str, type]
+    ) -> type:
         """Resolve a type annotation string to an actual Python type.
 
         Args:
