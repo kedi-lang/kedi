@@ -145,9 +145,7 @@ class TestMockLMOptimizer:
         assert "name" in out
 
     def test_value_changes_with_range(self):
-        out_low = self._call(
-            "Your output fields are:\n1. `y` (int):\nInstructions: RANGE[0,10]"
-        )
+        out_low = self._call("Your output fields are:\n1. `y` (int):\nInstructions: RANGE[0,10]")
         Recorder.reset()
         out_high = self._call(
             "Your output fields are:\n1. `y` (int):\nInstructions: RANGE[100,200]"
@@ -231,15 +229,9 @@ class TestRecorder:
 
     def test_optimizer_and_reflection_call_filters(self):
         Recorder.reset()
-        Recorder.lm_calls.append(
-            LMCall(prompt="a", response="b", model="mock/optimizer")
-        )
-        Recorder.lm_calls.append(
-            LMCall(prompt="c", response="d", model="mock/reflection")
-        )
-        Recorder.lm_calls.append(
-            LMCall(prompt="e", response="f", model="mock/optimizer")
-        )
+        Recorder.lm_calls.append(LMCall(prompt="a", response="b", model="mock/optimizer"))
+        Recorder.lm_calls.append(LMCall(prompt="c", response="d", model="mock/reflection"))
+        Recorder.lm_calls.append(LMCall(prompt="e", response="f", model="mock/optimizer"))
         assert len(Recorder.optimizer_calls()) == 2
         assert len(Recorder.reflection_calls()) == 1
 

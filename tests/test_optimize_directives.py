@@ -170,10 +170,7 @@ def test_mock_optimizer_interface():
     assert len(result) == 1
     assert "find_capital" in result
     # Mock optimizer adds improvements to prompts
-    assert (
-        "[capital]" in result["find_capital"]
-        or "Think step by step" in result["find_capital"]
-    )
+    assert "[capital]" in result["find_capital"] or "Think step by step" in result["find_capital"]
     assert isinstance(score, float)
     assert 0.0 <= score <= 1.0
 

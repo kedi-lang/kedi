@@ -156,9 +156,7 @@ class MockOptimizer(OptimizerAdapter):
                     )
 
                 # Validate each element matches corresponding param type
-                for param_idx, (param_name, arg_val) in enumerate(
-                    zip(proc_params, input_val)
-                ):
+                for param_idx, (param_name, arg_val) in enumerate(zip(proc_params, input_val)):
                     expected_type = param_types.get(param_name)
                     if expected_type and not isinstance(arg_val, expected_type):
                         raise TypeError(

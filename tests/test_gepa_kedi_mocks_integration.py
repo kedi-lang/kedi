@@ -115,9 +115,9 @@ def test_optimization_converges_score_improves(monkeypatch: pytest.MonkeyPatch):
     assert score >= 0.66, f"Expected score >= 0.66, got {score}"
 
     distinct = {r for r in ranges}
-    assert len(distinct) >= 2, (
-        f"Expected at least 2 distinct ranges (proving iteration), got {len(distinct)}"
-    )
+    assert (
+        len(distinct) >= 2
+    ), f"Expected at least 2 distinct ranges (proving iteration), got {len(distinct)}"
 
     assert "produce_value" in optimized
     assert "RANGE[" in optimized["produce_value"]
@@ -155,12 +155,10 @@ def test_feedback_text_reaches_reflection_lm(monkeypatch: pytest.MonkeyPatch):
     reflection_prompts = [c.prompt for c in Recorder.reflection_calls()]
     if reflection_prompts:
         all_text = " ".join(reflection_prompts)
-        feedback_found = (
-            "TOO_LOW" in all_text or "TOO_HIGH" in all_text or "OK" in all_text
-        )
-        assert feedback_found, (
-            "Expected feedback text (TOO_LOW/TOO_HIGH/OK) in at least one reflection prompt"
-        )
+        feedback_found = "TOO_LOW" in all_text or "TOO_HIGH" in all_text or "OK" in all_text
+        assert (
+            feedback_found
+        ), "Expected feedback text (TOO_LOW/TOO_HIGH/OK) in at least one reflection prompt"
 
 
 # ── Inverted feedback diverges or stalls ─────────────────────────────
@@ -405,7 +403,7 @@ def test_gradual_metric_drives_incremental_improvement(monkeypatch: pytest.Monke
     first_lo, first_hi = ranges[0]
     last_lo, last_hi = ranges[-1]
 
-    assert dist_to_target(last_lo, last_hi) <= dist_to_target(first_lo, first_hi), (
-        "Gradual metric should drive range closer to target"
-    )
+    assert dist_to_target(last_lo, last_hi) <= dist_to_target(
+        first_lo, first_hi
+    ), "Gradual metric should drive range closer to target"
     assert score >= 0.5, f"Expected score >= 0.5 with gradual metric, got {score}"

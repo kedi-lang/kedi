@@ -96,9 +96,7 @@ class OptimizedPromptLoader:
                 if span.template_lines:
                     # Modify the existing TemplateLine object in place
                     # This automatically updates proc.body since they reference the same object
-                    span.template_lines[0].optimized_prompt_prefix = (
-                        optimized_prompt or None
-                    )
+                    span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
                 else:
                     # This shouldn't happen - optimize spans should have template lines
                     # But if it does, create a new one with empty segments and the prefix

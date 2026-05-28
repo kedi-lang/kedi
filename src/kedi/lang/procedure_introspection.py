@@ -87,12 +87,8 @@ def attach_procedure_metadata(
             procedure_param_type_to_python(proc, param_name, default="str")
             for param_name in proc.params
         ),
-        param_defaults=tuple(
-            param_defaults.get(param_name) for param_name in proc.params
-        ),
-        default_values=tuple(
-            default_values.get(param_name) for param_name in proc.params
-        ),
+        param_defaults=tuple(param_defaults.get(param_name) for param_name in proc.params),
+        default_values=tuple(default_values.get(param_name) for param_name in proc.params),
         return_type=procedure_return_type_to_python(proc, default="str"),
         docstring=proc.docstring,
     )

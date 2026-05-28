@@ -140,24 +140,18 @@ class VirtualBuilder:
         src_end = region.range["end"]
         start_line = src_start["line"]
         end_line = src_end["line"]
-        dedent = (
-            self._common_indent(start_line, end_line) if region.kind == "fenced" else 0
-        )
+        dedent = self._common_indent(start_line, end_line) if region.kind == "fenced" else 0
 
         for source_line in range(start_line, end_line + 1):
             if source_line >= len(self.source_lines):
                 continue
             line_text = self.source_lines[source_line]
             start_char = src_start["character"] if source_line == start_line else 0
-            end_char = (
-                src_end["character"] if source_line == end_line else len(line_text)
-            )
+            end_char = src_end["character"] if source_line == end_line else len(line_text)
             if source_line == end_line and end_char == 0:
                 continue
             if dedent:
-                start_char = min(
-                    end_char, start_char + min(dedent, _indent_width(line_text))
-                )
+                start_char = min(end_char, start_char + min(dedent, _indent_width(line_text)))
             if end_char < start_char:
                 continue
 
@@ -232,8 +226,7 @@ class VirtualBuilder:
 class RegionCursor:
     def __init__(self, ranges: list[dict[str, Any]]) -> None:
         self.regions = [
-            PythonRegion(kind=r["kind"], range=r["range"], text=r.get("text", ""))
-            for r in ranges
+            PythonRegion(kind=r["kind"], range=r["range"], text=r.get("text", "")) for r in ranges
         ]
 
     def next(self, kind: str, after: Optional[Span] = None) -> Optional[PythonRegion]:
@@ -312,9 +305,7 @@ def compute_python_virtual_document(
             _emit_python_module_stub(builder, stmt.code)
         builder.add("")
 
-    if focused_proc is None and (
-        program.toplevel_body or program.toplevel_return is not None
-    ):
+    if focused_proc is None and (program.toplevel_body or program.toplevel_return is not None):
         builder.add("def __kedi_toplevel__() -> Any:")
         scope: dict[str, ScopeName] = {}
         before_body = builder.line
@@ -338,9 +329,7 @@ def compute_python_virtual_document(
         _emit_procedure_body(builder, cursor, proc, header_defaults)
 
     if focused_proc is None and isinstance(program, ProgramWithValidation):
-        procedure_map = {
-            proc.name: proc for proc in _all_procedures(program.procedures)
-        }
+        procedure_map = {proc.name: proc for proc in _all_procedures(program.procedures)}
         _emit_validation(builder, cursor, program, procedure_map)
 
     return {
@@ -352,9 +341,7 @@ def compute_python_virtual_document(
     }
 
 
-def _fallback_virtual_document(
-    source: str, ranges: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _fallback_virtual_document(source: str, ranges: list[dict[str, Any]]) -> dict[str, Any]:
     builder = VirtualBuilder(source, None)
     for r in ranges:
         builder.add_mapped_region(
@@ -382,9 +369,7 @@ def _find_deepest_procedure_at_line(
     procedures: Iterable[ProcedureDef], source_line: int
 ) -> Optional[ProcedureDef]:
     for proc in procedures:
-        if proc.loc is None or not (
-            proc.loc.start_line <= source_line <= proc.loc.end_line
-        ):
+        if proc.loc is None or not (proc.loc.start_line <= source_line <= proc.loc.end_line):
             continue
         nested = _find_deepest_procedure_at_line(_nested_procedures(proc), source_line)
         return nested or proc
@@ -475,8 +460,7 @@ def _emit_python_class_stub(builder: VirtualBuilder, stmt: py_ast.ClassDef) -> N
         builder.add(f"    {name}: {typ}")
     if fields:
         params = ", ".join(
-            _python_class_init_param(name, typ, has_default)
-            for name, typ, has_default in fields
+            _python_class_init_param(name, typ, has_default) for name, typ, has_default in fields
         )
         builder.add(f"    def __init__(self, {params}) -> None: ...")
     for method in methods:
@@ -566,9 +550,7 @@ def _unparse_or_any(expr: Optional[py_ast.AST]) -> str:
 
 def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
     return [
-        stmt.proc
-        for stmt in proc.body
-        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+        stmt.proc for stmt in proc.body if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
     ]
 
 
@@ -618,13 +600,9 @@ def _emit_type_stub(
         builder.add(f"    def __init__({_type_init_params(typedef)}) -> None: ...")
 
 
-def _emit_proc_stub(
-    builder: VirtualBuilder, proc: ProcedureDef, prefix: str = ""
-) -> None:
+def _emit_proc_stub(builder: VirtualBuilder, proc: ProcedureDef, prefix: str = "") -> None:
     params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
-    ret = _type_to_python(
-        proc.return_type_expr, proc.return_type_annotation, default="str"
-    )
+    ret = _type_to_python(proc.return_type_expr, proc.return_type_annotation, default="str")
     if proc.docstring:
         line = builder.add(f"{prefix}def {proc.name}({params}) -> {ret}:")
         for doc_line in _docstring_lines(proc.docstring, prefix + "    "):
@@ -647,9 +625,7 @@ def _emit_procedure_body(
     header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
     params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
-    ret = _type_to_python(
-        proc.return_type_expr, proc.return_type_annotation, default="str"
-    )
+    ret = _type_to_python(proc.return_type_expr, proc.return_type_annotation, default="str")
     signature = f"def __kedi_scope_{proc.name}({params}) -> {ret}:"
     signature_line = builder.add(signature)
     _add_proc_default_regions(
@@ -689,9 +665,7 @@ def _emit_nested_procedure(
     header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
     params = ", ".join(_proc_param_to_python(proc, name) for name in proc.params)
-    ret = _type_to_python(
-        proc.return_type_expr, proc.return_type_annotation, default="str"
-    )
+    ret = _type_to_python(proc.return_type_expr, proc.return_type_annotation, default="str")
     signature = f"{indent}def {proc.name}({params}) -> {ret}:"
     signature_line = builder.add(signature)
     _add_proc_default_regions(
@@ -792,9 +766,7 @@ def _emit_assign_block(
     indent: str,
 ) -> None:
     typ = _type_to_python(stmt.type_expr, stmt.type_annotation)
-    helper = (
-        f"__kedi_block_{stmt.name}_{stmt.loc.start_line if stmt.loc else len(scope)}"
-    )
+    helper = f"__kedi_block_{stmt.name}_{stmt.loc.start_line if stmt.loc else len(scope)}"
     params = _scope_params(scope)
     signature = f"{indent}def {helper}({params}) -> {typ}:"
     signature_line = builder.add(signature)
@@ -906,9 +878,7 @@ def _emit_validation(
                 builder, cursor, case, f"__kedi_test_{suite.procedure_name}_{case.name}"
             )
     for suite in program.evals:
-        for dataset in list(suite.datasets.values()) + list(
-            suite.test_datasets.values()
-        ):
+        for dataset in list(suite.datasets.values()) + list(suite.test_datasets.values()):
             _emit_validation_code(
                 builder,
                 cursor,
@@ -1093,9 +1063,7 @@ def _index_header_default_ranges(
         container_line = item.get("containerLine")
         if owner_kind is None or container_line is None:
             continue
-        indexed.setdefault(owner_kind, {}).setdefault(container_line, []).append(
-            item["range"]
-        )
+        indexed.setdefault(owner_kind, {}).setdefault(container_line, []).append(item["range"])
     return indexed
 
 
@@ -1113,9 +1081,7 @@ def _add_proc_default_regions(
     signature: str,
     header_defaults: dict[str, dict[int, list[Range]]],
 ) -> None:
-    default_ranges = list(
-        header_defaults.get("param", {}).get(_container_line(proc), [])
-    )
+    default_ranges = list(header_defaults.get("param", {}).get(_container_line(proc), []))
     if not default_ranges:
         return
     search_from = signature.find("(") + 1
@@ -1303,9 +1269,7 @@ def main_loop() -> None:
             payload = json.loads(line)
             request_id = payload.get("id")
             text = payload.get("text", "")
-            source_path = payload.get("sourcePath") or _path_from_uri(
-                payload.get("uri")
-            )
+            source_path = payload.get("sourcePath") or _path_from_uri(payload.get("uri"))
             focus_line = payload.get("focusLine")
             result = compute_python_virtual_document(
                 text,

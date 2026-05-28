@@ -33,12 +33,8 @@ class _LazyRuntimeAdapter:
 def _build_runtime_adapter(adapter: str, model: str | None):
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "dspy":
-        return _LazyRuntimeAdapter(
-            lambda: DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
-        )
-    return _LazyRuntimeAdapter(
-        lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
-    )
+        return _LazyRuntimeAdapter(lambda: DSPyAdapter(model=model or "groq/qwen/qwen3-32b"))
+    return _LazyRuntimeAdapter(lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b"))
 
 
 def run_tests_cli(
@@ -214,9 +210,7 @@ def run_optimization_cli(
         eval_suite = eval_map[proc.name]
 
         # Load training data using service
-        dataset_name = (
-            list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
-        )
+        dataset_name = list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
         if not dataset_name:
             return 1, f"Procedure '{proc.name}' needs training data"
 
@@ -281,9 +275,7 @@ def run_optimization_cli(
         result_writer.write_training_scores(train_scores_dict)
 
         # Display results
-        display_text = result_writer.format_prompts_for_display(
-            optimized_dict, optimized_path
-        )
+        display_text = result_writer.format_prompts_for_display(optimized_dict, optimized_path)
         return 0, display_text
 
     return 0, ""
@@ -354,8 +346,7 @@ def maybe_run_codegen(
         prog = parse_program(src_txt)
         # Check for auto_spec (new) or ai_prompt (legacy)
         needs = any(
-            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None)
-            for p in prog.procedures
+            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
         )
         if not needs:
             return True, None

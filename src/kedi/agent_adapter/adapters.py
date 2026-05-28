@@ -37,9 +37,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             type: A Pydantic model class based on the provided schema.
         """
         assert output_schema, "Output schema cannot be empty."
-        field_definitions = {
-            field: (type_, ...) for field, type_ in output_schema.items()
-        }
+        field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
         return create_model("_OutputModel", __base__=BaseModel, **field_definitions)  # type: ignore[return-value]
 
     async def produce(
@@ -74,9 +72,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         Synchronous version of produce method.
         """
         return asyncio.run(
-            self.produce(
-                template, output_schema=output_schema, output_type=output_type, **kwargs
-            )
+            self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
         )
 
 
@@ -102,9 +98,7 @@ class DSPyAdapter:
         )
 
     @staticmethod
-    async def type_builder(
-        output_schema: dict[str, type], **kwargs
-    ) -> type[dspy.Signature]:
+    async def type_builder(output_schema: dict[str, type], **kwargs) -> type[dspy.Signature]:
         """
         Type builder to create a dictionary schema from a given output type.
         Args:
@@ -149,6 +143,4 @@ class DSPyAdapter:
         """
         Synchronous version of produce method.
         """
-        return asyncio.run(
-            self.produce(template, output_schema=output_schema, **kwargs)
-        )
+        return asyncio.run(self.produce(template, output_schema=output_schema, **kwargs))

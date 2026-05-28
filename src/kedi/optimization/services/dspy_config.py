@@ -240,9 +240,7 @@ class DSPyConfigurationService:
             raise ImportError("DSPy is required")
 
         if not hasattr(dspy.settings, "lm") or dspy.settings.lm is None:
-            raise RuntimeError(
-                "DSPy LM not configured. Call configure_main_lm() first."
-            )
+            raise RuntimeError("DSPy LM not configured. Call configure_main_lm() first.")
 
         # Ensure cache is always disabled
         dspy.configure_cache(

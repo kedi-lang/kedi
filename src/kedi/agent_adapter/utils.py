@@ -71,8 +71,7 @@ def kedi_program_to_pydantic_tools(
         local_env=local_env,
     )
     procedure_map = {
-        proc.name: proc
-        for proc in _all_procedures(prog.procedures, include_nested=include_nested)
+        proc.name: proc for proc in _all_procedures(prog.procedures, include_nested=include_nested)
     }
     tools: list[Tool] = []
     for name, json_schema in schemas.items():
@@ -181,9 +180,7 @@ def _coerce_tool_arguments(
                     rt, None, provided, allow_str_coercion=False
                 )
         except Exception as exc:
-            raise TypeError(
-                f"Parameter '{param_name}' does not match annotated type"
-            ) from exc
+            raise TypeError(f"Parameter '{param_name}' does not match annotated type") from exc
 
 
 def _tool_metadata(
@@ -215,9 +212,7 @@ def _build_tool_description(
     return build_procedure_description(rt, proc, base_description, local_env=local_env)
 
 
-def _all_procedures(
-    procedures: list[ProcedureDef], *, include_nested: bool
-) -> list[ProcedureDef]:
+def _all_procedures(procedures: list[ProcedureDef], *, include_nested: bool) -> list[ProcedureDef]:
     out: list[ProcedureDef] = []
 
     def visit(proc: ProcedureDef) -> None:

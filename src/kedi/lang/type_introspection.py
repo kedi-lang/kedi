@@ -206,9 +206,7 @@ def make_type_init(
             for field in typedef.fields
         ),
         default_sources=tuple(field.default_expr for field in typedef.fields),
-        default_values=tuple(
-            default_values.get(field.name) for field in typedef.fields
-        ),
+        default_values=tuple(default_values.get(field.name) for field in typedef.fields),
     )
     class_source = metadata.display_class_source()
     init_source = metadata.display_source()

@@ -54,9 +54,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
         end = template.find("]", start + 1)
         keys: List[str] = []
         if start != -1 and end != -1:
-            keys = [
-                k.strip() for k in template[start + 1 : end].split(",") if k.strip()
-            ]
+            keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
 
         # Return predefined responses as an object with attributes
         class MockResult:
@@ -78,9 +76,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
 class EmptyMockAdapter(AgentAdapter[Any]):
     """Mock adapter that returns empty object to trigger missing key errors."""
 
-    async def produce(
-        self, *, template: str, output_schema: Dict[str, type], **_: Any
-    ) -> Any:
+    async def produce(self, *, template: str, output_schema: Dict[str, type], **_: Any) -> Any:
         return self.produce_sync(template=template, output_schema=output_schema)
 
     def produce_sync(
@@ -95,9 +91,7 @@ class EmptyMockAdapter(AgentAdapter[Any]):
 
 def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:
     """Run a kedi program with specific LLM responses."""
-    runtime = compile_program(
-        parse_program(src), adapter=TypeCoercionMockAdapter(responses)
-    )
+    runtime = compile_program(parse_program(src), adapter=TypeCoercionMockAdapter(responses))
     return runtime.run_main()
 
 

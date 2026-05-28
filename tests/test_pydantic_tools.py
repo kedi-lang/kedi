@@ -32,13 +32,8 @@ def test_kedi_procedure_to_pydantic_tool_uses_schema_and_defaults() -> None:
         tool.tool_def.parameters_json_schema["description"]
         == "Translate the provided text. Returns `str` instance."
     )
-    assert (
-        tool.tool_def.parameters_json_schema["properties"]["text"]["type"] == "string"
-    )
-    assert (
-        tool.tool_def.parameters_json_schema["properties"]["style"]["default"]
-        == "brief"
-    )
+    assert tool.tool_def.parameters_json_schema["properties"]["text"]["type"] == "string"
+    assert tool.tool_def.parameters_json_schema["properties"]["style"]["default"] == "brief"
     assert tool.metadata is not None
     assert tool.metadata["kedi_return_schema"] == {"type": "string"}
     assert (
@@ -117,9 +112,7 @@ def test_kedi_procedure_to_pydantic_tool_handles_custom_kedi_types() -> None:
     assert schema["properties"]["person"]["$ref"] == "#/$defs/Person"
     assert "Person" in schema["$defs"]
 
-    result = asyncio.run(
-        tool.function_schema.call({"person": {"name": "Ada", "salary": 5}}, None)
-    )
+    result = asyncio.run(tool.function_schema.call({"person": {"name": "Ada", "salary": 5}}, None))
     assert result == "Ada earns 5"
 
 

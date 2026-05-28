@@ -22,9 +22,7 @@ def test_parser_records_procedure_and_type_defaults() -> None:
         "id": "0",
         "label": '"draft"',
     }
-    assert [
-        (field.name, field.default_expr) for field in program.type_defs[0].fields
-    ] == [
+    assert [(field.name, field.default_expr) for field in program.type_defs[0].fields] == [
         ("name", None),
         ("salary", "0"),
     ]
@@ -104,11 +102,7 @@ def test_python_interop_stub_exposes_defaulted_signature_and_source() -> None:
     signature = rt.executor.evaluate_inline(
         rt, "str(inspect.signature(kedi_proc))", {"inspect": inspect}
     )
-    source = rt.executor.evaluate_inline(
-        rt, "inspect.getsource(kedi_proc)", {"inspect": inspect}
-    )
+    source = rt.executor.evaluate_inline(rt, "inspect.getsource(kedi_proc)", {"inspect": inspect})
 
     assert signature == "(x: int, y: int = 1) -> int"
-    assert source == (
-        "def kedi_proc(x: int, y: int = 1) -> int:\n    return __kedi_call__(x, y)\n"
-    )
+    assert source == ("def kedi_proc(x: int, y: int = 1) -> int:\n    return __kedi_call__(x, y)\n")

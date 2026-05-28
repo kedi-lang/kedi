@@ -121,9 +121,7 @@ def test_optimization_with_list_str_output(monkeypatch: pytest.MonkeyPatch):
     return (0.5, "NEEDS_TAGS")
     ```
 """
-    optimized, score, proc, _ = _optimize(
-        monkeypatch, src, [("item1", None), ("item2", None)]
-    )
+    optimized, score, proc, _ = _optimize(monkeypatch, src, [("item1", None), ("item2", None)])
 
     assert "tag_span" in optimized
     assert score >= 0.0
@@ -164,15 +162,13 @@ def test_optimization_with_python_preprocessing(monkeypatch: pytest.MonkeyPatch)
     assert score >= 0.0
 
     for call in Recorder.calls:
-        assert "prefix" in call.kwargs, (
-            "Span references <prefix>, so it should be in kwargs"
-        )
-        assert "text" not in call.kwargs, (
-            "Span does NOT reference <text>, it should not be in kwargs"
-        )
-        assert "word_count" not in call.kwargs, (
-            "Span does NOT reference <word_count>, it should not be in kwargs"
-        )
+        assert "prefix" in call.kwargs, "Span references <prefix>, so it should be in kwargs"
+        assert (
+            "text" not in call.kwargs
+        ), "Span does NOT reference <text>, it should not be in kwargs"
+        assert (
+            "word_count" not in call.kwargs
+        ), "Span does NOT reference <word_count>, it should not be in kwargs"
 
 
 # ── Multiline span ───────────────────────────────────────────────────
@@ -205,9 +201,9 @@ def test_optimization_with_multiline_span(monkeypatch: pytest.MonkeyPatch):
     assert "detailed" in optimized
 
     span = proc.optimize_spans[0]
-    assert len(span.template_lines) == 3, (
-        f"Expected 3 template lines in multiline span, got {len(span.template_lines)}"
-    )
+    assert (
+        len(span.template_lines) == 3
+    ), f"Expected 3 template lines in multiline span, got {len(span.template_lines)}"
 
 
 # ── Non-optimized lines preserved ────────────────────────────────────
@@ -280,9 +276,7 @@ def test_complex_span_inputs_forwarding(monkeypatch: pytest.MonkeyPatch):
         assert "tagged" in call.kwargs, "Span references <tagged>"
         assert "raw" not in call.kwargs, "Span does NOT reference <raw>"
         value = call.kwargs.get("tagged", "")
-        assert "TAG:" in str(value), (
-            f"Expected 'TAG:' prefix in computed input, got '{value}'"
-        )
+        assert "TAG:" in str(value), f"Expected 'TAG:' prefix in computed input, got '{value}'"
 
 
 # ── Optimization with test_data split ────────────────────────────────

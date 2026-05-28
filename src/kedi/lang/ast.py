@@ -266,9 +266,7 @@ class ProcedureDef:
     param_type_annotations: Optional[dict[str, Optional[str]]] = None
     param_type_exprs: Optional[dict[str, Optional[TypeExpr]]] = None
     param_defaults: Optional[dict[str, str]] = None
-    lexical_env: Optional[dict[str, Any]] = field(
-        default=None, repr=False, compare=False
-    )
+    lexical_env: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
     # Legacy AI-prompt-only spec (superseded by `auto_spec`).
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None

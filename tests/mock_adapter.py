@@ -28,9 +28,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         end = template.find("]", start + 1)
         keys: List[str] = []
         if start != -1 and end != -1:
-            keys = [
-                k.strip() for k in template[start + 1 : end].split(",") if k.strip()
-            ]
+            keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
         annotations: Dict[str, Any] = dict(output_schema or {})
         data: Dict[str, Any] = {}
         for k in keys:

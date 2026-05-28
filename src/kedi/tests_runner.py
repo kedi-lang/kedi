@@ -102,12 +102,8 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
                     _eval_python_inline(rt, c.code, {})
                 case_results.append(TestCaseResult(name=c.name, success=True))
             except Exception as e:
-                case_results.append(
-                    TestCaseResult(name=c.name, success=False, error=str(e))
-                )
-        results.append(
-            TestRunResult(procedure=suite.procedure_name, cases=case_results)
-        )
+                case_results.append(TestCaseResult(name=c.name, success=False, error=str(e)))
+        results.append(TestRunResult(procedure=suite.procedure_name, cases=case_results))
     return results
 
 
@@ -231,9 +227,7 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                 except Exception as e:
                     score = 0.0
                     feedback = f"error: {e}"
-                metric_results.append(
-                    EvalMetricResult(name=m.name, score=score, feedback=feedback)
-                )
+                metric_results.append(EvalMetricResult(name=m.name, score=score, feedback=feedback))
             else:
                 # Dataset-aware metric - iterate over dataset (test_data preferred, fallback to training)
                 dataset_name = m.dataset_name
@@ -314,19 +308,11 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                             eval_scores.append(0.0)
                             eval_feedbacks.append(f"error: {e}")
 
-                eval_agg_score = (
-                    sum(eval_scores) / len(eval_scores) if eval_scores else 0.0
-                )
-                eval_feedback_str = (
-                    "; ".join(eval_feedbacks) if eval_feedbacks else None
-                )
+                eval_agg_score = sum(eval_scores) / len(eval_scores) if eval_scores else 0.0
+                eval_feedback_str = "; ".join(eval_feedbacks) if eval_feedbacks else None
                 metric_results.append(
-                    EvalMetricResult(
-                        name=m.name, score=eval_agg_score, feedback=eval_feedback_str
-                    )
+                    EvalMetricResult(name=m.name, score=eval_agg_score, feedback=eval_feedback_str)
                 )
 
-        results.append(
-            EvalRunResult(procedure=suite.procedure_name, metrics=metric_results)
-        )
+        results.append(EvalRunResult(procedure=suite.procedure_name, metrics=metric_results))
     return results

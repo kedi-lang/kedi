@@ -32,9 +32,7 @@ def procedure_json_schema(
         if default_expr is None:
             field_defs[param_name] = (param_type, ...)
             continue
-        default_value = rt.executor.evaluate_type_expression(
-            rt, default_expr, default_env
-        )
+        default_value = rt.executor.evaluate_type_expression(rt, default_expr, default_env)
         field_defs[param_name] = (param_type, copy.deepcopy(default_value))
 
     model = create_model(  # type: ignore[call-overload]
@@ -85,10 +83,7 @@ def program_procedure_json_schemas(
 ) -> dict[str, dict[str, Any]]:
     """Build input JSON Schemas for procedures in a parsed program."""
     procedures = _all_procedures(prog.procedures, include_nested=include_nested)
-    return {
-        proc.name: procedure_json_schema(rt, proc, local_env=local_env)
-        for proc in procedures
-    }
+    return {proc.name: procedure_json_schema(rt, proc, local_env=local_env) for proc in procedures}
 
 
 def build_procedure_description(

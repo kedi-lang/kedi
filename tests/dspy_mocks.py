@@ -41,9 +41,7 @@ def deterministic_uniform_0_1(key: str) -> float:
     return (val % 10_000_000) / 10_000_000.0
 
 
-def sample_from_range(
-    template: str, *, prefer_midpoint: bool = True
-) -> Tuple[int, float]:
+def sample_from_range(template: str, *, prefer_midpoint: bool = True) -> Tuple[int, float]:
     """Produce an (int_value, float_value) determined by RANGE[...] in template."""
     lo, hi = parse_first_range(template)
     if prefer_midpoint:
@@ -54,9 +52,7 @@ def sample_from_range(
     return (int(round(value)), float(value))
 
 
-def dist_to_target(
-    lo: float, hi: float, target_lo: float = 40.0, target_hi: float = 60.0
-) -> float:
+def dist_to_target(lo: float, hi: float, target_lo: float = 40.0, target_hi: float = 60.0) -> float:
     """Distance from interval [lo,hi] to target [target_lo,target_hi]."""
     if hi < target_lo:
         return target_lo - hi
@@ -219,9 +215,7 @@ class MockLM(BaseLM):
             if isinstance(messages, list) and messages:
                 all_content = []
                 for msg in messages:
-                    content = (
-                        msg.get("content", "") if isinstance(msg, dict) else str(msg)
-                    )
+                    content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
                     all_content.append(content)
                 prompt_text = "\n".join(all_content)
             else:
@@ -341,9 +335,7 @@ class MockLM(BaseLM):
             output_fields = [f for f in all_found if f.lower() not in exclude]
 
         for fld in output_fields:
-            field_context = prompt[
-                max(0, prompt.find(fld) - 80) : prompt.find(fld) + 80
-            ].lower()
+            field_context = prompt[max(0, prompt.find(fld) - 80) : prompt.find(fld) + 80].lower()
 
             if "int" in field_context and "list" not in field_context:
                 outputs[fld] = ival

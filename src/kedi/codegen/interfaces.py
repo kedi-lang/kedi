@@ -15,9 +15,7 @@ class ProgramContext:
     """
 
     preamble: str = ""
-    type_definitions: list[str] = field(
-        default_factory=list
-    )  # Python class definitions
+    type_definitions: list[str] = field(default_factory=list)  # Python class definitions
     procedure_definitions: list[str] = field(
         default_factory=list
     )  # Python function signatures with docs

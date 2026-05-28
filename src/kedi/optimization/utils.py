@@ -83,9 +83,7 @@ def span_to_instruction(
     return base
 
 
-def normalize_optimized_prompt_prefix(
-    span: OptimizeSpan, instructions: str | None
-) -> str:
+def normalize_optimized_prompt_prefix(span: OptimizeSpan, instructions: str | None) -> str:
     """Convert a full DSPy instruction string into the stored prefix form.
 
     Kedi persists only the optimized prefix and keeps the original span lines as the
@@ -163,9 +161,7 @@ def render_instruction_lines(
                     parts.append(f"[{segment.name}]")
             elif isinstance(segment, (PythonExprSegment, PythonExprNativeSegment)):
                 try:
-                    value = evaluate_python_inline(
-                        rt, getattr(segment, "code", ""), kwargs
-                    )
+                    value = evaluate_python_inline(rt, getattr(segment, "code", ""), kwargs)
                     parts.append(str(value))
                 except Exception:
                     code = getattr(segment, "code", "")

@@ -492,9 +492,7 @@ def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None
 
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
-    )
+    src = "@p():\n  [a:int] = `40+2`\n  [b] = <`40+2`>\n  = <`str(a)+'-'+b`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "42-42"
 

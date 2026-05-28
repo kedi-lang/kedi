@@ -16,15 +16,11 @@ def test_python_interop_exposes_stub_signature_name_and_source() -> None:
     signature = rt.executor.evaluate_inline(
         rt, "str(inspect.signature(kedi_proc))", {"inspect": inspect}
     )
-    source = rt.executor.evaluate_inline(
-        rt, "inspect.getsource(kedi_proc)", {"inspect": inspect}
-    )
+    source = rt.executor.evaluate_inline(rt, "inspect.getsource(kedi_proc)", {"inspect": inspect})
 
     assert name == "kedi_proc"
     assert signature == "(x: int, y: int) -> int"
-    assert source == (
-        "def kedi_proc(x: int, y: int) -> int:\n    return __kedi_call__(x, y)\n"
-    )
+    assert source == ("def kedi_proc(x: int, y: int) -> int:\n    return __kedi_call__(x, y)\n")
     assert "wrapper(*args: Any)" not in source
     assert rt.executor.evaluate_inline(rt, "kedi_proc.__doc__", {}) is None
 
@@ -40,9 +36,7 @@ def test_python_interop_docstring_uses_first_multiline_comment() -> None:
         "= ok\n"
     )
 
-    source = rt.executor.evaluate_inline(
-        rt, "inspect.getsource(kedi_proc)", {"inspect": inspect}
-    )
+    source = rt.executor.evaluate_inline(rt, "inspect.getsource(kedi_proc)", {"inspect": inspect})
     doc = rt.executor.evaluate_inline(rt, "kedi_proc.__doc__", {})
 
     assert source == (
@@ -93,11 +87,7 @@ def test_nested_procedure_python_interop_uses_nested_stub() -> None:
 
 
 def test_type_init_exposes_stub_signature_and_source() -> None:
-    src = (
-        "~Person(name: str, salary: int = `0`)\n"
-        "[person: Person] = `Person('Ada')`\n"
-        "= ok\n"
-    )
+    src = "~Person(name: str, salary: int = `0`)\n" "[person: Person] = `Person('Ada')`\n" "= ok\n"
     rt = _runtime(src)
 
     signature = rt.executor.evaluate_inline(

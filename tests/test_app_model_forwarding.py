@@ -11,9 +11,7 @@ from kedi.tests_runner import TestCaseResult as CaseResult
 from kedi.tests_runner import TestRunResult as RunResult
 
 
-def test_run_evals_cli_forwards_selected_adapter_model(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_run_evals_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypatch) -> None:
     src = tmp_path / "prog.kedi"
     src.write_text("= ok\n", encoding="utf-8")
 
@@ -54,9 +52,7 @@ def test_run_evals_cli_forwards_selected_adapter_model(
     assert seen["run_adapter"] is sentinel
 
 
-def test_run_tests_cli_forwards_selected_adapter_model(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypatch) -> None:
     src = tmp_path / "prog.kedi"
     src.write_text("= ok\n", encoding="utf-8")
 
@@ -73,9 +69,7 @@ def test_run_tests_cli_forwards_selected_adapter_model(
 
     def fake_run_tests(src_main: str, *, adapter=None):
         seen["run_adapter"] = adapter
-        return [
-            RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])
-        ]
+        return [RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])]
 
     monkeypatch.setattr(app, "maybe_run_codegen", fake_codegen)
     monkeypatch.setattr(app, "_build_runtime_adapter", fake_build)
