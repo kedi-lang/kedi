@@ -23,8 +23,7 @@ def test_python_interop_exposes_stub_signature_name_and_source() -> None:
     assert name == "kedi_proc"
     assert signature == "(x: int, y: int) -> int"
     assert source == (
-        "def kedi_proc(x: int, y: int) -> int:\n"
-        "    return __kedi_call__(x, y)\n"
+        "def kedi_proc(x: int, y: int) -> int:\n    return __kedi_call__(x, y)\n"
     )
     assert "wrapper(*args: Any)" not in source
     assert rt.executor.evaluate_inline(rt, "kedi_proc.__doc__", {}) is None
@@ -49,7 +48,7 @@ def test_python_interop_docstring_uses_first_multiline_comment() -> None:
     assert source == (
         "def kedi_proc(x: int) -> int:\n"
         '    """Add one to the input.\n'
-        "    Keeps the prose as the Python docstring.\"\"\"\n"
+        '    Keeps the prose as the Python docstring."""\n'
         "    return __kedi_call__(x)\n"
     )
     assert doc == "Add one to the input.\nKeeps the prose as the Python docstring."

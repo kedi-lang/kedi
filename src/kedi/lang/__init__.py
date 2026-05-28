@@ -30,6 +30,11 @@ from .ast import (
 )
 from .compiler import compile_program
 from .parser import KediDiagnostic, KediParseError, parse_program
+from .procedure_schema import (
+    procedure_json_schema,
+    procedure_return_json_schema,
+    program_procedure_json_schemas,
+)
 
 __all__ = [
     "Program",
@@ -50,6 +55,9 @@ __all__ = [
     "TypePython",
     "parse_program",
     "compile_program",
+    "procedure_json_schema",
+    "procedure_return_json_schema",
+    "program_procedure_json_schemas",
     "KediDiagnostic",
     "KediParseError",
 ]

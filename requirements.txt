@@ -1,6 +1,7 @@
 dspy
 pytest>=8.2
 pydantic>=2
+docstring-parser>=0.18
 pydantic-ai
 python-dotenv
 pydantic-settings

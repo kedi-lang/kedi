@@ -18,6 +18,7 @@ constructs ``KediType`` from a ``TypeExpr``.
 from __future__ import annotations
 
 import copy
+import json
 import shlex
 from typing import Any, Optional, Union
 
@@ -271,14 +272,17 @@ def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value
     if isinstance(value, dict):
-        return model.model_validate(value)
+        return model(**value)
     if isinstance(value, str):
         text = value.strip()
         if text.startswith("{") and text.endswith("}"):
-            return model.model_validate_json(text)
+            loaded = json.loads(text)
+            if isinstance(loaded, dict):
+                return model(**loaded)
+            raise ValueError(f"Cannot coerce non-object JSON to {model.__name__}")
         parsed = _parse_model_repr(text, model)
         if parsed is not None:
-            return model.model_validate(parsed)
+            return model(**parsed)
     raise ValueError(f"Cannot coerce {type(value).__name__} to {model.__name__}")
 
 

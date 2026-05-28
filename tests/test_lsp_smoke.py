@@ -26,6 +26,7 @@ def _decode_semantic_tokens(data: list[int]) -> list[tuple[int, int, int, int, i
         out.append((line, col, length, token_type, token_mods))
     return out
 
+
 # ---------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------
@@ -123,11 +124,7 @@ def test_hover_on_docstring_comment_uses_procedure_docstring():
 
 def test_hover_on_regular_block_comment_stays_none():
     src = (
-        "@translate(text: str) -> str:\n"
-        "  = <text>\n"
-        "  ###\n"
-        "  Not a docstring.\n"
-        "  ###\n"
+        "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
     )
     hover = features.compute_hover(
         source=src, source_path="example.kedi", pos=lsp.Position(line=3, character=6)
@@ -678,22 +675,27 @@ def test_semantic_tokens_docstring_comment_uses_variable_token():
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = _decode_semantic_tokens(tokens.data)
     variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
-    assert any(line == 1 and token_type == variable_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 2 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+    assert any(
+        line == 1 and token_type == variable_type
+        for line, _, _, token_type, _ in decoded
+    )
+    assert any(
+        line == 2 and token_type == variable_type
+        for line, _, _, token_type, _ in decoded
+    )
 
 
 def test_semantic_tokens_regular_block_comment_stays_comment_token():
     src = (
-        "@translate(text: str) -> str:\n"
-        "  = <text>\n"
-        "  ###\n"
-        "  Not a docstring.\n"
-        "  ###\n"
+        "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
     )
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = _decode_semantic_tokens(tokens.data)
     comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")
-    assert any(line == 2 and token_type == comment_type for line, _, _, token_type, _ in decoded)
+    assert any(
+        line == 2 and token_type == comment_type
+        for line, _, _, token_type, _ in decoded
+    )
 
 
 # ---------------------------------------------------------------------

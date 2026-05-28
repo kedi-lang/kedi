@@ -47,14 +47,7 @@ def test_block_comment_between_statements(monkeypatch: Any) -> None:
 def test_first_block_comment_in_procedure_body_becomes_docstring(
     monkeypatch: Any,
 ) -> None:
-    src = (
-        "@p():\n"
-        "  ###\n"
-        "  Summary line.\n"
-        "    Indented detail.\n"
-        "  ###\n"
-        "  = ok\n"
-    )
+    src = "@p():\n  ###\n  Summary line.\n    Indented detail.\n  ###\n  = ok\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
 
@@ -64,14 +57,7 @@ def test_first_block_comment_in_procedure_body_becomes_docstring(
 
 
 def test_nonleading_block_comment_does_not_become_docstring(monkeypatch: Any) -> None:
-    src = (
-        "@p():\n"
-        "  hello\n"
-        "  ###\n"
-        "  Not a docstring.\n"
-        "  ###\n"
-        "  = ok\n"
-    )
+    src = "@p():\n  hello\n  ###\n  Not a docstring.\n  ###\n  = ok\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
 

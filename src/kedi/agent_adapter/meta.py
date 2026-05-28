@@ -29,3 +29,4 @@ class AgentAdapter(Protocol[T]):
         Returns:
             T: The output produced by the agent, matching the specified output type.
         """
+        pass

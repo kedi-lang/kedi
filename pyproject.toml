@@ -13,6 +13,7 @@ dependencies = [
     "click",
     "pytest>=8.2",
     "pydantic>=2",
+    "docstring-parser>=0.18",
     "python-dotenv",
     "pydantic-settings",
     "pydantic-ai>=1.0.17",
