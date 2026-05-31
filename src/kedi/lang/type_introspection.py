@@ -41,10 +41,6 @@ class TypeInitMetadata:
             lines.append("")
         lines.extend(
             [
-                f"    {self._new_signature()}",
-                '        """This stub is generated for Python introspection."""',
-                f"        {self._new_call()}",
-                "",
                 f"    {self._signature()}",
                 '        """This stub is generated for Python introspection."""',
                 f"        {self._init_call()}",
@@ -63,29 +59,6 @@ class TypeInitMetadata:
         lines.append(f"    {self._init_call()}")
         return "\n".join(lines) + "\n"
 
-    def display_new_source(self) -> str:
-        return (
-            f"{self._new_signature()}\n"
-            '    """This stub is generated for Python introspection."""\n'
-            f"    {self._new_call()}\n"
-        )
-
-    def executable_new_source(self) -> str:
-        return f"{self._new_signature(executable=True)}\n    {self._new_call()}\n"
-
-    def executable_class_source(self) -> str:
-        lines = [
-            f"class {self.name}:",
-            '    """This stub is generated for Python introspection."""',
-            *self._class_field_lines(),
-            f"    {self._new_signature()}",
-            f"        {self._new_call()}",
-            f"    {self._signature()}",
-            '        """This stub is generated for Python introspection."""',
-            f"        {self._init_call()}",
-        ]
-        return "\n".join(lines) + "\n"
-
     def default_namespace(self) -> dict[str, Any]:
         namespace: dict[str, Any] = {}
         for index, (source, value) in enumerate(
@@ -95,7 +68,6 @@ class TypeInitMetadata:
                 continue
             default_value = _DefaultValue(source, value)
             namespace[f"__kedi_default_{index}"] = default_value
-            namespace[self._class_runtime_default_name(index)] = default_value
         return namespace
 
     def _signature(self) -> str:
@@ -124,25 +96,6 @@ class TypeInitMetadata:
             return "def __init__(self) -> None:"
         return f"def __init__(self, {params}) -> None:"
 
-    def _new_signature(self, *, executable: bool = False) -> str:
-        params = ", ".join(
-            self._param_signature(
-                field,
-                typ,
-                (
-                    self._class_runtime_default_name(index)
-                    if executable and default is not None
-                    else default
-                ),
-            )
-            for index, (field, typ, default) in enumerate(
-                zip(self.fields, self.field_types, self.default_sources, strict=False)
-            )
-        )
-        if not params:
-            return f'def __new__(cls) -> "{self.name}":'
-        return f'def __new__(cls, {params}) -> "{self.name}":'
-
     def _param_signature(self, field: str, typ: str, default_source: str | None) -> str:
         piece = f"{field}: {typ}"
         if default_source is not None:
@@ -157,15 +110,6 @@ class TypeInitMetadata:
         if not kwargs:
             return "__kedi_model_init__(self)"
         return f"__kedi_model_init__(self, {kwargs})"
-
-    def _new_call(self) -> str:
-        kwargs = self._keyword_args()
-        if not kwargs:
-            return "return __kedi_model_new__(cls)"
-        return f"return __kedi_model_new__(cls, {kwargs})"
-
-    def _class_runtime_default_name(self, index: int) -> str:
-        return f"kedi_default_{index}"
 
     def _class_field_lines(self) -> list[str]:
         lines: list[str] = []
@@ -210,19 +154,13 @@ def make_type_init(
     )
     class_source = metadata.display_class_source()
     init_source = metadata.display_source()
-    new_source = metadata.display_new_source()
     class_filename = f"<kedi-type-class:{typedef.name}:{id(model_class)}>"
     init_filename = f"<kedi-type-init:{typedef.name}:{id(model_class)}>"
-    new_filename = f"<kedi-type-new:{typedef.name}:{id(model_class)}>"
     _cache_source(class_filename, class_source)
     _cache_source(init_filename, init_source)
-    _cache_source(new_filename, new_source)
 
     def init_model(instance: BaseModel, **kwargs: Any) -> None:
         super(model_class, instance).__init__(**kwargs)
-
-    def new_model(cls: type[BaseModel], **_: Any) -> BaseModel:
-        return object.__new__(cls)
 
     default_namespace = metadata.default_namespace()
     init_namespace = dict(namespace)
@@ -233,19 +171,6 @@ def make_type_init(
         init_namespace,
         init_namespace,
     )
-    new_namespace = dict(namespace)
-    new_namespace.update(default_namespace)
-    new_namespace["__kedi_model_new__"] = new_model
-    exec(
-        compile(
-            metadata.executable_new_source(),
-            new_filename,
-            "exec",
-            dont_inherit=True,
-        ),
-        new_namespace,
-        new_namespace,
-    )
 
     module_name = f"_kedi_type_introspection_{typedef.name}_{id(model_class)}"
     module = types.ModuleType(module_name)
@@ -254,17 +179,12 @@ def make_type_init(
     sys.modules[module_name] = module
 
     init = init_namespace["__init__"]
-    new = new_namespace["__new__"]
     init.__qualname__ = f"{typedef.name}.__init__"
     init.__module__ = module_name
     init.__doc__ = "This stub is generated for Python introspection."
-    new.__qualname__ = f"{typedef.name}.__new__"
-    new.__module__ = module_name
-    new.__doc__ = "This stub is generated for Python introspection."
     model_class.__module__ = module_name
     model_class.__qualname__ = typedef.name
     model_class.__doc__ = "This stub is generated for Python introspection."
-    setattr(model_class, "__new__", staticmethod(new))
     return init
 
 

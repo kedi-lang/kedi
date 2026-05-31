@@ -108,16 +108,14 @@ def test_type_init_exposes_stub_signature_and_source() -> None:
     assert "_init(self, *args" not in source
 
 
-def test_type_class_and_new_expose_stub_source() -> None:
+def test_type_class_source_omits_new_stub() -> None:
     src = "~Person(user: str, salary: float = `100000`)\n= ok\n"
     rt = _runtime(src)
 
     class_source = rt.executor.evaluate_inline(
         rt, "inspect.getsource(Person)", {"inspect": inspect}
     )
-    new_source = rt.executor.evaluate_inline(
-        rt, "inspect.getsource(Person.__new__)", {"inspect": inspect}
-    )
+    salary = rt.executor.evaluate_inline(rt, "Person('Ada').salary", {})
 
     assert class_source == (
         "class Person:\n"
@@ -125,16 +123,8 @@ def test_type_class_and_new_expose_stub_source() -> None:
         "    user: str\n"
         "    salary: float = 100000\n"
         "\n"
-        '    def __new__(cls, user: str, salary: float = 100000) -> "Person":\n'
-        '        """This stub is generated for Python introspection."""\n'
-        "        return __kedi_model_new__(cls, user=user, salary=salary)\n"
-        "\n"
         "    def __init__(self, user: str, salary: float = 100000) -> None:\n"
         '        """This stub is generated for Python introspection."""\n'
         "        __kedi_model_init__(self, user=user, salary=salary)\n"
     )
-    assert new_source == (
-        'def __new__(cls, user: str, salary: float = 100000) -> "Person":\n'
-        '    """This stub is generated for Python introspection."""\n'
-        "    return __kedi_model_new__(cls, user=user, salary=salary)\n"
-    )
+    assert salary == 100000
