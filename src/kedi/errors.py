@@ -24,6 +24,7 @@ class KediPythonTrace:
     span: Span | None
     traceback_lineno: int
     python_lineno: int
+    python_col: int | None = None
     kedi_lineno: int | None = None
     procedure_name: str | None = None
     source_snippet: str | None = None
@@ -39,7 +40,13 @@ class KediPythonOrigin:
     kedi_line_offset: int = 0
     procedure_name: str | None = None
 
-    def to_trace(self, traceback_lineno: int, *, source_map: Any | None = None) -> KediPythonTrace:
+    def to_trace(
+        self,
+        traceback_lineno: int,
+        *,
+        source_map: Any | None = None,
+        python_col: int | None = None,
+    ) -> KediPythonTrace:
         python_lineno = max(1, traceback_lineno - self.wrapper_line_offset)
         kedi_lineno = None
         source_snippet = None
@@ -58,6 +65,7 @@ class KediPythonOrigin:
             span=self.span,
             traceback_lineno=traceback_lineno,
             python_lineno=python_lineno,
+            python_col=python_col,
             kedi_lineno=kedi_lineno,
             procedure_name=self.procedure_name,
             source_snippet=source_snippet,
@@ -110,7 +118,13 @@ def collect_python_traces(
 ) -> tuple[KediPythonTrace, ...]:
     traces: list[KediPythonTrace] = []
     if isinstance(exc, SyntaxError) and exc.filename in origins and exc.lineno is not None:
-        traces.append(origins[exc.filename].to_trace(exc.lineno, source_map=source_map))
+        traces.append(
+            origins[exc.filename].to_trace(
+                exc.lineno,
+                source_map=source_map,
+                python_col=exc.offset,
+            )
+        )
     tb = exc.__traceback__
     while tb is not None:
         filename = tb.tb_frame.f_code.co_filename

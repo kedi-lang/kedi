@@ -51,7 +51,11 @@ def test_cli_renders_traceback_for_inline_python_error(tmp_path: Path) -> None:
     assert "Kedi stack trace:" in result.output
     assert f'File "{srcp}"' in result.output
     assert "in inline python" in result.output
-    assert f"embedded python line 1 at {srcp}:2" in result.output
+    assert "embedded Python line 1" in result.output
+    assert "Inline Python error: ZeroDivisionError" in result.output
+    assert "division by zero" in result.output
+    assert "<kedi-python:" not in result.output
+    assert "            ^^^^^" in result.output
     assert "1 / 0" in result.output
     assert "procedure _main" not in result.output
 
@@ -81,9 +85,11 @@ def test_cli_renders_parse_error_with_location(tmp_path: Path) -> None:
     result = runner.invoke(cli_main, [str(srcp)])
 
     assert result.exit_code == 1
-    assert f"{srcp}:1:1: error:" in result.output
+    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert f'File "{srcp}", line 1, column 1' in result.output
     assert "unexpected source at top level" in result.output
     assert "@boom(" in result.output
+    assert "^" in result.output
 
 
 def test_cli_maps_fenced_python_error_to_inner_kedi_line(tmp_path: Path) -> None:
@@ -98,8 +104,9 @@ def test_cli_maps_fenced_python_error_to_inner_kedi_line(tmp_path: Path) -> None
 
     assert result.exit_code == 1
     assert f'File "{srcp}", line 13, in python statement' in result.output
-    assert f"embedded python line 1 at {srcp}:13" in result.output
+    assert "embedded Python line 1" in result.output
     assert 'print(f"{")' in result.output
+    assert "Inline Python error: SyntaxError" in result.output
 
 
 def test_cli_renders_toplevel_body_error_without_return(tmp_path: Path) -> None:
@@ -113,6 +120,7 @@ def test_cli_renders_toplevel_body_error_without_return(tmp_path: Path) -> None:
     assert "Kedi stack trace:" in result.output
     assert f'File "{srcp}", line 1, in assignment x' in result.output
     assert "in inline python" in result.output
+    assert "Inline Python error: ZeroDivisionError" in result.output
     assert "1 / 0" in result.output
 
 
@@ -129,5 +137,27 @@ def test_cli_renders_embedded_python_trace_once_for_assignment_block(tmp_path: P
     assert result.exit_code == 1
     assert f'File "{srcp}", line 1, in assignment x' in result.output
     assert f'File "{srcp}", line 3, in python block' in result.output
-    assert result.output.count("embedded python line") == 1
+    assert result.output.count("embedded Python line") == 1
     assert result.output.count('return "value') == 1
+    assert "Python block error: SyntaxError" in result.output
+    assert "<kedi-python:" not in result.output
+    assert "detected at line" not in result.output
+
+
+def test_cli_labels_nested_python_trace_as_call_then_error(tmp_path: Path) -> None:
+    srcp = tmp_path / "sample.kedi"
+    srcp.write_text(
+        "[x: int] = ```\ndef fn():\n    return 1 / 0\nreturn fn()\n```\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, [str(srcp)])
+
+    assert result.exit_code == 1
+    assert f'File "{srcp}", line 3, in python block' in result.output
+    assert "embedded Python call, line 3" in result.output
+    assert "embedded Python error, line 2" in result.output
+    assert "embedded Python line" not in result.output
+    assert "Python block error: ZeroDivisionError" in result.output
+    assert "division by zero" in result.output
