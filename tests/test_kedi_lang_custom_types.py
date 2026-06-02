@@ -212,13 +212,7 @@ def test_type_redefinition_shadowing():
 
 
 def test_type_used_in_assignment_block_with_annotation():
-    src = (
-        "~Item(name)\n"
-        "[value: Item] = ```\n"
-        "return Item(name='a')\n"
-        "```\n"
-        "= <`value.name`>\n"
-    )
+    src = "~Item(name)\n[value: Item] = ```\nreturn Item(name='a')\n```\n= <`value.name`>\n"
     out = _run(src)
     assert out == "a"
 

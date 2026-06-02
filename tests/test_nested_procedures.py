@@ -25,14 +25,7 @@ def test_nested_simple_definition(monkeypatch: Any) -> None:
 
 def test_nested_shadowing_and_scope(monkeypatch: Any) -> None:
     # Inner bar should shadow outer bar
-    src = (
-        "@bar():\n  = outer\n\n"
-        "@foo():\n"
-        "  @bar():\n"
-        "    = inner\n"
-        "  = <bar()>\n\n"
-        "= <foo()>\n"
-    )
+    src = "@bar():\n  = outer\n\n@foo():\n  @bar():\n    = inner\n  = <bar()>\n\n= <foo()>\n"
     out = _run(src)
     assert out == "inner"
 
@@ -64,13 +57,7 @@ def test_multiple_nested_procedures(monkeypatch: Any) -> None:
 
 
 def test_shadow_param_names(monkeypatch: Any) -> None:
-    src = (
-        "@foo(x):\n"
-        "  @tripler(x):\n"
-        "    = <`int(x)*3`>\n"
-        "  = <tripler(4)>\n\n"
-        "= <foo(10)>\n"
-    )
+    src = "@foo(x):\n  @tripler(x):\n    = <`int(x)*3`>\n  = <tripler(4)>\n\n= <foo(10)>\n"
     out = _run(src)
     assert out == "12"
 
@@ -83,12 +70,7 @@ def test_outer_cannot_see_inner_param(monkeypatch: Any) -> None:
 
 def test_outer_cannot_see_inner_assignment(monkeypatch: Any) -> None:
     src = (
-        "@foo():\n"
-        "  @inner():\n"
-        "    [secret] = value\n"
-        "    = <secret>\n"
-        "  = <`secret`>\n\n"
-        "= <foo()>\n"
+        "@foo():\n  @inner():\n    [secret] = value\n    = <secret>\n  = <`secret`>\n\n= <foo()>\n"
     )
     with pytest.raises(Exception):
         _run(src)
@@ -115,14 +97,7 @@ def test_two_level_nested_params(monkeypatch: Any) -> None:
 
 
 def test_lexical_closure_reads_assignment(monkeypatch: Any) -> None:
-    src = (
-        "@goo():\n"
-        "  [x:int] = `2`\n"
-        "  @bar() -> int:\n"
-        "    = `x`\n"
-        "  = <`bar()`>\n\n"
-        "= <goo()>\n"
-    )
+    src = "@goo():\n  [x:int] = `2`\n  @bar() -> int:\n    = `x`\n  = <`bar()`>\n\n= <goo()>\n"
     out = _run(src)
     assert out == "2"
 

@@ -5,6 +5,7 @@ from typing import List
 
 from ..lang import parse_program
 from ..lang.ast import ProcedureDef
+from ..source_loading import single_file_source_map
 from .interfaces import CodegenConfig
 from .manager import CodegenManager
 from .mock_agents import MockPassingAgent
@@ -41,7 +42,11 @@ def run_codegen(
     use_cache: bool = True,
 ) -> bool:
     text = Path(source_path).read_text(encoding="utf-8")
-    prog = parse_program(text)
+    prog = parse_program(
+        text,
+        source_path=str(Path(source_path).resolve()),
+        source_map=single_file_source_map(source_path, text),
+    )
     procs: List[ProcedureDef] = prog.procedures
     mgr = CodegenManager(
         _select_agent(agent_kind, model),

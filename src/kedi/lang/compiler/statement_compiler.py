@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ...core import KediRuntime
+from ...errors import KediTraceFrame
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
@@ -44,29 +45,32 @@ class StatementCompiler:
         """
 
         def _fn(**kwargs: Any) -> Any:
-            # If an override is provided, short-circuit LLM invocation and inject values.
-            if stmt.optimized_output_override is not None:
-                env = self.rt._current_env.get()
-                if env is None:
-                    raise RuntimeError("Template override requires active runtime environment")
-                for key, value in stmt.optimized_output_override.items():
-                    env[key] = value
-                    kwargs[key] = value
-                return stmt.optimized_output_override
+            with self.rt.trace_frame(
+                KediTraceFrame(kind="template", label="template line", span=stmt.loc)
+            ):
+                # If an override is provided, short-circuit LLM invocation and inject values.
+                if stmt.optimized_output_override is not None:
+                    env = self.rt._current_env.get()
+                    if env is None:
+                        raise RuntimeError("Template override requires active runtime environment")
+                    for key, value in stmt.optimized_output_override.items():
+                        env[key] = value
+                        kwargs[key] = value
+                    return stmt.optimized_output_override
 
-            # If there's an optimized prompt prefix, prepend it to the segments
-            # This allows GEPA to output plain text while preserving type annotations
-            segments_to_use = stmt.segments
-            if stmt.optimized_prompt_prefix:
-                from ..ast import TextSegment
+                # If there's an optimized prompt prefix, prepend it to the segments
+                # This allows GEPA to output plain text while preserving type annotations
+                segments_to_use = stmt.segments
+                if stmt.optimized_prompt_prefix:
+                    from ..ast import TextSegment
 
-                # Prepend optimized text, then original seed prompt with types
-                # Use two newlines for better separation between optimized and seed prompts
-                optimized_text = TextSegment(text=stmt.optimized_prompt_prefix + "\n\n")
-                segments_to_use = [optimized_text] + stmt.segments
+                    # Prepend optimized text, then original seed prompt with types
+                    # Use two newlines for better separation between optimized and seed prompts
+                    optimized_text = TextSegment(text=stmt.optimized_prompt_prefix + "\n\n")
+                    segments_to_use = [optimized_text] + stmt.segments
 
-            expr, _ = prepare_segments(self.rt, segments_to_use, kwargs)
-            return self.rt.m(expr)
+                expr, _ = prepare_segments(self.rt, segments_to_use, kwargs)
+                return self.rt.m(expr)
 
         return _fn
 
@@ -74,35 +78,49 @@ class StatementCompiler:
         """Compile a return statement to a function."""
 
         def _fn(**kwargs: Any) -> Any:
-            rendered = render_expression(self.rt, stmt.segments, kwargs, context="return")
-            return rendered
+            with self.rt.trace_frame(KediTraceFrame(kind="return", label="return", span=stmt.loc)):
+                rendered = render_expression(self.rt, stmt.segments, kwargs, context="return")
+                return rendered
 
         return _fn
 
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
         code = stmt.code
-        if "\n" in code or code.strip().startswith("return"):
-            return execute_python_block(code, self.rt, kwargs)
-        return evaluate_python_inline(self.rt, code, kwargs)
+        with self.rt.trace_frame(
+            KediTraceFrame(kind="return_block", label="return block", span=stmt.loc)
+        ):
+            if "\n" in code or code.strip().startswith("return"):
+                return execute_python_block(code, self.rt, kwargs, span=stmt.loc)
+            return evaluate_python_inline(self.rt, code, kwargs, span=stmt.loc)
 
     def execute_assignment(self, stmt: AssignStmt, closure_env: dict[str, Any]) -> None:
         """Execute an assignment statement."""
-        native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
-        is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
-        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
+        with self.rt.trace_frame(
+            KediTraceFrame(kind="assignment", label=f"assignment {stmt.name}", span=stmt.loc)
+        ):
+            native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
+            is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
+            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
 
-        if native is not None:
-            if is_backtick:
-                value = assign_value_from_native(
-                    native, kedi_type, self.rt, closure_env, strict_native=True
-                )
-            elif is_angle:
-                value = assign_value_from_native(
-                    native, kedi_type, self.rt, closure_env, strict_native=False
-                )
-            elif is_call:
-                value = native
+            if native is not None:
+                if is_backtick:
+                    value = assign_value_from_native(
+                        native, kedi_type, self.rt, closure_env, strict_native=True
+                    )
+                elif is_angle:
+                    value = assign_value_from_native(
+                        native, kedi_type, self.rt, closure_env, strict_native=False
+                    )
+                elif is_call:
+                    value = native
+                else:
+                    value = rendered
+                    if not kedi_type.is_none():
+                        try:
+                            value = kedi_type.validate(self.rt, closure_env, value)
+                        except Exception:
+                            raise TypeError("Native assignment value does not match annotated type")
             else:
                 value = rendered
                 if not kedi_type.is_none():
@@ -110,41 +128,49 @@ class StatementCompiler:
                         value = kedi_type.validate(self.rt, closure_env, value)
                     except Exception:
                         raise TypeError("Native assignment value does not match annotated type")
-        else:
-            value = rendered
+
+            self._set_value(stmt.name, value, closure_env)
+
+    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
+        """Execute an assignment with Python block RHS."""
+        with self.rt.trace_frame(
+            KediTraceFrame(
+                kind="assignment_block",
+                label=f"assignment {stmt.name}",
+                span=stmt.loc,
+            )
+        ):
+            result = execute_python_block(stmt.code, self.rt, closure_env, span=stmt.loc)
+            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
+
+            value = result
             if not kedi_type.is_none():
+                # Strict validation with TypeAdapter
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception:
                     raise TypeError("Native assignment value does not match annotated type")
+            else:
+                if not isinstance(value, str):
+                    raise TypeError(
+                        "Native non-string assignment requires explicit type annotation"
+                    )
 
-        self._set_value(stmt.name, value, closure_env)
-
-    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
-        """Execute an assignment with Python block RHS."""
-        result = execute_python_block(stmt.code, self.rt, closure_env)
-        kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
-
-        value = result
-        if not kedi_type.is_none():
-            # Strict validation with TypeAdapter
-            try:
-                value = kedi_type.validate(self.rt, closure_env, value)
-            except Exception:
-                raise TypeError("Native assignment value does not match annotated type")
-        else:
-            if not isinstance(value, str):
-                raise TypeError("Native non-string assignment requires explicit type annotation")
-
-        self._set_value(stmt.name, value, closure_env)
+            self._set_value(stmt.name, value, closure_env)
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
         """Execute a Python block for side effects."""
-        self.rt.executor.execute_side_effects(self.rt, stmt.code, closure_env)
+        execute_inline_side_effects(
+            self.rt,
+            stmt.code,
+            closure_env,
+            span=stmt.loc,
+            kedi_line_offset=1,
+        )
 
     def execute_backtick_line(self, stmt: BacktickLineStmt, closure_env: dict[str, Any]) -> None:
         """Execute a single-line Python statement for side effects."""
-        execute_inline_side_effects(self.rt, stmt.code, closure_env)
+        execute_inline_side_effects(self.rt, stmt.code, closure_env, span=stmt.loc)
 
     def _set_value(self, name: str, value: Any, closure_env: dict[str, Any]) -> None:
         """Set a value in both closure and runtime environments."""

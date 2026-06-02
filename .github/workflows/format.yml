@@ -26,13 +26,13 @@ jobs:
 
       - name: Install formatters
         run: |
-          pip install --quiet black isort
+          pip install --quiet ruff
 
-      - name: Run Black + isort (safe mode)
+      - name: Run Ruff formatter (safe mode)
         run: |
           set +e
-          find . -type f -name "*.py" -print0 | xargs -0 black || true
-          find . -type f -name "*.py" -print0 | xargs -0 isort || true
+          ruff format . || true
+          ruff check . --fix --select I || true
           set -e
 
       - name: Commit formatted code
@@ -43,6 +43,6 @@ jobs:
           git checkout stable
 
           git add .
-          git diff --cached --quiet || git commit -m "format: black"
+          git diff --cached --quiet || git commit -m "format: ruff"
 
           git push origin stable

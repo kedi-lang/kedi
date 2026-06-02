@@ -129,7 +129,7 @@ class OptimizationDataLoader:
         # Validate it's iterable
         if not hasattr(val, "__iter__") or isinstance(val, (str, bytes)):
             raise ValueError(
-                f"Data '{dataset_name}' must return an iterable " f"(got {type(val).__name__})"
+                f"Data '{dataset_name}' must return an iterable (got {type(val).__name__})"
             )
 
         # Convert dict.items() to list

@@ -108,11 +108,7 @@ def test_hover_on_procedure_header_includes_docstring():
 
 def test_hover_on_docstring_comment_uses_procedure_docstring():
     src = (
-        "@translate(text: str) -> str:\n"
-        "  ###\n"
-        "  Translate the provided text.\n"
-        "  ###\n"
-        "  = <text>\n"
+        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
     )
     hover = features.compute_hover(
         source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=6)
@@ -455,15 +451,7 @@ def test_definition_returns_none_for_non_reference():
 
 
 def test_references_finds_all_call_sites():
-    src = (
-        "@greet():\n"
-        "  = Hi\n"
-        "\n"
-        "@main():\n"
-        "  [a] = <greet()>\n"
-        "  [b] = <greet()>\n"
-        "  = <a><b>\n"
-    )
+    src = "@greet():\n  = Hi\n\n@main():\n  [a] = <greet()>\n  [b] = <greet()>\n  = <a><b>\n"
     # Cursor on `greet` in the @main body's first call.
     refs = features.compute_references(
         source=src,
@@ -664,11 +652,7 @@ def test_semantic_tokens_legend_constants():
 
 def test_semantic_tokens_docstring_comment_uses_variable_token():
     src = (
-        "@translate(text: str) -> str:\n"
-        "  ###\n"
-        "  Translate the provided text.\n"
-        "  ###\n"
-        "  = <text>\n"
+        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
     )
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = _decode_semantic_tokens(tokens.data)

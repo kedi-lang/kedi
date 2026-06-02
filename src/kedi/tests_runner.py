@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
+from .source_loading import load_kedi_source_bundle
 
 
 @dataclass
@@ -39,17 +40,15 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
     text: str
     if "\n" in src_main or "@" in src_main:
         text = src_main
+        source_path = None
+        source_map = None
     else:
         p = Path(src_main)
-        text = p.read_text(encoding="utf-8")
-        # Merge companion .val.kedi and .cache.kedi if present
-        val_path = p.with_suffix(".val.kedi")
-        if val_path.exists():
-            text = text + "\n\n" + val_path.read_text(encoding="utf-8")
-        cache_path = p.with_suffix(".cache.kedi")
-        if cache_path.exists():
-            text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
-    prog = parse_program(text)
+        loaded = load_kedi_source_bundle(p.resolve())
+        text = loaded.text
+        source_path = str(p.resolve())
+        source_map = loaded.source_map
+    prog = parse_program(text, source_path=source_path, source_map=source_map)
     rt = compile_program(prog, adapter=adapter)
     return rt
 

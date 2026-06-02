@@ -376,23 +376,27 @@ def test_program_loader_preserves_output_fields_with_optimized_prefix():
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         source_path = Path(tmpdir) / "test.kedi"
-        source_path.write_text("""
+        source_path.write_text(
+            """
 @solve(x: str) -> int:
   > optimize: solver:
     Input: <x>
     Reasoning: [reasoning: str]
     Answer: [answer: int]
   = `answer`
-""".strip())
+""".strip()
+        )
 
         optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
-        optimized_path.write_text("""
+        optimized_path.write_text(
+            """
 {
   "solve": {
     "solver": "Use careful reasoning before answering."
   }
 }
-""".strip())
+""".strip()
+        )
 
         program = load_program_with_optimized_prompts(source_path)
         proc = next(p for p in program.procedures if p.name == "solve")
@@ -412,14 +416,16 @@ def test_program_loader_normalizes_polluted_optimized_prompt():
     """Historical full-instruction saves should be normalized back to prefix form."""
     with tempfile.TemporaryDirectory() as tmpdir:
         source_path = Path(tmpdir) / "test.kedi"
-        source_path.write_text("""
+        source_path.write_text(
+            """
 @solve(x: str) -> int:
   > optimize: solver:
     Input: <x>
     Reasoning: [reasoning: str]
     Answer: [answer: int]
   = `answer`
-""".strip())
+""".strip()
+        )
 
         base = "Input: <x>\nReasoning: [reasoning: str]\nAnswer: [answer: int]"
         polluted = "Use exact IDs only.\n" + base + "\n" + base

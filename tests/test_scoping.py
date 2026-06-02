@@ -17,13 +17,7 @@ def _run(src: str) -> str:
 
 def test_top_level_assignment_visible_in_python_block(monkeypatch: Any) -> None:
     src = (
-        "[x:int] = `7`\n"
-        "@p():\n"
-        "  [y: int] = ```\n"
-        "  return x * 2\n"
-        "  ```\n"
-        "  = <`str(y)`>\n\n"
-        "= <p()>\n"
+        "[x:int] = `7`\n@p():\n  [y: int] = ```\n  return x * 2\n  ```\n  = <`str(y)`>\n\n= <p()>\n"
     )
     out = _run(src)
     assert out == "14"
@@ -105,14 +99,7 @@ def test_assign_block_type_coercion(monkeypatch: Any) -> None:
 
 
 def test_nested_call_reads_top_level_assignment(monkeypatch: Any) -> None:
-    src = (
-        "[seed] = outer\n"
-        "@inner():\n"
-        "  = <seed>\n\n"
-        "@outer():\n"
-        "  = <inner()>\n\n"
-        "= <outer()>\n"
-    )
+    src = "[seed] = outer\n@inner():\n  = <seed>\n\n@outer():\n  = <inner()>\n\n= <outer()>\n"
     out = _run(src)
     assert out == "outer"
 

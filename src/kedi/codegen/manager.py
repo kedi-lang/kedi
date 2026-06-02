@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..lang.ast import Program
 from ..lang.parser import parse_program
+from ..source_loading import merge_source_documents
 from ..tests_runner import run_tests
 from .interfaces import CodegenAgent, CodegenConfig, ProgramContext
 from .translator import (
@@ -67,11 +68,16 @@ class CodegenManager:
 
     def parse_with_cache(self, source_path: Path) -> Program:
         """Parse source file, merging with cache if it exists."""
-        source = source_path.read_text(encoding="utf-8")
+        documents = [(source_path.resolve(), source_path.read_text(encoding="utf-8"))]
         cache = self.cache_path_for(source_path)
         if cache.exists():
-            source += "\n" + cache.read_text(encoding="utf-8")
-        return parse_program(source)
+            documents.append((cache.resolve(), cache.read_text(encoding="utf-8")))
+        loaded = merge_source_documents(documents)
+        return parse_program(
+            loaded.text,
+            source_path=str(source_path.resolve()),
+            source_map=loaded.source_map,
+        )
 
     def verify_compilation(self, source_path: Path) -> str | None:
         """Verify the code compiles. Returns error message if it doesn't."""

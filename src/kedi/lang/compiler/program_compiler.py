@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core import KediRuntime
 from ...executors.base import Executor
+from ...errors import KediTraceFrame
 from ..ast import Program, ReturnStmt
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
@@ -49,10 +50,13 @@ class ProgramCompiler:
         """Compile program and return configured runtime."""
         # Initialize type environment
         setattr(self.rt, "_type_env_stack", [{}])
+        self.rt._program = prog
+        self.rt._source_map = getattr(prog, "source_map", None)
+        self.rt._source_text = getattr(prog, "source_text", None)
 
         # Execute prelude
         if prog.prelude is not None:
-            self._setup_prelude(prog.prelude)
+            self._setup_prelude(prog.prelude, prog.prelude_loc)
 
         # Register top-level types
         type_env = getattr(self.rt, "_type_env_stack")[0]
@@ -67,8 +71,8 @@ class ProgramCompiler:
             fn = self.proc_compiler.compile_procedure(proc)
             self.rt.procedure(fn)
 
-        # Setup main entry point
-        if prog.toplevel_return is not None:
+        # Setup main entry point when there is executable top-level code.
+        if prog.toplevel_body or prog.toplevel_return is not None:
             self._setup_main(prog.toplevel_body, prog.toplevel_return)
 
         # Attach validation suites
@@ -76,13 +80,14 @@ class ProgramCompiler:
 
         return self.rt
 
-    def _setup_prelude(self, prelude_code: str) -> None:
+    def _setup_prelude(self, prelude_code: str, prelude_loc) -> None:
         """Execute prelude and store environment."""
-        setattr(
-            self.rt,
-            "_prelude_env",
-            self.rt.executor.execute_prelude(self.rt, prelude_code),
-        )
+        with self.rt.trace_frame(KediTraceFrame(kind="prelude", label="prelude", span=prelude_loc)):
+            setattr(
+                self.rt,
+                "_prelude_env",
+                self.rt.executor.execute_prelude(self.rt, prelude_code),
+            )
 
     def _setup_main(self, toplevel_body: list, toplevel_return) -> None:
         """Setup main entry point for top-level execution."""
@@ -94,21 +99,33 @@ class ProgramCompiler:
             setattr(self.rt, "_globals_env", kwargs)
 
             # Execute top-level statements
-            for stmt in toplevel_body:
-                self.executor.execute_single_statement(stmt, kwargs, is_toplevel=True)
+            with self.rt.trace_frame(
+                KediTraceFrame(
+                    kind="program",
+                    label="top-level program",
+                    span=None,
+                )
+            ):
+                for stmt in toplevel_body:
+                    self.executor.execute_single_statement(stmt, kwargs, is_toplevel=True)
 
-            # Execute return
-            if isinstance(toplevel_return, ReturnStmt):
-                return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
-            else:  # ReturnBlockStmt
-                code = toplevel_return.code
-                # Top-level: always return string rendering for native returns
-                if "\n" in code or code.strip().startswith("return"):
-                    result = execute_python_block(code, self.rt, kwargs)
-                    return "" if result is None else str(result)
-                # Inline python native return
-                value = evaluate_python_inline(self.rt, code, kwargs)
-                return "" if value is None else str(value)
+                if toplevel_return is None:
+                    return None
+
+                # Execute return
+                if isinstance(toplevel_return, ReturnStmt):
+                    return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
+                else:  # ReturnBlockStmt
+                    code = toplevel_return.code
+                    # Top-level: always return string rendering for native returns
+                    if "\n" in code or code.strip().startswith("return"):
+                        result = execute_python_block(
+                            code, self.rt, kwargs, span=toplevel_return.loc
+                        )
+                        return "" if result is None else str(result)
+                    # Inline python native return
+                    value = evaluate_python_inline(self.rt, code, kwargs, span=toplevel_return.loc)
+                    return "" if value is None else str(value)
 
     def _attach_validation(self, prog: Program) -> None:
         """Attach validation suites if present.

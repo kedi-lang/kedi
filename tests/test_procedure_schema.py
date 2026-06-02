@@ -61,11 +61,7 @@ def test_procedure_json_schema_parses_rest_param_and_return_descriptions() -> No
 
 
 def test_procedure_json_schema_uses_custom_kedi_types() -> None:
-    src = (
-        "~Person(name: str, salary: int = `0`)\n"
-        "@hire(person: Person) -> Person:\n"
-        "  = `person`\n"
-    )
+    src = "~Person(name: str, salary: int = `0`)\n@hire(person: Person) -> Person:\n  = `person`\n"
     prog = parse_program(src)
     rt = compile_program(prog)
 
@@ -100,12 +96,7 @@ def test_procedure_json_schema_leaves_untyped_params_open() -> None:
 
 
 def test_program_procedure_json_schemas_can_include_nested_procedures() -> None:
-    src = (
-        "@outer(text: str) -> str:\n"
-        "  @inner(value: int) -> int:\n"
-        "    = `value + 1`\n"
-        "  = <text>\n"
-    )
+    src = "@outer(text: str) -> str:\n  @inner(value: int) -> int:\n    = `value + 1`\n  = <text>\n"
     prog = parse_program(src)
     rt = compile_program(prog)
 

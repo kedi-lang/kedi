@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -15,6 +16,12 @@ from typing import (
 )
 
 from .executors.base import DefaultExecutor, Executor
+from .errors import (
+    KediExecutionError,
+    KediPythonOrigin,
+    KediTraceFrame,
+    build_execution_error,
+)
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
@@ -76,6 +83,14 @@ class KediRuntime:
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
             "kedi_current_env", default=None
         )
+        self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
+            "kedi_trace_stack", default=()
+        )
+        self._python_origin_counter = 0
+        self._python_origins: Dict[str, KediPythonOrigin] = {}
+        self._program: Any | None = None
+        self._source_map: Any | None = None
+        self._source_text: str | None = None
 
     # Expressions
     def i(self, key: str) -> InputExpr:
@@ -109,7 +124,7 @@ class KediRuntime:
 
     def run_main(self) -> Any:
         if self._main is None:
-            raise RuntimeError("No main procedure defined")
+            return None
         return self._invoke_procedure(self._main, [])
 
     # Internal helpers
@@ -151,15 +166,33 @@ class KediRuntime:
 
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
         import inspect
+        from .lang.procedure_introspection import get_procedure_metadata
 
         sig = inspect.signature(fn)
         bound = sig.bind_partial(*args)
         bound.apply_defaults()
         local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
+        metadata = get_procedure_metadata(fn)
+        proc_span = getattr(getattr(fn, "__kedi_procedure_def__", None), "loc", None)
+        proc_name = metadata.name if metadata is not None else getattr(fn, "__name__", None)
+        should_trace_procedure = not (fn is self._main and metadata is None)
 
         token = self._current_env.set(local_env)
         try:
-            result = fn(*args)
+            frame_ctx = (
+                self.trace_frame(
+                    KediTraceFrame(
+                        kind="procedure",
+                        label=f"procedure {proc_name}" if proc_name else "procedure",
+                        span=proc_span,
+                        procedure_name=proc_name,
+                    )
+                )
+                if should_trace_procedure
+                else nullcontext()
+            )
+            with frame_ctx:
+                result = fn(*args)
         finally:
             self._current_env.reset(token)
 
@@ -167,6 +200,69 @@ class KediRuntime:
             self._evaluate_value(result, local_env)
             if isinstance(result, (InputExpr, CallExpr))
             else result
+        )
+
+    @contextmanager
+    def trace_frame(self, frame: KediTraceFrame):
+        frame = self._hydrate_frame(frame)
+        stack = self._trace_stack.get()
+        token = self._trace_stack.set(stack + (frame,))
+        try:
+            yield
+        except KediExecutionError:
+            raise
+        except Exception as exc:
+            raise self.build_execution_error(exc) from exc
+        finally:
+            self._trace_stack.reset(token)
+
+    def current_trace_frames(self) -> tuple[KediTraceFrame, ...]:
+        return self._trace_stack.get()
+
+    def build_execution_error(self, exc: BaseException) -> KediExecutionError:
+        return build_execution_error(
+            exc,
+            frames=self.current_trace_frames(),
+            python_origins=self._python_origins,
+            source_map=self._source_map,
+        )
+
+    def register_python_origin(
+        self,
+        *,
+        kind: str,
+        code: str,
+        span: Any,
+        wrapper_line_offset: int = 0,
+        kedi_line_offset: int = 0,
+        procedure_name: str | None = None,
+    ) -> str:
+        self._python_origin_counter += 1
+        filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        self._python_origins[filename] = KediPythonOrigin(
+            filename=filename,
+            kind=kind,
+            code=code,
+            span=span,
+            wrapper_line_offset=wrapper_line_offset,
+            kedi_line_offset=kedi_line_offset,
+            procedure_name=procedure_name,
+        )
+        return filename
+
+    def _hydrate_frame(self, frame: KediTraceFrame) -> KediTraceFrame:
+        if frame.source_snippet is not None or frame.span is None or frame.span.source_path is None:
+            return frame
+        source_map = self._source_map
+        line = None
+        if source_map is not None and hasattr(source_map, "get_line"):
+            line = source_map.get_line(frame.span.source_path, frame.span.start_line)
+        return KediTraceFrame(
+            kind=frame.kind,
+            label=frame.label,
+            span=frame.span,
+            procedure_name=frame.procedure_name,
+            source_snippet=line,
         )
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:

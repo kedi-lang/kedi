@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
+from ...source_loading import CompositeSourceMap
 
 from ..ast import (
     AssignBlockStmt,
@@ -84,17 +85,26 @@ from .escapes import dedent_block, unescape_text_with_tracking
 # ---------------------------------------------------------------------
 
 
-def _span(node: Node, source_path: Optional[str] = None) -> Span:
+def _span(
+    node: Node,
+    source_path: Optional[str] = None,
+    source_map: CompositeSourceMap | None = None,
+) -> Span:
     """Build a :class:`Span` from a tree-sitter node."""
+    start_line = node.start_point[0] + 1
+    end_line = node.end_point[0] + 1
+    start_resolved = source_map.resolve_line(start_line) if source_map is not None else None
+    end_resolved = source_map.resolve_line(end_line) if source_map is not None else None
     return Span(
         start_byte=node.start_byte,
         end_byte=node.end_byte,
         # tree-sitter Point.row/column are 0-based; convert to 1-based.
-        start_line=node.start_point[0] + 1,
+        start_line=start_resolved.source_line if start_resolved else start_line,
         start_col=node.start_point[1] + 1,
-        end_line=node.end_point[0] + 1,
+        end_line=end_resolved.source_line if end_resolved else end_line,
         end_col=node.end_point[1] + 1,
-        source_path=source_path,
+        source_path=start_resolved.source_path if start_resolved else source_path,
+        source_id=start_resolved.source_id if start_resolved else source_path,
     )
 
 
@@ -163,10 +173,17 @@ def _decode_type_python_body(source: bytes, body_node: Node) -> str:
 
 
 class _Walker:
-    def __init__(self, source: bytes, tree: Tree, source_path: Optional[str]):
+    def __init__(
+        self,
+        source: bytes,
+        tree: Tree,
+        source_path: Optional[str],
+        source_map: CompositeSourceMap | None,
+    ):
         self.source = source
         self.tree = tree
         self.source_path = source_path
+        self.source_map = source_map
         self.diagnostics: List[KediDiagnostic] = []
 
     # ----- entry point -----
@@ -221,6 +238,7 @@ class _Walker:
                     and not (isinstance(prog, ProgramWithValidation) and (prog.tests or prog.evals))
                 ):
                     prog.prelude = self._walk_python_block_code(child)
+                    prog.prelude_loc = self._span(child)
                     prelude_consumed = True
                 else:
                     prog.toplevel_body.append(self._walk_python_block(child))
@@ -278,7 +296,7 @@ class _Walker:
     # ----- diagnostics helpers -----
 
     def _span(self, node: Node) -> Span:
-        return _span(node, self.source_path)
+        return _span(node, self.source_path, self.source_map)
 
     def _error(self, node: Node, message: str, code: Optional[str] = None) -> None:
         self.diagnostics.append(
@@ -373,14 +391,16 @@ class _Walker:
         for j in range(line_index):
             start += len(lines[j].encode("utf-8")) + 1  # +1 for '\n'
         end_byte = start + len(line.encode("utf-8"))
+        resolved = self.source_map.resolve_line(line_index + 1) if self.source_map else None
         span = Span(
             start_byte=start,
             end_byte=end_byte,
-            start_line=line_index + 1,
+            start_line=resolved.source_line if resolved else line_index + 1,
             start_col=1,
-            end_line=line_index + 1,
+            end_line=resolved.source_line if resolved else line_index + 1,
             end_col=max(1, len(line) + 1),
-            source_path=self.source_path,
+            source_path=resolved.source_path if resolved else self.source_path,
+            source_id=resolved.source_id if resolved else self.source_path,
         )
         self.diagnostics.append(
             KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
@@ -1190,6 +1210,7 @@ def cst_to_ast(
     source: bytes,
     tree: Tree,
     source_path: Optional[str] = None,
+    source_map: CompositeSourceMap | None = None,
 ) -> Union[Program, ProgramWithValidation]:
     """Walk ``tree`` and produce a Kedi AST.
 
@@ -1197,4 +1218,4 @@ def cst_to_ast(
     collected (parse errors from tree-sitter or structural-validation
     issues).
     """
-    return _Walker(source, tree, source_path).walk_program()
+    return _Walker(source, tree, source_path, source_map).walk_program()

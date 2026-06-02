@@ -7,6 +7,8 @@ from pathlib import Path
 import click
 import dotenv
 
+from kedi.error_rendering import render_execution_error, render_parse_error
+from kedi.errors import KediExecutionError
 from kedi.app import (
     maybe_run_codegen,
     run_evals_cli,
@@ -14,6 +16,7 @@ from kedi.app import (
     run_program_cli,
     run_tests_cli,
 )
+from kedi.lang.parser.diagnostics import KediParseError
 from kedi.utils import parse_args
 
 dotenv.load_dotenv()
@@ -233,7 +236,8 @@ def main(
         # Execute program
         try:
             code, out = run_program_cli(source, adapter=adapter, model=adapter_model)
-            click.echo(out)
+            if out:
+                click.echo(out)
             if code != 0:
                 ctx.exit(code)
             return code
@@ -245,6 +249,12 @@ def main(
     except click.exceptions.Exit:
         # Re-raise click Exit exceptions (from ctx.exit())
         raise
+    except KediParseError as e:
+        click.echo(render_parse_error(e, use_color=sys.stderr.isatty()), err=True, nl=False)
+        ctx.exit(1)
+    except KediExecutionError as e:
+        click.echo(render_execution_error(e, use_color=sys.stderr.isatty()), err=True, nl=False)
+        ctx.exit(1)
     except Exception as e:
         click.echo(f"Execution error: {e}", err=True)
         ctx.exit(1)
