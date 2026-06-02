@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from typing import Optional, Union
 
-from ..ast import Program, ProgramWithValidation
 from ...source_loading import CompositeSourceMap, single_file_source_map
+from ..ast import Program, ProgramWithValidation
 from .cst_to_ast import cst_to_ast
 from .diagnostics import KediDiagnostic, KediParseError
 from .parser import parse as _parse

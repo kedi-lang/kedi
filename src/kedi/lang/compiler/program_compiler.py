@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ...core import KediRuntime
-from ...executors.base import Executor
 from ...errors import KediTraceFrame
+from ...executors.base import Executor
 from ..ast import Program, ReturnStmt
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler

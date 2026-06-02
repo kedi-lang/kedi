@@ -36,8 +36,8 @@ from __future__ import annotations
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
-from ...source_loading import CompositeSourceMap
 
+from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
