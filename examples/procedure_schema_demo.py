@@ -46,8 +46,7 @@ def main() -> None:
     if procedure is None:
         available = ", ".join(proc.name for proc in program.procedures) or "<none>"
         print(
-            f"Procedure {args.procedure!r} not found in {source_path.name}. "
-            f"Available: {available}",
+            f"Procedure {args.procedure!r} not found in {source_path.name}. Available: {available}",
             file=sys.stderr,
         )
         sys.exit(1)

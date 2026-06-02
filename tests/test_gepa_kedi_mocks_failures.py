@@ -227,9 +227,9 @@ def test_span_without_inputs_still_optimizes(monkeypatch: pytest.MonkeyPatch):
     assert score >= 0.0
 
     for call in Recorder.calls:
-        assert (
-            "seed" not in call.kwargs
-        ), "Span has no <seed> reference, so seed should not be forwarded to Predict"
+        assert "seed" not in call.kwargs, (
+            "Span has no <seed> reference, so seed should not be forwarded to Predict"
+        )
 
 
 # ── Empty spans list returns empty ───────────────────────────────────

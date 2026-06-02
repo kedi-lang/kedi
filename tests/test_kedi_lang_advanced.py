@@ -213,11 +213,10 @@ def test_runtime_errors(monkeypatch: Any, src: str, exc: type[BaseException]) ->
         _run(monkeypatch, src)
 
 
-def test_no_main_defined_raises(monkeypatch: Any) -> None:
+def test_no_main_defined_is_noop(monkeypatch: Any) -> None:
     src = "@p(x):\n  = <x>\n"
     rt = _compile(src)
-    with pytest.raises(RuntimeError):
-        rt.run_main()
+    assert rt.run_main() is None
 
 
 # ----------------------

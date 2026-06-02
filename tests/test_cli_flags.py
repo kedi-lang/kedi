@@ -5,7 +5,23 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from click.testing import CliRunner
+
 from kedi.cli import main as cli_main
+
+
+def test_cli_allows_program_without_toplevel_return(tmp_path: Path) -> None:
+    srcp = tmp_path / "library.kedi"
+    srcp.write_text(
+        "~Person(name: str)\n\n@helper(name: str) -> str:\n  = Hello <name>\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli_main, [str(srcp)])
+
+    assert result.exit_code == 0
+    assert result.output == ""
 
 
 def test_cli_optimizer_flag(tmp_path: Path) -> None:

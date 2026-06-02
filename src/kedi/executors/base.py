@@ -21,7 +21,14 @@ class Executor(Protocol):
 
     def execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any: ...
 
-    def execute_side_effects(self, rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None: ...
+    def execute_side_effects(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env_map: dict[str, Any],
+        *,
+        kedi_line_offset: int = 0,
+    ) -> None: ...
 
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]: ...
 
@@ -57,8 +64,9 @@ class DefaultExecutor:
             local_env=local_env,
         )
         env = self._build_python_env(rt, local_env)
+        eval_filename = self._python_filename(rt, "inline", code)
         try:
-            result = eval(code, env, env)
+            result = eval(compile(code, eval_filename, "eval", dont_inherit=True), env, env)
             self._emit_debug(
                 "execution_completed",
                 "evaluate_inline",
@@ -69,8 +77,9 @@ class DefaultExecutor:
             )
             return result
         except SyntaxError:
+            exec_filename = self._python_filename(rt, "inline", code)
             try:
-                exec(code, env, env)
+                exec(compile(code, exec_filename, "exec", dont_inherit=True), env, env)
                 self._emit_debug(
                     "execution_completed",
                     "evaluate_inline",
@@ -90,7 +99,7 @@ class DefaultExecutor:
                     error=str(exc),
                     mode="exec_after_syntax_error",
                 )
-                raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
+                raise
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -101,7 +110,7 @@ class DefaultExecutor:
                 error=str(exc),
                 mode="eval",
             )
-            raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
+            raise
 
     def execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
         self._emit_debug(
@@ -115,8 +124,15 @@ class DefaultExecutor:
         wrapper_src = f"def __kedi_block__({params}):\n" + "\n".join(
             "    " + line for line in code.splitlines()
         )
+        filename = self._python_filename(
+            rt,
+            "block",
+            code,
+            wrapper_line_offset=1,
+            kedi_line_offset=1,
+        )
         try:
-            exec(wrapper_src, env, env)
+            exec(compile(wrapper_src, filename, "exec", dont_inherit=True), env, env)
             result = env["__kedi_block__"](**local_env)
             self._emit_debug(
                 "execution_completed",
@@ -135,9 +151,16 @@ class DefaultExecutor:
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            raise RuntimeError(f"Python block error: {exc}") from exc
+            raise
 
-    def execute_side_effects(self, rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None:
+    def execute_side_effects(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env_map: dict[str, Any],
+        *,
+        kedi_line_offset: int = 0,
+    ) -> None:
         self._emit_debug(
             "execution_started",
             "execute_side_effects",
@@ -145,8 +168,14 @@ class DefaultExecutor:
             env_map=env_map,
         )
         env = self._build_python_env(rt, env_map)
+        filename = self._python_filename(
+            rt,
+            "side_effects",
+            code,
+            kedi_line_offset=kedi_line_offset,
+        )
         try:
-            exec(code, env, env)
+            exec(compile(code, filename, "exec", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -156,7 +185,7 @@ class DefaultExecutor:
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            raise RuntimeError(f"Inline Python error: {type(exc).__name__}: {exc}") from exc
+            raise
         self._sync_existing_variables(rt, env_map, env)
         self._emit_debug(
             "execution_completed",
@@ -169,8 +198,9 @@ class DefaultExecutor:
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]:
         self._emit_debug("execution_started", "execute_prelude", code=code)
         env = self._build_python_env(rt, {})
+        filename = self._python_filename(rt, "prelude", code, kedi_line_offset=1)
         try:
-            exec(code, env, env)
+            exec(compile(code, filename, "exec", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -179,7 +209,7 @@ class DefaultExecutor:
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
-            raise RuntimeError(f"Python prelude error: {exc}") from exc
+            raise
         self._emit_debug(
             "execution_completed",
             "execute_prelude",
@@ -233,7 +263,8 @@ class DefaultExecutor:
             code=code,
         )
         try:
-            result = eval(code, env, env)
+            filename = self._python_filename(rt, "type_expression", code)
+            result = eval(compile(code, filename, "eval", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -250,6 +281,31 @@ class DefaultExecutor:
             output=result,
         )
         return result
+
+    def _python_filename(
+        self,
+        rt: KediRuntime,
+        kind: str,
+        code: str,
+        *,
+        wrapper_line_offset: int = 0,
+        kedi_line_offset: int = 0,
+    ) -> str:
+        frames = rt.current_trace_frames()
+        span = frames[-1].span if frames else None
+        procedure_name = None
+        for frame in reversed(frames):
+            if frame.procedure_name:
+                procedure_name = frame.procedure_name
+                break
+        return rt.register_python_origin(
+            kind=kind,
+            code=code,
+            span=span,
+            wrapper_line_offset=wrapper_line_offset,
+            kedi_line_offset=kedi_line_offset,
+            procedure_name=procedure_name,
+        )
 
     def _build_python_env(self, rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
         from ..lang.compiler.environment import build_python_env

@@ -93,6 +93,7 @@ def attach_procedure_metadata(
         docstring=proc.docstring,
     )
     setattr(fn, _PROCEDURE_METADATA_ATTR, metadata)
+    setattr(fn, "__kedi_procedure_def__", proc)
     fn.__doc__ = proc.docstring
     return fn
 

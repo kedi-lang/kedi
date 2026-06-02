@@ -95,8 +95,7 @@ class DSPyConfigurationService:
         """
         if not DSPY_AVAILABLE:
             raise ImportError(
-                "DSPy is required for DSPyConfigurationService. "
-                "Install with: pip install dspy-ai"
+                "DSPy is required for DSPyConfigurationService. Install with: pip install dspy-ai"
             )
         self.config = config
 

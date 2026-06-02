@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...core import KediRuntime
+from ...errors import KediTraceFrame
 from ..ast import (
     CallArg,
     CallSegment,
@@ -29,19 +30,42 @@ def evaluate_call(rt: KediRuntime, seg: CallSegment, local_env: dict[str, Any]) 
     return rt._invoke_procedure(callee, eval_args)
 
 
-def evaluate_python_inline(rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
+def evaluate_python_inline(
+    rt: KediRuntime,
+    code: str,
+    local_env: dict[str, Any],
+    *,
+    span=None,
+) -> Any:
     """Evaluate inline Python expression or statement."""
-    return rt.executor.evaluate_inline(rt, code, local_env)
+    with rt.trace_frame(KediTraceFrame(kind="python_inline", label="inline python", span=span)):
+        return rt.executor.evaluate_inline(rt, code, local_env)
 
 
-def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any]) -> Any:
+def execute_python_block(code: str, rt: KediRuntime, kwargs: dict[str, Any], *, span=None) -> Any:
     """Execute a multi-line Python block with return value."""
-    return rt.executor.execute_block(rt, code, kwargs)
+    with rt.trace_frame(KediTraceFrame(kind="python_block", label="python block", span=span)):
+        return rt.executor.execute_block(rt, code, kwargs)
 
 
-def execute_inline_side_effects(rt: KediRuntime, code: str, env_map: dict[str, Any]) -> None:
+def execute_inline_side_effects(
+    rt: KediRuntime,
+    code: str,
+    env_map: dict[str, Any],
+    *,
+    span=None,
+    kedi_line_offset: int = 0,
+) -> None:
     """Execute Python code for side effects, syncing back existing vars only."""
-    rt.executor.execute_side_effects(rt, code, env_map)
+    with rt.trace_frame(
+        KediTraceFrame(kind="python_side_effects", label="python statement", span=span)
+    ):
+        rt.executor.execute_side_effects(
+            rt,
+            code,
+            env_map,
+            kedi_line_offset=kedi_line_offset,
+        )
 
 
 def prepare_segments(
@@ -75,7 +99,7 @@ def prepare_segments(
             pytype = kedi_type.resolve(rt, env=kwargs)
             expr.append(rt.o(seg.name, pytype))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = evaluate_python_inline(rt, seg.code, kwargs)
+            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
             expr.append(str(value))
             parts.append(str(value))
 
@@ -111,7 +135,7 @@ def evaluate_assignment_rhs(
     if len(non_ws) == 1:
         seg = non_ws[0]
         if isinstance(seg, PythonExprNativeSegment):
-            value = evaluate_python_inline(rt, seg.code, kwargs)
+            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
             return value, str(value)
         if isinstance(seg, CallSegment):
             value = evaluate_call(rt, seg, kwargs)
@@ -129,7 +153,7 @@ def _evaluate_arg(rt: KediRuntime, arg: CallArg, local_env: dict[str, Any]) -> A
     if isinstance(arg, LiteralArg):
         if hasattr(arg, "__native_backtick__"):
             code = getattr(arg, "__native_backtick__")
-            return evaluate_python_inline(rt, code, local_env)
+            return evaluate_python_inline(rt, code, local_env, span=arg.loc)
         if hasattr(arg, "__render_segments__"):
             segs = getattr(arg, "__render_segments__")
             return render_expression(rt, segs, local_env, context="return")
@@ -138,7 +162,7 @@ def _evaluate_arg(rt: KediRuntime, arg: CallArg, local_env: dict[str, Any]) -> A
             return evaluate_call(rt, nested, local_env)
         if hasattr(arg, "__python_segment__"):
             pyseg = getattr(arg, "__python_segment__")
-            return evaluate_python_inline(rt, pyseg.code, local_env)
+            return evaluate_python_inline(rt, pyseg.code, local_env, span=pyseg.loc)
         return arg.value
     elif isinstance(arg, VarArg):
         return lookup_value(rt, arg.name, local_env)
@@ -194,7 +218,7 @@ def _stringify_segments(
                 else:
                     parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = evaluate_python_inline(rt, seg.code, kwargs)
+            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
             parts.append(str(value))
 
     return "".join(parts)

@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Optional, Union
 
 from ..ast import Program, ProgramWithValidation
+from ...source_loading import CompositeSourceMap, single_file_source_map
 from .cst_to_ast import cst_to_ast
 from .diagnostics import KediDiagnostic, KediParseError
 from .parser import parse as _parse
@@ -37,6 +38,7 @@ def parse_program(
     source: str,
     *,
     source_path: Optional[str] = None,
+    source_map: CompositeSourceMap | None = None,
 ) -> Union[Program, ProgramWithValidation]:
     """Parse Kedi source text into an AST.
 
@@ -55,9 +57,21 @@ def parse_program(
         :class:`KediParseError` (a ``ValueError`` subclass) if the
         source contains parse errors or fails structural validation.
     """
-    source_bytes = source.encode("utf-8") if isinstance(source, str) else source
+    source_text = source.decode("utf-8") if isinstance(source, bytes) else source
+    source_bytes = source_text.encode("utf-8")
     tree = _parse(source_bytes)
-    return cst_to_ast(source_bytes, tree, source_path=source_path)
+    resolved_source_map = source_map
+    if resolved_source_map is None and source_path is not None:
+        resolved_source_map = single_file_source_map(source_path, source_text)
+    program = cst_to_ast(
+        source_bytes,
+        tree,
+        source_path=source_path,
+        source_map=resolved_source_map,
+    )
+    program.source_text = source_text
+    program.source_map = resolved_source_map
+    return program
 
 
 __all__ = [

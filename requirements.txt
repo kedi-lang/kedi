@@ -6,3 +6,4 @@ pydantic-ai
 python-dotenv
 pydantic-settings
 antlr4-python3-runtime>=4.13
+rich>=13

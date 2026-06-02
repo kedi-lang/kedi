@@ -90,9 +90,9 @@ def test_span_inputs_keys_are_span_level(monkeypatch: pytest.MonkeyPatch):
 
     assert Recorder.calls, "Predict should be called"
     for call in Recorder.calls:
-        assert set(call.kwargs.keys()) == {
-            "p"
-        }, f"Span only references <p>; got kwargs keys {set(call.kwargs.keys())}"
+        assert set(call.kwargs.keys()) == {"p"}, (
+            f"Span only references <p>; got kwargs keys {set(call.kwargs.keys())}"
+        )
         assert "a" not in call.kwargs
         assert "b" not in call.kwargs
         assert "c" not in call.kwargs
@@ -124,9 +124,9 @@ def test_span_input_values_are_computed_correctly(monkeypatch: pytest.MonkeyPatc
     assert Recorder.calls, "Predict should be called"
     first = Recorder.calls[0]
     assert "p" in first.kwargs
-    assert (
-        first.kwargs["p"] == "pre-1-2"
-    ), f"Expected computed span input 'pre-1-2', got '{first.kwargs['p']}'"
+    assert first.kwargs["p"] == "pre-1-2", (
+        f"Expected computed span input 'pre-1-2', got '{first.kwargs['p']}'"
+    )
 
 
 # ── Multiple training examples all use span inputs ───────────────────
@@ -160,13 +160,13 @@ def test_all_training_examples_use_span_inputs(monkeypatch: pytest.MonkeyPatch):
         max_calls=20,
     )
 
-    assert (
-        len(Recorder.calls) >= 3
-    ), f"Expected at least 3 Predict calls (one per training example), got {len(Recorder.calls)}"
+    assert len(Recorder.calls) >= 3, (
+        f"Expected at least 3 Predict calls (one per training example), got {len(Recorder.calls)}"
+    )
     for i, call in enumerate(Recorder.calls):
-        assert set(call.kwargs.keys()) == {
-            "tag"
-        }, f"Predict call {i} kwargs keys should be {{'tag'}}, got {set(call.kwargs.keys())}"
+        assert set(call.kwargs.keys()) == {"tag"}, (
+            f"Predict call {i} kwargs keys should be {{'tag'}}, got {set(call.kwargs.keys())}"
+        )
         assert "a" not in call.kwargs
         assert "b" not in call.kwargs
 
@@ -239,6 +239,6 @@ def test_span_outputs_listed_in_instructions(monkeypatch: pytest.MonkeyPatch):
     assert Recorder.calls, "Predict should be called"
     first = Recorder.calls[0]
     instructions = first.instructions.lower()
-    assert (
-        "x" in instructions or "label" in instructions
-    ), "Span instructions should reference span output fields x and/or label"
+    assert "x" in instructions or "label" in instructions, (
+        "Span instructions should reference span output fields x and/or label"
+    )

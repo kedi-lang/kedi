@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from ...lang import Program, parse_program
+from ...source_loading import load_kedi_source_bundle
 from .prompt_loader import OptimizedPromptLoader
 
 
@@ -31,21 +32,12 @@ def load_program_with_optimized_prompts(
     Returns:
         Parsed Program object with optimized prompts injected (if available)
     """
-    # Read source file
-    src = source_path.read_text(encoding="utf-8")
-
-    # Merge companion .val.kedi file if it exists (for validation/tests)
-    val_path = source_path.with_suffix(".val.kedi")
-    if val_path.exists():
-        src = src + "\n\n" + val_path.read_text(encoding="utf-8")
-
-    # Merge cache file if it exists (for AI-generated procedures)
-    cache_path = source_path.with_suffix(".cache.kedi")
-    if cache_path.exists():
-        src = src + "\n\n" + cache_path.read_text(encoding="utf-8")
-
-    # Parse program
-    program = parse_program(src)
+    loaded = load_kedi_source_bundle(source_path)
+    program = parse_program(
+        loaded.text,
+        source_path=str(source_path.resolve()),
+        source_map=loaded.source_map,
+    )
 
     # Load and inject optimized prompts if available
     prompt_loader = OptimizedPromptLoader(source_path)

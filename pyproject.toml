@@ -21,6 +21,7 @@ dependencies = [
     "tree-sitter-kedi==0.1.0",
     "tree-sitter-python>=0.23",
     "pygls>=1.3",
+    "rich>=13",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
@@ -57,10 +58,6 @@ include-package-data = true
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 
-[tool.black]
+[tool.ruff]
 line-length = 100
-target-version = ['py311']
-
-[tool.isort]
-profile = "black"
-line_length = 100
+target-version = "py311"

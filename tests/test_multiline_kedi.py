@@ -112,11 +112,7 @@ def test_multiline_and_block_comment_crosstalk(monkeypatch: Any) -> None:
 
 def test_inline_comment_in_python_block(monkeypatch: Any) -> None:
     src = (
-        "@p() -> int:\n"
-        "  = ```\n"
-        "  return 1  # python comment that stays\n"
-        "  ```\n\n"
-        "= <`str(p())`>\n"
+        "@p() -> int:\n  = ```\n  return 1  # python comment that stays\n  ```\n\n= <`str(p())`>\n"
     )
     out = _run(src)
     assert out == "1"

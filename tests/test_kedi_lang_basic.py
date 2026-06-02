@@ -316,6 +316,11 @@ def test_typed_params_string_default_and_type_mismatch(monkeypatch: Any) -> None
         rt2.run_main()
 
 
+def test_program_without_toplevel_return_is_noop() -> None:
+    rt = _compile("@helper() -> str:\n  = ok\n")
+    assert rt.run_main() is None
+
+
 def test_inline_python_with_procedure_calls(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
@@ -558,12 +563,7 @@ def test_typed_assignment_list_int(monkeypatch: Any) -> None:
 def test_mixed_typed_and_untyped_outputs(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n"
-            "  get [a: int] and [b]\n"
-            "  = <`str(a)+'-'+str(len(str(b)))`>\n\n"
-            "= <p()>\n"
-        ),
+        ("@p():\n  get [a: int] and [b]\n  = <`str(a)+'-'+str(len(str(b)))`>\n\n= <p()>\n"),
     )
     assert "-" in out
 
@@ -597,13 +597,7 @@ def test_typed_list_cross_call_and_inline(monkeypatch: Any) -> None:
 def test_typed_assignment_then_llm(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        (
-            "@p():\n"
-            "  [prefix: str] = pre-\n"
-            "  name is [name: str]\n"
-            "  = <prefix><name>\n\n"
-            "= <p()>\n"
-        ),
+        ("@p():\n  [prefix: str] = pre-\n  name is [name: str]\n  = <prefix><name>\n\n= <p()>\n"),
     )
     assert isinstance(out, str)
 

@@ -61,13 +61,7 @@ def test_procedure_defaults_are_used_and_untyped_defaults_stay_native() -> None:
 
 def test_procedure_defaults_are_definition_time_and_validated() -> None:
     src = (
-        "```\n"
-        "seed = 1\n"
-        "```\n"
-        "@value(x: int = `seed`) -> int:\n"
-        "  = `x`\n\n"
-        "`seed = 5`\n"
-        "= <value()>\n"
+        "```\nseed = 1\n```\n@value(x: int = `seed`) -> int:\n  = `x`\n\n`seed = 5`\n= <value()>\n"
     )
 
     assert run_without_llm(src) == "1"

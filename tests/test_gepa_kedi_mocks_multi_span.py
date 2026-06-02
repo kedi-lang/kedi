@@ -103,9 +103,9 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
     assert len(proc.optimize_spans) == 2, "Procedure should have 2 optimize spans"
     assert "span_a" in optimized, "span_a should have an optimized prompt"
     assert "span_b" in optimized, "span_b should have an optimized prompt"
-    assert (
-        optimized["span_a"] != optimized["span_b"]
-    ), "Different spans should get different optimized prompts"
+    assert optimized["span_a"] != optimized["span_b"], (
+        "Different spans should get different optimized prompts"
+    )
 
 
 # ── Two procedures optimized independently ───────────────────────────

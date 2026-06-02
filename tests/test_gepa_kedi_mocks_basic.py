@@ -116,18 +116,14 @@ class TestMockLMOptimizer:
 
     def test_produces_midpoint_for_float_field(self):
         prompt = (
-            "Your output fields are:\n"
-            "1. `score` (float): the score\n\n"
-            "Instructions: RANGE[0,100]"
+            "Your output fields are:\n1. `score` (float): the score\n\nInstructions: RANGE[0,100]"
         )
         out = self._call(prompt)
         assert out["score"] == 50.0
 
     def test_produces_list_for_list_field(self):
         prompt = (
-            "Your output fields are:\n"
-            "1. `tags` (list[str]): tag list\n\n"
-            "Instructions: RANGE[0,10]"
+            "Your output fields are:\n1. `tags` (list[str]): tag list\n\nInstructions: RANGE[0,10]"
         )
         out = self._call(prompt)
         assert isinstance(out["tags"], list)

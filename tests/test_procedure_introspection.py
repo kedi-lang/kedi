@@ -87,7 +87,7 @@ def test_nested_procedure_python_interop_uses_nested_stub() -> None:
 
 
 def test_type_init_exposes_stub_signature_and_source() -> None:
-    src = "~Person(name: str, salary: int = `0`)\n" "[person: Person] = `Person('Ada')`\n" "= ok\n"
+    src = "~Person(name: str, salary: int = `0`)\n[person: Person] = `Person('Ada')`\n= ok\n"
     rt = _runtime(src)
 
     signature = rt.executor.evaluate_inline(

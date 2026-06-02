@@ -29,9 +29,21 @@ class RecordingExecutor:
         self.calls.append("execute_block")
         return self._delegate.execute_block(rt, code, local_env)
 
-    def execute_side_effects(self, rt, code: str, env_map: dict[str, Any]) -> None:
+    def execute_side_effects(
+        self,
+        rt,
+        code: str,
+        env_map: dict[str, Any],
+        *,
+        kedi_line_offset: int = 0,
+    ) -> None:
         self.calls.append("execute_side_effects")
-        self._delegate.execute_side_effects(rt, code, env_map)
+        self._delegate.execute_side_effects(
+            rt,
+            code,
+            env_map,
+            kedi_line_offset=kedi_line_offset,
+        )
 
     def execute_prelude(self, rt, code: str) -> dict[str, Any]:
         self.calls.append("execute_prelude")

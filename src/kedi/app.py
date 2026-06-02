@@ -8,6 +8,8 @@ from typing import Any, Callable, Tuple
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
+from .lang.parser.diagnostics import KediParseError
+from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
 
 
@@ -97,15 +99,12 @@ def run_optimization_cli(
 
     # Parse and validate before creating any optimizer/runtime adapters.
     # Missing eval/data should fail deterministically without requiring API keys.
-    text = source_path.read_text(encoding="utf-8")
-    val_path = source_path.with_suffix(".val.kedi")
-    if val_path.exists():
-        text = text + "\n\n" + val_path.read_text(encoding="utf-8")
-    cache_path = source_path.with_suffix(".cache.kedi")
-    if cache_path.exists():
-        text = text + "\n\n" + cache_path.read_text(encoding="utf-8")
-
-    prog = parse_program(text)
+    loaded = load_kedi_source_bundle(source_path)
+    prog = parse_program(
+        loaded.text,
+        source_path=str(source_path),
+        source_map=loaded.source_map,
+    )
 
     # Find procedures with optimize spans
     procs_with_optimize = [p for p in prog.procedures if p.optimize_spans]
@@ -342,8 +341,13 @@ def maybe_run_codegen(
     use_cache: bool = True,
 ) -> Tuple[bool, str | None]:
     try:
-        src_txt = Path(source_path).read_text(encoding="utf-8")
-        prog = parse_program(src_txt)
+        root = Path(source_path).resolve()
+        loaded = load_kedi_source_bundle(root)
+        prog = parse_program(
+            loaded.text,
+            source_path=str(root),
+            source_map=loaded.source_map,
+        )
         # Check for auto_spec (new) or ai_prompt (legacy)
         needs = any(
             getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
@@ -366,6 +370,8 @@ def maybe_run_codegen(
             return False, "Code generation failed to produce passing tests."
         return True, None
     except Exception as e:
+        if isinstance(e, KediParseError):
+            raise
         return False, str(e)
 
 

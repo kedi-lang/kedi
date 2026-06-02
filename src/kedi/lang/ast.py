@@ -49,6 +49,7 @@ class Span:
     end_line: int
     end_col: int
     source_path: Optional[str] = None
+    source_id: Optional[str] = None
 
 
 # =====================================================================
@@ -290,7 +291,10 @@ class Program:
     toplevel_return: Optional[Union[ReturnStmt, ReturnBlockStmt]] = None
     toplevel_body: List[Stmt] = field(default_factory=list)
     prelude: Optional[str] = None
+    prelude_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     type_defs: List[TypeDef] = field(default_factory=list)
+    source_text: Optional[str] = field(default=None, repr=False, compare=False)
+    source_map: Any = field(default=None, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
