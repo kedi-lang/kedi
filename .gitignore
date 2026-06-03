@@ -233,6 +233,5 @@ src/kedi/executors/experimental.py
 tmp
 demo.kedi
 kedi-docs/
-docs/DEFAULT_ARGUMENTS_PLAN.md
-docs/TOOL_CALL_FOUNDATIONS_PLAN.md
-docs/TRACEBACK_DX_PLAN.md
+docs/*_PLAN.md
+/*.kedi
