@@ -179,6 +179,76 @@ def test_hover_on_nested_text_segment_works():
     assert "Hello world" in body
 
 
+def test_hover_and_definition_on_imported_procedure(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=4),
+    )
+    assert hover is not None
+    assert "make_profile" in hover.contents.value
+    assert "name: str" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=4),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_on_imported_type_in_annotation(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "~Profile(name: str)\n\n> export:\n  Profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n[p: Profile] = `Profile(name="Ada")`\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=5),
+    )
+    assert hover is not None
+    assert "Profile" in hover.contents.value
+    assert "not defined in this module" not in hover.contents.value
+
+
+def test_hover_on_imported_value(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "[xd: int] = `1`\n\n> export:\n  xd\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles\n\n= <xd>\n"
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=3),
+    )
+    assert hover is not None
+    assert "Imported value" in hover.contents.value
+    assert "`xd`" in hover.contents.value
+
+
 def test_hover_on_input_segment():
     src = "@p(name):\n  Hello, <name>!\n  = done\n"
     hover = features.compute_hover(

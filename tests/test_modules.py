@@ -15,10 +15,7 @@ def _compile_file(path: Path, *, adapter=None):
 
 def test_parser_reads_import_and_export_directives() -> None:
     prog = parse_program(
-        "> import: profiles (file name without .kedi)\n\n"
-        "> export:\n"
-        "  xd\n"
-        "  get_proc\n"
+        "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
     )
 
     assert [item.module for item in prog.imports] == ["profiles"]
@@ -51,7 +48,7 @@ def test_import_exposes_only_exported_procedure_value_and_type(tmp_path: Path) -
     main.write_text(
         "> import: profiles\n"
         "\n"
-        "[profile: Profile] = <get_profile(`\"Ada\"`)>\n"
+        '[profile: Profile] = <get_profile(`"Ada"`)>\n'
         "= <`profile.name`>:<`profile.id`>:<`profile_id + 1`>\n",
         encoding="utf-8",
     )
@@ -63,20 +60,12 @@ def test_import_exposes_only_exported_procedure_value_and_type(tmp_path: Path) -
 
 def test_imported_values_are_visible_inside_local_procedures(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
-        "[xd: int] = `10`\n"
-        "\n"
-        "> export:\n"
-        "  xd\n",
+        "[xd: int] = `10`\n\n> export:\n  xd\n",
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"
     main.write_text(
-        "> import: profiles\n"
-        "\n"
-        "@plus_one() -> int:\n"
-        "  = `xd + 1`\n"
-        "\n"
-        "= <plus_one()>\n",
+        "> import: profiles\n\n@plus_one() -> int:\n  = `xd + 1`\n\n= <plus_one()>\n",
         encoding="utf-8",
     )
 
@@ -87,19 +76,12 @@ def test_imported_values_are_visible_inside_local_procedures(tmp_path: Path) -> 
 
 def test_imported_procedure_runs_with_its_own_runtime_context(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
-        "@ask() -> str:\n"
-        "  Say [answer].\n"
-        "  = <answer>\n"
-        "\n"
-        "> export:\n"
-        "  ask\n",
+        "@ask() -> str:\n  Say [answer].\n  = <answer>\n\n> export:\n  ask\n",
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"
     main.write_text(
-        "> import: profiles\n"
-        "\n"
-        "= <ask()>\n",
+        "> import: profiles\n\n= <ask()>\n",
         encoding="utf-8",
     )
 
@@ -129,7 +111,7 @@ def test_star_export_exposes_public_names_only(tmp_path: Path) -> None:
     main.write_text(
         "> import: profiles\n"
         "\n"
-        "[profile: Profile] = `Profile(name=\"Ada\")`\n"
+        '[profile: Profile] = `Profile(name="Ada")`\n'
         "= <get_proc()>:<`xd`>:<`profile.name`>\n",
         encoding="utf-8",
     )
@@ -143,15 +125,12 @@ def test_star_export_exposes_public_names_only(tmp_path: Path) -> None:
 
 def test_unexported_procedure_is_not_imported(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
-        "@hidden() -> str:\n"
-        "  = nope\n",
+        "@hidden() -> str:\n  = nope\n",
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"
     main.write_text(
-        "> import: profiles\n"
-        "\n"
-        "= <hidden()>\n",
+        "> import: profiles\n\n= <hidden()>\n",
         encoding="utf-8",
     )
 
@@ -163,15 +142,12 @@ def test_unexported_procedure_is_not_imported(tmp_path: Path) -> None:
 
 def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
-        "> export:\n"
-        "  missing\n",
+        "> export:\n  missing\n",
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"
     main.write_text(
-        "> import: profiles\n"
-        "\n"
-        "= ok\n",
+        "> import: profiles\n\n= ok\n",
         encoding="utf-8",
     )
 
