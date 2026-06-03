@@ -231,7 +231,7 @@ src/kedi/executors/experimental.py
 
 # Temporary
 tmp
-demo.kedi
+/*.kedi
 kedi-docs/
 docs/*_PLAN.md
 /*.kedi

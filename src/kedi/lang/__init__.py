@@ -13,6 +13,8 @@ from __future__ import annotations
 from .ast import (
     CallSegment,
     InputSegment,
+    ModuleExport,
+    ModuleImport,
     OutputSegment,
     ProcedureDef,
     Program,
@@ -39,6 +41,8 @@ from .procedure_schema import (
 __all__ = [
     "Program",
     "ProgramWithValidation",
+    "ModuleImport",
+    "ModuleExport",
     "ProcedureDef",
     "TemplateLine",
     "ReturnStmt",

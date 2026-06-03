@@ -40,6 +40,7 @@ Multiple inputs and outputs can appear on the same line:
 ### Program Structure
 
 A Kedi program consists of:
+- **Imports and exports**: Explicit module boundaries for sharing procedures, types, and values across `.kedi` files
 - **Template lines**: Free text with embedded substitutions and outputs
 - **Procedures**: Reusable named blocks of code
 - **Assignments**: Variable initialization and storage
@@ -70,6 +71,47 @@ It can span multiple lines.
 - Inline: Everything after `#` is ignored; use `##` for literal `#`
 - Block: Lines containing only `###` (trimmed) start/end blocks; must appear in matching pairs
 - Procedure docstrings: if the first statement inside a procedure body is a block comment, its body becomes the procedure's Python `__doc__` and is surfaced in editor hovers / virtual stubs
+
+### Module Imports and Exports
+
+Kedi modules can explicitly export top-level procedures, types, and values. Another `.kedi` file imports the module by file name without the `.kedi` suffix:
+
+```kedi
+> import: profiles
+
+= <get_profile(`"Ada"`)> has id <`profile_id`>
+```
+
+In `profiles.kedi`:
+
+```kedi
+~Profile(name: str, id: int)
+
+@get_profile(name: str) -> Profile:
+  = `Profile(name=name, id=1)`
+
+[profile_id: int] = `1`
+
+> export:
+  Profile
+  get_profile
+  profile_id
+```
+
+Imports resolve relative to the importing file. If no sibling module exists, Kedi falls back to bundled internal modules such as `> import: this`. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
+
+To export every public name in a module, use `> export: *`:
+
+```kedi
+@get_name() -> str:
+  = Ada
+
+[xd: int] = `1`
+
+> export: *
+```
+
+Public names are names that do not start with `_`. If a module has no export directive, importing it does not expose any names.
 
 ### Template Lines
 

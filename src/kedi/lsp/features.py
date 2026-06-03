@@ -30,7 +30,8 @@ import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
@@ -92,6 +93,13 @@ from ..lang.ast import (
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
+from ..module_registry import (
+    describe_module_search_paths,
+    find_module_path,
+    module_search_paths,
+    resolve_module_path,
+)
+from ..source_loading import load_kedi_source_bundle
 
 # Kedi highlights + injection queries, loaded from the tree-sitter-kedi
 # wheel's bundled ``queries/`` directory. These are the single source of
@@ -178,8 +186,8 @@ def _segments_of(stmt) -> list:
 def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
-        parse_program(source, source_path=source_path)
-        return []
+        prog = parse_program(source, source_path=source_path)
+        return _missing_import_diagnostics(prog)
     except KediParseError as exc:
         return [_diag_to_lsp(d) for d in exc.diagnostics]
 
@@ -206,7 +214,7 @@ def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
 class SymbolRef:
     """The symbol under the cursor, used by references / rename / hover."""
 
-    kind: str  # "procedure" | "type" | "type_field" | "parameter" | "local" | "param_decl" | "output_decl"
+    kind: str  # "module" | "procedure" | "type" | "type_field" | "parameter" | "local" | "param_decl" | "output_decl"
     name: str
     declaration_span: Optional[Span]
     scope_proc: Optional[ProcedureDef]
@@ -214,26 +222,416 @@ class SymbolRef:
     cursor_span: Span
 
 
+@dataclass
+class ImportedModuleInfo:
+    name: str
+    path: Path
+    declaration_span: Span
+    docstring: Optional[str] = None
+
+
+@dataclass
+class ImportedValueInfo:
+    name: str
+    declaration_span: Span
+    type_expr: Optional[TypeExpr] = None
+    module_name: Optional[str] = None
+
+
+@dataclass
+class ImportedSurface:
+    modules: dict[str, ImportedModuleInfo] = field(default_factory=dict)
+    procedures: dict[str, ProcedureDef] = field(default_factory=dict)
+    types: dict[str, TypeDef] = field(default_factory=dict)
+    values: dict[str, ImportedValueInfo] = field(default_factory=dict)
+
+    def merge(self, other: "ImportedSurface") -> None:
+        self.modules.update(other.modules)
+        self.procedures.update(other.procedures)
+        self.types.update(other.types)
+        self.values.update(other.values)
+
+
+def _program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
+    loc = getattr(prog, "loc", None)
+    if loc is not None and loc.source_path:
+        return Path(loc.source_path).resolve()
+    source_map = getattr(prog, "source_map", None)
+    documents = getattr(source_map, "documents", None)
+    if documents:
+        return Path(documents[0].path).resolve()
+    return None
+
+
+def _resolved_import_path(
+    prog: Program | ProgramWithValidation, module_import_name: str
+) -> Optional[Path]:
+    try:
+        return resolve_module_path(module_import_name, source_path=_program_path(prog))
+    except (FileNotFoundError, RuntimeError):
+        return None
+
+
+def _assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
+    if stmt.loc is None:
+        return None
+    name_start_col = stmt.loc.start_col + 1  # skip '['
+    return Span(
+        start_byte=stmt.loc.start_byte + 1,
+        end_byte=stmt.loc.start_byte + 1 + len(stmt.name),
+        start_line=stmt.loc.start_line,
+        start_col=name_start_col,
+        end_line=stmt.loc.start_line,
+        end_col=name_start_col + len(stmt.name),
+        source_path=stmt.loc.source_path,
+    )
+
+
+def _top_level_value_infos(prog: Program | ProgramWithValidation) -> dict[str, ImportedValueInfo]:
+    return {
+        stmt.name: ImportedValueInfo(
+            name=stmt.name,
+            declaration_span=span,
+            type_expr=stmt.type_expr,
+        )
+        for stmt in prog.toplevel_body
+        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
+        for span in [(_assignment_name_span(stmt))]
+        if span is not None
+    }
+
+
+def _is_public_export_name(name: str) -> bool:
+    return bool(name) and not name.startswith("_")
+
+
+def _program_line_text(
+    prog: Program | ProgramWithValidation,
+    line_number: int,
+    source_path: Optional[str] = None,
+) -> Optional[str]:
+    if prog.source_text:
+        lines = prog.source_text.splitlines()
+        if 1 <= line_number <= len(lines):
+            return lines[line_number - 1]
+    source_map = getattr(prog, "source_map", None)
+    if source_map is not None:
+        path = source_path or getattr(getattr(prog, "loc", None), "source_path", None)
+        if path:
+            return source_map.get_line(path, line_number)
+    return None
+
+
+def _extract_module_docstring(source: str) -> Optional[str]:
+    tree = _ts_parse(source.encode("utf-8"))
+    named = [child for child in tree.root_node.children if child.is_named]
+    if not named:
+        return None
+
+    first = named[0]
+    if first.type == "block_comment":
+        lines = source[first.start_byte : first.end_byte].splitlines()
+        if len(lines) < 2:
+            return None
+        text = "\n".join(lines[1:-1]).strip()
+        return text or None
+
+    if first.type == "line_comment":
+        body: list[str] = []
+        for node in named:
+            if node.type != "line_comment":
+                break
+            line = source[node.start_byte : node.end_byte]
+            body.append(line[1:].lstrip())
+        text = "\n".join(body).strip()
+        return text or None
+
+    return None
+
+
+def _import_name_span(
+    prog: Program | ProgramWithValidation,
+    module_import,
+) -> Optional[Span]:
+    if module_import.loc is None:
+        return None
+    line = _program_line_text(prog, module_import.loc.start_line, module_import.loc.source_path)
+    if line is None:
+        return None
+    colon_index = line.find(":")
+    search_start = colon_index + 1 if colon_index >= 0 else 0
+    name_index = line.find(module_import.module, search_start)
+    if name_index < 0:
+        return None
+    prefix = line[:name_index]
+    start_col = name_index + 1
+    start_byte = module_import.loc.start_byte + len(prefix.encode("utf-8"))
+    return Span(
+        start_byte=start_byte,
+        end_byte=start_byte + len(module_import.module.encode("utf-8")),
+        start_line=module_import.loc.start_line,
+        start_col=start_col,
+        end_line=module_import.loc.start_line,
+        end_col=start_col + len(module_import.module),
+        source_path=module_import.loc.source_path,
+    )
+
+
+def _exported_name_at_position(
+    prog: Program | ProgramWithValidation,
+    pos: lsp.Position,
+) -> Optional[tuple[str, Span]]:
+    for export in getattr(prog, "exports", []):
+        if export.loc is None or not _position_inside(pos, export.loc):
+            continue
+        if pos.line + 1 <= export.loc.start_line:
+            continue
+        line = _program_line_text(prog, pos.line + 1, export.loc.source_path)
+        if line is None:
+            continue
+        export_name = line.split("#", 1)[0].strip()
+        if not export_name or export_name == "*" or not _is_identifier(export_name):
+            continue
+        name_index = line.find(export_name)
+        if name_index < 0:
+            continue
+        start_col = name_index + 1
+        start_byte = export.loc.start_byte + len(line[:name_index].encode("utf-8"))
+        span = Span(
+            start_byte=start_byte,
+            end_byte=start_byte + len(export_name.encode("utf-8")),
+            start_line=pos.line + 1,
+            start_col=start_col,
+            end_line=pos.line + 1,
+            end_col=start_col + len(export_name),
+            source_path=export.loc.source_path,
+        )
+        if _position_inside(pos, span):
+            return export_name, span
+    return None
+
+
+def _imported_surface_for_program(prog: Program | ProgramWithValidation) -> ImportedSurface:
+    surface = ImportedSurface()
+    root_path = _program_path(prog)
+    seen = {root_path} if root_path is not None else set()
+    for module_import in getattr(prog, "imports", []):
+        module_path = _resolved_import_path(prog, module_import.module)
+        if module_path is None:
+            continue
+        surface.merge(_load_imported_surface(module_path, seen, module_import.module))
+    return surface
+
+
+def _load_imported_surface(
+    path: Path,
+    seen: set[Path],
+    module_name: Optional[str] = None,
+) -> ImportedSurface:
+    if path in seen or not path.exists():
+        return ImportedSurface()
+
+    next_seen = set(seen)
+    next_seen.add(path)
+    try:
+        loaded = load_kedi_source_bundle(path, include_val=False, include_cache=True)
+        prog = parse_program(
+            loaded.text,
+            source_path=str(path),
+            source_map=loaded.source_map,
+        )
+    except Exception:
+        return ImportedSurface()
+
+    module_surface = ImportedSurface()
+    if module_name is not None:
+        module_surface.modules[module_name] = ImportedModuleInfo(
+            name=module_name,
+            path=path,
+            declaration_span=Span(
+                start_byte=0,
+                end_byte=0,
+                start_line=1,
+                start_col=1,
+                end_line=1,
+                end_col=1,
+                source_path=str(path),
+            ),
+            docstring=_extract_module_docstring(loaded.text),
+        )
+
+    nested_surface = ImportedSurface()
+    for module_import in getattr(prog, "imports", []):
+        resolved_nested_path = find_module_path(module_import.module, source_path=path)
+        if resolved_nested_path is None:
+            continue
+        nested_surface.merge(
+            _load_imported_surface(resolved_nested_path, next_seen, module_import.module)
+        )
+
+    local_procedures = {proc.name: proc for proc in prog.procedures}
+    local_types = {td.name: td for td in prog.type_defs}
+    local_values = {
+        stmt.name: ImportedValueInfo(
+            name=stmt.name,
+            declaration_span=span,
+            type_expr=stmt.type_expr,
+            module_name=module_name,
+        )
+        for stmt in prog.toplevel_body
+        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
+        for span in [(_assignment_name_span(stmt))]
+        if span is not None
+    }
+
+    combined_procedures = dict(nested_surface.procedures)
+    combined_procedures.update(local_procedures)
+    combined_types = dict(nested_surface.types)
+    combined_types.update(local_types)
+    combined_values = dict(nested_surface.values)
+    combined_values.update(local_values)
+
+    export_names: list[str] = []
+    for export in getattr(prog, "exports", []):
+        if export.export_all:
+            export_names.extend(
+                name
+                for name in (
+                    list(combined_procedures) + list(combined_types) + list(combined_values)
+                )
+                if _is_public_export_name(name)
+            )
+        export_names.extend(export.names)
+
+    resolved = ImportedSurface(modules=dict(module_surface.modules))
+    for name in dict.fromkeys(export_names):
+        if name in combined_procedures:
+            resolved.procedures[name] = combined_procedures[name]
+        elif name in combined_types:
+            resolved.types[name] = combined_types[name]
+        elif name in combined_values:
+            resolved.values[name] = combined_values[name]
+    return resolved
+
+
+def _missing_import_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> List[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for module_import in getattr(prog, "imports", []):
+        module_path = _resolved_import_path(prog, module_import.module)
+        if module_path is not None:
+            continue
+        span = _import_name_span(prog, module_import) or module_import.loc
+        if span is None:
+            continue
+        paths = module_search_paths(module_import.module, source_path=_program_path(prog))
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-IMPORT-NOT-FOUND",
+                source="kedi",
+                message=(
+                    f"imported module '{module_import.module}' not found: "
+                    f"{describe_module_search_paths(paths)}"
+                ),
+            )
+        )
+    return diagnostics
+
+
 def _resolve_symbol_at(
     prog: Union[Program, ProgramWithValidation], pos: lsp.Position
 ) -> Optional[SymbolRef]:
     """Identify what the cursor is on. Returns ``None`` if nothing useful."""
+    imported_surface = _imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
+    proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
+    type_by_name.update(imported_surface.types)
+    top_level_values = _top_level_value_infos(prog)
+
+    for module_import in getattr(prog, "imports", []):
+        name_span = _import_name_span(prog, module_import)
+        if name_span is None or not _position_inside(pos, name_span):
+            continue
+        module_info = imported_surface.modules.get(module_import.module)
+        return SymbolRef(
+            kind="module",
+            name=module_import.module,
+            declaration_span=module_info.declaration_span if module_info is not None else None,
+            scope_proc=None,
+            cursor_span=name_span,
+        )
+
+    export_name_hit = _exported_name_at_position(prog, pos)
+    if export_name_hit is not None:
+        export_name, export_span = export_name_hit
+        if export_name in proc_by_name:
+            target = proc_by_name[export_name]
+            return SymbolRef(
+                kind="procedure",
+                name=export_name,
+                declaration_span=target.loc,
+                scope_proc=None,
+                cursor_span=export_span,
+            )
+        if export_name in type_by_name:
+            target = type_by_name[export_name]
+            return SymbolRef(
+                kind="type",
+                name=export_name,
+                declaration_span=target.loc,
+                scope_proc=None,
+                cursor_span=export_span,
+            )
+        if export_name in top_level_values:
+            target = top_level_values[export_name]
+            return SymbolRef(
+                kind="module_value",
+                name=export_name,
+                declaration_span=target.declaration_span,
+                scope_proc=None,
+                cursor_span=export_span,
+            )
+        if export_name in imported_surface.values:
+            target = imported_surface.values[export_name]
+            return SymbolRef(
+                kind="imported_value",
+                name=export_name,
+                declaration_span=target.declaration_span,
+                scope_proc=None,
+                cursor_span=export_span,
+            )
 
     # Walk procedures first — they own the deepest spans.
     for proc in prog.procedures:
-        r = _resolve_in_procedure(proc, pos, proc_by_name, type_by_name)
+        r = _resolve_in_procedure(proc, pos, proc_by_name, type_by_name, imported_surface.values)
         if r is not None:
             return r
 
     # Top-level
     for stmt in prog.toplevel_body:
-        r = _resolve_in_stmt(stmt, pos, None, proc_by_name, type_by_name)
+        r = _resolve_in_stmt(
+            stmt,
+            pos,
+            None,
+            proc_by_name,
+            type_by_name,
+            imported_surface.values,
+        )
         if r is not None:
             return r
     if prog.toplevel_return is not None:
-        r = _resolve_in_stmt(prog.toplevel_return, pos, None, proc_by_name, type_by_name)
+        r = _resolve_in_stmt(
+            prog.toplevel_return,
+            pos,
+            None,
+            proc_by_name,
+            type_by_name,
+            imported_surface.values,
+        )
         if r is not None:
             return r
     # Type defs (top-level).
@@ -249,11 +647,12 @@ def _resolve_in_procedure(
     pos: lsp.Position,
     proc_by_name: dict,
     type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo],
 ) -> Optional[SymbolRef]:
     if proc.loc is None or not _position_inside(pos, proc.loc):
         return None
     for child in _nested_procedures(proc):
-        r = _resolve_in_procedure(child, pos, proc_by_name, type_by_name)
+        r = _resolve_in_procedure(child, pos, proc_by_name, type_by_name, imported_values)
         if r is not None:
             return r
     if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
@@ -277,7 +676,7 @@ def _resolve_in_procedure(
     if r is not None:
         return r
     for stmt in proc.body:
-        r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name)
+        r = _resolve_in_stmt(stmt, pos, proc, proc_by_name, type_by_name, imported_values)
         if r is not None:
             return r
     return None
@@ -339,6 +738,7 @@ def _resolve_in_stmt(
     proc: Optional[ProcedureDef],
     proc_by_name: dict,
     type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo],
 ) -> Optional[SymbolRef]:
     if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
         return None
@@ -358,7 +758,7 @@ def _resolve_in_stmt(
         if r is not None:
             return r
     for seg in _segments_of(stmt):
-        r = _resolve_in_segment(seg, pos, proc, proc_by_name, type_by_name)
+        r = _resolve_in_segment(seg, pos, proc, proc_by_name, type_by_name, imported_values)
         if r is not None:
             return r
     return None
@@ -370,6 +770,7 @@ def _resolve_in_segment(
     proc: Optional[ProcedureDef],
     proc_by_name: dict,
     type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo],
 ) -> Optional[SymbolRef]:
     if not hasattr(seg, "loc") or seg.loc is None or not _position_inside(pos, seg.loc):
         return None
@@ -384,6 +785,14 @@ def _resolve_in_segment(
                 cursor_span=seg.loc,
             )
         decl = _find_local_declaration(proc, seg.name) if proc else None
+        if decl is None and seg.name in imported_values:
+            return SymbolRef(
+                kind="imported_value",
+                name=seg.name,
+                declaration_span=imported_values[seg.name].declaration_span,
+                scope_proc=proc,
+                cursor_span=seg.loc,
+            )
         return SymbolRef(
             kind="local",
             name=seg.name,
@@ -422,12 +831,26 @@ def _resolve_in_segment(
             ):
                 inner = getattr(arg, inner_seg_attr, None)
                 if inner is not None:
-                    r = _resolve_in_segment(inner, pos, proc, proc_by_name, type_by_name)
+                    r = _resolve_in_segment(
+                        inner,
+                        pos,
+                        proc,
+                        proc_by_name,
+                        type_by_name,
+                        imported_values,
+                    )
                     if r is not None:
                         return r
             rendered = getattr(arg, "__render_segments__", None) or []
             for inner in rendered:
-                r = _resolve_in_segment(inner, pos, proc, proc_by_name, type_by_name)
+                r = _resolve_in_segment(
+                    inner,
+                    pos,
+                    proc,
+                    proc_by_name,
+                    type_by_name,
+                    imported_values,
+                )
                 if r is not None:
                     return r
     if isinstance(seg, OutputSegment):
@@ -607,10 +1030,21 @@ def compute_hover(
         return _generic_hover(prog, pos)
 
     range_ = _span_to_range(sym.cursor_span)
+    imported_surface = _imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
+    proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
+    type_by_name.update(imported_surface.types)
 
-    if sym.kind == "procedure":
+    if sym.kind == "module":
+        module_info = imported_surface.modules.get(sym.name)
+        if module_info is None:
+            text = f"**Module** `{sym.name}` — import target not found."
+        else:
+            text = f"**Module** `{sym.name}`"
+            if module_info.docstring:
+                text += f"\n\n{module_info.docstring}"
+    elif sym.kind == "procedure":
         target = proc_by_name.get(sym.name)
         if target is not None:
             text = _proc_signature_markdown(target)
@@ -629,18 +1063,44 @@ def compute_hover(
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
-        text = f"**Parameter** `{sym.name}`" + (
-            f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
-        )
+        proc_name = f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
+        if sym.scope_proc is not None:
+            text = f"**Parameter** `{sym.name}: {_proc_param_annotation(sym.scope_proc, sym.name)}`{proc_name}"
+        else:
+            text = f"**Parameter** `{sym.name}`{proc_name}"
     elif sym.kind == "local":
         text = f"**Local** `{sym.name}` — output or assignment in this procedure."
+    elif sym.kind == "module_value":
+        text = f"**Module value** `{sym.name}` — top-level assignment exported by this module."
+    elif sym.kind == "imported_value":
+        imported_value = imported_surface.values.get(sym.name)
+        if imported_value is not None and imported_value.type_expr is not None:
+            text = f"**Imported value** `{sym.name}: {_type_expr_to_str(imported_value.type_expr)}`"
+        else:
+            text = f"**Imported value** `{sym.name}`"
+        if imported_value is not None and imported_value.module_name:
+            text += f" — exported from `{imported_value.module_name}`."
+        else:
+            text += " — exported from another Kedi module."
     elif sym.kind == "output_decl":
         text = (
             f"**Output** `{sym.name}` — LLM-filled placeholder; "
             "the value becomes available as a local variable below."
         )
     elif sym.kind == "type_field":
-        text = f"**Field** `{sym.name}` — type definition member."
+        target_field = next(
+            (
+                field
+                for typedef in prog.type_defs
+                for field in typedef.fields
+                if field.loc == sym.declaration_span and field.name == sym.name
+            ),
+            None,
+        )
+        if target_field is not None:
+            text = f"**Field** `{sym.name}: {_type_field_annotation(target_field)}` — type definition member."
+        else:
+            text = f"**Field** `{sym.name}` — type definition member."
     else:
         text = f"**{sym.kind}** `{sym.name}`"
     return lsp.Hover(
@@ -885,9 +1345,18 @@ def _type_signature_markdown(td: TypeDef) -> str:
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
 
 
+def _type_expr_to_str(expr: TypeExpr) -> str:
+    if isinstance(expr, TypeRef):
+        return expr.name
+    if isinstance(expr, TypeApply):
+        return f"{expr.name}[{', '.join(_type_expr_to_str(arg) for arg in expr.args)}]"
+    if isinstance(expr, TypeUnion):
+        return f"{_type_expr_to_str(expr.left)} | {_type_expr_to_str(expr.right)}"
+    return repr(expr)
+
+
 def _format_proc_param(proc: ProcedureDef, name: str) -> str:
-    ann = (proc.param_type_annotations or {}).get(name)
-    piece = f"{name}: {ann}" if ann else name
+    piece = f"{name}: {_proc_param_annotation(proc, name)}"
     default = (proc.param_defaults or {}).get(name)
     if default is not None:
         piece += f" = `{default}`"
@@ -895,10 +1364,18 @@ def _format_proc_param(proc: ProcedureDef, name: str) -> str:
 
 
 def _format_type_field(field: TypeField) -> str:
-    piece = f"{field.name}: {field.type_annotation or 'str'}"
+    piece = f"{field.name}: {_type_field_annotation(field)}"
     if field.default_expr is not None:
         piece += f" = `{field.default_expr}`"
     return piece
+
+
+def _proc_param_annotation(proc: ProcedureDef, name: str) -> str:
+    return ((proc.param_type_annotations or {}).get(name) or "str").strip()
+
+
+def _type_field_annotation(field: TypeField) -> str:
+    return (field.type_annotation or "str").strip()
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
@@ -960,7 +1437,12 @@ def compute_definition(
     sym = _resolve_symbol_at(prog, pos)
     if sym is None or sym.declaration_span is None:
         return None
-    return lsp.Location(uri=uri, range=_span_to_range(sym.declaration_span))
+    target_uri = uri
+    if sym.declaration_span.source_path:
+        decl_path = Path(sym.declaration_span.source_path).resolve()
+        if source_path is None or decl_path != Path(source_path).resolve():
+            target_uri = decl_path.as_uri()
+    return lsp.Location(uri=target_uri, range=_span_to_range(sym.declaration_span))
 
 
 # =====================================================================
@@ -1097,8 +1579,8 @@ def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
 
 
 def _collect_type_refs_in_type_def(td: TypeDef, name: str, out: List[Span]) -> None:
-    for field in td.fields:
-        _collect_type_refs_in_expr(field.type_expr, name, out)
+    for type_field in td.fields:
+        _collect_type_refs_in_expr(type_field.type_expr, name, out)
 
 
 def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Span]) -> None:
@@ -1153,6 +1635,13 @@ def compute_prepare_rename(
         and _known_lsp_type_origin(sym.name) is not None
     ):
         return None
+    if (
+        source_path is not None
+        and sym.declaration_span is not None
+        and sym.declaration_span.source_path is not None
+        and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
+    ):
+        return None
     if sym.kind not in (
         "procedure",
         "type",
@@ -1161,6 +1650,7 @@ def compute_prepare_rename(
         "param_decl",
         "local",
         "output_decl",
+        "imported_value",
     ):
         return None
     return _span_to_range(sym.cursor_span)
@@ -1184,6 +1674,13 @@ def compute_rename(
         sym.kind == "type"
         and sym.declaration_span is None
         and _known_lsp_type_origin(sym.name) is not None
+    ):
+        return None
+    if (
+        source_path is not None
+        and sym.declaration_span is not None
+        and sym.declaration_span.source_path is not None
+        and Path(sym.declaration_span.source_path).resolve() != Path(source_path).resolve()
     ):
         return None
     # Reject non-identifier new names.
@@ -1266,7 +1763,9 @@ def compute_signature_help(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
+    imported_surface = _imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
+    proc_by_name.update(imported_surface.procedures)
 
     # Find the innermost call_segment containing the cursor.
     target_call: Optional[CallSegment] = None
@@ -1501,9 +2000,8 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
             )
     detail_parts = []
     if proc.params:
-        annos = proc.param_type_annotations or {}
         detail_parts.append(
-            "(" + ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params) + ")"
+            "(" + ", ".join(f"{p}: {_proc_param_annotation(proc, p)}" for p in proc.params) + ")"
         )
     if proc.return_type_annotation:
         detail_parts.append(f"-> {proc.return_type_annotation}")
@@ -1521,7 +2019,7 @@ def _type_def_symbol(td: TypeDef) -> lsp.DocumentSymbol:
     children = [
         lsp.DocumentSymbol(
             name=f.name,
-            detail=f.type_annotation or "str",
+            detail=_type_field_annotation(f),
             kind=lsp.SymbolKind.Field,
             range=_span_to_range(f.loc) if f.loc else _empty_range(),
             selection_range=_span_to_range(f.loc) if f.loc else _empty_range(),

@@ -1,7 +1,7 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
- 
+
 [project]
 name = "kedi"
 version = "0.3.0"
@@ -52,8 +52,19 @@ kedi = "kedi.cli:main"
 kedi-lsp = "kedi.lsp.server:main"
 
 [tool.hatch.build]
-packages = ["src/kedi"]
 include-package-data = true
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src/kedi",
+    "/src/kedi/modules/*.kedi",
+    "/README.md",
+    "/LICENSE",
+]
+
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kedi"]
 
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
