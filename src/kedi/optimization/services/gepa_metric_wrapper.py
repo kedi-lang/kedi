@@ -8,18 +8,14 @@ import weakref
 from collections.abc import Callable
 from typing import Any, Optional
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
 from ...lang.ast import OutputSegment, TemplateLine
 from ..utils import normalize_optimized_prompt_prefix
+
+DSPY_AVAILABLE = True
 
 
 class GEPAMetricWrapper:
@@ -389,29 +385,21 @@ class GEPAMetricWrapper:
             return None
 
         try:
-            if hasattr(module, "predictor"):
-                predictor = module.predictor
-            elif hasattr(module, "named_predictors"):
+            predictor: Any = getattr(module, "predictor", None)
+            if predictor is None and hasattr(module, "named_predictors"):
                 named = module.named_predictors()
                 if named:
                     predictor = named[0][1] if isinstance(named[0], tuple) else named[0]
                 else:
                     return None
-            else:
+
+            sig = getattr(predictor, "signature", None)
+            if sig is None:
                 return None
 
-            if not hasattr(predictor, "signature"):
-                return None
+            instructions = getattr(sig, "instructions", None) or getattr(sig, "_instructions", None)
 
-            sig = predictor.signature
-            instructions = None
-
-            if hasattr(sig, "instructions"):
-                instructions = sig.instructions
-            elif hasattr(sig, "_instructions"):
-                instructions = sig._instructions
-
-            if instructions and instructions.strip():
+            if isinstance(instructions, str) and instructions.strip():
                 default_pattern = "Given the fields"
                 if (
                     default_pattern not in instructions

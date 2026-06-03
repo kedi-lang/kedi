@@ -394,10 +394,9 @@ def install_mock_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
             instructions = ""
             if hasattr(self, "signature"):
                 sig = self.signature
-                if hasattr(sig, "instructions"):
-                    instructions = sig.instructions or ""
-                elif hasattr(sig, "_instructions"):
-                    instructions = sig._instructions or ""
+                instructions = (
+                    getattr(sig, "instructions", None) or getattr(sig, "_instructions", None) or ""
+                )
 
             Recorder.calls.append(
                 PredictCall(

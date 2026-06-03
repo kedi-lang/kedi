@@ -4,16 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
+
+DSPY_AVAILABLE = True
 
 
 class DSPyExampleFormatter:
@@ -127,6 +123,7 @@ class DSPyExampleFormatter:
             return {name: str(proc_inputs[name]) for name in span_input_names}
 
         # Slow path: span uses computed intermediate values — must run procedure.
+        original_env = self.runtime._current_env.get()
         try:
             # Find the procedure definition in the runtime
             if hasattr(self.runtime, "_main") and self.runtime._main:
@@ -156,9 +153,6 @@ class DSPyExampleFormatter:
             # Call the procedure - this will populate the runtime environment
             # We need to intercept the environment at the point of the span
             try:
-                # Store original environment
-                original_env = self.runtime._current_env.get()
-
                 # Set our environment
                 self.runtime._current_env.set(env)
 

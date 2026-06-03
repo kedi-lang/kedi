@@ -27,4 +27,4 @@ class Settings(BaseSettings):
         # env_prefix = "KEDI_"
 
 
-settings = Settings()
+settings = Settings.model_validate({})

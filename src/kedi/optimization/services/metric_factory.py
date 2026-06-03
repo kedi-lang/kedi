@@ -115,6 +115,8 @@ class MetricFactory:
             score = float(val[0])
             feedback = None if val[1] is None else str(val[1])
             return (score, feedback)
+        elif isinstance(val, tuple):
+            raise TypeError("Metric tuple result must be (score, feedback)")
         else:
             score = float(val)
             return (score, None)

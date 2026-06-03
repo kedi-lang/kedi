@@ -172,13 +172,13 @@ class TestValidAdapterResponses:
 
         from pydantic import BaseModel
 
-        class PersonModel(BaseModel):
+        class LocalPersonModel(BaseModel):
             name: str
             age: int
 
         class CompanyModel(BaseModel):
             name: str
-            employees: List[PersonModel]
+            employees: List[LocalPersonModel]
 
             def total_employees(self) -> int:
                 return len(self.employees)
@@ -187,8 +187,8 @@ class TestValidAdapterResponses:
             "company": CompanyModel(
                 name="TechCorp",
                 employees=[
-                    PersonModel(name="Alice", age=30),
-                    PersonModel(name="Bob", age=25),
+                    LocalPersonModel(name="Alice", age=30),
+                    LocalPersonModel(name="Bob", age=25),
                 ],
             )
         }

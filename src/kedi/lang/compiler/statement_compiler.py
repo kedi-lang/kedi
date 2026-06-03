@@ -211,7 +211,8 @@ class StatementExecutor:
                     self._sync_env(closure_env)
 
                 elif isinstance(stmt, TypeDefStmt):
-                    register_type(self.rt, stmt.typedef, type_scope, closure_env)
+                    if stmt.typedef is not None:
+                        register_type(self.rt, stmt.typedef, type_scope, closure_env)
 
                 elif isinstance(stmt, ProcDefStmt):
                     # Register nested procedure dynamically with current closure

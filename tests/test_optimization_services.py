@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, cast
 
+import dspy
 import pytest
 
 from kedi.lang import compile_program, parse_program
@@ -30,16 +31,7 @@ from kedi.optimization.services.program_loader import (
 )
 from kedi.optimization.utils import extract_output_fields
 
-# Skip DSPy-dependent tests if DSPy is not available
-try:
-    import dspy
-    from dspy import LM
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = cast(Any, None)
-    LM = cast(Any, None)
+DSPY_AVAILABLE = True
 
 
 def _parse_validation_program(src: str) -> ProgramWithValidation:

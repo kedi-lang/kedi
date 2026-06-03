@@ -17,14 +17,9 @@ from kedi.optimization.services import (
     OptimizationResultWriter,
     TypeResolver,
 )
+from kedi.optimization.gepa import GEPAOptimizer
 
-try:
-    from kedi.optimization.gepa import GEPAOptimizer
-
-    GEPA_AVAILABLE = True
-except ImportError:
-    GEPA_AVAILABLE = False
-    GEPAOptimizer = None  # type: ignore[assignment]
+GEPA_AVAILABLE = True
 
 
 def _parse_validation_program(src: str) -> ProgramWithValidation:

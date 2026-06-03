@@ -8,6 +8,8 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, cast
 
+import dspy
+
 from ..lang.ast import OptimizeSpan
 from ..lang.compiler.environment import KediRuntime
 from ..model_normalization import normalize_for_litellm
@@ -23,13 +25,7 @@ from .utils import normalize_optimized_prompt_prefix, span_to_instruction
 
 _GEPA_STATE_NAME = "gepa_state.bin"
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore[assignment]
+DSPY_AVAILABLE = True
 
 
 class GEPAOptimizer(OptimizerAdapter):

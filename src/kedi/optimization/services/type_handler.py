@@ -3,18 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+from collections.abc import Sequence
 
 from ...agent_adapter.adapters import DSPyAdapter
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType
+
+DSPY_AVAILABLE = True
 
 
 class StructuredTypeHandler:
@@ -34,7 +29,7 @@ class StructuredTypeHandler:
 
     def build_output_schema(
         self,
-        output_fields: list[tuple[str, str | None]],
+        output_fields: Sequence[tuple[str, str | None]],
     ) -> dict[str, type]:
         """Convert Kedi output fields to output schema dict.
 
@@ -78,9 +73,9 @@ class StructuredTypeHandler:
     async def create_dspy_signature(
         self,
         inputs: list[str],
-        output_fields: list[tuple[str, str | None]],
+        output_fields: Sequence[tuple[str, str | None]],
         use_string_signature: bool = True,
-    ) -> dspy.Signature | str:
+    ) -> str:
         """Create DSPy Signature using adapter pattern.
 
         Delegates to DSPyAdapter.type_builder() to handle structured types
@@ -186,9 +181,9 @@ class StructuredTypeHandler:
     def create_dspy_signature_sync(
         self,
         inputs: list[str],
-        output_fields: list[tuple[str, str | None]],
+        output_fields: Sequence[tuple[str, str | None]],
         use_string_signature: bool = True,
-    ) -> dspy.Signature | str:
+    ) -> str:
         """Synchronous wrapper for create_dspy_signature.
 
         Args:

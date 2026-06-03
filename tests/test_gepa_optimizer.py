@@ -2,20 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from kedi.lang import parse_program
+from kedi.optimization.gepa import GEPAOptimizer
 
-try:
-    from kedi.optimization.gepa import GEPAOptimizer
-
-    GEPA_AVAILABLE = GEPAOptimizer is not None
-except ImportError:
-    GEPA_AVAILABLE = False
-    GEPAOptimizer = None  # type: ignore[assignment]
+GEPA_AVAILABLE = True
 
 
-@pytest.mark.skipif(not GEPAOptimizer, reason="DSPy not available or GEPA optimizer not importable")
 def test_gepa_optimizer_interface():
     """Test GEPA optimizer implements the interface correctly."""
     from kedi.optimization.config import OptimizerConfig

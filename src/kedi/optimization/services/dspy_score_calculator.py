@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
-try:
-    import dspy
+import dspy
 
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+DSPY_AVAILABLE = True
 
 
 class DSPyScoreCalculator:
@@ -84,7 +80,7 @@ class DSPyScoreCalculator:
         if hasattr(example, "inputs") and callable(example.inputs):
             inputs = example.inputs()
             if inputs:
-                return inputs
+                return cast(dict[str, Any], inputs)
 
         # Fallback: extract from __dict__
         if hasattr(example, "__dict__"):

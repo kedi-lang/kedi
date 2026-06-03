@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
 from ..utils import extract_input_fields, extract_output_fields
 from .type_handler import StructuredTypeHandler
+
+DSPY_AVAILABLE = True
 
 
 class _KediRuntimeRef:

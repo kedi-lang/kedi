@@ -73,7 +73,7 @@ class KediRuntime:
     def __init__(
         self,
         *,
-        adapter: AgentAdapter | None = None,
+        adapter: AgentAdapter[Any] | None = None,
         executor: Executor | None = None,
     ) -> None:
         self.adapter = adapter

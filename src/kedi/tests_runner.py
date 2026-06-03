@@ -221,6 +221,8 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                     if isinstance(val, tuple) and len(val) == 2:
                         score = float(val[0])
                         feedback = None if val[1] is None else str(val[1])
+                    elif isinstance(val, tuple):
+                        raise TypeError("Metric tuple result must be (score, feedback)")
                     else:
                         score = float(val)
                 except Exception as e:
@@ -296,6 +298,8 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                             elif isinstance(val, tuple) and len(val) == 2:
                                 score_val = float(val[0])
                                 feedback_val = None if val[1] is None else str(val[1])
+                            elif isinstance(val, tuple):
+                                raise TypeError("Metric tuple result must be (score, feedback)")
                             else:
                                 score_val = float(val)
                                 feedback_val = None

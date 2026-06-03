@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 def compile_program(
     prog: Program,
     *,
-    adapter: AgentAdapter | None = None,
+    adapter: AgentAdapter[Any] | None = None,
     executor: Executor | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
@@ -39,7 +39,7 @@ class ProgramCompiler:
 
     def __init__(
         self,
-        adapter: AgentAdapter | None,
+        adapter: AgentAdapter[Any] | None,
         *,
         executor: Executor | None = None,
         module_stack: tuple[Path, ...] = (),

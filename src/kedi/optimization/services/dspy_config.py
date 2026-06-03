@@ -5,27 +5,19 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
-try:
-    import dspy
-    from dspy import LM
-    from dspy.adapters.chat_adapter import ChatAdapter
-    from dspy.adapters.json_adapter import (
-        JSONAdapter,
-        _get_structured_outputs_response_format,
-    )
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
-    LM = None  # type: ignore
-    JSONAdapter = None  # type: ignore
-    ChatAdapter = None  # type: ignore
+import dspy
+from dspy import LM
+from dspy.adapters.chat_adapter import ChatAdapter
+from dspy.adapters.json_adapter import (
+    JSONAdapter,
+    _get_structured_outputs_response_format,
+)
 
 from ...model_normalization import normalize_for_litellm
 from ..config import OptimizerConfig
 
 logger = logging.getLogger(__name__)
+DSPY_AVAILABLE = True
 
 
 class AdaptiveJSONAdapter(JSONAdapter):

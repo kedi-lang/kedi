@@ -89,7 +89,6 @@ from ..lang.ast import (
     TypeField,
     TypeRef,
     TypeUnion,
-    VarArg,
 )
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
@@ -1237,9 +1236,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         # Segment containers: CallSegment may have nested args
         if isinstance(node, CallSegment):
             for arg in getattr(node, "args", []) or []:
-                if isinstance(arg, VarArg):
-                    for inner in arg.segments or []:
-                        visit(inner)
+                for inner in getattr(arg, "__render_segments__", []) or []:
+                    visit(inner)
             return
 
     # Top-level walk

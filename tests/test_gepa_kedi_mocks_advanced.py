@@ -240,8 +240,10 @@ def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPa
 
     body_stmts = proc.body
     for stmt in body_stmts:
-        if hasattr(stmt, "optimized_prompt_prefix"):
-            if stmt.optimized_prompt_prefix is None and hasattr(stmt, "segments"):
+        optimized_prompt_prefix = getattr(stmt, "optimized_prompt_prefix", None)
+        segments = getattr(stmt, "segments", None)
+        if optimized_prompt_prefix is None:
+            if segments is not None:
                 pass
 
 
