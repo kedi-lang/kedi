@@ -16,6 +16,7 @@ from .type_system import register_type
 
 if TYPE_CHECKING:
     from ...agent_adapter.meta import AgentAdapter
+    from ...executors.base import Executor
 
 
 def compile_program(
@@ -94,15 +95,22 @@ class ProgramCompiler:
 
     def _compile_imports(self, prog: Program, active_stack: tuple[Path, ...]) -> None:
         for module_import in prog.imports:
-            module_path = self._resolve_import_path(prog, module_import)
-            imported_prog = self._load_imported_program(module_path)
-            imported_rt = ProgramCompiler(
-                self.adapter,
-                executor=self.rt.executor,
-                module_stack=active_stack,
-            ).compile(imported_prog)
-            imported_rt.run_main()
-            self._merge_exports(module_path, imported_prog, imported_rt)
+            with self.rt.trace_frame(
+                KediTraceFrame(
+                    kind="module_import",
+                    label=f"import {module_import.module}",
+                    span=module_import.loc,
+                )
+            ):
+                module_path = self._resolve_import_path(prog, module_import)
+                imported_prog = self._load_imported_program(module_path)
+                imported_rt = ProgramCompiler(
+                    self.adapter,
+                    executor=self.rt.executor,
+                    module_stack=active_stack,
+                ).compile(imported_prog)
+                imported_rt.run_main()
+                self._merge_exports(module_path, imported_prog, imported_rt)
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
         source_path = self._program_path(prog)

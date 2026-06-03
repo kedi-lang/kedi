@@ -59,9 +59,27 @@ def test_diagnostics_reports_legacy_optimize_empty_message():
     assert any("must have an indented block" in d.message for d in diags)
 
 
-def test_diagnostics_accept_module_import_export_syntax():
+def test_diagnostics_accept_module_import_export_syntax(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text("> export:\n  xd\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
     src = "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
-    assert features.compute_diagnostics(src, "example.kedi") == []
+    main.write_text(src, encoding="utf-8")
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_report_missing_imported_module(tmp_path):
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    diags = features.compute_diagnostics(src, str(main))
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-IMPORT-NOT-FOUND"
+    assert "profiles" in diag.message
+    assert diag.range.start.line == 0
 
 
 # ---------------------------------------------------------------------
@@ -228,6 +246,16 @@ def test_hover_on_imported_type_in_annotation(tmp_path):
     assert "Profile" in hover.contents.value
     assert "not defined in this module" not in hover.contents.value
 
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=5),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
 
 def test_hover_on_imported_value(tmp_path):
     profiles = tmp_path / "profiles.kedi"
@@ -246,7 +274,97 @@ def test_hover_on_imported_value(tmp_path):
     )
     assert hover is not None
     assert "Imported value" in hover.contents.value
-    assert "`xd`" in hover.contents.value
+    assert "`xd: int`" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=3),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "# Profile utilities\n"
+        "# Used across the workspace.\n\n"
+        "@make_profile(name: str) -> str:\n"
+        "  = <name>\n\n"
+        "> export:\n"
+        "  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert hover is not None
+    assert "**Module** `profiles`" in hover.contents.value
+    assert "Profile utilities" in hover.contents.value
+    assert "Used across the workspace." in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_exported_procedure_name():
+    src = "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n"
+
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=4, character=4),
+    )
+    assert hover is not None
+    assert "make_profile" in hover.contents.value
+    assert "name: str" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=4, character=4),
+    )
+    assert location is not None
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_exported_value_name():
+    src = "[profile_id: int] = `1`\n\n> export:\n  profile_id\n"
+
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=3, character=4),
+    )
+    assert hover is not None
+    assert "Module value" in hover.contents.value
+    assert "profile_id" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=3, character=4),
+    )
+    assert location is not None
+    assert location.range.start.line == 0
 
 
 def test_hover_on_input_segment():

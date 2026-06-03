@@ -256,7 +256,14 @@ def main(
         click.echo(render_execution_error(e, use_color=sys.stderr.isatty()), err=True, nl=False)
         ctx.exit(1)
     except Exception as e:
-        click.echo(f"Execution error: {e}", err=True)
+        click.echo(
+            render_execution_error(
+                KediExecutionError(message=str(e) or type(e).__name__, original=e),
+                use_color=sys.stderr.isatty(),
+            ),
+            err=True,
+            nl=False,
+        )
         ctx.exit(1)
 
 
