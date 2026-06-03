@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...core import KediRuntime
-from ...executors.base import Executor
 from ...errors import KediTraceFrame
 from ...source_loading import load_kedi_source_bundle
 from ..ast import ModuleImport, Program, ReturnStmt

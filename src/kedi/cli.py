@@ -7,8 +7,6 @@ from pathlib import Path
 import click
 import dotenv
 
-from kedi.error_rendering import render_execution_error, render_parse_error
-from kedi.errors import KediExecutionError
 from kedi.app import (
     maybe_run_codegen,
     run_evals_cli,
@@ -16,6 +14,8 @@ from kedi.app import (
     run_program_cli,
     run_tests_cli,
 )
+from kedi.error_rendering import render_execution_error, render_parse_error
+from kedi.errors import KediExecutionError
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.utils import parse_args
 
