@@ -318,31 +318,26 @@ def _program_line_text(
 
 
 def _extract_module_docstring(source: str) -> Optional[str]:
-    lines = source.splitlines()
-    if not lines:
+    tree = _ts_parse(source.encode("utf-8"))
+    named = [child for child in tree.root_node.children if child.is_named]
+    if not named:
         return None
 
-    index = 0
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    if index >= len(lines):
-        return None
-
-    if lines[index].strip() == "###":
-        body: list[str] = []
-        index += 1
-        while index < len(lines) and lines[index].strip() != "###":
-            body.append(lines[index])
-            index += 1
-        text = "\n".join(body).strip()
+    first = named[0]
+    if first.type == "block_comment":
+        lines = source[first.start_byte : first.end_byte].splitlines()
+        if len(lines) < 2:
+            return None
+        text = "\n".join(lines[1:-1]).strip()
         return text or None
 
-    if lines[index].lstrip().startswith("#"):
+    if first.type == "line_comment":
         body: list[str] = []
-        while index < len(lines) and lines[index].lstrip().startswith("#"):
-            line = lines[index].lstrip()[1:].lstrip()
-            body.append(line)
-            index += 1
+        for node in named:
+            if node.type != "line_comment":
+                break
+            line = source[node.start_byte : node.end_byte]
+            body.append(line[1:].lstrip())
         text = "\n".join(body).strip()
         return text or None
 

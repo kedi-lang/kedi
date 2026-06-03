@@ -323,6 +323,30 @@ def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_
     assert location.range.start.line == 0
 
 
+def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "@make_profile(name: str) -> str:\n"
+        "  = <name>\n\n"
+        "# Not a module docstring.\n"
+        "> export:\n"
+        "  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles\n\n= <make_profile(`\"Ada\"`)>\n"
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert hover is not None
+    assert "**Module** `profiles`" in hover.contents.value
+    assert "Not a module docstring." not in hover.contents.value
+
+
 def test_hover_and_definition_on_exported_procedure_name():
     src = "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n"
 
@@ -867,13 +891,13 @@ def test_semantic_tokens_cover_module_directives():
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = _decode_semantic_tokens(tokens.data)
 
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
     namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
     variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
 
-    assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 0 and token_type == operator_type for line, _, _, token_type, _ in decoded)
     assert any(line == 0 and token_type == namespace_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 2 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 2 and token_type == operator_type for line, _, _, token_type, _ in decoded)
     assert any(line == 3 and token_type == variable_type for line, _, _, token_type, _ in decoded)
     assert any(line == 4 and token_type == variable_type for line, _, _, token_type, _ in decoded)
 
