@@ -640,7 +640,7 @@ def _emit_procedure_body(
             typ=_type_to_python(
                 (proc.param_type_exprs or {}).get(name),
                 (proc.param_type_annotations or {}).get(name),
-                default="Any",
+                default="str",
             ),
             source_range=_param_name_range(builder.source_lines, proc, name),
         )
@@ -680,7 +680,7 @@ def _emit_nested_procedure(
             typ=_type_to_python(
                 (proc.param_type_exprs or {}).get(name),
                 (proc.param_type_annotations or {}).get(name),
-                default="Any",
+                default="str",
             ),
             source_range=_param_name_range(builder.source_lines, proc, name),
         )
@@ -925,7 +925,7 @@ def _emit_metric(
         for name in procedure.params:
             if name == metric.dataset_name:
                 continue
-            builder.add(f"    {name}: Any = ...")
+            builder.add(f"    {_proc_param_to_python(procedure, name)} = ...")
     region = cursor.next("fenced" if metric.is_block else "inline", metric.loc)
     if region is not None:
         builder.add_mapped_region(region, "    ")
@@ -1225,7 +1225,7 @@ def _proc_param_to_python(proc: ProcedureDef, name: str) -> str:
     typ = _type_to_python(
         (proc.param_type_exprs or {}).get(name),
         (proc.param_type_annotations or {}).get(name),
-        default="Any",
+        default="str",
     )
     piece = f"{name}: {typ}"
     default = (proc.param_defaults or {}).get(name)

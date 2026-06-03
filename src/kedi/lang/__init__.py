@@ -14,6 +14,8 @@ from .ast import (
     CallSegment,
     InputSegment,
     OutputSegment,
+    ModuleExport,
+    ModuleImport,
     ProcedureDef,
     Program,
     ProgramWithValidation,
@@ -39,6 +41,8 @@ from .procedure_schema import (
 __all__ = [
     "Program",
     "ProgramWithValidation",
+    "ModuleImport",
+    "ModuleExport",
     "ProcedureDef",
     "TemplateLine",
     "ReturnStmt",

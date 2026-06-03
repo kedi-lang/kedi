@@ -286,7 +286,22 @@ class TypeDefStmt(Stmt):
 
 
 @dataclass
+class ModuleImport:
+    module: str
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ModuleExport:
+    names: List[str] = field(default_factory=list)
+    export_all: bool = False
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class Program:
+    imports: List[ModuleImport] = field(default_factory=list)
+    exports: List[ModuleExport] = field(default_factory=list)
     procedures: List[ProcedureDef] = field(default_factory=list)
     toplevel_return: Optional[Union[ReturnStmt, ReturnBlockStmt]] = None
     toplevel_body: List[Stmt] = field(default_factory=list)

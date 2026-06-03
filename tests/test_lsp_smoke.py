@@ -59,6 +59,37 @@ def test_diagnostics_reports_legacy_optimize_empty_message():
     assert any("must have an indented block" in d.message for d in diags)
 
 
+def test_diagnostics_accept_module_import_export_syntax(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text("> export:\n  xd\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
+    main.write_text(src, encoding="utf-8")
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_report_missing_imported_module(tmp_path):
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    diags = features.compute_diagnostics(src, str(main))
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-IMPORT-NOT-FOUND"
+    assert "profiles" in diag.message
+    assert diag.range.start.line == 0
+
+
+def test_diagnostics_accept_internal_registry_import(tmp_path):
+    main = tmp_path / "main.kedi"
+    src = "> import: this\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
 # ---------------------------------------------------------------------
 # Hover
 # ---------------------------------------------------------------------
@@ -84,7 +115,17 @@ def test_hover_on_defaulted_procedure_header_shows_defaults():
     assert hover is not None
     body = hover.contents.value
     assert "text: str" in body
-    assert 'style = `"brief"`' in body
+    assert 'style: str = `"brief"`' in body
+
+
+def test_hover_on_untyped_procedure_header_defaults_param_to_str():
+    src = "@translate(text) -> str:\n  = <text>\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "text: str" in body
 
 
 def test_hover_on_procedure_header_includes_docstring():
@@ -172,6 +213,226 @@ def test_hover_on_nested_text_segment_works():
     body = hover.contents.value
     assert "Text segment" in body
     assert "Hello world" in body
+
+
+def test_hover_and_definition_on_imported_procedure(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=4),
+    )
+    assert hover is not None
+    assert "make_profile" in hover.contents.value
+    assert "name: str" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=4),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_on_imported_type_in_annotation(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "~Profile(name: str)\n\n> export:\n  Profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n[p: Profile] = `Profile(name="Ada")`\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=5),
+    )
+    assert hover is not None
+    assert "Profile" in hover.contents.value
+    assert "not defined in this module" not in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=5),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_on_imported_value(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "[xd: int] = `1`\n\n> export:\n  xd\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles\n\n= <xd>\n"
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=3),
+    )
+    assert hover is not None
+    assert "Imported value" in hover.contents.value
+    assert "`xd: int`" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=2, character=3),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "# Profile utilities\n"
+        "# Used across the workspace.\n\n"
+        "@make_profile(name: str) -> str:\n"
+        "  = <name>\n\n"
+        "> export:\n"
+        "  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert hover is not None
+    assert "**Module** `profiles`" in hover.contents.value
+    assert "Profile utilities" in hover.contents.value
+    assert "Used across the workspace." in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri=main.resolve().as_uri(),
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert location is not None
+    assert location.uri == profiles.resolve().as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_internal_registry_module_name():
+    from kedi.module_registry import internal_module_path
+
+    internal_path = internal_module_path("this")
+    assert internal_path is not None
+
+    src = "> import: this\n\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=11),
+    )
+    assert hover is not None
+    assert "**Module** `this`" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=11),
+    )
+    assert location is not None
+    assert location.uri == internal_path.as_uri()
+    assert location.range.start.line == 0
+
+
+def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(tmp_path):
+    profiles = tmp_path / "profiles.kedi"
+    profiles.write_text(
+        "@make_profile(name: str) -> str:\n"
+        "  = <name>\n\n"
+        "# Not a module docstring.\n"
+        "> export:\n"
+        "  make_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
+    main.write_text(src, encoding="utf-8")
+
+    hover = features.compute_hover(
+        source=src,
+        source_path=str(main),
+        pos=lsp.Position(line=0, character=12),
+    )
+    assert hover is not None
+    assert "**Module** `profiles`" in hover.contents.value
+    assert "Not a module docstring." not in hover.contents.value
+
+
+def test_hover_and_definition_on_exported_procedure_name():
+    src = "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n"
+
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=4, character=4),
+    )
+    assert hover is not None
+    assert "make_profile" in hover.contents.value
+    assert "name: str" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=4, character=4),
+    )
+    assert location is not None
+    assert location.range.start.line == 0
+
+
+def test_hover_and_definition_on_exported_value_name():
+    src = "[profile_id: int] = `1`\n\n> export:\n  profile_id\n"
+
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=3, character=4),
+    )
+    assert hover is not None
+    assert "Module value" in hover.contents.value
+    assert "profile_id" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=3, character=4),
+    )
+    assert location is not None
+    assert location.range.start.line == 0
 
 
 def test_hover_on_input_segment():
@@ -297,6 +558,17 @@ def test_hover_on_type_definition_shows_field_defaults():
     assert hover is not None
     body = hover.contents.value
     assert "salary: int = `0`" in body
+
+
+def test_hover_on_type_definition_defaults_untyped_field_to_str():
+    src = "~Person(name)\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=1),
+    )
+    assert hover is not None
+    assert "name: str" in hover.contents.value
 
 
 def test_custom_type_definition_still_jumps_to_kedi_type():
@@ -669,6 +941,22 @@ def test_semantic_tokens_regular_block_comment_stays_comment_token():
     assert any(line == 2 and token_type == comment_type for line, _, _, token_type, _ in decoded)
 
 
+def test_semantic_tokens_cover_module_directives():
+    src = "> import: profiles\n\n> export:\n  xd\n  get_proc\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+
+    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
+    namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(line == 0 and token_type == operator_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 0 and token_type == namespace_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 2 and token_type == operator_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 3 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 4 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------
@@ -986,6 +1274,14 @@ def test_python_virtual_document_models_defaulted_signatures():
     assert any(region["text"] == "0" for region in virtual["ranges"])
 
 
+def test_python_virtual_document_defaults_untyped_proc_params_to_str():
+    src = "@greet(name):\n  = ```\n  return name.upper()\n  ```\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def greet(name: str) -> str: ..." in virtual["text"]
+    assert "def __kedi_scope_greet(name: str) -> str:" in virtual["text"]
+
+
 def test_python_virtual_document_maps_header_default_expression():
     src = (
         "@get_name() -> str:\n"
@@ -1034,7 +1330,7 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     )
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
-    assert "def get_country(city: Any) -> str: ..." in virtual["text"]
+    assert "def get_country(city: str) -> str: ..." in virtual["text"]
     assert "def __kedi_metric_get_country_accuracy() -> Any:" in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
     assert any(r["kind"] == "fenced" for r in virtual["ranges"])
@@ -1044,7 +1340,7 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
         and s["sourceRange"]["start"] == {"line": 0, "character": 1}
         for s in virtual["symbols"]
     )
-    assert "    city: Any = ..." in virtual["text"]
+    assert "    city: str = ..." in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
 
 
@@ -1065,7 +1361,7 @@ def test_python_virtual_document_models_metric_scope_params_as_any():
     ast.parse(virtual["text"])
     assert "def __kedi_metric_solve_knapsack_accuracy() -> Any:" in virtual["text"]
     assert "    problems: Any = ..." in virtual["text"]
-    assert "    capacity: Any = ..." in virtual["text"]
+    assert "    capacity: str = ..." in virtual["text"]
     assert "    items_str, capacity = problems" in virtual["text"]
     assert "    pred = solve_knapsack(items_str, capacity)" in virtual["text"]
 

@@ -29,7 +29,7 @@ def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     except Exception:
         pass
 
-    for env_name in ("_globals_env", "_prelude_env"):
+    for env_name in ("_globals_env", "_prelude_env", "_import_env"):
         env = getattr(rt, env_name, None)
         if isinstance(env, dict) and name in env:
             return env[name]
@@ -41,8 +41,8 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, An
     """Build execution environment for Python code with full context."""
     env: dict[str, Any] = {"__builtins__": builtins.__dict__}
 
-    # Layer environments: prelude -> globals -> current -> local
-    for env_name in ("_prelude_env", "_globals_env"):
+    # Layer environments: imports -> prelude -> globals -> current -> local
+    for env_name in ("_import_env", "_prelude_env", "_globals_env"):
         source = getattr(rt, env_name, None)
         if isinstance(source, dict):
             env.update(source)
@@ -91,7 +91,7 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
             env.update(layer)
 
     # Add runtime environments
-    for env_name in ("_prelude_env", "_globals_env"):
+    for env_name in ("_import_env", "_prelude_env", "_globals_env"):
         source = getattr(rt, env_name, None)
         if isinstance(source, dict):
             env.update(source)
