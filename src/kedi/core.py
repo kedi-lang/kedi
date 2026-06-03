@@ -15,13 +15,13 @@ from typing import (
     Union,
 )
 
-from .executors.base import DefaultExecutor, Executor
 from .errors import (
     KediExecutionError,
     KediPythonOrigin,
     KediTraceFrame,
     build_execution_error,
 )
+from .executors.base import DefaultExecutor, Executor
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
@@ -167,6 +167,7 @@ class KediRuntime:
 
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
         import inspect
+
         from .lang.procedure_introspection import get_procedure_metadata
 
         sig = inspect.signature(fn)

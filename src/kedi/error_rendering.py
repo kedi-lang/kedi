@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from enum import StrEnum
-from io import StringIO
 import linecache
 import re
+from enum import StrEnum
+from io import StringIO
 
 from rich.console import Console
 from rich.text import Text
