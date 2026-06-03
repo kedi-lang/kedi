@@ -50,6 +50,8 @@ from ..ast import (
     EvalSuite,
     InputSegment,
     LiteralArg,
+    ModuleExport,
+    ModuleImport,
     OptimizeSpan,
     OutputSegment,
     ProcDefStmt,
@@ -246,6 +248,10 @@ class _Walker:
                 prog.procedures.append(self._walk_procedure_def(child))
             elif t == "type_def":
                 prog.type_defs.append(self._walk_type_def(child))
+            elif t == "module_import":
+                prog.imports.append(self._walk_module_import(child))
+            elif t == "module_export":
+                prog.exports.append(self._walk_module_export(child))
             elif t == "validation_block":
                 assert isinstance(prog, ProgramWithValidation)
                 suite = self._walk_validation_block(child)
@@ -418,6 +424,31 @@ class _Walker:
         for child in node.children:
             if child.has_error:
                 self._collect_tree_errors(child)
+
+    # =================================================================
+    # Module directives
+    # =================================================================
+
+    def _walk_module_import(self, node: Node) -> ModuleImport:
+        module_node = _field(node, "module")
+        assert module_node is not None
+        return ModuleImport(
+            module=_identifier_name(self.source, module_node),
+            loc=self._span(node),
+        )
+
+    def _walk_module_export(self, node: Node) -> ModuleExport:
+        export_all = "*" in _src_text(self.source, node).split(":", 1)[1].splitlines()[0]
+        names: list[str] = []
+        body = _field(node, "body")
+        if body is not None:
+            for child in _named_children(body):
+                if child.type != "module_export_name":
+                    continue
+                name_node = _field(child, "name")
+                if name_node is not None:
+                    names.append(_identifier_name(self.source, name_node))
+        return ModuleExport(names=names, export_all=export_all, loc=self._span(node))
 
     # =================================================================
     # Procedures

@@ -59,6 +59,11 @@ def test_diagnostics_reports_legacy_optimize_empty_message():
     assert any("must have an indented block" in d.message for d in diags)
 
 
+def test_diagnostics_accept_module_import_export_syntax():
+    src = "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
+    assert features.compute_diagnostics(src, "example.kedi") == []
+
+
 # ---------------------------------------------------------------------
 # Hover
 # ---------------------------------------------------------------------
@@ -667,6 +672,22 @@ def test_semantic_tokens_regular_block_comment_stays_comment_token():
     decoded = _decode_semantic_tokens(tokens.data)
     comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")
     assert any(line == 2 and token_type == comment_type for line, _, _, token_type, _ in decoded)
+
+
+def test_semantic_tokens_cover_module_directives():
+    src = "> import: profiles\n\n> export:\n  xd\n  get_proc\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 0 and token_type == namespace_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 2 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 3 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 4 and token_type == variable_type for line, _, _, token_type, _ in decoded)
 
 
 # ---------------------------------------------------------------------

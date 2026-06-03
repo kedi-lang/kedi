@@ -71,15 +71,15 @@ class ProcedureCompiler:
         if parent_env:
             kwargs = {**parent_env, **kwargs}
 
-        # Inject globals
-        globals_env = getattr(self.rt, "_globals_env", None)
-        if isinstance(globals_env, dict):
-            for k, v in globals_env.items():
+        # Inject imported and top-level values.
+        current_env = self.rt._current_env.get()
+        for env_name in ("_import_env", "_globals_env"):
+            source_env = getattr(self.rt, env_name, None)
+            if not isinstance(source_env, dict):
+                continue
+            for k, v in source_env.items():
                 kwargs.setdefault(k, v)
-            # Also inject into current env
-            current_env = self.rt._current_env.get()
-            if isinstance(current_env, dict):
-                for k, v in globals_env.items():
+                if isinstance(current_env, dict):
                     current_env.setdefault(k, v)
 
         return kwargs

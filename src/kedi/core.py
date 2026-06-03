@@ -80,6 +80,7 @@ class KediRuntime:
         self.executor = executor or DefaultExecutor()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
+        self._import_env: ValueEnv = {}
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
             "kedi_current_env", default=None
         )
