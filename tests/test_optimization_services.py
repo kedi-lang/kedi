@@ -273,7 +273,7 @@ def test_type_resolver_basic_types():
     param_types = resolver.resolve_param_types(proc)
 
     assert "x" in param_types
-    assert param_types["x"] == int
+    assert param_types["x"] is int
 
 
 def test_type_resolver_no_annotations():

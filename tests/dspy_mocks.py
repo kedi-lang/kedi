@@ -5,7 +5,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
+import dspy
 import pytest
+from dspy import BaseLM
+
+from kedi.agent_adapter import AgentAdapter
+from kedi.utils import AttrDict
 
 # =========
 # Utilities
@@ -117,9 +122,6 @@ class Recorder:
 # Range-aware Test Adapter
 # =======================
 
-from kedi.agent_adapter import AgentAdapter
-from kedi.utils import AttrDict
-
 
 class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
     """Adapter that generates outputs guided by RANGE[min,max] tokens present in the prompt."""
@@ -158,9 +160,9 @@ class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
         data: Dict[str, Any] = {}
         if output_schema:
             for key, typ in output_schema.items():
-                if typ == int or typ is int:
+                if typ is int:
                     data[key] = ival
-                elif typ == float or typ is float:
+                elif typ is float:
                     data[key] = fval
                 elif hasattr(typ, "__origin__"):
                     origin = getattr(typ, "__origin__", None)
@@ -185,10 +187,6 @@ def reflection_fail_once() -> None:
     """Configure the mock reflection LM to emit invalid content on its next call."""
     global _REFLECTION_FAIL_NEXT
     _REFLECTION_FAIL_NEXT = True
-
-
-import dspy
-from dspy import BaseLM
 
 
 class MockLM(BaseLM):

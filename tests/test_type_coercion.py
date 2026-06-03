@@ -314,31 +314,6 @@ class TestEdgeCases:
             runtime.run_main()
 
 
-class TestEdgeCases:
-    """Test edge cases and error handling."""
-
-    def test_missing_output_key(self):
-        """Test that missing output keys raise appropriate errors."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-        ```
-        
-        [person: Person] is a person.
-        
-        = "Success"
-        """
-
-        # Empty responses - should cause missing key error
-        runtime = compile_program(parse_program(src), adapter=EmptyMockAdapter())
-
-        with pytest.raises(ValueError, match="LLM did not return required key: person"):
-            runtime.run_main()
-
-
 class TestRegressionTests:
     """Test that the fix doesn't break existing functionality."""
 

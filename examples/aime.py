@@ -10,22 +10,19 @@ Usage:
 """
 
 import argparse
+from importlib.util import find_spec
 import json
 import os
 import sys
 from pathlib import Path
 
 # Check dependencies before importing Kedi
-try:
-    import datasets
-except ImportError:
+if find_spec("datasets") is None:
     print("Error: 'datasets' package is required but not installed.", file=sys.stderr)
     print("Install it with: pip install datasets", file=sys.stderr)
     sys.exit(1)
 
-try:
-    import dspy
-except ImportError:
+if find_spec("dspy") is None:
     print("Error: 'dspy-ai' package is required but not installed.", file=sys.stderr)
     print("Install it with: pip install dspy-ai", file=sys.stderr)
     sys.exit(1)
