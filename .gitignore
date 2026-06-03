@@ -231,7 +231,7 @@ src/kedi/executors/experimental.py
 
 # Temporary
 tmp
-*.kedi
+/*.kedi
 kedi-docs/
 docs/DEFAULT_ARGUMENTS_PLAN.md
 docs/TOOL_CALL_FOUNDATIONS_PLAN.md

@@ -98,7 +98,7 @@ In `profiles.kedi`:
   profile_id
 ```
 
-Imports resolve relative to the importing file. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
+Imports resolve relative to the importing file. If no sibling module exists, Kedi falls back to bundled internal modules such as `> import: this`. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
 
 To export every public name in a module, use `> export: *`:
 

@@ -158,5 +158,22 @@ def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:
 def test_import_without_source_path_cannot_resolve_module() -> None:
     prog = parse_program("> import: profiles\n= ok\n")
 
-    with pytest.raises(RuntimeError, match="without a source path"):
+    with pytest.raises(RuntimeError, match="registered internal module"):
         compile_program(prog)
+
+
+def test_internal_registry_module_resolves_from_default_store(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: this\n\n= ok\n", encoding="utf-8")
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == "ok"
+
+
+def test_internal_registry_module_resolves_without_source_path() -> None:
+    prog = parse_program("> import: this\n= ok\n")
+
+    rt = compile_program(prog)
+
+    assert rt.run_main() == "ok"

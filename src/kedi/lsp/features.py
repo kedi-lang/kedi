@@ -94,6 +94,12 @@ from ..lang.ast import (
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
+from ..module_registry import (
+    describe_module_search_paths,
+    find_module_path,
+    module_search_paths,
+    resolve_module_path,
+)
 from ..source_loading import load_kedi_source_bundle
 
 # Kedi highlights + injection queries, loaded from the tree-sitter-kedi
@@ -261,10 +267,10 @@ def _program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
 def _resolved_import_path(
     prog: Program | ProgramWithValidation, module_import_name: str
 ) -> Optional[Path]:
-    root_path = _program_path(prog)
-    if root_path is None:
+    try:
+        return resolve_module_path(module_import_name, source_path=_program_path(prog))
+    except (FileNotFoundError, RuntimeError):
         return None
-    return (root_path.parent / f"{module_import_name}.kedi").resolve()
 
 
 def _assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
@@ -457,8 +463,12 @@ def _load_imported_surface(
 
     nested_surface = ImportedSurface()
     for module_import in getattr(prog, "imports", []):
-        nested_path = (path.parent / f"{module_import.module}.kedi").resolve()
-        nested_surface.merge(_load_imported_surface(nested_path, next_seen, module_import.module))
+        resolved_nested_path = find_module_path(module_import.module, source_path=path)
+        if resolved_nested_path is None:
+            continue
+        nested_surface.merge(
+            _load_imported_surface(resolved_nested_path, next_seen, module_import.module)
+        )
 
     local_procedures = {proc.name: proc for proc in prog.procedures}
     local_types = {td.name: td for td in prog.type_defs}
@@ -511,18 +521,22 @@ def _missing_import_diagnostics(
     diagnostics: list[lsp.Diagnostic] = []
     for module_import in getattr(prog, "imports", []):
         module_path = _resolved_import_path(prog, module_import.module)
-        if module_path is None or module_path.exists():
+        if module_path is not None:
             continue
         span = _import_name_span(prog, module_import) or module_import.loc
         if span is None:
             continue
+        paths = module_search_paths(module_import.module, source_path=_program_path(prog))
         diagnostics.append(
             lsp.Diagnostic(
                 range=_span_to_range(span),
                 severity=lsp.DiagnosticSeverity.Error,
                 code="K-IMPORT-NOT-FOUND",
                 source="kedi",
-                message=f"imported module '{module_import.module}' not found: {module_path}",
+                message=(
+                    f"imported module '{module_import.module}' not found: "
+                    f"{describe_module_search_paths(paths)}"
+                ),
             )
         )
     return diagnostics

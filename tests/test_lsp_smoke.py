@@ -82,6 +82,14 @@ def test_diagnostics_report_missing_imported_module(tmp_path):
     assert diag.range.start.line == 0
 
 
+def test_diagnostics_accept_internal_registry_import(tmp_path):
+    main = tmp_path / "main.kedi"
+    src = "> import: this\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
 # ---------------------------------------------------------------------
 # Hover
 # ---------------------------------------------------------------------
@@ -323,6 +331,32 @@ def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_
     assert location.range.start.line == 0
 
 
+def test_hover_and_definition_on_internal_registry_module_name():
+    from kedi.module_registry import internal_module_path
+
+    internal_path = internal_module_path("this")
+    assert internal_path is not None
+
+    src = "> import: this\n\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=11),
+    )
+    assert hover is not None
+    assert "**Module** `this`" in hover.contents.value
+
+    location = features.compute_definition(
+        source=src,
+        uri="file:///tmp/example.kedi",
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=11),
+    )
+    assert location is not None
+    assert location.uri == internal_path.as_uri()
+    assert location.range.start.line == 0
+
+
 def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text(
@@ -334,7 +368,7 @@ def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(t
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"
-    src = "> import: profiles\n\n= <make_profile(`\"Ada\"`)>\n"
+    src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
     main.write_text(src, encoding="utf-8")
 
     hover = features.compute_hover(

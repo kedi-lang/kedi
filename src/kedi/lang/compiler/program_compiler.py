@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
+from ...module_registry import resolve_module_path
 from ...source_loading import load_kedi_source_bundle
 from ..ast import ModuleImport, Program, ReturnStmt
 from .evaluation import evaluate_python_inline, execute_python_block
@@ -113,17 +114,10 @@ class ProgramCompiler:
                 self._merge_exports(module_path, imported_prog, imported_rt)
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
-        source_path = self._program_path(prog)
-        if source_path is None:
-            raise RuntimeError(
-                f"Cannot resolve Kedi import {module_import.module!r} without a source path"
-            )
-        module_path = source_path.parent / f"{module_import.module}.kedi"
-        if not module_path.exists():
-            raise FileNotFoundError(
-                f"Kedi import {module_import.module!r} not found at {module_path}"
-            )
-        return module_path.resolve()
+        return resolve_module_path(
+            module_import.module,
+            source_path=self._program_path(prog),
+        )
 
     def _load_imported_program(self, module_path: Path) -> Program:
         from ..parser import parse_program

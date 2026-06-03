@@ -165,7 +165,7 @@ def test_cli_labels_nested_python_trace_as_call_then_error(tmp_path: Path) -> No
 
 def test_cli_renders_missing_import_with_kedi_trace(tmp_path: Path) -> None:
     srcp = tmp_path / "sample.kedi"
-    srcp.write_text("> import: internals\n\n= ok\n", encoding="utf-8")
+    srcp.write_text("> import: missing_registry_module\n\n= ok\n", encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(cli_main, [str(srcp)])
@@ -173,9 +173,9 @@ def test_cli_renders_missing_import_with_kedi_trace(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "Execution error:" not in result.output
     assert "Kedi stack trace:" in result.output
-    assert f'File "{srcp}", line 1, in import internals' in result.output
+    assert f'File "{srcp}", line 1, in import missing_registry_module' in result.output
     assert "Kedi error: FileNotFoundError" in result.output
-    assert "internals.kedi" in result.output
+    assert "missing_registry_module.kedi" in result.output
 
 
 def test_cli_unexpected_exception_uses_kedi_error_renderer(
