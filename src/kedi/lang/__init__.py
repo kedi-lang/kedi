@@ -13,9 +13,9 @@ from __future__ import annotations
 from .ast import (
     CallSegment,
     InputSegment,
-    OutputSegment,
     ModuleExport,
     ModuleImport,
+    OutputSegment,
     ProcedureDef,
     Program,
     ProgramWithValidation,

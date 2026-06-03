@@ -30,8 +30,7 @@ import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
