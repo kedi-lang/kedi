@@ -1064,9 +1064,11 @@ def compute_hover(
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
     elif sym.kind == "parameter":
-        text = f"**Parameter** `{sym.name}`" + (
-            f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
-        )
+        proc_name = f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
+        if sym.scope_proc is not None:
+            text = f"**Parameter** `{sym.name}: {_proc_param_annotation(sym.scope_proc, sym.name)}`{proc_name}"
+        else:
+            text = f"**Parameter** `{sym.name}`{proc_name}"
     elif sym.kind == "local":
         text = f"**Local** `{sym.name}` — output or assignment in this procedure."
     elif sym.kind == "module_value":
@@ -1087,7 +1089,19 @@ def compute_hover(
             "the value becomes available as a local variable below."
         )
     elif sym.kind == "type_field":
-        text = f"**Field** `{sym.name}` — type definition member."
+        target_field = next(
+            (
+                field
+                for typedef in prog.type_defs
+                for field in typedef.fields
+                if field.loc == sym.declaration_span and field.name == sym.name
+            ),
+            None,
+        )
+        if target_field is not None:
+            text = f"**Field** `{sym.name}: {_type_field_annotation(target_field)}` — type definition member."
+        else:
+            text = f"**Field** `{sym.name}` — type definition member."
     else:
         text = f"**{sym.kind}** `{sym.name}`"
     return lsp.Hover(
@@ -1343,8 +1357,7 @@ def _type_expr_to_str(expr: TypeExpr) -> str:
 
 
 def _format_proc_param(proc: ProcedureDef, name: str) -> str:
-    ann = (proc.param_type_annotations or {}).get(name)
-    piece = f"{name}: {ann}" if ann else name
+    piece = f"{name}: {_proc_param_annotation(proc, name)}"
     default = (proc.param_defaults or {}).get(name)
     if default is not None:
         piece += f" = `{default}`"
@@ -1352,10 +1365,18 @@ def _format_proc_param(proc: ProcedureDef, name: str) -> str:
 
 
 def _format_type_field(field: TypeField) -> str:
-    piece = f"{field.name}: {field.type_annotation or 'str'}"
+    piece = f"{field.name}: {_type_field_annotation(field)}"
     if field.default_expr is not None:
         piece += f" = `{field.default_expr}`"
     return piece
+
+
+def _proc_param_annotation(proc: ProcedureDef, name: str) -> str:
+    return ((proc.param_type_annotations or {}).get(name) or "str").strip()
+
+
+def _type_field_annotation(field: TypeField) -> str:
+    return (field.type_annotation or "str").strip()
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
@@ -1980,9 +2001,8 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
             )
     detail_parts = []
     if proc.params:
-        annos = proc.param_type_annotations or {}
         detail_parts.append(
-            "(" + ", ".join(f"{p}: {annos[p]}" if annos.get(p) else p for p in proc.params) + ")"
+            "(" + ", ".join(f"{p}: {_proc_param_annotation(proc, p)}" for p in proc.params) + ")"
         )
     if proc.return_type_annotation:
         detail_parts.append(f"-> {proc.return_type_annotation}")
@@ -2000,7 +2020,7 @@ def _type_def_symbol(td: TypeDef) -> lsp.DocumentSymbol:
     children = [
         lsp.DocumentSymbol(
             name=f.name,
-            detail=f.type_annotation or "str",
+            detail=_type_field_annotation(f),
             kind=lsp.SymbolKind.Field,
             range=_span_to_range(f.loc) if f.loc else _empty_range(),
             selection_range=_span_to_range(f.loc) if f.loc else _empty_range(),

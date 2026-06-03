@@ -115,7 +115,17 @@ def test_hover_on_defaulted_procedure_header_shows_defaults():
     assert hover is not None
     body = hover.contents.value
     assert "text: str" in body
-    assert 'style = `"brief"`' in body
+    assert 'style: str = `"brief"`' in body
+
+
+def test_hover_on_untyped_procedure_header_defaults_param_to_str():
+    src = "@translate(text) -> str:\n  = <text>\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
+    )
+    assert hover is not None
+    body = hover.contents.value
+    assert "text: str" in body
 
 
 def test_hover_on_procedure_header_includes_docstring():
@@ -548,6 +558,17 @@ def test_hover_on_type_definition_shows_field_defaults():
     assert hover is not None
     body = hover.contents.value
     assert "salary: int = `0`" in body
+
+
+def test_hover_on_type_definition_defaults_untyped_field_to_str():
+    src = "~Person(name)\n= ok\n"
+    hover = features.compute_hover(
+        source=src,
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=1),
+    )
+    assert hover is not None
+    assert "name: str" in hover.contents.value
 
 
 def test_custom_type_definition_still_jumps_to_kedi_type():
@@ -1253,6 +1274,14 @@ def test_python_virtual_document_models_defaulted_signatures():
     assert any(region["text"] == "0" for region in virtual["ranges"])
 
 
+def test_python_virtual_document_defaults_untyped_proc_params_to_str():
+    src = "@greet(name):\n  = ```\n  return name.upper()\n  ```\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+    ast.parse(virtual["text"])
+    assert "def greet(name: str) -> str: ..." in virtual["text"]
+    assert "def __kedi_scope_greet(name: str) -> str:" in virtual["text"]
+
+
 def test_python_virtual_document_maps_header_default_expression():
     src = (
         "@get_name() -> str:\n"
@@ -1301,7 +1330,7 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     )
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
-    assert "def get_country(city: Any) -> str: ..." in virtual["text"]
+    assert "def get_country(city: str) -> str: ..." in virtual["text"]
     assert "def __kedi_metric_get_country_accuracy() -> Any:" in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
     assert any(r["kind"] == "fenced" for r in virtual["ranges"])
@@ -1311,7 +1340,7 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
         and s["sourceRange"]["start"] == {"line": 0, "character": 1}
         for s in virtual["symbols"]
     )
-    assert "    city: Any = ..." in virtual["text"]
+    assert "    city: str = ..." in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
 
 
@@ -1332,7 +1361,7 @@ def test_python_virtual_document_models_metric_scope_params_as_any():
     ast.parse(virtual["text"])
     assert "def __kedi_metric_solve_knapsack_accuracy() -> Any:" in virtual["text"]
     assert "    problems: Any = ..." in virtual["text"]
-    assert "    capacity: Any = ..." in virtual["text"]
+    assert "    capacity: str = ..." in virtual["text"]
     assert "    items_str, capacity = problems" in virtual["text"]
     assert "    pred = solve_knapsack(items_str, capacity)" in virtual["text"]
 
