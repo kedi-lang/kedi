@@ -89,7 +89,7 @@ class DSPyModuleBuilder:
         rt = self.type_handler.runtime
 
         class SingleSpanModule(dspy.Module):
-            def __init__(self, sig: dspy.Signature):
+            def __init__(self, sig: type[dspy.Signature]):
                 super().__init__()
                 # Use the globally configured LM (inherits max_tokens from dspy.settings)
                 # DSPy automatically uses JSON mode via its adapter system for structured outputs
@@ -110,7 +110,7 @@ class DSPyModuleBuilder:
         inputs: list[str],
         outputs: list[tuple[str, str | None]],
         param_types: dict[str, type],
-    ) -> dspy.Signature:
+    ) -> type[dspy.Signature]:
         """Create DSPy Signature with input and output fields.
 
         Uses actual Pydantic types for structured outputs to enable proper

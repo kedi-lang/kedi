@@ -39,7 +39,7 @@ def get_language() -> Language:
     return _language
 
 
-def parse(source: str) -> Tree:
+def parse(source: str | bytes) -> Tree:
     """Parse Kedi source text into a tree-sitter ``Tree``.
 
     The parser accepts ``bytes`` natively; ``str`` is encoded as UTF-8

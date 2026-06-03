@@ -7,7 +7,7 @@ deterministically and correctly in isolation, before any end-to-end tests.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import dspy
 import pytest
@@ -305,8 +305,10 @@ class TestInstallMockDspy:
         install_mock_dspy(monkeypatch)
         Recorder.reset()
 
-        sig = dspy.Signature("foo: str -> bar: str").with_instructions(
-            "Test instruction with RANGE[0,10]"
+        sig = (
+            cast(Any, dspy)
+            .Signature("foo: str -> bar: str")
+            .with_instructions("Test instruction with RANGE[0,10]")
         )
         pred = dspy.Predict(sig)
         pred(foo="hello")

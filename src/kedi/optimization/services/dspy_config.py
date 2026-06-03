@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 try:
     import dspy
@@ -126,7 +126,8 @@ class DSPyConfigurationService:
         # WORKAROUND: Monkey-patch DSPy's LM class BEFORE creating any instances
         # This fixes DSPy's bug where internal LM instances use hardcoded max_tokens=4000
         if not hasattr(LM, "_kedi_patched"):
-            original_init = LM.__init__
+            lm_cls = cast(Any, LM)
+            original_init = lm_cls.__init__
             configured_max_tokens = max_tokens
 
             def patched_init(
@@ -163,8 +164,8 @@ class DSPyConfigurationService:
                     **kwargs,
                 )
 
-            LM.__init__ = patched_init
-            LM._kedi_patched = True
+            lm_cls.__init__ = patched_init
+            setattr(LM, "_kedi_patched", True)
             print(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
 
         # Create LM with configured settings

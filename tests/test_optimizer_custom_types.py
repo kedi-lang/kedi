@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from kedi.lang.ast import ProgramWithValidation
 
 try:
     from pydantic import BaseModel
@@ -10,13 +11,20 @@ try:
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
-    BaseModel = object
+    BaseModel = object  # type: ignore[assignment]
 
 from kedi.lang import compile_program, parse_program
 from kedi.optimization.services import (
     OptimizationDataLoader,
     TypeResolver,
 )
+
+
+def _parse_validation_program(src: str) -> ProgramWithValidation:
+    prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
+    return prog
+
 
 # ==================== Pydantic Model Tests ====================
 
@@ -76,7 +84,7 @@ def test_pydantic_in_dataset():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -124,7 +132,7 @@ def test_list_in_data():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -150,7 +158,7 @@ def test_list_output():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -179,7 +187,7 @@ def test_dict_input():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -208,7 +216,7 @@ def test_tuple_input():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -256,7 +264,7 @@ def test_mixed_types():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -285,7 +293,7 @@ def test_nested_structures():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -312,7 +320,7 @@ def test_optional_types():
     ]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)

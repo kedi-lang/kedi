@@ -382,7 +382,9 @@ def _split_leading_toplevel_python(
     leading: list[PythonBlock] = []
     index = 0
     while index < len(statements) and isinstance(statements[index], PythonBlock):
-        leading.append(statements[index])
+        statement = statements[index]
+        assert isinstance(statement, PythonBlock)
+        leading.append(statement)
         index += 1
     return leading, statements[index:]
 

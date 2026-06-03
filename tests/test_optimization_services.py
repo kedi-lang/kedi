@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import (
     DSPyConfigurationService,
@@ -36,8 +38,14 @@ try:
     DSPY_AVAILABLE = True
 except ImportError:
     DSPY_AVAILABLE = False
-    dspy = None
-    LM = None
+    dspy = cast(Any, None)
+    LM = cast(Any, None)
+
+
+def _parse_validation_program(src: str) -> ProgramWithValidation:
+    prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
+    return prog
 
 
 # ==================== OptimizationDataLoader Tests ====================
@@ -55,7 +63,7 @@ def test_data_loader_single_param():
     return [(1, 2), (2, 4), (3, 6)]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -80,7 +88,7 @@ def test_data_loader_multi_param():
     return [((1, 2), 3), ((2, 3), 5), ((3, 4), 7)]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -107,7 +115,7 @@ def test_data_loader_test_data():
     return [(4, 8), (5, 10)]
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -136,7 +144,7 @@ def test_data_loader_dict_format():
     return {"a": 2, "b": 4, "c": 6}
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -168,7 +176,7 @@ def test_metric_factory_simple_metric():
     return (1.0 if result == expected else 0.0, None)
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -207,7 +215,7 @@ def test_metric_factory_with_feedback():
         return (0.0, f"Expected {expected}, got {result}")
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -239,7 +247,7 @@ def test_metric_factory_bool_return():
     return result == expected
     ```
 """
-    prog = parse_program(src)
+    prog = _parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -610,7 +618,7 @@ def test_dspy_prompt_extractor():
     class MockModule(dspy.Module):
         def __init__(self):
             super().__init__()
-            sig = dspy.Signature("x -> result")
+            sig = cast(Any, dspy).Signature("x -> result")
             self.predictor = dspy.Predict(sig.with_instructions("Optimized prompt: <x>"))
 
     module = MockModule()
@@ -639,7 +647,7 @@ def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     class MockModule(dspy.Module):
         def __init__(self):
             super().__init__()
-            sig = dspy.Signature("x -> result")
+            sig = cast(Any, dspy).Signature("x -> result")
             self.predictor = dspy.Predict(
                 sig.with_instructions(f"Use the exact identifier.\n{base}\n{base}")
             )

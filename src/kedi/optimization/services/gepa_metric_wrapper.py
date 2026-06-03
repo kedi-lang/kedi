@@ -188,7 +188,7 @@ class GEPAMetricWrapper:
                 self._store_cached_feedback(pred, 0.0, payload.feedback)
                 return payload
 
-        gepa_metric._progress = progress
+        setattr(gepa_metric, "_progress", progress)
         return gepa_metric
 
     def _extract_input(self, gold: dspy.Example, proc_params: list[str]) -> Any:

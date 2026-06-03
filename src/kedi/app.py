@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Callable, Tuple
 
@@ -386,7 +387,7 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
 
     source_path = Path(source).resolve()
     if DEBUG:
-        print(f"[DEBUG run_program_cli] Source: {source_path}", file=os.sys.stderr)
+        print(f"[DEBUG run_program_cli] Source: {source_path}", file=sys.stderr)
 
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)

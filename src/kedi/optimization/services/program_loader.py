@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import sys
 from pathlib import Path
 
 from ...lang import Program, parse_program
@@ -44,11 +44,11 @@ def load_program_with_optimized_prompts(
 
     if debug:
         has_prompts = prompt_loader.has_optimized_prompts()
-        print(f"[DEBUG] Checking for optimized prompts: {has_prompts}", file=os.sys.stderr)
+        print(f"[DEBUG] Checking for optimized prompts: {has_prompts}", file=sys.stderr)
         if has_prompts:
             print(
                 f"[DEBUG] Optimized path: {prompt_loader.optimized_path}",
-                file=os.sys.stderr,
+                file=sys.stderr,
             )
 
     if prompt_loader.has_optimized_prompts():
@@ -63,7 +63,7 @@ def load_program_with_optimized_prompts(
                         print(
                             f"[DEBUG] BEFORE injection - {proc.name}::{span.name}: "
                             f"{original[:80]}...",
-                            file=os.sys.stderr,
+                            file=sys.stderr,
                         )
 
         prompt_loader.inject_optimized_prompts(program)
@@ -79,7 +79,7 @@ def load_program_with_optimized_prompts(
                         print(
                             f"[DEBUG] AFTER injection - {proc.name}::{span.name}: "
                             f"{injected[:80]}...",
-                            file=os.sys.stderr,
+                            file=sys.stderr,
                         )
 
     return program

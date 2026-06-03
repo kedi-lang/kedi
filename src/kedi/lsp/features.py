@@ -32,6 +32,7 @@ import importlib.resources
 import typing as _typing
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import ModuleType
 from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
@@ -122,7 +123,7 @@ except Exception:  # pragma: no cover
 try:
     import typing_extensions as _typing_extensions
 except Exception:  # pragma: no cover - optional runtime dependency in degraded envs
-    _typing_extensions = None
+    _typing_extensions: ModuleType | None = None
 
 
 def _build_lsp_type_registry() -> dict[str, str]:
@@ -323,7 +324,7 @@ def _program_line_text(
 
 
 def _extract_module_docstring(source: str) -> Optional[str]:
-    tree = _ts_parse(source.encode("utf-8"))
+    tree = _ts_parse(source)
     named = [child for child in tree.root_node.children if child.is_named]
     if not named:
         return None
@@ -688,6 +689,7 @@ def _position_in_proc_name(proc: ProcedureDef, pos: lsp.Position) -> bool:
     The header `@<name>(...)` starts at column 1 in 1-based terms. The
     name occupies columns 2..2+len(name).
     """
+    assert proc.loc is not None
     if pos.line + 1 != proc.loc.start_line:
         return False
     name_start_col = proc.loc.start_col + 1  # skip '@'
@@ -695,6 +697,7 @@ def _position_in_proc_name(proc: ProcedureDef, pos: lsp.Position) -> bool:
 
 
 def _proc_name_span(proc: ProcedureDef) -> Span:
+    assert proc.loc is not None
     name_start_col = proc.loc.start_col + 1
     return Span(
         start_byte=proc.loc.start_byte + 1,
@@ -1345,7 +1348,9 @@ def _type_signature_markdown(td: TypeDef) -> str:
     return f"`~{td.name}({fields})`\n\nKedi type definition (compiled to a Pydantic model)."
 
 
-def _type_expr_to_str(expr: TypeExpr) -> str:
+def _type_expr_to_str(expr: TypeExpr | None) -> str:
+    if expr is None:
+        return "None"
     if isinstance(expr, TypeRef):
         return expr.name
     if isinstance(expr, TypeApply):
@@ -2371,6 +2376,7 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
 
     # ---- 2. Embedded Python regions via injections.scm ---------------
     if python_byte_ranges and _PY_PARSER is not None and _PY_HIGHLIGHTS_QUERY is not None:
+        assert _KEDI_INJECTIONS_QUERY is not None
         cursor = _TSQueryCursor(_KEDI_INJECTIONS_QUERY)
         for _pat_idx, caps in cursor.matches(tree.root_node):
             for region_node in caps.get("injection.content", []):

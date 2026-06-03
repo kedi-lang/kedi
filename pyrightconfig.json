@@ -1,0 +1,12 @@
+{
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "standard",
+  "exclude": ["**/.*", "examples/**"],
+  "extraPaths": ["src"],
+  "reportAny": "none",
+  "reportExplicitAny": "none",
+  // "reportMissingImports": "none",
+  // "reportPrivateUsage": "none",
+  // "reportCallIssue": "none",
+  // "reportPrivateImportUsage": "none",
+}

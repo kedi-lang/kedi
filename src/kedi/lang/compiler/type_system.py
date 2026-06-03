@@ -20,7 +20,7 @@ from __future__ import annotations
 import copy
 import json
 import shlex
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 from pydantic import BaseModel, Field, TypeAdapter, create_model
 
@@ -235,8 +235,10 @@ class KediType:
             return None
 
 
-def _typeexpr_to_str(e: TypeExpr) -> str:
+def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
     """Render a structured ``TypeExpr`` back to a human-readable form."""
+    if e is None:
+        return "None"
     if isinstance(e, TypeRef):
         return e.name
     if isinstance(e, TypeApply):
@@ -322,7 +324,11 @@ def register_type(
                 _pydantic_default(default_value),
             )
 
-    new_model = create_model(typedef.name, __base__=BaseModel, **field_defs)
+    new_model = create_model(
+        typedef.name,
+        __base__=cast(Any, BaseModel),
+        **cast(Any, field_defs),
+    )
     init_namespace = build_type_env(rt, local_env or {})
     init_namespace[typedef.name] = new_model
     setattr(

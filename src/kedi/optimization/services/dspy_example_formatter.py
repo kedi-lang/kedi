@@ -170,9 +170,10 @@ class DSPyExampleFormatter:
 
                 # Extract span input values from environment
                 span_input_values = {}
-                for input_name in span_input_names:
-                    if input_name in final_env:
-                        span_input_values[input_name] = str(final_env[input_name])
+                if final_env is not None:
+                    for input_name in span_input_names:
+                        if input_name in final_env:
+                            span_input_values[input_name] = str(final_env[input_name])
 
                 if span_input_values:
                     return span_input_values

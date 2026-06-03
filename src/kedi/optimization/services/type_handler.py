@@ -188,7 +188,7 @@ class StructuredTypeHandler:
         inputs: list[str],
         output_fields: list[tuple[str, str | None]],
         use_string_signature: bool = True,
-    ) -> str:
+    ) -> dspy.Signature | str:
         """Synchronous wrapper for create_dspy_signature.
 
         Args:

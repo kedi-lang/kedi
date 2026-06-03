@@ -6,7 +6,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..lang.ast import OptimizeSpan
 from ..lang.compiler.environment import KediRuntime
@@ -65,8 +65,8 @@ class GEPAOptimizer(OptimizerAdapter):
 
         # Initialize services
         self.dspy_config_service = DSPyConfigurationService(config)
-        self.module_builder = DSPyModuleBuilder(runtime=runtime)
-        self.example_formatter = DSPyExampleFormatter(runtime)
+        self.module_builder = DSPyModuleBuilder(runtime=cast(KediRuntime, runtime))
+        self.example_formatter = DSPyExampleFormatter(cast(KediRuntime, runtime))
         self.metric_wrapper = GEPAMetricWrapper()
         self.prompt_extractor = DSPyPromptExtractor()
         self.score_calculator = DSPyScoreCalculator()
@@ -265,7 +265,7 @@ class GEPAOptimizer(OptimizerAdapter):
                 optimizer = dspy.GEPA(
                     metric=gepa_metric,
                     max_metric_calls=self.config.max_metric_calls,
-                    reflection_lm=reflection_lm,
+                    reflection_lm=cast(Any, reflection_lm),
                     reflection_minibatch_size=self.config.reflection_minibatch_size,
                     track_stats=True,
                     log_dir=str(gepa_log_dir) if gepa_log_dir is not None else None,
@@ -292,8 +292,9 @@ class GEPAOptimizer(OptimizerAdapter):
                 compile_sec = int(compile_elapsed) % 60
 
                 metric_calls = 0
-                if hasattr(gepa_metric, "_progress"):
-                    metric_calls = gepa_metric._progress["count"]
+                progress = getattr(gepa_metric, "_progress", None)
+                if isinstance(progress, dict):
+                    metric_calls = int(progress.get("count", 0))
 
                 print(f"{'─' * 80}")
                 print(f"✅ GEPA optimization complete for span '{span.name}'")
@@ -405,6 +406,7 @@ class GEPAOptimizer(OptimizerAdapter):
             # Load existing optimized prompts
             import json
 
+            assert self.source_path is not None
             optimized_path = self.source_path.with_suffix(
                 self.source_path.suffix + ".optimized.json"
             )

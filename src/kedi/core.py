@@ -106,9 +106,10 @@ class KediRuntime:
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         # Allow re-registration for AI-generated procedures from cache
-        if fn.__name__ in self._procedures:
+        name = getattr(fn, "__name__", fn.__class__.__name__)
+        if name in self._procedures:
             pass  # Silently replace
-        self._procedures[fn.__name__] = fn
+        self._procedures[name] = fn
         return fn
 
     def main(self, fn: Callable[..., Any]) -> Callable[..., Any]:

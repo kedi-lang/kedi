@@ -15,6 +15,7 @@ import warnings
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
@@ -27,6 +28,7 @@ from tests.dspy_mocks import (
 
 def _prepare(src: str, proc_index: int = 0, eval_index: int = 0):
     prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[proc_index]
     resolver = TypeResolver(rt)

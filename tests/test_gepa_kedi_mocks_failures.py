@@ -11,6 +11,7 @@ import warnings
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
@@ -24,6 +25,7 @@ from tests.dspy_mocks import (
 
 def _prepare(src: str):
     prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[0]
     resolver = TypeResolver(rt)
@@ -59,6 +61,7 @@ def test_missing_output_in_span_raises_valueerror(monkeypatch: pytest.MonkeyPatc
     ```
 """
     prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[0]
     param_types = TypeResolver(rt).resolve_param_types(proc)
@@ -105,6 +108,7 @@ def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
     ```
 """
     prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[0]
     param_types = TypeResolver(rt).resolve_param_types(proc)

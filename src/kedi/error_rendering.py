@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import linecache
 import re
-from enum import StrEnum
+from enum import Enum
 from io import StringIO
+from typing import cast
 
 from rich.console import Console
 from rich.text import Text
@@ -13,7 +14,7 @@ from .lang.ast import Span
 from .lang.parser.diagnostics import KediDiagnostic, KediParseError
 
 
-class RenderStyle(StrEnum):
+class RenderStyle(str, Enum):
     COLOR = "color"
     GRAYSCALE = "grayscale"
     MONO_DARK = "mono_dark"
@@ -73,7 +74,7 @@ def render_execution_error(
     if error.frames:
         console.print()
     _render_error_footer(console, error, style)
-    return console.file.getvalue()
+    return cast(StringIO, console.file).getvalue()
 
 
 def render_parse_error(error: KediParseError, *, use_color: bool) -> str:
@@ -83,7 +84,7 @@ def render_parse_error(error: KediParseError, *, use_color: bool) -> str:
         if index > 0:
             console.print()
         _render_parse_diagnostic(console, diagnostic, style)
-    return console.file.getvalue()
+    return cast(StringIO, console.file).getvalue()
 
 
 def _render_parse_diagnostic(

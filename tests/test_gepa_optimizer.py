@@ -12,7 +12,7 @@ try:
     GEPA_AVAILABLE = GEPAOptimizer is not None
 except ImportError:
     GEPA_AVAILABLE = False
-    GEPAOptimizer = None
+    GEPAOptimizer = None  # type: ignore[assignment]
 
 
 @pytest.mark.skipif(not GEPAOptimizer, reason="DSPy not available or GEPA optimizer not importable")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, cast
 
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
@@ -41,7 +42,7 @@ def test_kedi_procedure_to_pydantic_tool_uses_schema_and_defaults() -> None:
         == "Translate the provided text. Returns `str` instance."
     )
 
-    result = asyncio.run(tool.function_schema.call({"text": "Merhaba"}, None))
+    result = asyncio.run(tool.function_schema.call({"text": "Merhaba"}, cast(Any, None)))
     assert result == "brief: Merhaba"
 
 
@@ -112,7 +113,9 @@ def test_kedi_procedure_to_pydantic_tool_handles_custom_kedi_types() -> None:
     assert schema["properties"]["person"]["$ref"] == "#/$defs/Person"
     assert "Person" in schema["$defs"]
 
-    result = asyncio.run(tool.function_schema.call({"person": {"name": "Ada", "salary": 5}}, None))
+    result = asyncio.run(
+        tool.function_schema.call({"person": {"name": "Ada", "salary": 5}}, cast(Any, None))
+    )
     assert result == "Ada earns 5"
 
 
@@ -174,6 +177,7 @@ def test_kedi_tool_works_with_pydantic_ai_agent() -> None:
 
     result = agent.run_sync("Use the search_docs tool.")
     output = json.loads(result.output)
+    assert model.last_model_request_parameters is not None
     function_tools = model.last_model_request_parameters.function_tools
     assert len(function_tools) == 1
     assert function_tools[0].description == (

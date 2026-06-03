@@ -281,7 +281,7 @@ class StatementExecutor:
             self._sync_env(env)
 
         elif isinstance(stmt, ProcDefStmt):
-            if is_toplevel:
+            if is_toplevel and stmt.proc is not None:
                 # Register top-level procedure
                 from .procedure_compiler import ProcedureCompiler
 
