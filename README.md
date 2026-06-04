@@ -1,4 +1,7 @@
 # Kedi 
+
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/kedi-lang/kedi?utm_source=badge)
+
 ## A typed reasoning layer for LLM orchestration
 
 Kedi is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
