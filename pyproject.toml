@@ -72,3 +72,8 @@ tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[dependency-groups]
+dev = [
+    "pytest-codspeed>=5.0.3",
+]
