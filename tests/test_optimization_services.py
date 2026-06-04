@@ -11,7 +11,7 @@ import dspy
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import ProgramWithValidation
+from kedi.lang.ast import EvalSuite, ProcedureDef, ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import (
     DSPyConfigurationService,
@@ -145,6 +145,45 @@ def test_data_loader_dict_format():
 
     assert len(train_data) == 3
     assert all(isinstance(item, tuple) for item in train_data)
+
+
+def test_data_loader_errors_inline_data_and_tuple_normalization():
+    src = """
+@test(x: int) -> int:
+  = `x`
+
+@eval: test:
+  > data: inline_cases:
+    = `[(1, 2), (3, 4, 5), 6]`
+  > data: broken:
+    = `1 / 0`
+  > test_data: inline_tests:
+    = `[(7, 8)]`
+  > test_data: broken_tests:
+    = `1 / 0`
+"""
+    prog = _parse_validation_program(src)
+    rt = compile_program(prog, adapter=None)
+    loader = OptimizationDataLoader(rt)
+    eval_suite = prog.evals[0]
+
+    assert loader.load_training_data(eval_suite, "inline_cases") == [(1, 2), (3, None), (6, None)]
+    assert loader.load_training_data(eval_suite) == [(1, 2), (3, None), (6, None)]
+    assert loader.load_test_data(eval_suite, "inline_tests") == [(7, 8)]
+    assert loader.load_test_data(EvalSuite("test"), "missing") is None
+
+    with pytest.raises(ValueError, match="No training datasets"):
+        loader.load_training_data(EvalSuite("test"))
+    with pytest.raises(ValueError, match="Dataset 'missing' not found"):
+        loader.load_training_data(eval_suite, "missing")
+    with pytest.raises(RuntimeError, match="Error loading training data 'broken'"):
+        loader.load_training_data(eval_suite, "broken")
+    with pytest.raises(RuntimeError, match="Error loading test data 'broken_tests'"):
+        loader.load_test_data(eval_suite, "broken_tests")
+    with pytest.raises(ValueError, match="must return an iterable"):
+        loader._convert_to_list("abc", "letters")
+    with pytest.raises(ValueError, match="must return an iterable"):
+        loader._convert_to_list(123, "number")
 
 
 # ==================== MetricFactory Tests ====================
@@ -293,6 +332,62 @@ def test_type_resolver_no_annotations():
     assert param_types == {}
 
 
+def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
+    src = """
+@test(items: list[int], missing: MissingType, raw) -> str:
+  = ok
+"""
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+    resolver = TypeResolver(rt)
+    proc = prog.procedures[0]
+
+    param_types = resolver.resolve_param_types(proc)
+    assert "items" in param_types
+    assert "missing" not in param_types
+    assert "raw" not in param_types
+
+    assert resolver.resolve_output_types([]) == {}
+    outputs = resolver.resolve_output_types(
+        [
+            ("plain", None),
+            ("count", "int"),
+            ("items", "list[int]"),
+            ("unknown", "MissingType"),
+        ]
+    )
+    assert outputs["plain"] is str
+    assert outputs["count"] is int
+    assert getattr(outputs["items"], "__origin__", None) is list
+    assert outputs["unknown"] is str
+
+
+def test_type_resolver_direct_fallback_paths(monkeypatch):
+    rt = compile_program(parse_program("= ok"), adapter=None)
+    resolver = TypeResolver(rt)
+
+    assert resolver.resolve_param_types(ProcedureDef("plain", ["x"])) == {}
+
+    def fail_resolve(self: Any, runtime: Any, env: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("kedi.optimization.services.type_resolver.KediType.resolve", fail_resolve)
+
+    proc = ProcedureDef("broken", ["x"], param_type_annotations={"x": "int"})
+    assert resolver.resolve_param_types(proc) == {}
+    assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
+
+    def resolve_to_value(self: Any, runtime: Any, env: Any) -> object:
+        return object()
+
+    monkeypatch.setattr(
+        "kedi.optimization.services.type_resolver.KediType.resolve",
+        resolve_to_value,
+    )
+
+    assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
+
+
 # ==================== OptimizationResultWriter Tests ====================
 
 
@@ -323,6 +418,26 @@ def test_result_writer_create_files():
 
         scores_path = source_path.with_suffix(source_path.suffix + ".optimized_scores.json")
         assert scores_path.exists()
+
+
+def test_result_writer_merges_scores_and_recovers_from_invalid_json():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text("# Test")
+        scores_path = source_path.with_suffix(source_path.suffix + ".optimized_scores.json")
+        scores_path.write_text("{bad json", encoding="utf-8")
+
+        writer = OptimizationResultWriter(source_path)
+        writer.write_training_scores({"fresh": 0.5})
+
+        assert json.loads(scores_path.read_text(encoding="utf-8")) == {"fresh": 0.5}
+
+        writer.write_training_scores({"other": 0.75})
+
+        assert json.loads(scores_path.read_text(encoding="utf-8")) == {
+            "fresh": 0.5,
+            "other": 0.75,
+        }
 
 
 def test_result_writer_format_display():
@@ -365,6 +480,8 @@ def test_result_writer_delete_existing():
 
         assert not opt_path.exists()
         assert not scores_path.exists()
+
+        writer.delete_existing_optimized_files()
 
 
 def test_program_loader_preserves_output_fields_with_optimized_prefix():
@@ -441,6 +558,77 @@ def test_program_loader_normalizes_polluted_optimized_prompt():
         span = proc.optimize_spans[0]
 
         assert span.template_lines[0].optimized_prompt_prefix == "Use exact IDs only."
+
+
+def test_program_loader_debug_output_shows_before_and_after_injection(capsys):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> int:
+  > optimize: solver:
+    Input: <x>
+    Answer: [answer: int]
+  = `answer`
+""".strip()
+        )
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            json.dumps({"solve": {"solver": "Use a direct numeric answer."}}),
+            encoding="utf-8",
+        )
+
+        program = load_program_with_optimized_prompts(source_path, debug=True)
+
+        captured = capsys.readouterr()
+        assert "[DEBUG] Checking for optimized prompts: True" in captured.err
+        assert "[DEBUG] BEFORE injection - solve::solver:" in captured.err
+        assert "[DEBUG] AFTER injection - solve::solver:" in captured.err
+        assert program.procedures[0].optimize_spans[0].template_lines[
+            0
+        ].optimized_prompt_prefix == ("Use a direct numeric answer.")
+
+
+def test_program_loader_debug_output_without_optimized_prompts(capsys):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> str:
+  = <x>
+""".strip()
+        )
+
+        load_program_with_optimized_prompts(source_path, debug=True)
+
+        captured = capsys.readouterr()
+        assert "[DEBUG] Checking for optimized prompts: False" in captured.err
+        assert "BEFORE injection" not in captured.err
+        assert "AFTER injection" not in captured.err
+
+
+def test_program_loader_debug_output_with_stale_optimized_prompts(capsys):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> str:
+  = <x>
+""".strip()
+        )
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            json.dumps({"solve": {"old_span": "Use stale prompt."}}),
+            encoding="utf-8",
+        )
+
+        load_program_with_optimized_prompts(source_path, debug=True)
+
+        captured = capsys.readouterr()
+        assert "[DEBUG] Checking for optimized prompts: True" in captured.err
+        assert "[DEBUG] Optimized path:" in captured.err
+        assert "BEFORE injection" not in captured.err
+        assert "AFTER injection" not in captured.err
 
 
 # ==================== StructuredTypeHandler Tests ====================

@@ -72,3 +72,20 @@ tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.coverage.run]
+branch = true
+source = ["src/kedi"]
+omit = [
+    "tree-sitter-kedi/**",
+]
+
+[tool.coverage.report]
+omit = [
+    "tree-sitter-kedi/**",
+]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.14.1",
+]

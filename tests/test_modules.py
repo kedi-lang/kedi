@@ -5,6 +5,13 @@ from pathlib import Path
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.module_registry import (
+    describe_module_search_paths,
+    internal_module_path,
+    module_search_paths,
+    resolve_module_path,
+)
+from kedi import module_registry
 from tests.mock_adapter import MockAdapter
 
 
@@ -155,6 +162,25 @@ def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:
         _compile_file(main)
 
 
+def test_cyclic_imports_raise_with_full_import_chain(tmp_path: Path) -> None:
+    (tmp_path / "a.kedi").write_text(
+        "> import: b\n\n> export:\n  a\n\n@a() -> str:\n  = a\n", encoding="utf-8"
+    )
+    (tmp_path / "b.kedi").write_text(
+        "> import: a\n\n> export:\n  b\n\n@b() -> str:\n  = b\n", encoding="utf-8"
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: a\n\n= ok\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError) as info:
+        _compile_file(main)
+
+    message = str(info.value)
+    assert "Cyclic Kedi import detected" in message
+    assert str((tmp_path / "a.kedi").resolve()) in message
+    assert str((tmp_path / "b.kedi").resolve()) in message
+
+
 def test_import_without_source_path_cannot_resolve_module() -> None:
     prog = parse_program("> import: profiles\n= ok\n")
 
@@ -177,3 +203,56 @@ def test_internal_registry_module_resolves_without_source_path() -> None:
     rt = compile_program(prog)
 
     assert rt.run_main() == "ok"
+
+
+def test_module_registry_handles_internal_resource_lookup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal_module_path.cache_clear()
+
+    def raise_files(_package: str):
+        raise RuntimeError("resource system unavailable")
+
+    monkeypatch.setattr(module_registry.importlib.resources, "files", raise_files)
+
+    assert internal_module_path("this") is None
+
+    internal_module_path.cache_clear()
+
+    class BrokenResource:
+        def joinpath(self, _name: str) -> "BrokenResource":
+            return self
+
+        def is_file(self) -> bool:
+            raise OSError("cannot inspect resource")
+
+    monkeypatch.setattr(
+        module_registry.importlib.resources, "files", lambda _package: BrokenResource()
+    )
+
+    assert internal_module_path("this") is None
+
+
+def test_module_registry_search_path_rendering_and_dedup(tmp_path: Path) -> None:
+    internal_module_path.cache_clear()
+    internal = internal_module_path("this")
+    assert internal is not None
+
+    source_path = internal.parent / "main.kedi"
+    assert module_search_paths("this", source_path=source_path) == (internal,)
+
+    assert describe_module_search_paths(()) == "registered internal modules"
+    assert describe_module_search_paths((tmp_path / "a.kedi",)) == str(tmp_path / "a.kedi")
+    assert describe_module_search_paths((tmp_path / "a.kedi", tmp_path / "b.kedi")) == (
+        f"{tmp_path / 'a.kedi'} or {tmp_path / 'b.kedi'}"
+    )
+
+
+def test_module_registry_missing_sibling_reports_file_path(tmp_path: Path) -> None:
+    source = tmp_path / "main.kedi"
+    source.write_text("= ok\n", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError) as info:
+        resolve_module_path("profiles", source_path=source)
+
+    assert str(tmp_path / "profiles.kedi") in str(info.value)

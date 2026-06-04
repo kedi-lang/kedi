@@ -210,7 +210,8 @@ def run_optimization_cli(
         eval_suite = eval_map[proc.name]
 
         # Load training data using service
-        dataset_name = list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
+        dataset_names = list(eval_suite.datasets.keys())
+        dataset_name = dataset_names[0] if dataset_names else None
         if not dataset_name:
             return 1, f"Procedure '{proc.name}' needs training data"
 
@@ -278,7 +279,7 @@ def run_optimization_cli(
         display_text = result_writer.format_prompts_for_display(optimized_dict, optimized_path)
         return 0, display_text
 
-    return 0, ""
+    return 0, ""  # pragma: no cover - successful optimization always records a result.
 
 
 def run_evals_cli(

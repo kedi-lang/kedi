@@ -1302,5 +1302,5 @@ def _path_from_uri(uri: Any) -> Optional[str]:
     return unquote(parsed.path)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

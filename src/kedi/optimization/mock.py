@@ -78,9 +78,7 @@ class MockOptimizer(OptimizerAdapter):
                     # Handle metric errors - return 0.0 score
                     round_scores.append(0.0)
 
-            # Track scores for this round
-            if round_scores:
-                all_scores.extend(round_scores)
+            all_scores.extend(round_scores)
 
         # Calculate final training score as average of all metric calls
         train_score = sum(all_scores) / len(all_scores) if all_scores else 0.0

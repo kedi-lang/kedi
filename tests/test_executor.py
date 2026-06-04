@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -8,6 +9,10 @@ from kedi.core import KediRuntime
 from kedi.executors.debug import (
     ExecutorDebugEvent,
     MarkdownDebugExporter,
+    _normalize_base_name,
+    _render_markdown_event,
+    _sanitize,
+    default_debug_export_path,
 )
 from kedi.lang.compiler import compile_program
 from kedi.lang.parser import parse_program
@@ -145,6 +150,64 @@ def test_markdown_debug_exporter_generates_default_filename(tmp_path: Path, monk
     assert path.suffix == ".md"
 
 
+def test_debug_exporter_normalizes_names_and_sanitizes_payloads(tmp_path: Path) -> None:
+    fixed = default_debug_export_path("Report.txt", now=datetime(2026, 3, 3))
+    assert fixed.name == "report_debug_export_20260303_000000.md"
+    assert _normalize_base_name(" !!! ") == "kedi"
+
+    class CustomValue:
+        def __repr__(self) -> str:
+            return "<custom>"
+
+    payload = _sanitize(
+        {
+            "path": tmp_path / "sample.kedi",
+            "values": [tmp_path / "x", CustomValue()],
+        }
+    )
+
+    assert payload == {
+        "path": str(tmp_path / "sample.kedi"),
+        "values": [str(tmp_path / "x"), "<custom>"],
+    }
+
+
+def test_render_markdown_event_skips_empty_fields_and_renders_all_sections() -> None:
+    event = ExecutorDebugEvent.create(
+        "execution_failed",
+        executor="DefaultExecutor",
+        step="execute_block",
+        execution_kind="",
+        function_name=None,
+        fallback_executor="DefaultExecutor",
+        mode="fallback",
+        error_type="ValueError",
+        error="bad value",
+        external_functions=["fetch"],
+        code="return x",
+        inputs={"x": 1},
+        local_env={"x": 1},
+        env_map={"seed": 1},
+        args=[],
+        kwargs={},
+        result=None,
+        output="done",
+    )
+
+    rendered = _render_markdown_event(event)
+
+    assert "- Execution kind:" not in rendered
+    assert "- Fallback executor: `DefaultExecutor`" in rendered
+    assert "- Mode: `fallback`" in rendered
+    assert "- Error type: `ValueError`" in rendered
+    assert "- External functions: `['fetch']`" in rendered
+    assert "### Code" in rendered
+    assert "### Inputs" in rendered
+    assert "### Local env" in rendered
+    assert "### Env map" in rendered
+    assert "### Output" in rendered
+
+
 def test_default_executor_emits_debug_events_for_successful_step():
     exporter = MemoryDebugExporter()
     executor = DefaultExecutor(debug_exporter=exporter)
@@ -165,3 +228,28 @@ def test_default_executor_emits_debug_events_for_successful_step():
         "evaluate_inline",
         "evaluate_inline",
     ]
+
+
+def test_default_executor_setter_and_variable_sync_updates_runtime_env() -> None:
+    exporter = MemoryDebugExporter()
+    executor = DefaultExecutor()
+    rt = KediRuntime(executor=executor)
+
+    executor.set_debug_exporter(exporter)
+    executor.evaluate_inline(rt, "1", {})
+
+    runtime_env = {"x": 1, "stale": 2}
+    token = rt._current_env.set(runtime_env)
+    try:
+        target = {"x": 1, "missing": 3}
+        executor._sync_existing_variables(rt, target, {"x": 10, "extra": 99})
+    finally:
+        rt._current_env.reset(token)
+
+    assert exporter.events
+    assert target == {"x": 10, "missing": 3}
+    assert runtime_env == {"x": 10, "stale": 2}
+
+    target_without_runtime_env = {"x": 1}
+    executor._sync_existing_variables(rt, target_without_runtime_env, {"x": 2})
+    assert target_without_runtime_env == {"x": 2}
