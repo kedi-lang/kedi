@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
@@ -218,7 +218,7 @@ class StatementExecutor:
                     # Register nested procedure dynamically with current closure
                     from .procedure_compiler import ProcedureCompiler
 
-                    child: ProcedureDef = stmt.proc  # type: ignore
+                    child = cast(ProcedureDef, stmt.proc)
                     child.lexical_env = dict(closure_env)
                     proc_compiler = ProcedureCompiler(self.rt)
                     fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)

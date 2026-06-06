@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
@@ -162,7 +162,7 @@ class ProgramCompiler:
 
         stack = getattr(rt, "_type_env_stack", None)
         if isinstance(stack, list):
-            for layer in stack:
+            for layer in cast(list[dict[str, Any]], stack):
                 names.extend(name for name in layer if self._is_public_name(name))
 
         for env_name in ("_globals_env", "_prelude_env", "_import_env"):
@@ -187,8 +187,9 @@ class ProgramCompiler:
         stack = getattr(imported_rt, "_type_env_stack", None)
         if isinstance(stack, list):
             for layer in reversed(stack):
-                if name in layer:
-                    return "type", layer[name]
+                if isinstance(layer, dict) and name in layer:
+                    typed_layer = cast(dict[str, Any], layer)
+                    return "type", typed_layer[name]
 
         for env_name in ("_globals_env", "_prelude_env", "_import_env"):
             env = getattr(imported_rt, env_name, None)

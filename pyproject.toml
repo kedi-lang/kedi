@@ -78,14 +78,24 @@ branch = true
 source = ["src/kedi"]
 omit = [
     "tree-sitter-kedi/**",
+    "tests/**",
 ]
 
 [tool.coverage.report]
 omit = [
     "tree-sitter-kedi/**",
+    "tests/**",
+]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "\\s*\\.\\.\\.\\s*(#.*)?$",
 ]
 
 [dependency-groups]
 dev = [
+    "basedpyright>=1.39.6",
     "coverage>=7.14.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.16",
+    "ty>=0.0.44",
 ]

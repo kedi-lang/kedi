@@ -23,7 +23,7 @@ class AgentAdapter(Protocol[T]):
         Returns:
             T: The output produced by the agent, matching the specified output type.
         """
-        ...  # type: ignore
+        ...
 
     def produce_sync(
         self,
@@ -41,4 +41,4 @@ class AgentAdapter(Protocol[T]):
         Returns:
             T: The output produced by the agent, matching the specified output type.
         """
-        ...  # type: ignore
+        ...

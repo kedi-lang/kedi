@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
 
@@ -35,11 +35,14 @@ def procedure_json_schema(
         default_value = rt.executor.evaluate_type_expression(rt, default_expr, default_env)
         field_defs[param_name] = (param_type, copy.deepcopy(default_value))
 
-    model = create_model(  # type: ignore[call-overload]
-        f"_{proc.name}Parameters",
-        __base__=BaseModel,
-        __config__=ConfigDict(extra="forbid", title=proc.name),
-        **field_defs,  # type: ignore[arg-type]
+    model = cast(
+        type[BaseModel],
+        cast(Any, create_model)(
+            f"_{proc.name}Parameters",
+            __base__=BaseModel,
+            __config__=ConfigDict(extra="forbid", title=proc.name),
+            **field_defs,
+        ),
     )
     schema = _strip_introspection_descriptions(model.model_json_schema())
     schema["description"] = build_procedure_description(

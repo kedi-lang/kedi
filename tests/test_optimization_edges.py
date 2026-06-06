@@ -1021,7 +1021,7 @@ def test_gepa_optimizer_reflection_and_proc_helpers(
             "p",
             ["x"],
             {},
-            [_span("same", [OutputSegment(name="answer")])],
+            [OptimizeSpan("same", [])],
             [("x", "y")],
             None,
             lambda *_: (1.0, None),

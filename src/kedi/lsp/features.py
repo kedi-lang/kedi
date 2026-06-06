@@ -2441,7 +2441,10 @@ def _resolve_overlaps(
                 continue
             _, ttype, mods = slot
             j = i
-            while j < max_col and paint[j] is not None and paint[j][1:] == (ttype, mods):
+            while j < max_col:
+                next_slot = paint[j]
+                if next_slot is None or next_slot[1:] != (ttype, mods):
+                    break
                 j += 1
             out.append((line, i, j - i, ttype, mods))
             i = j

@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, cast
 
 import dspy
 from dspy import LM
@@ -38,7 +39,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         assert output_schema, "Output schema cannot be empty."
         field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
-        return create_model("_OutputModel", __base__=BaseModel, **field_definitions)  # type: ignore[return-value]
+        model = cast(Any, create_model)(
+            "_OutputModel",
+            __base__=BaseModel,
+            **field_definitions,
+        )
+        return cast(type[OutputDataT], model)
 
     async def produce(
         self,
@@ -112,11 +118,12 @@ class DSPyAdapter:
             field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
         }
         field_definitions.update({"user_prompt": (str, dspy.InputField())})
-        return create_model(
+        model = cast(Any, create_model)(
             "_OutputSignature",
             __base__=dspy.Signature,
             **field_definitions,
         )
+        return cast(type[dspy.Signature], model)
 
     async def produce(
         self,

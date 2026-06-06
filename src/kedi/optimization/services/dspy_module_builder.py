@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import dspy
 
 from ...lang.ast import OptimizeSpan
@@ -132,11 +134,12 @@ class DSPyModuleBuilder:
                 # Fallback to str if no type annotation
                 field_definitions[field] = (str, dspy.OutputField())
 
-        return create_model(
+        model = cast(Any, create_model)(
             "_ProcedureSignature",
             __base__=dspy.Signature,
             **field_definitions,
         )
+        return cast(type[dspy.Signature], model)
 
     def _resolve_type_annotation(self, type_anno: str, param_types: dict[str, type]) -> type:
         """Resolve a type annotation string to an actual Python type.
