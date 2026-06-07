@@ -171,7 +171,7 @@ def run_optimization_cli(
         except ImportError:
             return (
                 1,
-                "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai",
+                "DSPy is required for GEPA optimizer. Install with: uv add dspy-ai",
             )
     else:
         model = adapter_model or "groq:qwen/qwen3-32b"
@@ -183,7 +183,7 @@ def run_optimization_cli(
             except ImportError:
                 return (
                     1,
-                    "DSPy is required for dspy adapter. Install with: pip install dspy-ai",
+                    "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
                 )
         else:
             adapter_for_runtime = PydanticAdapter(model=model)

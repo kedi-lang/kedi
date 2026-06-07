@@ -51,9 +51,7 @@ class GEPAOptimizer(OptimizerAdapter):
             source_path: Path to source .kedi file for saving optimized prompts
         """
         if not DSPY_AVAILABLE:
-            raise ImportError(
-                "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai"
-            )
+            raise ImportError("DSPy is required for GEPA optimizer. Install with: uv add dspy-ai")
 
         self.config = config
         self.runtime = runtime

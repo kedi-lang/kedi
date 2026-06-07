@@ -24,15 +24,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install formatters
-        run: |
-          pip install --quiet ruff
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies with uv
+        run: uv sync --dev
 
       - name: Run Ruff formatter (safe mode)
         run: |
           set +e
-          ruff format . || true
-          ruff check . --fix --select I || true
+          uv run --group dev ruff format . || true
+          uv run --group dev ruff check . --fix --select I || true
           set -e
 
       - name: Commit formatted code

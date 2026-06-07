@@ -35,6 +35,8 @@ Kedi is a compact DSL that lets you compose multi‑step LLM workflows with stro
 
 ### Run it
 - Local install:
+`uv sync --dev`
+- Pip fallback:
 `pip install -e .`
 - After install:
 `kedi <source> [OPTIONS]`
