@@ -47,7 +47,7 @@ coverage:
 	@printf "$(GREEN)✔ Coverage run complete.$(RESET)\n"
 
 check-coverage:
-	@printf "$(BLUE)==>$(RESET) Checking 100%% coverage...\n"
+	@printf "$(BLUE)==>$(RESET) Checking full test coverage...\n"
 	@$(UV) run --group dev pytest --cov=. --cov-fail-under=100 -q
 	@printf "$(GREEN)✔ Coverage threshold satisfied.$(RESET)\n"
 
