@@ -585,3 +585,11 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
     )
     assert single_env["value"] == "ok"
     executor.execute_single_statement(ReturnStmt(segments=[TextSegment(text="ignored")]), {})
+
+
+def test_procedure_kwargs_skip_non_dict_runtime_envs() -> None:
+    rt = compile_kedi_program(parse_program("@p():\n  = ok\n"), adapter=None)
+    setattr(rt, "_import_env", object())
+    setattr(rt, "_globals_env", object())
+
+    assert rt._get_proc("p")() == "ok"

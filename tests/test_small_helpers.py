@@ -139,6 +139,11 @@ def test_utils_cast_value_parse_args_and_attrdict() -> None:
     assert parsed.name == "Ada"
     assert parsed.missing is None
 
+    plain = AttrDict({"present": "ok"})
+    assert plain.present == "ok"
+    with pytest.raises(KeyError):
+        _ = plain.missing
+
 
 def test_source_loading_maps_empty_and_missing_lines(tmp_path: Path) -> None:
     empty = SourceDocument(path="empty.kedi", text="", start_line_in_merged=1)

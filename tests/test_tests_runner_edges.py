@@ -7,6 +7,7 @@ import pytest
 
 from kedi import tests_runner
 from kedi.tests_runner import _load_program_with_validations, run_evals, run_tests
+from kedi.utils import AttrDict
 
 
 def test_load_program_with_validations_accepts_file_path(tmp_path: Path) -> None:
@@ -48,7 +49,14 @@ def test_run_tests_file_path_block_inline_failure_and_loader_fallback(
         lambda _: (_ for _ in ()).throw(RuntimeError("optimized load failed")),
     )
 
-    fallback_results = run_tests(str(source), adapter=None)
+    fallback_results_without_globals = run_tests(str(source), adapter=None)
+    assert [case.success for case in fallback_results_without_globals[0].cases] == [True, False]
+
+    fallback_results = run_tests(
+        str(source),
+        adapter=None,
+        runtime_globals={"args": AttrDict({}, default=None)},
+    )
     assert [case.success for case in fallback_results[0].cases] == [True, False]
 
 
@@ -83,11 +91,36 @@ def test_run_evals_file_path_loader_fallback_and_metric_shapes(
         lambda _: (_ for _ in ()).throw(RuntimeError("optimized load failed")),
     )
 
-    result = run_evals(str(source), adapter=None)[0]
+    result_without_globals = run_evals(str(source), adapter=None)[0]
+    metrics_without_globals = {metric.name: metric for metric in result_without_globals.metrics}
+    assert metrics_without_globals["mapping_score"].score == 1.0
+
+    result = run_evals(
+        str(source),
+        adapter=None,
+        runtime_globals={"args": AttrDict({}, default=None)},
+    )[0]
     metrics = {metric.name: metric for metric in result.metrics}
 
     assert metrics["mapping_score"].score == 1.0
     assert metrics["mapping_score"].feedback == "test:2"
+
+
+def test_run_tests_and_evals_source_strings_receive_runtime_globals() -> None:
+    cli_args = {"args": AttrDict({"id": "7"}, default=None)}
+    test_source = (
+        "@test: args:\n  > case: cli:\n    `assert args.id == '7' and args.missing is None`\n"
+    )
+    test_results = run_tests(test_source, adapter=None, runtime_globals=cli_args)
+    assert test_results[0].cases[0].success
+
+    eval_source = (
+        "@eval: args:\n"
+        "  > metric: cli:\n"
+        "    = `1.0 if args.id == '7' and args.missing is None else 0.0`\n"
+    )
+    eval_results = run_evals(eval_source, adapter=None, runtime_globals=cli_args)
+    assert eval_results[0].metrics[0].score == 1.0
 
 
 def test_run_evals_legacy_metric_tuple_shapes_and_dataset_example_errors() -> None:
