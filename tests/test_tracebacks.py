@@ -148,7 +148,9 @@ def test_cli_renders_toplevel_body_error_without_return(tmp_path: Path) -> None:
     assert "1 / 0" in result.output
 
 
-def test_cli_renders_embedded_python_trace_once_for_assignment_block(tmp_path: Path) -> None:
+def test_cli_renders_embedded_python_trace_once_for_assignment_block(
+    tmp_path: Path,
+) -> None:
     srcp = tmp_path / "sample.kedi"
     srcp.write_text(
         '[x: str] = ```\n# comment\nreturn "value\n```\n',
@@ -258,7 +260,9 @@ def test_error_helpers_cover_message_subclasses_and_frame_labels() -> None:
     assert frame_label("custom_frame") == "custom frame"
 
 
-def test_python_origin_trace_maps_source_line_when_source_map_is_available(tmp_path: Path) -> None:
+def test_python_origin_trace_maps_source_line_when_source_map_is_available(
+    tmp_path: Path,
+) -> None:
     source_path = str(tmp_path / "sample.kedi")
     span = Span(
         0,
@@ -390,7 +394,9 @@ def test_render_execution_error_cleans_syntax_and_fallback_details() -> None:
     assert "fallback message" in fallback
 
 
-def test_render_parse_error_handles_multiple_diagnostics_and_linecache(tmp_path: Path) -> None:
+def test_render_parse_error_handles_multiple_diagnostics_and_linecache(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "bad.kedi"
     source.write_text("@boom(\n= nope\n", encoding="utf-8")
     diagnostics = [

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from kedi import module_registry
 from kedi.lang import compile_program, parse_program
 from kedi.module_registry import (
     describe_module_search_paths,
@@ -11,7 +12,6 @@ from kedi.module_registry import (
     module_search_paths,
     resolve_module_path,
 )
-from kedi import module_registry
 from tests.mock_adapter import MockAdapter
 
 

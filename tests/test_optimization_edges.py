@@ -58,18 +58,22 @@ def _span(name: str = "prompt", segments: list[Any] | None = None) -> OptimizeSp
         name=name,
         template_lines=[
             TemplateLine(
-                segments=segments
-                if segments is not None
-                else [
-                    TextSegment(text="Answer "),
-                    OutputSegment(name="answer", type_annotation="str"),
-                ]
+                segments=(
+                    segments
+                    if segments is not None
+                    else [
+                        TextSegment(text="Answer "),
+                        OutputSegment(name="answer", type_annotation="str"),
+                    ]
+                )
             )
         ],
     )
 
 
-def test_optimizer_registry_unknown_and_gepa_import_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_optimizer_registry_unknown_and_gepa_import_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     assert get_optimizer("missing") is None
     assert isinstance(get_optimizer("mock"), MockOptimizer)
 
@@ -220,7 +224,9 @@ def test_metric_factory_inline_error_and_normalization_edges() -> None:
     assert factory._normalize_metric_result("0.5") == (0.5, None)
 
 
-def test_type_handler_schema_and_signature_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_type_handler_schema_and_signature_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rt = compile_program(parse_program("= ok\n"), adapter=None)
     handler = StructuredTypeHandler(rt)
 
@@ -298,7 +304,9 @@ def test_type_handler_schema_and_signature_edges(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", matching_schema_builder)
     monkeypatch.setattr(
-        handler, "build_output_schema", lambda fields: {"other": cast(Any, unknown_type)}
+        handler,
+        "build_output_schema",
+        lambda fields: {"other": cast(Any, unknown_type)},
     )
     assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]).startswith(
         "x -> answer: <object object at"
@@ -562,7 +570,8 @@ def test_prompt_extractor_edges() -> None:
     assert extractor._find_predictors(cast(Any, AttrModule())) == {"good": predictor}
     assert extractor._find_predictors(
         cast(
-            Any, SimpleNamespace(named_predictors=lambda: [("bad", object()), ("good", predictor)])
+            Any,
+            SimpleNamespace(named_predictors=lambda: [("bad", object()), ("good", predictor)]),
         )
     ) == {"good": predictor}
     assert extractor._find_predictors(
@@ -584,7 +593,10 @@ def test_prompt_extractor_edges() -> None:
     )
     assert (
         extractor._find_predictor_for_span(
-            {}, cast(Any, SimpleNamespace(student=SimpleNamespace(predictor=predictor))), span, 9
+            {},
+            cast(Any, SimpleNamespace(student=SimpleNamespace(predictor=predictor))),
+            span,
+            9,
         )
         is predictor
     )
@@ -712,7 +724,10 @@ def test_gepa_metric_wrapper_helper_edges() -> None:
         1,
         2,
     )
-    assert wrapper._extract_input(cast(Any, SimpleNamespace(x=1, y=2)), ["x", "y"]) == (1, 2)
+    assert wrapper._extract_input(cast(Any, SimpleNamespace(x=1, y=2)), ["x", "y"]) == (
+        1,
+        2,
+    )
 
     assert wrapper._apply_prompt_prefix(None, "x") is None
     assert wrapper._apply_prompt_prefix(span, None) is None
@@ -988,6 +1003,7 @@ def test_gepa_optimizer_reflection_and_proc_helpers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import inspect
+
     import kedi.optimization.gepa as gepa_module
 
     fake_dspy = SimpleNamespace(

@@ -8,10 +8,7 @@ import pytest
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
-from kedi.agent_adapter import (
-    kedi_procedure_to_pydantic_tool,
-    kedi_program_to_pydantic_tools,
-)
+from kedi.agent_adapter import kedi_procedure_to_pydantic_tool, kedi_program_to_pydantic_tools
 from kedi.agent_adapter.utils import _coerce_tool_arguments
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ProcedureDef

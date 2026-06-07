@@ -92,7 +92,9 @@ def test_structured_type_resolution_and_rendering_edges() -> None:
     assert _typeexpr_to_str(UnknownTypeExpr()) == "UnknownTypeExpr()"
 
 
-def test_kedi_type_adapter_and_legacy_resolution_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_kedi_type_adapter_and_legacy_resolution_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     rt = KediRuntime()
 
     assert KediType(None).is_none()

@@ -37,13 +37,11 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import (
-    Node,
-    Tree,
-)
+from tree_sitter import Node
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
+from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod
@@ -317,7 +315,9 @@ def _input_name_span(seg: InputSegment) -> Optional[Span]:
     )
 
 
-def _top_level_value_infos(prog: Program | ProgramWithValidation) -> dict[str, ImportedValueInfo]:
+def _top_level_value_infos(
+    prog: Program | ProgramWithValidation,
+) -> dict[str, ImportedValueInfo]:
     return {
         stmt.name: ImportedValueInfo(
             name=stmt.name,
@@ -326,7 +326,7 @@ def _top_level_value_infos(prog: Program | ProgramWithValidation) -> dict[str, I
         )
         for stmt in prog.toplevel_body
         if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [(_assignment_name_span(stmt))]
+        for span in [_assignment_name_span(stmt)]
         if span is not None
     }
 
@@ -441,7 +441,9 @@ def _exported_name_at_position(
     return None
 
 
-def _imported_surface_for_program(prog: Program | ProgramWithValidation) -> ImportedSurface:
+def _imported_surface_for_program(
+    prog: Program | ProgramWithValidation,
+) -> ImportedSurface:
     surface = ImportedSurface()
     root_path = _program_path(prog)
     seen = {root_path} if root_path is not None else set()
@@ -510,7 +512,7 @@ def _load_imported_surface(
         )
         for stmt in prog.toplevel_body
         if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [(_assignment_name_span(stmt))]
+        for span in [_assignment_name_span(stmt)]
         if span is not None
     }
 
@@ -590,7 +592,7 @@ def _resolve_symbol_at(
         return SymbolRef(
             kind="module",
             name=module_import.module,
-            declaration_span=module_info.declaration_span if module_info is not None else None,
+            declaration_span=(module_info.declaration_span if module_info is not None else None),
             scope_proc=None,
             cursor_span=name_span,
         )
@@ -1544,7 +1546,12 @@ def _find_all_references(
                     _collect_type_refs_in_expr(v, sym.name, out)
             for stmt in p.body:
                 _collect_type_refs_in_stmt(stmt, sym.name, out)
-    elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):  # pragma: no branch
+    elif sym.kind in (
+        "parameter",
+        "param_decl",
+        "local",
+        "output_decl",
+    ):  # pragma: no branch
         if sym.scope_proc is not None:
             for stmt in sym.scope_proc.body:
                 for seg in _segments_of(stmt):
@@ -2042,7 +2049,7 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
         detail=" ".join(detail_parts),
         kind=lsp.SymbolKind.Function,
         range=_span_to_range(proc.loc) if proc.loc else _empty_range(),
-        selection_range=_span_to_range(_proc_name_span(proc)) if proc.loc else _empty_range(),
+        selection_range=(_span_to_range(_proc_name_span(proc)) if proc.loc else _empty_range()),
         children=children,
     )
 

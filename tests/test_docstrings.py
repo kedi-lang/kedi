@@ -12,7 +12,9 @@ from kedi.lang.procedure_schema import (
 )
 
 
-def test_parse_procedure_docstring_empty_whitespace_and_parser_failure(monkeypatch) -> None:
+def test_parse_procedure_docstring_empty_whitespace_and_parser_failure(
+    monkeypatch,
+) -> None:
     assert parse_procedure_docstring(None).description is None
     assert parse_procedure_docstring("   \n\t  ").description is None
 

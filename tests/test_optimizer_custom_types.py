@@ -5,13 +5,9 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from kedi.lang.ast import ProgramWithValidation
-
 from kedi.lang import compile_program, parse_program
-from kedi.optimization.services import (
-    OptimizationDataLoader,
-    TypeResolver,
-)
+from kedi.lang.ast import ProgramWithValidation
+from kedi.optimization.services import OptimizationDataLoader, TypeResolver
 
 PYDANTIC_AVAILABLE = True
 

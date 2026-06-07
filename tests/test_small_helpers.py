@@ -9,12 +9,12 @@ import pytest
 from kedi.lang.ast import ProcedureDef, Span, TypeApply, TypePython, TypeRef, TypeUnion
 from kedi.lang.parser import parser as parser_module
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
+from kedi.lang.type_introspection import TypeInitMetadata
 from kedi.lang.type_render import (
     procedure_param_type_to_python,
     procedure_return_type_to_python,
     type_expr_to_python,
 )
-from kedi.lang.type_introspection import TypeInitMetadata
 from kedi.source_loading import SourceDocument, load_kedi_source_bundle, merge_source_documents
 from kedi.utils import AttrDict, cast_value, parse_args
 
@@ -61,7 +61,10 @@ def test_kedi_parse_error_preserves_empty_and_primary_messages() -> None:
     )
 
     assert str(error) == "first"
-    assert [diagnostic.message for diagnostic in error.diagnostics] == ["first", "second"]
+    assert [diagnostic.message for diagnostic in error.diagnostics] == [
+        "first",
+        "second",
+    ]
 
 
 def test_type_render_handles_structured_legacy_and_default_types() -> None:

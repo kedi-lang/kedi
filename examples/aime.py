@@ -10,10 +10,10 @@ Usage:
 """
 
 import argparse
-from importlib.util import find_spec
 import json
 import os
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 # Check dependencies before importing Kedi

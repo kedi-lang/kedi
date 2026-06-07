@@ -9,7 +9,6 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 import dspy
-
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
 from ...lang.ast import OutputSegment, TemplateLine

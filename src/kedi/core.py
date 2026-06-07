@@ -3,24 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-from .errors import (
-    KediExecutionError,
-    KediPythonOrigin,
-    KediTraceFrame,
-    build_execution_error,
-)
+from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
 from .executors.base import DefaultExecutor, Executor
 
 if TYPE_CHECKING:

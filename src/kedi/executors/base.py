@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
-from .debug import (
-    ExecutorDebugEvent,
-    ExecutorDebugExporter,
-)
+from .debug import ExecutorDebugEvent, ExecutorDebugExporter
 
 if TYPE_CHECKING:
     from ..core import KediRuntime

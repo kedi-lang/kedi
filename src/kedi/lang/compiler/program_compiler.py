@@ -226,7 +226,11 @@ class ProgramCompiler:
         metadata = get_procedure_metadata(fn)
         if metadata is not None:
             setattr(wrapper, "__kedi_procedure_metadata__", metadata)
-            setattr(wrapper, "__kedi_procedure_def__", getattr(fn, "__kedi_procedure_def__", None))
+            setattr(
+                wrapper,
+                "__kedi_procedure_def__",
+                getattr(fn, "__kedi_procedure_def__", None),
+            )
             wrapper.__doc__ = metadata.docstring
         return wrapper
 

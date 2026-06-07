@@ -71,7 +71,9 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         asyncio.run(adapter.produce("template"))
 
 
-def test_dspy_adapter_configures_lm_and_builds_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dspy_adapter_configures_lm_and_builds_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     lm_calls: list[dict[str, Any]] = []
     configure_calls: list[dict[str, Any]] = []
 
@@ -106,7 +108,9 @@ def test_dspy_adapter_configures_lm_and_builds_signature(monkeypatch: pytest.Mon
         asyncio.run(DSPyAdapter.type_builder({}))
 
 
-def test_dspy_adapter_produce_and_sync_use_predict(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dspy_adapter_produce_and_sync_use_predict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeSignature:
         def __init__(self) -> None:
             self.instructions: str | None = None

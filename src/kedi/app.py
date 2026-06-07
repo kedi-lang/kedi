@@ -407,9 +407,7 @@ def run_program_cli(
 ) -> Tuple[int, str]:
     from pathlib import Path
 
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     DEBUG = os.getenv("KEDI_DEBUG_OPTIMIZED", "0") == "1"
 

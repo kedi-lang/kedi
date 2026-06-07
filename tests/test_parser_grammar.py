@@ -132,10 +132,12 @@ def test_cst_walker_defensive_edges(monkeypatch):
         children=[
             _FakeNode("line_comment"),
             _FakeNode(
-                "module_export_name", fields={"name": _FakeNode("identifier", start=12, end=16)}
+                "module_export_name",
+                fields={"name": _FakeNode("identifier", start=12, end=16)},
             ),
             _FakeNode(
-                "module_export_name", fields={"name": _FakeNode("identifier", start=12, end=16)}
+                "module_export_name",
+                fields={"name": _FakeNode("identifier", start=12, end=16)},
             ),
         ],
     )
@@ -146,14 +148,21 @@ def test_cst_walker_defensive_edges(monkeypatch):
 
     proc_walker = _fake_walker(b"proc")
     proc = proc_walker._walk_procedure_def(
-        _FakeNode("procedure_def", fields={"name": _FakeNode("identifier", start=0, end=4)}, end=4)
+        _FakeNode(
+            "procedure_def",
+            fields={"name": _FakeNode("identifier", start=0, end=4)},
+            end=4,
+        )
     )
     assert proc.body == []
     param_noise = _FakeNode("param_list", children=[_FakeNode("line_comment")])
     proc_with_noise = proc_walker._walk_procedure_def(
         _FakeNode(
             "procedure_def",
-            fields={"name": _FakeNode("identifier", start=0, end=4), "params": param_noise},
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "params": param_noise,
+            },
             end=4,
         )
     )
@@ -186,7 +195,10 @@ def test_cst_walker_defensive_edges(monkeypatch):
             "template_line",
             children=[
                 _FakeNode("line_comment"),
-                _FakeNode("template_expr", children=[_FakeNode("text_segment", start=0, end=4)]),
+                _FakeNode(
+                    "template_expr",
+                    children=[_FakeNode("text_segment", start=0, end=4)],
+                ),
             ],
         )
     )
@@ -218,7 +230,11 @@ def test_cst_walker_defensive_edges(monkeypatch):
     assert type_def.fields == []
     assert (
         stmt_walker._walk_type_def(
-            _FakeNode("type_def", fields={"name": _FakeNode("identifier", start=0, end=4)}, end=4)
+            _FakeNode(
+                "type_def",
+                fields={"name": _FakeNode("identifier", start=0, end=4)},
+                end=4,
+            )
         ).fields
         == []
     )
@@ -293,7 +309,10 @@ def test_cst_walker_defensive_edges(monkeypatch):
 
     opt_proc = cst_module.ProcedureDef("proc", [])
     empty_opt = stmt_walker._walk_optimize_directive(
-        _FakeNode("optimize_directive", fields={"name": _FakeNode("identifier", start=0, end=4)}),
+        _FakeNode(
+            "optimize_directive",
+            fields={"name": _FakeNode("identifier", start=0, end=4)},
+        ),
         opt_proc,
     )
     assert empty_opt.template_lines == []

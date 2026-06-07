@@ -47,11 +47,7 @@ from ..lang.ast import (
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
-from .features import (
-    _known_lsp_type_origin,
-    compute_header_python_ranges,
-    compute_python_ranges,
-)
+from .features import _known_lsp_type_origin, compute_header_python_ranges, compute_python_ranges
 
 Position = dict[str, int]
 Range = dict[str, Position]

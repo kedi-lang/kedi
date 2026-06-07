@@ -17,19 +17,19 @@ from kedi.lang.ast import (
     InputSegment,
     LiteralArg,
     OutputSegment,
-    PythonBlock,
-    PythonExprSegment,
-    PythonExprNativeSegment,
     ProcDefStmt,
     ProcedureDef,
     Program,
+    PythonBlock,
+    PythonExprNativeSegment,
+    PythonExprSegment,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
     Span,
     Stmt,
-    TextSegment,
     TemplateLine,
+    TextSegment,
     TypeDefStmt,
     VarArg,
 )
@@ -42,8 +42,8 @@ from kedi.lang.compiler.evaluation import (
     prepare_segments,
     render_expression,
 )
-from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.lang.compiler.procedure_compiler import ProcedureCompiler
+from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.lang.compiler.statement_compiler import StatementCompiler, StatementExecutor
 from kedi.lang.parser.escapes import (
     _indent_width,
@@ -124,7 +124,11 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
 
     expr, rendered = prepare_segments(
         rt,
-        [TextSegment(text="Hello "), InputSegment(name="name"), PythonExprSegment(code="'!'")],
+        [
+            TextSegment(text="Hello "),
+            InputSegment(name="name"),
+            PythonExprSegment(code="'!'"),
+        ],
         {"name": "Ada"},
         context="return",
     )
@@ -150,10 +154,16 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     native_arg = LiteralArg(value="")
     setattr(native_arg, "__native_backtick__", "x + 2")
     render_arg = LiteralArg(value="")
-    setattr(render_arg, "__render_segments__", [TextSegment(text=" "), InputSegment(name="name")])
+    setattr(
+        render_arg,
+        "__render_segments__",
+        [TextSegment(text=" "), InputSegment(name="name")],
+    )
     call_arg = LiteralArg(value="")
     setattr(
-        call_arg, "__call_segment__", CallSegment(name="echo", args=[LiteralArg(value="nested")])
+        call_arg,
+        "__call_segment__",
+        CallSegment(name="echo", args=[LiteralArg(value="nested")]),
     )
     python_arg = LiteralArg(value="")
     setattr(python_arg, "__python_segment__", PythonExprSegment(code="x + 3"))
@@ -232,7 +242,10 @@ def test_runtime_core_edge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
         rt.m(["prompt"])
     with pytest.raises(KeyError, match="Value not found"):
         rt._evaluate_expression(i("missing"), {})
-    assert rt._evaluate_expression(c("add_one", i("value")), {"value": 1}) == ("2", None)
+    assert rt._evaluate_expression(c("add_one", i("value")), {"value": 1}) == (
+        "2",
+        None,
+    )
     assert rt._evaluate_expression(o("answer"), {})[0] == "[answer]"
     assert rt._evaluate_expression(cast(Any, object()), {})[1] is None
     with pytest.raises(KeyError, match="Value not found"):

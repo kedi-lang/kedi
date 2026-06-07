@@ -26,9 +26,7 @@ from kedi.optimization.services import (
     StructuredTypeHandler,
     TypeResolver,
 )
-from kedi.optimization.services.program_loader import (
-    load_program_with_optimized_prompts,
-)
+from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
 from kedi.optimization.utils import extract_output_fields
 
 DSPY_AVAILABLE = True
@@ -167,7 +165,11 @@ def test_data_loader_errors_inline_data_and_tuple_normalization():
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
 
-    assert loader.load_training_data(eval_suite, "inline_cases") == [(1, 2), (3, None), (6, None)]
+    assert loader.load_training_data(eval_suite, "inline_cases") == [
+        (1, 2),
+        (3, None),
+        (6, None),
+    ]
     assert loader.load_training_data(eval_suite) == [(1, 2), (3, None), (6, None)]
     assert loader.load_test_data(eval_suite, "inline_tests") == [(7, 8)]
     assert loader.load_test_data(EvalSuite("test"), "missing") is None

@@ -19,7 +19,9 @@ from kedi.lsp import features
 from kedi.lsp.python_virtual import compute_python_virtual_document
 
 
-def _decode_semantic_tokens(data: Sequence[int]) -> list[tuple[int, int, int, int, int]]:
+def _decode_semantic_tokens(
+    data: Sequence[int],
+) -> list[tuple[int, int, int, int, int]]:
     out: list[tuple[int, int, int, int, int]] = []
     line = 0
     col = 0
@@ -391,7 +393,9 @@ def test_hover_and_definition_on_internal_registry_module_name():
     assert location.range.start.line == 0
 
 
-def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(tmp_path):
+def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(
+    tmp_path,
+):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text(
         "@make_profile(name: str) -> str:\n"
@@ -1335,7 +1339,8 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     )
     assert (
         features._exported_name_at_position(
-            Program(exports=[ModuleExport(["Name"], loc=None)]), lsp.Position(line=0, character=0)
+            Program(exports=[ModuleExport(["Name"], loc=None)]),
+            lsp.Position(line=0, character=0),
         )
         is None
     )
@@ -1461,11 +1466,19 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     )
     assert "@p(x: int)" in features._proc_signature_markdown(proc)
     assert "AI-generated" in features._proc_signature_markdown(
-        ProcedureDef(name="auto", params=[], auto_spec=AutoSpec("make it", loc=span()), loc=span())
+        ProcedureDef(
+            name="auto",
+            params=[],
+            auto_spec=AutoSpec("make it", loc=span()),
+            loc=span(),
+        )
     )
     assert "optimization spans" in features._proc_signature_markdown(
         ProcedureDef(
-            name="opt", params=[], optimize_spans=[OptimizeSpan("prompt", loc=span())], loc=span()
+            name="opt",
+            params=[],
+            optimize_spans=[OptimizeSpan("prompt", loc=span())],
+            loc=span(),
         )
     )
     assert "doc" in features._proc_signature_markdown(
@@ -1568,7 +1581,9 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     assert features._find_local_declaration(local_proc, "z") is None
 
     monkeypatch.setattr(
-        features, "_param_decls", lambda proc: [("miss", span(1, 20, 25)), ("x", span())]
+        features,
+        "_param_decls",
+        lambda proc: [("miss", span(1, 20, 25)), ("x", span())],
     )
     assert features._resolve_in_procedure(proc, pos, {}, {}, {}) is not None
     monkeypatch.undo()
@@ -1639,7 +1654,11 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     )
     assert (
         features._resolve_in_type_expr(
-            TypeApply(name="list", args=[TypeRef(name="Other", loc=span(1, 20, 25))], loc=span()),
+            TypeApply(
+                name="list",
+                args=[TypeRef(name="Other", loc=span(1, 20, 25))],
+                loc=span(),
+            ),
             pos,
             {},
         )
@@ -1648,7 +1667,9 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     assert (
         features._resolve_in_stmt(
             AssignBlockStmt(
-                name="x", type_expr=TypeRef(name="Other", loc=span(1, 20, 25)), loc=span()
+                name="x",
+                type_expr=TypeRef(name="Other", loc=span(1, 20, 25)),
+                loc=span(),
             ),
             pos,
             None,
@@ -1686,7 +1707,11 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     )
     assert rendered_resolved is not None and rendered_resolved.name == "rendered"
     missing_inner_arg = CallArg(loc=span())
-    setattr(missing_inner_arg, "__call_segment__", InputSegment(name="miss", loc=span(1, 20, 25)))
+    setattr(
+        missing_inner_arg,
+        "__call_segment__",
+        InputSegment(name="miss", loc=span(1, 20, 25)),
+    )
     missing_render_arg = CallArg(loc=span())
     setattr(
         missing_render_arg,
@@ -1707,7 +1732,9 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     assert (
         features._resolve_in_segment(
             OutputSegment(
-                name="x", type_expr=TypeRef(name="Other", loc=span(1, 20, 25)), loc=span()
+                name="x",
+                type_expr=TypeRef(name="Other", loc=span(1, 20, 25)),
+                loc=span(),
             ),
             pos,
             None,
@@ -1728,7 +1755,8 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
                     [
                         None,
                         ProcDefStmt(
-                            proc=ProcedureDef("inner", [], body=[], loc=span()), loc=span()
+                            proc=ProcedureDef("inner", [], body=[], loc=span()),
+                            loc=span(),
                         ),
                         TemplateLine(segments=[outer_call], loc=span()),
                     ],
@@ -1812,7 +1840,10 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     assert any(child.name == "> optimize: prompt" for child in proc_symbol.children)
     no_loc_opt_symbol = features._proc_symbol(
         ProcedureDef(
-            name="no_loc_opt", params=[], optimize_spans=[OptimizeSpan("prompt")], loc=span()
+            name="no_loc_opt",
+            params=[],
+            optimize_spans=[OptimizeSpan("prompt")],
+            loc=span(),
         )
     )
     assert no_loc_opt_symbol.children == []
@@ -1846,13 +1877,20 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
     assert features.compute_hover(bad, "/tmp/bad.kedi", lsp.Position(line=0, character=1)) is None
     assert (
         features.compute_definition(
-            bad, "file:///tmp/bad.kedi", "/tmp/bad.kedi", lsp.Position(line=0, character=1)
+            bad,
+            "file:///tmp/bad.kedi",
+            "/tmp/bad.kedi",
+            lsp.Position(line=0, character=1),
         )
         is None
     )
     assert (
         features.compute_references(
-            bad, "file:///tmp/bad.kedi", "/tmp/bad.kedi", lsp.Position(line=0, character=1), True
+            bad,
+            "file:///tmp/bad.kedi",
+            "/tmp/bad.kedi",
+            lsp.Position(line=0, character=1),
+            True,
         )
         == []
     )
@@ -1862,7 +1900,11 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
     )
     assert (
         features.compute_rename(
-            bad, "file:///tmp/bad.kedi", "/tmp/bad.kedi", lsp.Position(line=0, character=1), "x"
+            bad,
+            "file:///tmp/bad.kedi",
+            "/tmp/bad.kedi",
+            lsp.Position(line=0, character=1),
+            "x",
         )
         is None
     )
@@ -1875,7 +1917,8 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
             bad,
             "/tmp/bad.kedi",
             lsp.Range(
-                start=lsp.Position(line=0, character=0), end=lsp.Position(line=1, character=0)
+                start=lsp.Position(line=0, character=0),
+                end=lsp.Position(line=1, character=0),
             ),
         )
         == []
@@ -2003,7 +2046,11 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
     )
     assert (
         features.compute_rename(
-            "= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", lsp.Position(line=0, character=1), "x"
+            "= ok\n",
+            "file:///tmp/x.kedi",
+            "/tmp/x.kedi",
+            lsp.Position(line=0, character=1),
+            "x",
         )
         is None
     )
@@ -2042,7 +2089,11 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
     )
     assert (
         features.compute_rename(
-            "= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", lsp.Position(line=0, character=0), "v2"
+            "= ok\n",
+            "file:///tmp/x.kedi",
+            "/tmp/x.kedi",
+            lsp.Position(line=0, character=0),
+            "v2",
         )
         is None
     )
@@ -2060,7 +2111,11 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
         lambda prog, sym, *, include_declaration: [rename_span],
     )
     rename_edit = features.compute_rename(
-        "= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", lsp.Position(line=0, character=0), "y"
+        "= ok\n",
+        "file:///tmp/x.kedi",
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=0),
+        "y",
     )
     assert rename_edit is not None and rename_edit.changes is not None
     assert len(rename_edit.changes["file:///tmp/x.kedi"]) == 1
@@ -2070,7 +2125,11 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
         lambda prog, pos: features.SymbolRef("local", "x", None, None, cast(Any, None)),
     )
     rename_without_cursor = features.compute_rename(
-        "= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", lsp.Position(line=0, character=0), "y"
+        "= ok\n",
+        "file:///tmp/x.kedi",
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=0),
+        "y",
     )
     assert rename_without_cursor is not None and rename_without_cursor.changes is not None
     assert len(rename_without_cursor.changes["file:///tmp/x.kedi"]) == 1
@@ -2120,13 +2179,19 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
     hints = features.compute_inlay_hints(
         hints_src,
         "/tmp/x.kedi",
-        lsp.Range(start=lsp.Position(line=0, character=0), end=lsp.Position(line=10, character=0)),
+        lsp.Range(
+            start=lsp.Position(line=0, character=0),
+            end=lsp.Position(line=10, character=0),
+        ),
     )
     assert len(hints) >= 3
     extra_hints = features.compute_inlay_hints(
         "@one(x):\n  = ok\n\n= <one(1, 2)>\n",
         "/tmp/x.kedi",
-        lsp.Range(start=lsp.Position(line=0, character=0), end=lsp.Position(line=10, character=0)),
+        lsp.Range(
+            start=lsp.Position(line=0, character=0),
+            end=lsp.Position(line=10, character=0),
+        ),
     )
     assert extra_hints
     assert (
@@ -2134,7 +2199,8 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
             "@one(x):\n  = ok\n\n= <one(1)>\n",
             "/tmp/x.kedi",
             lsp.Range(
-                start=lsp.Position(line=10, character=0), end=lsp.Position(line=11, character=0)
+                start=lsp.Position(line=10, character=0),
+                end=lsp.Position(line=11, character=0),
             ),
         )
         == []
@@ -2144,7 +2210,8 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
             "Value [answer]\n",
             "/tmp/x.kedi",
             lsp.Range(
-                start=lsp.Position(line=10, character=0), end=lsp.Position(line=11, character=0)
+                start=lsp.Position(line=10, character=0),
+                end=lsp.Position(line=11, character=0),
             ),
         )
         == []
@@ -2154,7 +2221,8 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
             "Value [answer: int]\n= <answer>\n",
             "/tmp/x.kedi",
             lsp.Range(
-                start=lsp.Position(line=0, character=0), end=lsp.Position(line=3, character=0)
+                start=lsp.Position(line=0, character=0),
+                end=lsp.Position(line=3, character=0),
             ),
         )
         == []
@@ -2164,7 +2232,8 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
         features._in_range(
             features.Span(0, 1, 1, 1, 1, 2),
             lsp.Range(
-                start=lsp.Position(line=2, character=0), end=lsp.Position(line=3, character=0)
+                start=lsp.Position(line=2, character=0),
+                end=lsp.Position(line=3, character=0),
             ),
         )
         is False
@@ -2173,14 +2242,16 @@ def test_lsp_feature_public_edge_paths(tmp_path, monkeypatch):
         features._in_range(
             features.Span(0, 1, 5, 1, 5, 2),
             lsp.Range(
-                start=lsp.Position(line=0, character=0), end=lsp.Position(line=3, character=0)
+                start=lsp.Position(line=0, character=0),
+                end=lsp.Position(line=3, character=0),
             ),
         )
         is False
     )
     assert (
         features._active_param_index(
-            CallSegment(name="p", args=cast(Any, None)), lsp.Position(line=0, character=0)
+            CallSegment(name="p", args=cast(Any, None)),
+            lsp.Position(line=0, character=0),
         )
         == 0
     )
@@ -2645,10 +2716,10 @@ def test_python_virtual_helper_edges(monkeypatch):
         EvalMetric,
         EvalSuite,
         OutputSegment,
-        PythonBlock,
-        PythonExprNativeSegment,
         ProcedureDef,
         ProgramWithValidation,
+        PythonBlock,
+        PythonExprNativeSegment,
         Span,
         TestCase,
         TestSuite,
@@ -2668,13 +2739,19 @@ def test_python_virtual_helper_edges(monkeypatch):
         kind="missing",
         name="x",
         source_range=None,
-        virtual_range={"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+        virtual_range={
+            "start": {"line": 0, "character": 0},
+            "end": {"line": 0, "character": 1},
+        },
     )
     assert builder.symbols == []
 
     empty_region = pv.PythonRegion(
         kind="inline",
-        range={"start": {"line": 99, "character": 0}, "end": {"line": 99, "character": 0}},
+        range={
+            "start": {"line": 99, "character": 0},
+            "end": {"line": 99, "character": 0},
+        },
         text="",
     )
     assert builder.add_mapped_region(empty_region)["start"]["line"] == 0
@@ -2682,7 +2759,10 @@ def test_python_virtual_helper_edges(monkeypatch):
 
     comment_region = pv.PythonRegion(
         kind="fenced",
-        range={"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 13}},
+        range={
+            "start": {"line": 1, "character": 0},
+            "end": {"line": 1, "character": 13},
+        },
         text="# comment",
     )
     builder.add_mapped_region(comment_region, "    ")
@@ -2691,7 +2771,10 @@ def test_python_virtual_helper_edges(monkeypatch):
 
     reversed_region = pv.PythonRegion(
         kind="inline",
-        range={"start": {"line": 2, "character": 9}, "end": {"line": 2, "character": 2}},
+        range={
+            "start": {"line": 2, "character": 9},
+            "end": {"line": 2, "character": 2},
+        },
         text="",
     )
     builder.add_mapped_region(reversed_region)
@@ -2700,7 +2783,10 @@ def test_python_virtual_helper_edges(monkeypatch):
         [
             {
                 "kind": "inline",
-                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end": {"line": 0, "character": 1},
+                },
                 "text": "x",
             }
         ]
@@ -3060,7 +3146,10 @@ def test_python_virtual_helper_edges(monkeypatch):
     monkeypatch.undo()
     pv._add_default_expr_region(
         symbol_builder,
-        source_range={"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+        source_range={
+            "start": {"line": 0, "character": 0},
+            "end": {"line": 0, "character": 1},
+        },
         line=0,
         line_text="x: int = 1",
         expr="missing",
@@ -3168,7 +3257,9 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
     handlers = server.protocol.fm.features
     published = []
     monkeypatch.setattr(
-        server, "text_document_publish_diagnostics", lambda params: published.append(params)
+        server,
+        "text_document_publish_diagnostics",
+        lambda params: published.append(params),
     )
 
     calls = []
@@ -3199,7 +3290,9 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
     )
     monkeypatch.setattr(server_module.features, "compute_inlay_hints", record("inlay", ["hint"]))
     monkeypatch.setattr(
-        server_module.features, "compute_semantic_tokens_full", record("semantic", "tokens")
+        server_module.features,
+        "compute_semantic_tokens_full",
+        record("semantic", "tokens"),
     )
     monkeypatch.setattr(server_module.features, "compute_python_ranges", lambda src: ["range"])
     monkeypatch.setattr(

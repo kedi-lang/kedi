@@ -50,7 +50,10 @@ def test_run_tests_file_path_block_inline_failure_and_loader_fallback(
     )
 
     fallback_results_without_globals = run_tests(str(source), adapter=None)
-    assert [case.success for case in fallback_results_without_globals[0].cases] == [True, False]
+    assert [case.success for case in fallback_results_without_globals[0].cases] == [
+        True,
+        False,
+    ]
 
     fallback_results = run_tests(
         str(source),
@@ -222,7 +225,9 @@ def test_run_tests_and_evals_path_detection_exceptions_and_non_string_inputs(
     assert run_evals(cast(Any, 123), adapter=None) == []
 
 
-def test_run_tests_and_evals_path_detection_missing_file(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_tests_and_evals_path_detection_missing_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class EmptyRuntime:
         _validation_tests: list[Any] = []
         _validation_evals: list[Any] = []

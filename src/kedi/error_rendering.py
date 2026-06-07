@@ -320,7 +320,9 @@ def _render_caret_line(
     console.print(caret_line)
 
 
-def _python_trace_targets(error: KediExecutionError) -> dict[int, tuple[KediPythonTrace, ...]]:
+def _python_trace_targets(
+    error: KediExecutionError,
+) -> dict[int, tuple[KediPythonTrace, ...]]:
     targets: dict[int, list[KediPythonTrace]] = {}
     for trace in error.python_traces:
         index = _best_python_trace_frame_index(error.frames, trace)

@@ -13,11 +13,7 @@ from ..lang.ast import (
     TextSegment,
 )
 from ..lang.compiler.environment import KediRuntime
-from ..lang.compiler.evaluation import (
-    evaluate_call,
-    evaluate_python_inline,
-    lookup_value,
-)
+from ..lang.compiler.evaluation import evaluate_call, evaluate_python_inline, lookup_value
 
 
 def template_line_to_string(template_line: TemplateLine) -> str:

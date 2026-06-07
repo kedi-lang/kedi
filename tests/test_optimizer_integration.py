@@ -10,6 +10,7 @@ import pytest
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
+from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.mock import MockOptimizer
 from kedi.optimization.services import (
     MetricFactory,
@@ -17,7 +18,6 @@ from kedi.optimization.services import (
     OptimizationResultWriter,
     TypeResolver,
 )
-from kedi.optimization.gepa import GEPAOptimizer
 
 GEPA_AVAILABLE = True
 

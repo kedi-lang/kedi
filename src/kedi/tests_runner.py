@@ -69,9 +69,7 @@ def run_tests(
     from pathlib import Path
 
     from .lang.compiler import compile_program
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     # Check if src_main is a file path or source code string
     source_path = None
@@ -142,9 +140,7 @@ def run_evals(
 ) -> List[EvalRunResult]:
     from pathlib import Path
 
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     # Check if src_main is a file path or source code string
     # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path

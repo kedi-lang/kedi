@@ -6,13 +6,16 @@ from types import SimpleNamespace
 from typing import Any
 
 from kedi import app
-from kedi.lang.ast import EvalDataset, EvalMetric, EvalSuite, OptimizeSpan, ProcedureDef
-from kedi.lang.ast import ProgramWithValidation
-from kedi.lang.parser.diagnostics import KediParseError
-from kedi.tests_runner import (
-    EvalMetricResult,
-    EvalRunResult,
+from kedi.lang.ast import (
+    EvalDataset,
+    EvalMetric,
+    EvalSuite,
+    OptimizeSpan,
+    ProcedureDef,
+    ProgramWithValidation,
 )
+from kedi.lang.parser.diagnostics import KediParseError
+from kedi.tests_runner import EvalMetricResult, EvalRunResult
 from kedi.tests_runner import TestCaseResult as CaseResult
 from kedi.tests_runner import TestRunResult as RunResult
 
@@ -333,7 +336,10 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
         "parse_program",
         lambda *args, **kwargs: ProgramWithValidation(procedures=[], evals=[]),
     )
-    assert app.run_optimization_cli(str(source)) == (0, "No procedures with optimize spans found")
+    assert app.run_optimization_cli(str(source)) == (
+        0,
+        "No procedures with optimize spans found",
+    )
 
     missing_eval = ProgramWithValidation(
         procedures=[
@@ -555,7 +561,9 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
         lambda source_path: SimpleNamespace(text="source", source_map=None),
     )
     monkeypatch.setattr(
-        app, "parse_program", lambda *args, **kwargs: (_ for _ in ()).throw(KediParseError([]))
+        app,
+        "parse_program",
+        lambda *args, **kwargs: (_ for _ in ()).throw(KediParseError([])),
     )
     try:
         app.maybe_run_codegen(str(source))
@@ -595,7 +603,10 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
     monkeypatch.setenv("KEDI_DEBUG_OPTIMIZED", "1")
 
     assert app.run_program_cli(str(source), adapter="pydantic", model=None) == (0, "")
-    assert app.run_program_cli(str(source), adapter="pydantic", model=None) == (0, "with adapter")
+    assert app.run_program_cli(str(source), adapter="pydantic", model=None) == (
+        0,
+        "with adapter",
+    )
 
     monkeypatch.setenv("KEDI_DEBUG_OPTIMIZED", "0")
     runtimes = [FakeRuntime([RuntimeError("different")])]

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from kedi.cli import main as cli_main
 from kedi.codegen.interfaces import CodegenConfig, ProgramContext
 from kedi.codegen.manager import CodegenManager
@@ -23,9 +24,9 @@ from kedi.codegen.translator import (
     python_tests_to_kedi_tests,
 )
 from kedi.lang.ast import ProcedureDef, TypeDef, TypeField
-from kedi.tests_runner import run_tests
 from kedi.tests_runner import TestCaseResult as KediTestCaseResult
 from kedi.tests_runner import TestRunResult as KediTestRunResult
+from kedi.tests_runner import run_tests
 
 
 def test_codegen_cache_paths(tmp_path: Path) -> None:
@@ -132,7 +133,11 @@ def test_codegen_manager_context_and_cache_parsing(tmp_path: Path) -> None:
 
     mgr.write_cache(src, "", "@cached():\n  = ok\n")
     merged = mgr.parse_with_cache(src)
-    assert {proc.name for proc in merged.procedures} == {"helper", "generated", "cached"}
+    assert {proc.name for proc in merged.procedures} == {
+        "helper",
+        "generated",
+        "cached",
+    }
 
 
 def test_codegen_manager_reports_compile_and_test_errors(
@@ -358,7 +363,9 @@ def test_mock_passing_agent_generates_implementations_by_return_type() -> None:
     assert "result = 'ok'" in agent.generate_impl("def f():", "", context, "")
 
 
-def test_pydantic_ai_agent_uses_configured_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pydantic_ai_agent_uses_configured_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from kedi.codegen import pydantic_ai_agent as agent_module
 
     class FakeAdapter:
