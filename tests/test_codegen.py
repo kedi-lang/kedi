@@ -59,12 +59,12 @@ def test_codegen_translator_covers_signature_type_test_and_impl_shapes() -> None
 
     proc = ProcedureDef(
         name="greet",
-        params=["name", "times", "suffix"],
+        params=["name", "suffix", "times"],
         param_type_annotations={"name": "", "times": "int"},
         param_defaults={"times": "1"},
     )
     assert kedi_procedure_to_python_signature(proc) == (
-        "def greet(name: str, times: int = 1, suffix: str) -> str:\n"
+        "def greet(name: str, suffix: str, times: int = 1) -> str:\n"
         "    '''Available procedure: greet'''\n"
         "    ..."
     )
