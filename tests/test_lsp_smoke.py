@@ -38,6 +38,19 @@ def _hover_value(hover: lsp.Hover | None) -> str:
     return hover.contents.value
 
 
+def _position_of(source: str, needle: str, *, occurrence: int = 1, offset: int = 0) -> lsp.Position:
+    start = 0
+    for _ in range(occurrence):
+        index = source.index(needle, start)
+        start = index + len(needle)
+    index += offset
+    before = source[:index]
+    return lsp.Position(
+        line=before.count("\n"),
+        character=len(before.rsplit("\n", 1)[-1]),
+    )
+
+
 # ---------------------------------------------------------------------
 # Diagnostics
 # ---------------------------------------------------------------------
@@ -468,6 +481,203 @@ def test_hover_on_output_segment_shows_type():
     body = _hover_value(hover)
     assert "Output" in body
     assert "n" in body
+
+
+def test_hover_on_assignment_target_shows_local_variable():
+    src = "@p():\n  [x: str] = ok\n  = <x>\n"
+    hover = features.compute_hover(
+        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=3)
+    )
+
+    assert hover is not None
+    body = _hover_value(hover)
+    assert "Local" in body
+    assert "`x`" in body
+
+
+def test_hover_on_runtime_args_shows_attrdict_type():
+    hover = features.compute_hover(
+        source="= <args>\n",
+        source_path="example.kedi",
+        pos=lsp.Position(line=0, character=3),
+    )
+
+    assert hover is not None
+    body = _hover_value(hover)
+    assert "Runtime value" in body
+    assert "AttrDict[str, ArgType]" in body
+
+
+def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
+    src = (
+        "# Module doc\n"
+        "> import: this\n"
+        "\n"
+        "```\n"
+        "class Helper:\n"
+        "    pass\n"
+        "```\n"
+        "\n"
+        "~Review(decision: str, issues: list[str], line_count: int = `0`)\n"
+        "\n"
+        "[global_note: str] = `args.note`\n"
+        "\n"
+        '@review_code(language: str = `args.language`, code: str = `"print(1)"`) -> Review:\n'
+        "  ###\n"
+        "  Review code with CLI args and Python interop.\n"
+        "  ###\n"
+        "  @line_count() -> int:\n"
+        "    [count: int] = ```\n"
+        "    return len([line for line in code.splitlines() if line.strip()])\n"
+        "    ```\n"
+        "    = <count>\n"
+        "\n"
+        "  > optimize: review_prompt:\n"
+        "    Review this <language> snippet with <line_count()> non-empty lines.\n"
+        "    Runtime args <args>.\n"
+        "    Return [review: Review]\n"
+        "\n"
+        "  `print(args.debug)`\n"
+        "  [review: Review] = ```\n"
+        '  return Review(decision="approve", issues=[], line_count=line_count())\n'
+        "  ```\n"
+        "  = <`review`>\n"
+        "\n"
+        "@test: review_code:\n"
+        "  > case: basic:\n"
+        '    `assert review_code("python", "print(1)").decision == "approve"`\n'
+        "\n"
+        "@eval: review_code:\n"
+        "  > data: examples:\n"
+        "    = ```\n"
+        '    return [("python", {"decision": "approve"})]\n'
+        "    ```\n"
+        "  > metric: accuracy(examples):\n"
+        "    = ```\n"
+        "    return 1.0\n"
+        "    ```\n"
+        "\n"
+        "> export:\n"
+        "  Review\n"
+        "  review_code\n"
+        "  global_note\n"
+        "\n"
+        "= <review_code(`args.language`, `args.code`)>\n"
+    )
+    source_path = "/tmp/all_nodes.kedi"
+    uri = "file:///tmp/all_nodes.kedi"
+
+    assert features.compute_diagnostics(src, source_path) == []
+
+    hover_checks = [
+        ("this", 1, 1, "**Module** `this`"),
+        ("~Review", 1, 2, "Kedi type definition"),
+        ("decision", 1, 0, "**Field** `decision: str`"),
+        ("global_note", 1, 1, "**Local** `global_note`"),
+        ("@review_code", 1, 2, "Review code with CLI args and Python interop."),
+        ("@line_count", 1, 2, "`@line_count()`"),
+        ("<language>", 1, 2, "**Parameter** `language: str`"),
+        ("<line_count()>", 1, 2, "`@line_count()`"),
+        ("<args>", 1, 2, "**Runtime value** `args: AttrDict[str, ArgType]`"),
+        ("[review: Review]", 1, 1, "**Output** `review`"),
+        ("[review: Review]", 2, 2, "**Local** `review`"),
+        ("review_code\n  global_note", 1, 1, "Review code with CLI args"),
+        ("review_code(`args", 1, 1, "Review code with CLI args"),
+    ]
+    for needle, occurrence, offset, expected in hover_checks:
+        hover = features.compute_hover(
+            src,
+            source_path,
+            _position_of(src, needle, occurrence=occurrence, offset=offset),
+        )
+        assert expected in _hover_value(hover)
+
+    definitions = [
+        ("this", 1, 1, "src/kedi/modules/this.kedi"),
+        ("Review:", 1, 1, source_path),
+        ("<line_count()>", 1, 2, source_path),
+        ("review_code(`args", 1, 1, source_path),
+        ("review_code\n  global_note", 1, 1, source_path),
+    ]
+    for needle, occurrence, offset, expected_uri in definitions:
+        loc = features.compute_definition(
+            src,
+            uri,
+            source_path,
+            _position_of(src, needle, occurrence=occurrence, offset=offset),
+        )
+        assert loc is not None
+        assert expected_uri in loc.uri
+
+    refs = features.compute_references(
+        src,
+        uri,
+        source_path,
+        _position_of(src, "@review_code", offset=2),
+        include_declaration=True,
+    )
+    assert len(refs) >= 2
+    assert any(ref.range.start.line == 12 for ref in refs)
+    assert any(ref.range.start.line == 52 for ref in refs)
+
+    prepare = features.compute_prepare_rename(
+        src,
+        source_path,
+        _position_of(src, "[review: Review]", occurrence=2, offset=2),
+    )
+    assert prepare is not None
+    assert prepare.start.line == 28
+    assert prepare.start.character == 3
+    assert prepare.end.character == 9
+
+    signature = features.compute_signature_help(
+        src,
+        source_path,
+        _position_of(src, "review_code(`args", offset=len("review_code(`args.language")),
+    )
+    assert signature is not None
+    assert signature.signatures[0].label.startswith("@review_code(")
+    assert signature.active_parameter == 0
+
+    hints = features.compute_inlay_hints(
+        src,
+        source_path,
+        lsp.Range(
+            start=lsp.Position(line=0, character=0),
+            end=lsp.Position(line=80, character=0),
+        ),
+    )
+    assert {str(hint.label) for hint in hints} >= {"language: ", "code: "}
+
+    decoded = _decode_semantic_tokens(features.compute_semantic_tokens_full(src, source_path).data)
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    function_type = features.SEMANTIC_TOKEN_TYPES.index("function")
+    type_type = features.SEMANTIC_TOKEN_TYPES.index("type")
+    assert any(
+        line == 10 and length == len("global_note") and t == variable_type
+        for line, _, length, t, _ in decoded
+    )
+    assert any(
+        line == 12 and length == len("review_code") and t == function_type
+        for line, _, length, t, _ in decoded
+    )
+    assert any(
+        line == 8 and length == len("Review") and t == type_type
+        for line, _, length, t, _ in decoded
+    )
+    assert any(
+        line == 24 and length == len("args") and t == variable_type
+        for line, _, length, t, _ in decoded
+    )
+
+    virtual = compute_python_virtual_document(src, source_path)
+    ast.parse(virtual["text"])
+    text = virtual["text"]
+    assert "args: AttrDict[str, ArgType] = ..." in text
+    assert "global_note: str = (" in text
+    assert "def review_code(language: str = args.language" in text
+    assert "print(args.debug)" in text
+    assert 'return Review(decision="approve", issues=[], line_count=line_count())' in text
 
 
 def test_hover_on_builtin_and_typing_types_is_not_undefined():
@@ -968,6 +1178,27 @@ def test_semantic_tokens_cover_module_directives():
     assert any(line == 4 and token_type == variable_type for line, _, _, token_type, _ in decoded)
 
 
+def test_semantic_tokens_cover_assignment_targets_and_args():
+    src = "[x: str] = `args.country`\n= <args>\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = _decode_semantic_tokens(tokens.data)
+
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 0 and col == 1 and length == 1 and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 0 and col == 12 and length == 4 and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 1 and col == 3 and length == 4 and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------
@@ -1065,6 +1296,8 @@ def test_lsp_feature_helper_edges(tmp_path, monkeypatch):
     assert features._program_line_text(Program(source_text="one"), 2) is None
     assert features._program_line_text(Program(source_map=source_map), 1) is None
     assert features._program_line_text(Program(), 1) is None
+    assert features._output_name_span(OutputSegment(name="x")) is None
+    assert features._input_name_span(InputSegment(name="x")) is None
     assert features._extract_module_docstring("") is None
     assert features._extract_module_docstring("###\n###\n") is None
     assert features._extract_module_docstring("# one\n# two\n= ok\n") == "one\ntwo"
@@ -2210,6 +2443,18 @@ def test_focused_virtual_document_keeps_focused_module_python_mapped():
     assert "from pydantic import BaseModel" in virtual["text"]
     assert "class Person(BaseModel):" in virtual["text"]
     assert any(region["range"]["start"]["line"] == 1 for region in virtual["ranges"])
+
+
+def test_virtual_document_exposes_runtime_args_as_attrdict():
+    src = "[city: str] = `args.city`\n= <`args.debug`>\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    ast.parse(virtual["text"])
+    assert "ArgType: TypeAlias = Union[str, bool, None]" in virtual["text"]
+    assert "class AttrDict(dict[_K, _V], Generic[_K, _V]):" in virtual["text"]
+    assert "args: AttrDict[str, ArgType] = ..." in virtual["text"]
+    assert "args.city" in virtual["text"]
+    assert "args.debug" in virtual["text"]
 
 
 def test_python_virtual_document_hoists_leading_toplevel_python_blocks():

@@ -214,7 +214,7 @@ def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
 class SymbolRef:
     """The symbol under the cursor, used by references / rename / hover."""
 
-    kind: str  # "module" | "procedure" | "type" | "type_field" | "parameter" | "local" | "param_decl" | "output_decl"
+    kind: str
     name: str
     declaration_span: Optional[Span]
     scope_proc: Optional[ProcedureDef]
@@ -284,6 +284,36 @@ def _assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
         end_line=stmt.loc.start_line,
         end_col=name_start_col + len(stmt.name),
         source_path=stmt.loc.source_path,
+    )
+
+
+def _output_name_span(seg: OutputSegment) -> Optional[Span]:
+    if seg.loc is None:
+        return None
+    name_start_col = seg.loc.start_col + 1  # skip '['
+    return Span(
+        start_byte=seg.loc.start_byte + 1,
+        end_byte=seg.loc.start_byte + 1 + len(seg.name),
+        start_line=seg.loc.start_line,
+        start_col=name_start_col,
+        end_line=seg.loc.start_line,
+        end_col=name_start_col + len(seg.name),
+        source_path=seg.loc.source_path,
+    )
+
+
+def _input_name_span(seg: InputSegment) -> Optional[Span]:
+    if seg.loc is None:
+        return None
+    name_start_col = seg.loc.start_col + 1  # skip '<'
+    return Span(
+        start_byte=seg.loc.start_byte + 1,
+        end_byte=seg.loc.start_byte + 1 + len(seg.name),
+        start_line=seg.loc.start_line,
+        start_col=name_start_col,
+        end_line=seg.loc.start_line,
+        end_col=name_start_col + len(seg.name),
+        source_path=seg.loc.source_path,
     )
 
 
@@ -746,11 +776,15 @@ def _resolve_in_stmt(
         return None
     # AssignStmt / AssignBlockStmt target name
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
-        # The target identifier lives just inside the `[name` literal.
-        # Without an explicit span on the name we approximate.
-        # Skip cursor hit-test on the target for now; references work
-        # via the segment search.
-        pass
+        name_span = _assignment_name_span(stmt)
+        if name_span is not None and _position_inside(pos, name_span):
+            return SymbolRef(
+                kind="local",
+                name=stmt.name,
+                declaration_span=name_span,
+                scope_proc=proc,
+                cursor_span=name_span,
+            )
     if isinstance(stmt, AssignStmt) and stmt.type_expr is not None:
         r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name)
         if r is not None:
@@ -778,13 +812,14 @@ def _resolve_in_segment(
         return None
     if isinstance(seg, InputSegment):
         # Could be a parameter, an output, or an assign-target reference.
+        name_span = _input_name_span(seg) or seg.loc
         if proc is not None and proc.params and seg.name in proc.params:
             return SymbolRef(
                 kind="parameter",
                 name=seg.name,
                 declaration_span=proc.loc,  # imprecise but useful
                 scope_proc=proc,
-                cursor_span=seg.loc,
+                cursor_span=name_span,
             )
         decl = _find_local_declaration(proc, seg.name) if proc else None
         if decl is None and seg.name in imported_values:
@@ -793,14 +828,22 @@ def _resolve_in_segment(
                 name=seg.name,
                 declaration_span=imported_values[seg.name].declaration_span,
                 scope_proc=proc,
-                cursor_span=seg.loc,
+                cursor_span=name_span,
+            )
+        if decl is None and seg.name == "args":
+            return SymbolRef(
+                kind="runtime_value",
+                name=seg.name,
+                declaration_span=None,
+                scope_proc=proc,
+                cursor_span=name_span,
             )
         return SymbolRef(
             kind="local",
             name=seg.name,
             declaration_span=decl,
             scope_proc=proc,
-            cursor_span=seg.loc,
+            cursor_span=name_span,
         )
     if isinstance(seg, CallSegment):
         # Cursor on the call NAME? Identifier sits at start_col+1..+len(name).
@@ -857,24 +900,14 @@ def _resolve_in_segment(
                     return r
     if isinstance(seg, OutputSegment):
         # The name occupies the first identifier after `[`.
-        name_start = seg.loc.start_col + 1
-        if pos.line + 1 == seg.loc.start_line and (
-            name_start <= pos.character + 1 < name_start + len(seg.name)
-        ):
+        name_span = _output_name_span(seg)
+        if name_span is not None and _position_inside(pos, name_span):
             return SymbolRef(
                 kind="output_decl",
                 name=seg.name,
-                declaration_span=seg.loc,
+                declaration_span=name_span,
                 scope_proc=proc,
-                cursor_span=Span(
-                    start_byte=seg.loc.start_byte + 1,
-                    end_byte=seg.loc.start_byte + 1 + len(seg.name),
-                    start_line=seg.loc.start_line,
-                    start_col=name_start,
-                    end_line=seg.loc.start_line,
-                    end_col=name_start + len(seg.name),
-                    source_path=seg.loc.source_path,
-                ),
+                cursor_span=name_span,
             )
         # type annotation
         if seg.type_expr is not None:  # pragma: no branch
@@ -978,10 +1011,10 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
         return None
     for stmt in proc.body:
         if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
-            return stmt.loc
+            return _assignment_name_span(stmt)
         for seg in _segments_of(stmt):
             if isinstance(seg, OutputSegment) and seg.name == name:
-                return seg.loc
+                return _output_name_span(seg)
     return None
 
 
@@ -1072,6 +1105,12 @@ def compute_hover(
             text = f"**Parameter** `{sym.name}`{proc_name}"
     elif sym.kind == "local":
         text = f"**Local** `{sym.name}` — output or assignment in this procedure."
+    elif sym.kind == "runtime_value":
+        text = (
+            "**Runtime value** `args: AttrDict[str, ArgType]` — CLI arguments passed after "
+            "the Kedi source path. Named flags are available as attributes; missing flags "
+            "resolve to `None`."
+        )
     elif sym.kind == "module_value":
         text = f"**Module value** `{sym.name}` — top-level assignment exported by this module."
     elif sym.kind == "imported_value":
