@@ -1,4 +1,6 @@
-# Kedi 
+# Kedi
+[![codecov](https://codecov.io/gh/kedi-lang/kedi/graph/badge.svg)](https://codecov.io/gh/kedi-lang/kedi)
+
 ## A typed reasoning layer for LLM orchestration
 
 Kedi is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
@@ -75,5 +77,3 @@ The runner loads the source, compiles it, optionally applies model/adapter setti
   - Examples: `\<`, `\>`, `\[`, `\]`, `\\`, `\,`, `\=`, `\@`, `\#`, `\~`, `` \` ``, `\(`, `\)`.
 
 See `docs/KEDI_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
-
-
