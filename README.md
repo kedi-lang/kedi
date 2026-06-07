@@ -1,81 +1,109 @@
 # Kedi
+
 [![coverage](https://img.shields.io/github/actions/workflow/status/kedi-lang/kedi/tests.yml?branch=stable&label=coverage)](https://github.com/kedi-lang/kedi/actions/workflows/tests.yml)
 
 ## A typed reasoning layer for LLM orchestration
 
-Kedi is a compact DSL that lets you compose multi‑step LLM workflows with strong typing, Python interop, and clear dataflow. You write indentation‑scoped procedures, mix natural language prompts with typed outputs, and weave in Python for logic—all compiled into a runtime you can execute locally or against your preferred model.
+Kedi is a compact DSL for writing typed LLM workflows. It combines prompt-like
+template lines, Python interop, Pydantic-backed types, imports/exports, and test
+or eval blocks in one readable source file.
 
-### A Quick Taste
+### Quick Taste
 
-````markdown
-~City(name, history, economy, cuisine)
+Typed outputs and Python can live in the same procedure:
 
-@get_city_info(city) -> City:
-    Paragraphs [history], [economy], and [cuisine] describe <city> in different aspects.
-    = `City(city, history, economy, cuisine)`
+````kedi
+~Review(decision: str, issues: list[str], summary: str)
 
-@get_cities_in(country) -> list[str]:
-    All cities in <country> are [cities: list[str]].
-    = `cities`
+@review_code(language: str, code: str) -> Review:
+  [line_count: int] = ```
+  return len([line for line in code.splitlines() if line.strip()])
+  ```
 
-# AI-generated procedure !
-@consolidate_city_info_as_markdown(cities: list[City], country) -> str:
-    > This is a procedure that takes a list of City objects of cities in \
-    the country (given in the country parameter) and \
-    with the information about their history, economy and cuisine. \
-    The procedure will consolidate the information into a markdown \
-    string and return it for an informative report.  
-    
-[country] = Singapore
-[cities_info : list[City]] = `[get_city_info(city) for city in get_cities_in(country)]`
-[markdown] = `consolidate_city_info_as_markdown(cities_info, country)`
+  Review this <language> snippet with <`line_count`> non-empty lines.
+  Return a structured review as [review: Review].
 
-= <markdown>
+  = `review`
 ````
 
-### Run it
-- Local install:
-`uv sync --dev`
-- Pip fallback:
-`pip install -e .`
-- After install:
-`kedi <source> [OPTIONS]`
-- Execute a program: 
-`kedi your_program.kedi`
-- Override model (optional): 
-`kedi your_program.kedi --adapter-model groq:qwen/qwen3-32b`
-- Run tests:
-`kedi your_program.kedi --test`
-- Run evaluations:
-`kedi your_program.kedi --eval`
-- Run with optimizer:
-`kedi your_program.kedi --eval --optimize --optimizer gepa`
+Kedi files can also behave like modules:
 
-The runner loads the source, compiles it, optionally applies model/adapter settings, and executes the top‑level program via `run_main()`.
+````kedi
+# reviews.kedi
+~Issue(line: int, severity: str, message: str)
+~Review(decision: str, issues: list[Issue], summary: str)
 
-### Core syntax in 30 seconds
-- **Procedures**: `@name(param[: type], ...) -> ret_type:` then an indented block.
-  - Types: `str`, `int`, `float`, `bool`, `list[T]`. Omitted types default to `str`.
-- **Template lines and outputs**: prompt the model and capture typed fields.
-  - Example: `Top cities are [cities: list[str]]`
-- **Substitutions**: use values and calls inline.
-  - `<var>`, `<call(arg1, arg2)>`, nested: `<outer(<inner(x)>)>`
-  - Inline Python: `<`len(xs)`>` renders as string in templates/returns.
-- **Arguments and native types**: pass native values with single backticks per arg.
-  - Example: `<add(`2`, `3`)>` where `add(x: int, y: int)`.
-- **Multiline Python blocks**: fence with triple backticks on their own lines.
-  - Assign value: 
-    ````py
-    [x: int] = ```
-    return 40 + 2
-    ```
-    ````
-  - Return native values from procedures by annotating the return type and using Python expressions/blocks: `@wrap() -> list[int]: = `[1,2,3]``
-- **Variables and assignment**: `[name(: type)] = expression` then reuse anywhere.
-- **Custom types**: `~TypeName(field[: type], ...)` creates a Pydantic model in scope.
-- **Returns**: a line starting with `=` returns a value (string by default).
-- **Line continuation**: end a line with `\` to continue on the next line.
-- **Escaping specials**: use backslash before special chars. Escapable: `<`, `>`, `[`, `]`, `=`, `@`, `,`, `\\`, `#`, `~`, `` ` ``, `(`, `)`.
-  - Examples: `\<`, `\>`, `\[`, `\]`, `\\`, `\,`, `\=`, `\@`, `\#`, `\~`, `` \` ``, `\(`, `\)`.
+> export:
+  Issue
+  Review
+````
 
-See `docs/KEDI_DSL.md` for the full grammar, typing rules, multiline Python prelude, closures for nested procedures, and structured output behavior.
+````kedi
+# report.kedi
+> import: reviews
+
+@summarize_review(review: Review) -> str:
+  Write a release-note style summary for <review>.
+  Summary: [summary]
+  = `summary`
+````
+
+### Install
+
+Kedi is uv-first:
+
+```bash
+uv sync --dev
+uv run kedi your_program.kedi
+```
+
+Pip fallback:
+
+```bash
+pip install -e .
+kedi your_program.kedi
+```
+
+### Common Commands
+
+```bash
+kedi your_program.kedi
+kedi your_program.kedi --test
+kedi your_program.kedi --eval
+kedi your_program.kedi --eval --optimize --optimizer gepa
+kedi your_program.kedi --adapter-model groq:qwen/qwen3-32b
+```
+
+Extra CLI arguments are available inside Python expressions and blocks as `args`:
+
+```bash
+kedi report.kedi --country Turkey --dry-run
+```
+
+```kedi
+@destination_label() -> str:
+  = `f"{args.country}:{'dry-run' if args.dry_run else 'live'}"`
+```
+
+### Core Syntax
+
+- Procedures: `@name(param[: type], ...) -> ret_type:`
+- Types: `str`, `int`, `float`, `bool`, `list[T]`, `dict[K, V]`, custom `~Type`
+- Untyped procedure and type fields default to `str`
+- Template outputs: `Answer: [answer: int]`
+- Substitutions: `<value>`, `<call(arg)>`, and inline Python with backticks
+- Python blocks: triple-backtick blocks that return native Python values
+- Modules: `> import: module_name`, `> export: name`, and `> export: *`
+- Validation: `@test:` and `@eval:` blocks live next to the code they verify
+
+### Developer Notes
+
+- `make check`: ruff, format check, `ty`, and `basedpyright`
+- `make check-coverage`: pytest with 100% coverage enforcement
+- `make prod`: full local gate used by pre-commit
+
+Kedi can also expose procedure metadata as JSON schema and Pydantic AI tools for
+tool-registration workflows.
+
+See [docs/KEDI_DSL.md](docs/KEDI_DSL.md) for the full language specification and
+[CONTRIBUTING.md](CONTRIBUTING.md) for local development workflow.
