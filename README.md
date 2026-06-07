@@ -1,5 +1,5 @@
 # Kedi
-[![codecov](https://codecov.io/gh/kedi-lang/kedi/graph/badge.svg)](https://codecov.io/gh/kedi-lang/kedi)
+[![coverage](https://img.shields.io/github/actions/workflow/status/kedi-lang/kedi/tests.yml?branch=stable&label=coverage)](https://github.com/kedi-lang/kedi/actions/workflows/tests.yml)
 
 ## A typed reasoning layer for LLM orchestration
 
