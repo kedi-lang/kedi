@@ -134,11 +134,10 @@ def test_utils_cast_value_parse_args_and_attrdict() -> None:
     )
 
     assert isinstance(parsed, AttrDict)
-    assert parsed.count == 1
+    assert parsed.count == "1"
     assert parsed.enabled is True
     assert parsed.name == "Ada"
-    with pytest.raises(KeyError):
-        _ = parsed.missing
+    assert parsed.missing is None
 
 
 def test_source_loading_maps_empty_and_missing_lines(tmp_path: Path) -> None:

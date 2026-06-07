@@ -114,10 +114,13 @@ class ProgramCompiler:
                 self._merge_exports(module_path, imported_prog, imported_rt)
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
-        return resolve_module_path(
-            module_import.module,
-            source_path=self._program_path(prog),
-        )
+        try:
+            return resolve_module_path(
+                module_import.module,
+                source_path=self._program_path(prog),
+            )
+        except FileNotFoundError as exc:
+            raise ModuleNotFoundError(str(exc)) from exc
 
     def _load_imported_program(self, module_path: Path) -> Program:
         from ..parser import parse_program
@@ -252,7 +255,7 @@ class ProgramCompiler:
         @self.rt.main
         def _main() -> Any:
             # Initialize top-level environment
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             setattr(self.rt, "_globals_env", kwargs)
 
             # Execute top-level statements

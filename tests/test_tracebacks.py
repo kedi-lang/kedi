@@ -198,7 +198,7 @@ def test_cli_renders_missing_import_with_kedi_trace(tmp_path: Path) -> None:
     assert "Execution error:" not in result.output
     assert "Kedi stack trace:" in result.output
     assert f'File "{srcp}", line 1, in import missing_registry_module' in result.output
-    assert "Kedi error: FileNotFoundError" in result.output
+    assert "Kedi error: ModuleNotFoundError" in result.output
     assert "missing_registry_module.kedi" in result.output
 
 

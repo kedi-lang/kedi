@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Any, TypeVar
 
 K = TypeVar("K")  # key type
 V = TypeVar("V")  # value type
+ArgType = str | bool | None
+_MISSING = object()
 
 
 class AttrDict(dict[K, V]):
     """A dictionary that supports attribute-style access."""
 
+    def __init__(self, *args: Any, default: Any = _MISSING, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._default = default
+
     def __getattr__(self, key: K) -> V:
+        if key in self:
+            return self[key]
+        if self._default is not _MISSING:
+            return self._default
         return self[key]
 
 
@@ -37,7 +47,7 @@ def cast_value(value: str) -> int | float | bool | str:
         return value
 
 
-def parse_args(args: list[str]) -> AttrDict[str, str | bool | int | float]:
+def parse_args(args: list[str]) -> AttrDict[str, ArgType]:
     """
     Parse command-line arguments in the format --key value or --flag.
 
@@ -49,23 +59,23 @@ def parse_args(args: list[str]) -> AttrDict[str, str | bool | int | float]:
 
     Example:
         >>> parse_args(["--foo", "bar", "--debug", "--timeout", "30"])
-        {"foo": "bar", "debug": True, "timeout": 30}
+        {"foo": "bar", "debug": True, "timeout": "30"}
     """
-    data = {}
-    for i, arg in enumerate(args):
+    data: dict[str, ArgType] = {}
+    index = 0
+    while index < len(args):
+        arg = args[index]
         if not arg.startswith("--"):
+            index += 1
             continue
 
         key = arg.lstrip("--").replace("-", "_")
-        next_arg = args[i + 1] if i + 1 < len(args) else None
-
-        # Check if next argument is a value or another flag
+        next_arg = args[index + 1] if index + 1 < len(args) else None
         if next_arg and not next_arg.startswith("--"):
-            value = cast_value(next_arg)
-            if key not in data:
-                data[key] = value
+            data.setdefault(key, next_arg)
+            index += 2
         else:
-            # It's a flag
-            data[key] = True
+            data.setdefault(key, True)
+            index += 1
 
-    return AttrDict(data)
+    return AttrDict(data, default=None)

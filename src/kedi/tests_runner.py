@@ -35,7 +35,12 @@ class EvalRunResult:
     metrics: List[EvalMetricResult]
 
 
-def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> Any:
+def _load_program_with_validations(
+    src_main: str,
+    *,
+    adapter: Optional[Any],
+    runtime_globals: dict[str, Any] | None = None,
+) -> Any:
     # src_main may be the full source content or a filesystem path
     text: str
     if "\n" in src_main or "@" in src_main:
@@ -50,10 +55,17 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
         source_map = loaded.source_map
     prog = parse_program(text, source_path=source_path, source_map=source_map)
     rt = compile_program(prog, adapter=adapter)
+    if runtime_globals:
+        rt.set_initial_globals(runtime_globals)
     return rt
 
 
-def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
+def run_tests(
+    src_main: str,
+    *,
+    adapter: Optional[Any] = None,
+    runtime_globals: dict[str, Any] | None = None,
+) -> List[TestRunResult]:
     from pathlib import Path
 
     from .lang.compiler import compile_program
@@ -78,12 +90,28 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
         try:
             program = load_program_with_optimized_prompts(source_path)
             rt = compile_program(program, adapter=adapter)
+            if runtime_globals:
+                rt.set_initial_globals(runtime_globals)
         except Exception:
             # Fallback to original loading method
-            rt = _load_program_with_validations(src_main, adapter=adapter)
+            if runtime_globals is None:
+                rt = _load_program_with_validations(src_main, adapter=adapter)
+            else:
+                rt = _load_program_with_validations(
+                    src_main,
+                    adapter=adapter,
+                    runtime_globals=runtime_globals,
+                )
     else:
         # Source code string - use original loading method
-        rt = _load_program_with_validations(src_main, adapter=adapter)
+        if runtime_globals is None:
+            rt = _load_program_with_validations(src_main, adapter=adapter)
+        else:
+            rt = _load_program_with_validations(
+                src_main,
+                adapter=adapter,
+                runtime_globals=runtime_globals,
+            )
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -106,7 +134,12 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
     return results
 
 
-def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
+def run_evals(
+    src_main: str,
+    *,
+    adapter: Optional[Any] = None,
+    runtime_globals: dict[str, Any] | None = None,
+) -> List[EvalRunResult]:
     from pathlib import Path
 
     from .optimization.services.program_loader import (
@@ -137,12 +170,28 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
             program = load_program_with_optimized_prompts(source_path)
             # Compile with optimized prompts
             rt = compile_program(program, adapter=adapter)
+            if runtime_globals:
+                rt.set_initial_globals(runtime_globals)
         except Exception:
             # Fallback to original loading method if optimized prompt loading fails
-            rt = _load_program_with_validations(src_main, adapter=adapter)
+            if runtime_globals is None:
+                rt = _load_program_with_validations(src_main, adapter=adapter)
+            else:
+                rt = _load_program_with_validations(
+                    src_main,
+                    adapter=adapter,
+                    runtime_globals=runtime_globals,
+                )
     else:
         # Source code string - use original loading method
-        rt = _load_program_with_validations(src_main, adapter=adapter)
+        if runtime_globals is None:
+            rt = _load_program_with_validations(src_main, adapter=adapter)
+        else:
+            rt = _load_program_with_validations(
+                src_main,
+                adapter=adapter,
+                runtime_globals=runtime_globals,
+            )
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
 

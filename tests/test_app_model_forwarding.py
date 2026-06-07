@@ -569,6 +569,10 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
     class FakeRuntime:
         def __init__(self, outputs: list[Any]) -> None:
             self.outputs = outputs
+            self.initial_globals: dict[str, Any] | None = None
+
+        def set_initial_globals(self, values: dict[str, Any]) -> None:
+            self.initial_globals = values
 
         def run_main(self) -> Any:
             value = self.outputs.pop(0)

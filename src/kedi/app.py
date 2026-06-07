@@ -12,6 +12,7 @@ from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
 from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
+from .utils import ArgType, AttrDict
 
 
 class _LazyRuntimeAdapter:
@@ -40,16 +41,32 @@ def _build_runtime_adapter(adapter: str, model: str | None):
     return _LazyRuntimeAdapter(lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b"))
 
 
+CliArgs = AttrDict[str, ArgType]
+
+
+def _runtime_globals(runtime_args: CliArgs | None) -> dict[str, Any]:
+    return {"args": runtime_args or AttrDict({}, default=None)}
+
+
+def _set_runtime_args(rt: Any, runtime_args: CliArgs | None) -> None:
+    if runtime_args is not None:
+        rt.set_initial_globals(_runtime_globals(runtime_args))
+
+
 def run_tests_cli(
     source: str,
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
     ok, err = maybe_run_codegen(source, model=model)
     if not ok:
         return 1, (err or "Code generation failed")
-    results = run_tests(source, adapter=_build_runtime_adapter(adapter, model))
+    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
+    if runtime_args is not None:
+        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+    results = run_tests(source, **kwargs)
     failed = sum(1 for s in results for c in s.cases if not c.success)
     lines = ["Tests:"]
     for suite in results:
@@ -78,6 +95,7 @@ def run_optimization_cli(
     adapter: str = "pydantic",
     adapter_model: str | None = None,
     optimizer_fresh: bool = False,
+    runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
 
@@ -185,6 +203,7 @@ def run_optimization_cli(
             prompt_loader.inject_optimized_prompts(prog)
 
     rt = compile_program(prog, adapter=adapter_for_runtime)
+    _set_runtime_args(rt, runtime_args)
 
     # Initialize services
     data_loader = OptimizationDataLoader(rt)
@@ -293,6 +312,7 @@ def run_evals_cli(
     reflection_model: str | None = None,
     optimize: bool = False,
     use_cache: bool = True,
+    runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
     """Run eval suites. Set ``optimize=True`` only when not calling ``run_optimization_cli`` first
     (e.g. programmatic API). The CLI runs optimization in ``run_optimization_cli`` and passes
@@ -311,6 +331,7 @@ def run_evals_cli(
             reflection_model=reflection_model,
             adapter=adapter,
             adapter_model=adapter_model,
+            runtime_args=runtime_args,
         )
         if code != 0:
             return code, msg
@@ -320,10 +341,10 @@ def run_evals_cli(
     if not ok:
         return 1, (err or "Code generation failed")
 
-    results = run_evals(
-        str(source_path),
-        adapter=_build_runtime_adapter(adapter, adapter_model),
-    )
+    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, adapter_model)}
+    if runtime_args is not None:
+        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+    results = run_evals(str(source_path), **kwargs)
 
     lines = ["Evals:"]
     for suite in results:
@@ -377,7 +398,13 @@ def maybe_run_codegen(
         return False, str(e)
 
 
-def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[int, str]:
+def run_program_cli(
+    source: str,
+    *,
+    adapter: str,
+    model: str | None,
+    runtime_args: CliArgs | None = None,
+) -> Tuple[int, str]:
     from pathlib import Path
 
     from .optimization.services.program_loader import (
@@ -397,6 +424,7 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
     # program. Fall back to the configured adapter only if runtime actually
     # needs LLM-backed template expansion.
     rt = compile_program(program, adapter=None)
+    _set_runtime_args(rt, runtime_args)
     try:
         out = rt.run_main()
         return 0, ("" if out is None else str(out))
@@ -406,5 +434,6 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
 
     adapter_impl = _build_runtime_adapter(adapter, model)
     rt = compile_program(program, adapter=adapter_impl)
+    _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))

@@ -95,8 +95,8 @@ def test_parse_cli_args() -> None:
 
     assert parse_args(args) == {
         "foo": "bar",
-        "retries": 5,
-        "temperature": 0.7,
+        "retries": "5",
+        "temperature": "0.7",
         "test": True,
         "no_cache": True,
     }

@@ -81,17 +81,17 @@ def test_procedure_json_schema_uses_custom_kedi_types() -> None:
     assert "description" not in returns
 
 
-def test_procedure_json_schema_leaves_untyped_params_open() -> None:
-    src = "@echo(value, count = `1`):\n  = <value>\n"
+def test_procedure_json_schema_defaults_untyped_params_to_string() -> None:
+    src = '@echo(value, fallback = `"empty"`):\n  = <value>\n'
     prog = parse_program(src)
     rt = compile_program(prog)
 
     schema = procedure_json_schema(rt, prog.procedures[0])
 
     assert schema["required"] == ["value"]
-    assert "type" not in schema["properties"]["value"]
-    assert schema["properties"]["count"]["default"] == 1
-    assert "type" not in schema["properties"]["count"]
+    assert schema["properties"]["value"]["type"] == "string"
+    assert schema["properties"]["fallback"]["default"] == "empty"
+    assert schema["properties"]["fallback"]["type"] == "string"
     assert procedure_return_json_schema(rt, prog.procedures[0]) == {"type": "string"}
 
 

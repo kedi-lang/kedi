@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -20,11 +19,6 @@ from kedi.lang.parser.diagnostics import KediParseError
 from kedi.utils import parse_args
 
 dotenv.load_dotenv()
-
-THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR = os.path.join(THIS_DIR, "src")
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
 context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 
@@ -143,10 +137,10 @@ def main(
     test: bool = False,
     do_eval: bool = False,
     optimizer: str = "mock",
-    optimizer_model: str = "openai/gpt-4o",
-    optimizer_reflection_model: str = "openai/gpt-5",
-    optimizer_max_metric_calls: int = 30,
-    optimizer_model_max_tokens: int = 2000,
+    optimizer_model: str = "openrouter/minimax/minimax-m2.7",
+    optimizer_reflection_model: str = "openrouter/minimax/minimax-m2.7",
+    optimizer_max_metric_calls: int = 100,
+    optimizer_model_max_tokens: int = 8000,
     optimizer_reflection_model_max_tokens: int = 32000,
     optimizer_reflection_minibatch_size: int = 3,
     optimizer_max_validation_examples: int | None = None,
@@ -160,10 +154,7 @@ def main(
     except Exception as e:
         click.echo(f"Error reading {source}: {e}", err=True)
         ctx.exit(1)
-    parse_args(ctx.args)
-    # the data comes from command line arguments
-    # should be passed into runtime environment
-    # TL;DR: pass `data` into runtime
+    runtime_args = parse_args(ctx.args)
     try:
         # Run optimization if requested (independent of eval flag)
         if optimize:
@@ -180,6 +171,7 @@ def main(
                 adapter=adapter,
                 adapter_model=adapter_model,
                 optimizer_fresh=optimizer_fresh,
+                runtime_args=runtime_args,
             )
             if msg:
                 if code != 0:
@@ -193,7 +185,12 @@ def main(
         if test or do_eval:
             # Run validations
             if test:
-                code, out = run_tests_cli(source, adapter=adapter, model=adapter_model)
+                code, out = run_tests_cli(
+                    source,
+                    adapter=adapter,
+                    model=adapter_model,
+                    runtime_args=runtime_args,
+                )
                 click.echo(out)
                 if code != 0:
                     ctx.exit(code)
@@ -213,6 +210,7 @@ def main(
                     reflection_model=optimizer_reflection_model if optimizer == "gepa" else None,
                     optimize=False,
                     use_cache=not no_cache,
+                    runtime_args=runtime_args,
                 )
                 if out:
                     if code != 0:
@@ -237,7 +235,12 @@ def main(
 
         # Execute program
         try:
-            code, out = run_program_cli(source, adapter=adapter, model=adapter_model)
+            code, out = run_program_cli(
+                source,
+                adapter=adapter,
+                model=adapter_model,
+                runtime_args=runtime_args,
+            )
             if out:
                 click.echo(out)
             if code != 0:

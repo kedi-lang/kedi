@@ -87,6 +87,8 @@ class KediRuntime:
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
         )
+        self._initial_globals_env: ValueEnv = {}
+        self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
         self._python_origins: Dict[str, KediPythonOrigin] = {}
         self._program: Any | None = None
@@ -128,6 +130,10 @@ class KediRuntime:
         if self._main is None:
             return None
         return self._invoke_procedure(self._main, [])
+
+    def set_initial_globals(self, values: ValueEnv) -> None:
+        self._initial_globals_env = dict(values)
+        self._globals_env = dict(values)
 
     # Internal helpers
     def _get_proc(self, name: str) -> Callable[..., Any]:

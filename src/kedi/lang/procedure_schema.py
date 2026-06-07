@@ -121,7 +121,7 @@ def _resolve_param_type(
         (proc.param_type_annotations or {}).get(param_name),
     )
     if kedi_type.is_none():
-        return Any
+        return str
     resolved = kedi_type.resolve(rt, local_env)
     if resolved is None:
         raise TypeError(

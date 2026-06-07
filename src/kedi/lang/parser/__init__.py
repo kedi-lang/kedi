@@ -1,26 +1,16 @@
 """Kedi DSL parser package.
 
-Phase-6 refactor: the hand-written parser previously in this package
-has been replaced by a tree-sitter-generated parser plus a Python
-CST→AST walker. The public API is unchanged:
+The parser is backed by tree-sitter and a Python CST-to-AST walker.
+The public entry point is ``parse_program(source)``; it returns a
+``Program`` or ``ProgramWithValidation`` and raises ``KediParseError``
+for syntax or structural diagnostics.
 
-  - ``parse_program(source) -> Program | ProgramWithValidation``
+Package modules:
 
-Modules:
-
-  - ``parser`` — tree-sitter ``Parser`` singleton.
-  - ``cst_to_ast`` — walks the tree-sitter CST and produces AST
-    dataclasses defined in :mod:`kedi.lang.ast`.
-  - ``diagnostics`` — :class:`KediDiagnostic` records and
-    :class:`KediParseError` (which subclasses ``ValueError`` for
-    backward compatibility).
-  - ``escapes`` — template-text escape unescaping and fenced-block
-    dedenting helpers, ported verbatim from the pre-refactor parser.
-
-The legacy modules (``preprocessing``, ``program_parser``,
-``segment_parser``, ``statement_parser``, ``block_parser``) are
-retained on disk until the Phase-8 cleanup so anything that imports
-them by name continues to work during the migration window.
+  - ``parser``: tree-sitter language/parser setup.
+  - ``cst_to_ast``: CST-to-AST conversion into :mod:`kedi.lang.ast`.
+  - ``diagnostics``: parser diagnostics and ``KediParseError``.
+  - ``escapes``: template escaping and fenced-block dedenting helpers.
 """
 
 from __future__ import annotations

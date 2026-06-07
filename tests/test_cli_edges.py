@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -16,16 +15,10 @@ def _source(tmp_path: Path) -> Path:
     return source
 
 
-def test_cli_import_adds_src_dir(monkeypatch: Any) -> None:
-    src_dir = cli_module.SRC_DIR
-    monkeypatch.setattr(sys, "path", [path for path in sys.path if path != src_dir])
+def test_cli_module_reloads_without_path_mutation() -> None:
+    reloaded = importlib.reload(cli_module)
 
-    importlib.reload(cli_module)
-
-    assert src_dir in sys.path
-
-    importlib.reload(cli_module)
-    assert sys.path.count(src_dir) == 1
+    assert not hasattr(reloaded, "SRC_DIR")
 
 
 def test_cli_reports_source_read_errors() -> None:
@@ -33,6 +26,16 @@ def test_cli_reports_source_read_errors() -> None:
 
     assert result.exit_code == 1
     assert "Error reading missing.kedi" in result.output
+
+
+def test_cli_passes_extra_args_to_program_env(tmp_path: Path) -> None:
+    source = tmp_path / "main.kedi"
+    source.write_text('= `f"{args.id}:{args.enabled}:{args.missing}"`\n', encoding="utf-8")
+
+    result = CliRunner().invoke(cli_module.main, [str(source), "--id", "1", "--enabled"])
+
+    assert result.exit_code == 0
+    assert result.output == "1:True:None\n"
 
 
 def test_cli_optimize_success_and_failure_paths(
