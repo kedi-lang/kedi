@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import dspy
 
+from ..console import KediConsole
 from ..lang.ast import OptimizeSpan
 from ..lang.compiler.environment import KediRuntime
 from ..model_normalization import normalize_for_litellm
@@ -42,6 +43,7 @@ class GEPAOptimizer(OptimizerAdapter):
         config: OptimizerConfig,
         runtime: KediRuntime | None = None,
         source_path: Path | None = None,
+        console: KediConsole | None = None,
     ):
         """Initialize GEPA optimizer.
 
@@ -56,6 +58,7 @@ class GEPAOptimizer(OptimizerAdapter):
         self.config = config
         self.runtime = runtime
         self.source_path = source_path
+        self.console = console or KediConsole()
 
         # Initialize services
         self.dspy_config_service = DSPyConfigurationService(config)
@@ -124,11 +127,11 @@ class GEPAOptimizer(OptimizerAdapter):
         # Configure reflection LM if provided in config
         reflection_lm = None
         if self.config.reflection_model:
-            print("\n🤔 Configuring reflection LM...")
-            print(f"   Model: {self.config.reflection_model}")
+            self.console.print("\n🤔 Configuring reflection LM...")
+            self.console.print(f"   Model: {self.config.reflection_model}")
             max_tokens = self.config.get_reflection_max_tokens()
-            print(f"   Max tokens: {max_tokens}")
-            print("   Temperature: 1.0")
+            self.console.print(f"   Max tokens: {max_tokens}")
+            self.console.print("   Temperature: 1.0")
 
             base_lm = dspy.LM(
                 model=normalize_for_litellm(self.config.reflection_model),
@@ -141,33 +144,40 @@ class GEPAOptimizer(OptimizerAdapter):
             # Note: DSPy wraps this as lambda x: reflection_lm(x)[0], so we need to ensure
             # our wrapper is compatible with that interface
             reflection_call_count = {"count": 0}
+            progress_console = self.console
 
             class TracedReflectionLM:
                 """Wrapper that traces reflection LM calls while maintaining DSPy compatibility."""
 
-                def __init__(self, base_lm, model_name, call_count):
+                def __init__(self, base_lm, model_name, call_count, console: KediConsole):
                     self.base_lm = base_lm
                     self.model_name = model_name
                     self.model = model_name  # DSPy / logging expect .model
                     self.call_count = call_count
+                    self.console = console
 
                 def __call__(self, prompt):
                     self.call_count["count"] += 1
-                    print(
+                    self.console.print(
                         f"\n💭 Reflection LM call #{self.call_count['count']}",
                         flush=True,
                     )
-                    print(f"   Model: {self.model_name}", flush=True)
+                    self.console.print(f"   Model: {self.model_name}", flush=True)
                     result = self.base_lm(prompt)
-                    print("   ✅ Reflection complete", flush=True)
+                    self.console.print("   ✅ Reflection complete", flush=True)
                     return result
 
             reflection_lm = TracedReflectionLM(
-                base_lm, self.config.reflection_model, reflection_call_count
+                base_lm,
+                self.config.reflection_model,
+                reflection_call_count,
+                progress_console,
             )
-            print("   ✅ Reflection LM created successfully (with call tracing)")
+            self.console.print("   ✅ Reflection LM created successfully (with call tracing)")
         else:
-            print("\n⚠️  No reflection model configured - GEPA will use default LM for reflection")
+            self.console.print(
+                "\n⚠️  No reflection model configured - GEPA will use default LM for reflection"
+            )
 
         optimized_prompts: dict[str, str] = {}
         span_scores: list[float] = []
@@ -182,12 +192,14 @@ class GEPAOptimizer(OptimizerAdapter):
 
         try:
             for span_idx, span in enumerate(spans, 1):
-                print(f"\n{'=' * 80}")
-                print(f"GEPA Optimization: Span {span_idx}/{len(spans)} - '{span.name}'")
-                print(f"{'=' * 80}")
+                self.console.print(f"\n{'=' * 80}")
+                self.console.print(
+                    f"GEPA Optimization: Span {span_idx}/{len(spans)} - '{span.name}'"
+                )
+                self.console.print(f"{'=' * 80}")
 
                 # Prepare training/validation examples
-                print("📊 Preparing datasets...")
+                self.console.print("📊 Preparing datasets...")
                 train_examples = self.example_formatter.format_examples(
                     train_list, proc_params, span=span, proc_name=proc_name
                 )
@@ -205,16 +217,18 @@ class GEPAOptimizer(OptimizerAdapter):
                 else:
                     val_examples = train_examples
 
-                print(f"   Training examples: {len(train_examples)}")
-                print(f"   Validation examples: {len(val_examples)}")
-                print(f"   Max metric calls (from config): {self.config.max_metric_calls}")
+                self.console.print(f"   Training examples: {len(train_examples)}")
+                self.console.print(f"   Validation examples: {len(val_examples)}")
+                self.console.print(
+                    f"   Max metric calls (from config): {self.config.max_metric_calls}"
+                )
 
-                print(f"\n🔧 Building DSPy module for span '{span.name}'...")
+                self.console.print(f"\n🔧 Building DSPy module for span '{span.name}'...")
                 dspy_module = self.module_builder.build_module(span, proc_params, param_types)
 
                 # Metric used during GEPA optimization - points at the module being optimized
                 # Obtain proc_def for sibling span overrides during metric evaluation
-                print("📝 Wrapping metric function...")
+                self.console.print("📝 Wrapping metric function...")
                 proc_def_for_wrapper = self._get_proc_def(proc_name)
                 gepa_metric = self.metric_wrapper.wrap_metric(
                     metric,
@@ -224,32 +238,38 @@ class GEPAOptimizer(OptimizerAdapter):
                     proc_def=proc_def_for_wrapper,
                 )
 
-                print("\n🚀 Starting GEPA optimization...")
-                print(f"   Optimizer model: {self.config.optimizer_model or 'default'}")
-                print(f"   Reflection model: {self.config.reflection_model or 'default'}")
-                print(f"   Reflection LM object: {reflection_lm}")
+                self.console.print("\n🚀 Starting GEPA optimization...")
+                self.console.print(
+                    f"   Optimizer model: {self.config.optimizer_model or 'default'}"
+                )
+                self.console.print(
+                    f"   Reflection model: {self.config.reflection_model or 'default'}"
+                )
+                self.console.print(f"   Reflection LM object: {reflection_lm}")
                 if reflection_lm:
-                    print(f"   Reflection LM model: {getattr(reflection_lm, 'model', 'unknown')}")
-                print(f"\n{'─' * 80}")
+                    self.console.print(
+                        f"   Reflection LM model: {getattr(reflection_lm, 'model', 'unknown')}"
+                    )
+                self.console.print(f"\n{'─' * 80}")
 
-                print("\n🔨 Creating GEPA optimizer...")
-                print(f"   Passing reflection_lm to GEPA: {reflection_lm}")
+                self.console.print("\n🔨 Creating GEPA optimizer...")
+                self.console.print(f"   Passing reflection_lm to GEPA: {reflection_lm}")
 
                 # Verify dspy.settings is configured correctly
                 if hasattr(dspy.settings, "lm") and dspy.settings.lm:
                     model_name = getattr(dspy.settings.lm, "model", "unknown")
                     lm_kwargs = getattr(dspy.settings.lm, "kwargs", {})
-                    print(f"   DSPy settings.lm: {model_name}")
-                    print(f"   DSPy settings.lm kwargs: {lm_kwargs}")
+                    self.console.print(f"   DSPy settings.lm: {model_name}")
+                    self.console.print(f"   DSPy settings.lm kwargs: {lm_kwargs}")
                 else:
-                    print("   ⚠️  WARNING: dspy.settings.lm is not configured!")
+                    self.console.print("   ⚠️  WARNING: dspy.settings.lm is not configured!")
 
                 gepa_log_dir = self._gepa_log_dir(proc_name, span.name)
                 if gepa_log_dir is not None:
                     gepa_log_dir.mkdir(parents=True, exist_ok=True)
                     state_file = gepa_log_dir / _GEPA_STATE_NAME
                     if state_file.exists():
-                        print(
+                        self.console.print(
                             f"   GEPA checkpoint: resuming from {gepa_log_dir}\n"
                             f"   If optimization ends immediately, raise "
                             f"--optimizer-max-metric-calls above the prior total eval-units.",
@@ -264,16 +284,18 @@ class GEPAOptimizer(OptimizerAdapter):
                     track_stats=True,
                     log_dir=str(gepa_log_dir) if gepa_log_dir is not None else None,
                 )
-                print(f"   Reflection minibatch size: {self.config.reflection_minibatch_size}")
-                print("   ✅ GEPA optimizer created successfully")
+                self.console.print(
+                    f"   Reflection minibatch size: {self.config.reflection_minibatch_size}"
+                )
+                self.console.print("   ✅ GEPA optimizer created successfully")
 
                 est_seconds = len(train_examples) * 25
-                print(
+                self.console.print(
                     f"\n⏳ Starting compile ({len(train_examples)} examples, "
                     f"budget={self.config.max_metric_calls} calls, "
                     f"est ~{est_seconds // 60}m{est_seconds % 60:02d}s for baseline)..."
                 )
-                print(f"{'─' * 80}")
+                self.console.print(f"{'─' * 80}")
 
                 compile_start = time.monotonic()
                 optimized_module = optimizer.compile(
@@ -290,9 +312,9 @@ class GEPAOptimizer(OptimizerAdapter):
                 if isinstance(progress, dict):
                     metric_calls = int(progress.get("count", 0))
 
-                print(f"{'─' * 80}")
-                print(f"✅ GEPA optimization complete for span '{span.name}'")
-                print(
+                self.console.print(f"{'─' * 80}")
+                self.console.print(f"✅ GEPA optimization complete for span '{span.name}'")
+                self.console.print(
                     f"   Duration: {compile_min}m{compile_sec:02d}s  |  "
                     f"DSPy metric callbacks: {metric_calls}  "
                     f"(GEPA budget: {self.config.max_metric_calls} eval-units; "
@@ -300,7 +322,7 @@ class GEPAOptimizer(OptimizerAdapter):
                 )
 
                 # Extract optimized prompt for this span
-                print("\n🔍 Extracting optimized prompt...")
+                self.console.print("\n🔍 Extracting optimized prompt...")
                 previous_instruction = span_to_instruction(span)
                 extracted = self.prompt_extractor.extract_prompts(optimized_module, [span])
                 optimized_prompt = normalize_optimized_prompt_prefix(span, extracted.get(span.name))
@@ -310,30 +332,34 @@ class GEPAOptimizer(OptimizerAdapter):
                         span.template_lines[0].optimized_prompt_prefix = optimized_prompt or None
 
                     effective_instruction = span_to_instruction(span)
-                    print(f"   Previous seed length: {len(previous_instruction)} chars")
-                    print(f"   Optimized prefix length: {len(optimized_prompt)} chars")
-                    print(f"   Effective prompt length: {len(effective_instruction)} chars")
+                    self.console.print(
+                        f"   Previous seed length: {len(previous_instruction)} chars"
+                    )
+                    self.console.print(f"   Optimized prefix length: {len(optimized_prompt)} chars")
+                    self.console.print(
+                        f"   Effective prompt length: {len(effective_instruction)} chars"
+                    )
 
                     if effective_instruction == previous_instruction:
-                        print("   ⚠️  Prompt appears unchanged")
+                        self.console.print("   ⚠️  Prompt appears unchanged")
                         warnings.warn(
                             f"Optimized prompt for '{span.name}' appears unchanged. "
                             "GEPA may not have optimized this span.",
                             UserWarning,
                         )
                     else:
-                        print("   ✨ Prompt successfully optimized")
+                        self.console.print("   ✨ Prompt successfully optimized")
 
                     # Save optimized prompts immediately after extraction, before scoring
                     # This ensures prompts are saved even if scoring fails or is interrupted
                     self._save_prompts_immediately(proc_name, optimized_prompts)
                 else:
-                    print("   ❌ No optimized prompt found")
+                    self.console.print("   ❌ No optimized prompt found")
                     warnings.warn(f"No optimized prompt found for span '{span.name}'", UserWarning)
                     continue
 
                 # Re-wrap metric with the optimized module for scoring
-                print("\n📈 Calculating final score on training set...")
+                self.console.print("\n📈 Calculating final score on training set...")
                 scoring_metric = self.metric_wrapper.wrap_metric(
                     metric,
                     proc_params,
@@ -348,8 +374,8 @@ class GEPAOptimizer(OptimizerAdapter):
                     scoring_metric,
                 )
                 span_scores.append(span_score)
-                print(f"   Training score: {span_score:.4f}")
-                print(f"{'=' * 80}\n")
+                self.console.print(f"   Training score: {span_score:.4f}")
+                self.console.print(f"{'=' * 80}\n")
         finally:
             # Restore original prefixes so caller gets pristine AST
             for span in spans:
@@ -418,9 +444,9 @@ class GEPAOptimizer(OptimizerAdapter):
 
             # Write back to file
             self.result_writer.write_optimized_prompts(existing_prompts)
-            print(f"   💾 Saved optimized prompts to {optimized_path.name}")
+            self.console.print(f"   💾 Saved optimized prompts to {optimized_path.name}")
         except Exception as e:
-            print(f"   ⚠️  Failed to save prompts: {e}")
+            self.console.print(f"   ⚠️  Failed to save prompts: {e}")
 
     def _validate_types(
         self,

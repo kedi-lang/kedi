@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..console import KediConsole
 from ..lang.ast import Program
 from ..lang.parser import parse_program
 from ..source_loading import merge_source_documents
@@ -22,10 +23,12 @@ class CodegenManager:
         agent: CodegenAgent,
         config: CodegenConfig | None = None,
         use_cache: bool = True,
+        console: KediConsole | None = None,
     ) -> None:
         self.agent = agent
         self.config = config or CodegenConfig()
         self.use_cache = use_cache
+        self.console = console or KediConsole()
 
     def cache_path_for(self, source_path: Path) -> Path:
         return source_path.with_suffix(".cache.kedi")
@@ -98,6 +101,19 @@ class CodegenManager:
         except Exception as e:
             return str(e)
 
+    def context_for_generation(self, source_path: Path) -> ProgramContext:
+        """Extract source context, falling back to an empty context on parse errors."""
+        try:
+            program = parse_program(source_path.read_text(encoding="utf-8"))
+            return self.extract_context_from_ast(program)
+        except Exception:
+            return ProgramContext()
+
+    def cleanup_failed_cache(self, source_path: Path) -> None:
+        cache = self.cache_path_for(source_path)
+        if cache.exists():
+            cache.unlink()
+
     def orchestrate_generation(
         self, source_path: Path, proc_header: str, prompt: str, spec: str
     ) -> bool:
@@ -124,18 +140,12 @@ class CodegenManager:
         if self.is_cached(source_path, name):
             return True
 
-        # Parse source to extract context as Python
-        try:
-            program = parse_program(source_path.read_text(encoding="utf-8"))
-            context = self.extract_context_from_ast(program)
-        except Exception:
-            context = ProgramContext()
+        context = self.context_for_generation(source_path)
 
         # Convert Kedi signature to Python signature
         python_sig = kedi_signature_to_python_signature(proc_header)
 
-        # Show initial progress message
-        print(f"Code generation in progress for {name}", end="", flush=True)
+        self.console.inline(f"Code generation in progress for {name}", end="", flush=True)
 
         # Iterative generation: each stage gets more attempts
         test_error_feedback = None
@@ -147,7 +157,7 @@ class CodegenManager:
             # Try generating tests (num_attempts times)
             test_success = False
             for test_attempt in range(num_attempts):
-                print(".", end="", flush=True)
+                self.console.progress_char()
                 python_tests = self.agent.generate_tests(
                     python_sig, prompt, context, test_error_feedback
                 )
@@ -171,7 +181,7 @@ class CodegenManager:
             # Tests compiled, now try generating implementation (num_attempts times)
             impl_success = False
             for impl_attempt in range(num_attempts):
-                print(".", end="", flush=True)
+                self.console.progress_char()
                 python_impl = self.agent.generate_impl(
                     python_sig, prompt, context, python_tests, impl_error_feedback
                 )
@@ -190,7 +200,7 @@ class CodegenManager:
                 # Implementation compiled, run tests
                 test_run_error = self.run_tests_and_get_errors(source_path)
                 if not test_run_error:
-                    print(" ✓")
+                    self.console.inline(" ✓\n", flush=True)
                     impl_success = True
                     break
 
@@ -202,9 +212,7 @@ class CodegenManager:
             # Implementation failed all attempts, prepare feedback for next stage
             test_error_feedback = f"Previous tests may have been too strict or incorrect.\nLast implementation error: {impl_error_feedback}"
 
-        print(" ✗")
+        self.console.inline(" ✗\n", flush=True)
         # Clean up failed cache - don't persist code that doesn't pass tests
-        cache = self.cache_path_for(source_path)
-        if cache.exists():
-            cache.unlink()
+        self.cleanup_failed_cache(source_path)
         return False

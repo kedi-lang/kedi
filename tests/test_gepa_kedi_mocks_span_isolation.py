@@ -21,6 +21,11 @@ from kedi.optimization.services import MetricFactory, TypeResolver
 from tests.dspy_mocks import RangeAwareAdapter, Recorder, install_mock_dspy
 
 
+@pytest.fixture(autouse=True)
+def _isolated_gepa_cwd(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+
 def _prepare(src: str):
     prog = parse_program(src)
     assert isinstance(prog, ProgramWithValidation)

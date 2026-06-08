@@ -196,7 +196,7 @@ def test_stringify_output_segments_uses_current_env_and_empty_fallback() -> None
     def fake_m(expressions: object) -> dict[str, Any]:
         return {}
 
-    rt.m = fake_m  # type: ignore[method-assign]
+    cast(Any, rt).m = fake_m
     assert render_expression(rt, [OutputSegment(name="missing")], {}, context="template") == ""
 
 

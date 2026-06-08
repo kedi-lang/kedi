@@ -95,6 +95,15 @@ def test_procedure_json_schema_defaults_untyped_params_to_string() -> None:
     assert procedure_return_json_schema(rt, prog.procedures[0]) == {"type": "string"}
 
 
+def test_procedure_json_schema_emits_string_for_untyped_tool_contract_param() -> None:
+    prog = parse_program("@search(query):\n  = <query>\n")
+    rt = compile_program(prog)
+
+    schema = procedure_json_schema(rt, prog.procedures[0])
+
+    assert schema["properties"]["query"]["type"] == "string"
+
+
 def test_program_procedure_json_schemas_can_include_nested_procedures() -> None:
     src = "@outer(text: str) -> str:\n  @inner(value: int) -> int:\n    = `value + 1`\n  = <text>\n"
     prog = parse_program(src)

@@ -28,7 +28,7 @@ def _uri_to_path(uri: str) -> Optional[str]:
 
 
 def make_server() -> LanguageServer:
-    server = LanguageServer(name="kedi-lsp", version="0.1.0")
+    server = LanguageServer(name="kedi-lsp", version="0.3.0")
 
     # ----- Document lifecycle: re-parse + publish diagnostics -----
 

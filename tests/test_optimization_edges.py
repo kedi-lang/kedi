@@ -923,7 +923,7 @@ def test_gepa_optimizer_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     optimizer.result_writer = None
     optimizer._save_prompts_immediately("p", {"s": "prompt"})
 
-    optimizer.result_writer = SimpleNamespace(
+    cast(Any, optimizer).result_writer = SimpleNamespace(
         write_optimized_prompts=lambda prompts: (_ for _ in ()).throw(RuntimeError("disk"))
     )
     optimizer._save_prompts_immediately("p", {"s": "prompt"})
@@ -959,16 +959,20 @@ def test_gepa_optimizer_fake_compile_paths(tmp_path: Path, monkeypatch: pytest.M
         KediRuntime(),
         source,
     )
-    optimizer.dspy_config_service = SimpleNamespace(verify_configured=lambda: None)
-    optimizer.example_formatter = SimpleNamespace(
+    cast(Any, optimizer).dspy_config_service = SimpleNamespace(verify_configured=lambda: None)
+    cast(Any, optimizer).example_formatter = SimpleNamespace(
         format_examples=lambda data, params, span=None, proc_name=None: [SimpleNamespace()]
     )
-    optimizer.module_builder = SimpleNamespace(build_module=lambda *args: SimpleNamespace())
-    optimizer.metric_wrapper = SimpleNamespace(wrap_metric=lambda *args, **kwargs: lambda *_: 1.0)
-    optimizer.prompt_extractor = SimpleNamespace(
+    cast(Any, optimizer).module_builder = SimpleNamespace(
+        build_module=lambda *args: SimpleNamespace()
+    )
+    cast(Any, optimizer).metric_wrapper = SimpleNamespace(
+        wrap_metric=lambda *args, **kwargs: lambda *_: 1.0
+    )
+    cast(Any, optimizer).prompt_extractor = SimpleNamespace(
         extract_prompts=lambda module, spans: {spans[0].name: "optimized"}
     )
-    optimizer.score_calculator = SimpleNamespace(calculate_score=lambda *args: 0.6)
+    cast(Any, optimizer).score_calculator = SimpleNamespace(calculate_score=lambda *args: 0.6)
 
     empty_span = _span("empty")
     prompts, score = optimizer.optimize_procedure(
@@ -983,7 +987,9 @@ def test_gepa_optimizer_fake_compile_paths(tmp_path: Path, monkeypatch: pytest.M
     assert prompts == {"empty": "optimized"}
     assert score == 0.6
 
-    optimizer.prompt_extractor = SimpleNamespace(extract_prompts=lambda module, spans: {})
+    cast(Any, optimizer).prompt_extractor = SimpleNamespace(
+        extract_prompts=lambda module, spans: {}
+    )
     monkeypatch.setattr(gepa_module, "normalize_optimized_prompt_prefix", lambda span, prompt: None)
     with pytest.warns(UserWarning, match="No optimized prompt"):
         prompts, score = optimizer.optimize_procedure(
@@ -1019,18 +1025,20 @@ def test_gepa_optimizer_reflection_and_proc_helpers(
         runtime,
         tmp_path / "source.kedi",
     )
-    optimizer.dspy_config_service = SimpleNamespace(verify_configured=lambda: None)
-    optimizer.example_formatter = SimpleNamespace(
+    cast(Any, optimizer).dspy_config_service = SimpleNamespace(verify_configured=lambda: None)
+    cast(Any, optimizer).example_formatter = SimpleNamespace(
         format_examples=lambda data, params, span=None, proc_name=None: [SimpleNamespace()]
     )
-    optimizer.module_builder = SimpleNamespace(build_module=lambda *args: SimpleNamespace())
-    optimizer.metric_wrapper = SimpleNamespace(
+    cast(Any, optimizer).module_builder = SimpleNamespace(
+        build_module=lambda *args: SimpleNamespace()
+    )
+    cast(Any, optimizer).metric_wrapper = SimpleNamespace(
         wrap_metric=lambda *args, **kwargs: SimpleNamespace(_progress={"count": 3})
     )
-    optimizer.prompt_extractor = SimpleNamespace(
+    cast(Any, optimizer).prompt_extractor = SimpleNamespace(
         extract_prompts=lambda module, spans: {spans[0].name: ""}
     )
-    optimizer.score_calculator = SimpleNamespace(calculate_score=lambda *args: 1.0)
+    cast(Any, optimizer).score_calculator = SimpleNamespace(calculate_score=lambda *args: 1.0)
 
     with pytest.warns(UserWarning, match="appears unchanged"):
         optimizer.optimize_procedure(

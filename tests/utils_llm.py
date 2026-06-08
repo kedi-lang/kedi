@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
 from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
@@ -29,7 +29,7 @@ def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
                     if delay_s > 0:
                         time.sleep(delay_s)
 
-        return wrapper  # type: ignore[return-value]
+        return cast(F, wrapper)
 
     return decorator
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import runpy
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -112,7 +113,7 @@ def test_tree_sitter_parser_handles_parser_initialized_inside_lock(
 
     class RaceLock:
         def __enter__(self) -> None:
-            parser_module._parser = fake_parser  # type: ignore[assignment]
+            cast(Any, parser_module)._parser = fake_parser
 
         def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
             return None

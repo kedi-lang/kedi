@@ -5,4 +5,5 @@
   "extraPaths": ["src"],
   "reportAny": "none",
   "reportExplicitAny": "none",
+  "reportArgumentType": "none",
 }

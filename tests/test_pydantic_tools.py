@@ -204,7 +204,8 @@ def test_kedi_tool_argument_coercion_covers_missing_none_model_and_invalid_paths
     kwargs: dict[str, Any] = {"person": {"name": "Ada"}, "raw": "untouched"}
     _coerce_tool_arguments(rt, proc, kwargs)
 
-    assert kwargs["person"].name == "Ada"
+    person: Any = kwargs["person"]
+    assert person.name == "Ada"
     assert kwargs["raw"] == "untouched"
 
     _coerce_tool_arguments(rt, ProcedureDef(name="plain", params=["x"]), {"x": "value"})

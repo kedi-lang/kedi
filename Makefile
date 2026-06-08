@@ -5,7 +5,7 @@ RESET := \033[0m
 UV ?= uv
 PYTHON_VERSIONS ?= 3.11 3.12
 
-.PHONY: all format check-formatted lint ty basedpyright check check-docs tests coverage check-coverage check-matrix prod
+.PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix prod
 
 all: format check tests
 
@@ -41,6 +41,11 @@ check-docs:
 	@cmp -s docs/KEDI_DSL.md kedi-zed/docs/KEDI_DSL.md
 	@cmp -s docs/KEDI_DSL.md kedi-vscode/docs/KEDI_DSL.md
 	@printf "$(GREEN)✔ Extension DSL docs are synced.$(RESET)\n"
+
+check-release:
+	@printf "$(BLUE)==>$(RESET) Running release surface checks...\n"
+	@bash scripts/check_release_surfaces.sh
+	@printf "$(GREEN)✔ Release surface checks complete.$(RESET)\n"
 
 tests:
 	@printf "$(BLUE)==>$(RESET) Running pytest...\n"

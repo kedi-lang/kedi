@@ -30,7 +30,7 @@ import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
@@ -91,13 +91,19 @@ from ..lang.ast import (
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
-from ..module_registry import (
-    describe_module_search_paths,
-    find_module_path,
-    module_search_paths,
-    resolve_module_path,
+from ..module_registry import describe_module_search_paths, module_search_paths
+from .module_surface import (
+    ImportedSurface,
+    ImportedValueInfo,
+    assignment_name_span,
+    extract_module_docstring,
+    imported_surface_for_program,
+    is_public_export_name,
+    load_imported_surface,
+    program_path,
+    resolved_import_path,
+    top_level_value_infos,
 )
-from ..source_loading import load_kedi_source_bundle
 
 # Kedi highlights + injection queries, loaded from the tree-sitter-kedi
 # wheel's bundled ``queries/`` directory. These are the single source of
@@ -220,69 +226,18 @@ class SymbolRef:
     cursor_span: Span
 
 
-@dataclass
-class ImportedModuleInfo:
-    name: str
-    path: Path
-    declaration_span: Span
-    docstring: Optional[str] = None
-
-
-@dataclass
-class ImportedValueInfo:
-    name: str
-    declaration_span: Span
-    type_expr: Optional[TypeExpr] = None
-    module_name: Optional[str] = None
-
-
-@dataclass
-class ImportedSurface:
-    modules: dict[str, ImportedModuleInfo] = field(default_factory=dict)
-    procedures: dict[str, ProcedureDef] = field(default_factory=dict)
-    types: dict[str, TypeDef] = field(default_factory=dict)
-    values: dict[str, ImportedValueInfo] = field(default_factory=dict)
-
-    def merge(self, other: "ImportedSurface") -> None:
-        self.modules.update(other.modules)
-        self.procedures.update(other.procedures)
-        self.types.update(other.types)
-        self.values.update(other.values)
-
-
 def _program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
-    loc = getattr(prog, "loc", None)
-    if loc is not None and loc.source_path:
-        return Path(loc.source_path).resolve()
-    source_map = getattr(prog, "source_map", None)
-    documents = getattr(source_map, "documents", None)
-    if documents:
-        return Path(documents[0].path).resolve()
-    return None
+    return program_path(prog)
 
 
 def _resolved_import_path(
     prog: Program | ProgramWithValidation, module_import_name: str
 ) -> Optional[Path]:
-    try:
-        return resolve_module_path(module_import_name, source_path=_program_path(prog))
-    except (FileNotFoundError, RuntimeError):
-        return None
+    return resolved_import_path(prog, module_import_name)
 
 
 def _assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
-    if stmt.loc is None:
-        return None
-    name_start_col = stmt.loc.start_col + 1  # skip '['
-    return Span(
-        start_byte=stmt.loc.start_byte + 1,
-        end_byte=stmt.loc.start_byte + 1 + len(stmt.name),
-        start_line=stmt.loc.start_line,
-        start_col=name_start_col,
-        end_line=stmt.loc.start_line,
-        end_col=name_start_col + len(stmt.name),
-        source_path=stmt.loc.source_path,
-    )
+    return assignment_name_span(stmt)
 
 
 def _output_name_span(seg: OutputSegment) -> Optional[Span]:
@@ -318,21 +273,11 @@ def _input_name_span(seg: InputSegment) -> Optional[Span]:
 def _top_level_value_infos(
     prog: Program | ProgramWithValidation,
 ) -> dict[str, ImportedValueInfo]:
-    return {
-        stmt.name: ImportedValueInfo(
-            name=stmt.name,
-            declaration_span=span,
-            type_expr=stmt.type_expr,
-        )
-        for stmt in prog.toplevel_body
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [_assignment_name_span(stmt)]
-        if span is not None
-    }
+    return top_level_value_infos(prog)
 
 
 def _is_public_export_name(name: str) -> bool:
-    return bool(name) and not name.startswith("_")
+    return is_public_export_name(name)
 
 
 def _program_line_text(
@@ -353,30 +298,7 @@ def _program_line_text(
 
 
 def _extract_module_docstring(source: str) -> Optional[str]:
-    tree = _ts_parse(source)
-    named = [child for child in tree.root_node.children if child.is_named]
-    if not named:
-        return None
-
-    first = named[0]
-    if first.type == "block_comment":
-        lines = source[first.start_byte : first.end_byte].splitlines()
-        if len(lines) < 2:
-            return None
-        text = "\n".join(lines[1:-1]).strip()
-        return text or None
-
-    if first.type == "line_comment":
-        body: list[str] = []
-        for node in named:
-            if node.type != "line_comment":
-                break
-            line = source[node.start_byte : node.end_byte]
-            body.append(line[1:].lstrip())
-        text = "\n".join(body).strip()
-        return text or None
-
-    return None
+    return extract_module_docstring(source)
 
 
 def _import_name_span(
@@ -444,15 +366,7 @@ def _exported_name_at_position(
 def _imported_surface_for_program(
     prog: Program | ProgramWithValidation,
 ) -> ImportedSurface:
-    surface = ImportedSurface()
-    root_path = _program_path(prog)
-    seen = {root_path} if root_path is not None else set()
-    for module_import in getattr(prog, "imports", []):
-        module_path = _resolved_import_path(prog, module_import.module)
-        if module_path is None:
-            continue
-        surface.merge(_load_imported_surface(module_path, seen, module_import.module))
-    return surface
+    return imported_surface_for_program(prog)
 
 
 def _load_imported_surface(
@@ -460,90 +374,7 @@ def _load_imported_surface(
     seen: set[Path],
     module_name: Optional[str] = None,
 ) -> ImportedSurface:
-    if path in seen or not path.exists():
-        return ImportedSurface()
-
-    next_seen = set(seen)
-    next_seen.add(path)
-    try:
-        loaded = load_kedi_source_bundle(path, include_val=False, include_cache=True)
-        prog = parse_program(
-            loaded.text,
-            source_path=str(path),
-            source_map=loaded.source_map,
-        )
-    except Exception:
-        return ImportedSurface()
-
-    module_surface = ImportedSurface()
-    if module_name is not None:
-        module_surface.modules[module_name] = ImportedModuleInfo(
-            name=module_name,
-            path=path,
-            declaration_span=Span(
-                start_byte=0,
-                end_byte=0,
-                start_line=1,
-                start_col=1,
-                end_line=1,
-                end_col=1,
-                source_path=str(path),
-            ),
-            docstring=_extract_module_docstring(loaded.text),
-        )
-
-    nested_surface = ImportedSurface()
-    for module_import in getattr(prog, "imports", []):
-        resolved_nested_path = find_module_path(module_import.module, source_path=path)
-        if resolved_nested_path is None:
-            continue
-        nested_surface.merge(
-            _load_imported_surface(resolved_nested_path, next_seen, module_import.module)
-        )
-
-    local_procedures = {proc.name: proc for proc in prog.procedures}
-    local_types = {td.name: td for td in prog.type_defs}
-    local_values = {
-        stmt.name: ImportedValueInfo(
-            name=stmt.name,
-            declaration_span=span,
-            type_expr=stmt.type_expr,
-            module_name=module_name,
-        )
-        for stmt in prog.toplevel_body
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [_assignment_name_span(stmt)]
-        if span is not None
-    }
-
-    combined_procedures = dict(nested_surface.procedures)
-    combined_procedures.update(local_procedures)
-    combined_types = dict(nested_surface.types)
-    combined_types.update(local_types)
-    combined_values = dict(nested_surface.values)
-    combined_values.update(local_values)
-
-    export_names: list[str] = []
-    for export in getattr(prog, "exports", []):
-        if export.export_all:
-            export_names.extend(
-                name
-                for name in (
-                    list(combined_procedures) + list(combined_types) + list(combined_values)
-                )
-                if _is_public_export_name(name)
-            )
-        export_names.extend(export.names)
-
-    resolved = ImportedSurface(modules=dict(module_surface.modules))
-    for name in dict.fromkeys(export_names):
-        if name in combined_procedures:
-            resolved.procedures[name] = combined_procedures[name]
-        elif name in combined_types:
-            resolved.types[name] = combined_types[name]
-        elif name in combined_values:
-            resolved.values[name] = combined_values[name]
-    return resolved
+    return load_imported_surface(path, seen, module_name)
 
 
 def _missing_import_diagnostics(

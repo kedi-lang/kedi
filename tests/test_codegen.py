@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from kedi.codegen.translator import (
     python_impl_to_kedi_impl,
     python_tests_to_kedi_tests,
 )
+from kedi.console import KediConsole
 from kedi.lang.ast import ProcedureDef, TypeDef, TypeField
 from kedi.tests_runner import TestCaseResult as KediTestCaseResult
 from kedi.tests_runner import TestRunResult as KediTestRunResult
@@ -39,6 +41,57 @@ def test_codegen_cache_paths(tmp_path: Path) -> None:
     mgr.write_cache(src, "", "@foo():\n  = ok\n")
     assert mgr.is_cached(src, "foo")
     assert not CodegenManager(MockPassingAgent(), use_cache=False).is_cached(src, "foo")
+
+
+def test_kedi_console_semantic_helpers_render_without_markup() -> None:
+    buffer = StringIO()
+    console = KediConsole(file=buffer, force_terminal=False, color_system=None)
+
+    console.banner("GEPA span 1/2")
+    console.section("datasets")
+    console.section("no rule", rule="")
+    console.detail("count: 2")
+    console.inline("working", end="", flush=True)
+    console.progress_char()
+    console.ok("done")
+    console.warn("careful")
+    console.fail("stop")
+
+    output = buffer.getvalue()
+    assert "GEPA span 1/2" in output
+    assert "datasets" in output
+    assert "no rule" in output
+    assert "count: 2" in output
+    assert "working" in output
+    assert "." in output
+    assert "✓ done" in output
+    assert "⚠ careful" in output
+    assert "✗ stop" in output
+
+
+def test_kedi_console_uses_plain_output_defaults() -> None:
+    buffer = StringIO()
+    console = KediConsole(file=buffer, force_terminal=False, color_system=None)
+
+    console.print("[green]plain[/green]", end="")
+
+    assert buffer.getvalue() == "[green]plain[/green]"
+
+
+def test_kedi_console_quiet_mode_suppresses_semantic_output() -> None:
+    buffer = StringIO()
+    console = KediConsole(file=buffer, force_terminal=False, color_system=None, quiet=True)
+
+    console.banner("hidden")
+    console.section("hidden", rule="")
+    console.detail("hidden")
+    console.progress_char()
+    console.inline("hidden", end="", flush=True)
+    console.ok("hidden")
+    console.warn("hidden")
+    console.fail("hidden")
+
+    assert buffer.getvalue() == ""
 
 
 def test_codegen_translator_covers_signature_type_test_and_impl_shapes() -> None:
@@ -138,6 +191,39 @@ def test_codegen_manager_context_and_cache_parsing(tmp_path: Path) -> None:
         "generated",
         "cached",
     }
+
+
+def test_codegen_cleanup_failed_cache_removes_existing_cache(tmp_path: Path) -> None:
+    src = tmp_path / "source.kedi"
+    src.write_text("@ok() -> str:\n  = ok\n", encoding="utf-8")
+    cache = src.with_suffix(".cache.kedi")
+    cache.write_text("stale", encoding="utf-8")
+    mgr = CodegenManager(MockPassingAgent())
+
+    mgr.cleanup_failed_cache(src)
+
+    assert not cache.exists()
+
+
+def test_codegen_context_for_generation_falls_back_on_context_extraction_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = tmp_path / "broken.kedi"
+    src.write_text("@broken(:\n", encoding="utf-8")
+    mgr = CodegenManager(MockPassingAgent())
+
+    assert mgr.context_for_generation(src) == ProgramContext()
+    assert mgr.context_for_generation(tmp_path / "missing.kedi") == ProgramContext()
+
+    def raise_unexpected(_program):
+        raise RuntimeError("unexpected")
+
+    valid_src = tmp_path / "valid.kedi"
+    valid_src.write_text("@ok() -> str:\n  = ok\n", encoding="utf-8")
+    monkeypatch.setattr(mgr, "extract_context_from_ast", raise_unexpected)
+
+    assert mgr.context_for_generation(valid_src) == ProgramContext()
 
 
 def test_codegen_manager_reports_compile_and_test_errors(

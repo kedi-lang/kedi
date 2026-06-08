@@ -53,7 +53,7 @@ class TestParseFirstRange:
         assert parse_first_range("RANGE[5,5]") == (-100.0, -50.0)
 
     def test_non_string_returns_default(self):
-        assert parse_first_range(42) == (-100.0, -50.0)  # type: ignore[arg-type]
+        assert parse_first_range(cast(str, 42)) == (-100.0, -50.0)
 
     def test_nan_returns_default(self):
         assert parse_first_range("RANGE[NaN,NaN]") == (-100.0, -50.0)
