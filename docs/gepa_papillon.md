@@ -1,5 +1,8 @@
 # Tutorial: GEPA for Structured Information Extraction for Enterprise Tasks
 
+> Status: external DSPy/GEPA reference tutorial. This file currently mirrors
+> `docs/gepa_structured.md`; keep both until the docs surface is reviewed.
+
 In this tutorial, we'll explore a three-part task for structured information extraction and classification using the [Facility Support Analyzer](https://github.com/meta-llama/llama-prompt-ops/tree/main/use-cases/facility-support-analyzer) dataset released by Meta. Given an email or message sent in an enterprise setting related to facility maintenance or support requests, the goal is to extract its **urgency**, assess the **sentiment**, and identify all relevant **service request categories**.
 
 We will build a simple DSPy program, and then use the `dspy.GEPA` optimizer to optimize it for the task.

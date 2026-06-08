@@ -5,7 +5,7 @@ RESET := \033[0m
 UV ?= uv
 PYTHON_VERSIONS ?= 3.11 3.12
 
-.PHONY: all format check-formatted lint ty basedpyright check tests coverage check-coverage check-matrix prod
+.PHONY: all format check-formatted lint ty basedpyright check check-docs tests coverage check-coverage check-matrix prod
 
 all: format check tests
 
@@ -35,6 +35,12 @@ basedpyright:
 	@printf "$(GREEN)✔ basedpyright check complete.$(RESET)\n"
 
 check: lint check-formatted ty basedpyright
+
+check-docs:
+	@printf "$(BLUE)==>$(RESET) Checking extension DSL docs are synced...\n"
+	@cmp -s docs/KEDI_DSL.md kedi-zed/docs/KEDI_DSL.md
+	@cmp -s docs/KEDI_DSL.md kedi-vscode/docs/KEDI_DSL.md
+	@printf "$(GREEN)✔ Extension DSL docs are synced.$(RESET)\n"
 
 tests:
 	@printf "$(BLUE)==>$(RESET) Running pytest...\n"
