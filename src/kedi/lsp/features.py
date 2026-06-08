@@ -498,16 +498,7 @@ def _position_in_proc_name(proc: ProcedureDef, pos: lsp.Position) -> bool:
 
 def _proc_name_span(proc: ProcedureDef) -> Span:
     assert proc.loc is not None
-    name_start_col = proc.loc.start_col + 1
-    return Span(
-        start_byte=proc.loc.start_byte + 1,
-        end_byte=proc.loc.start_byte + 1 + len(proc.name),
-        start_line=proc.loc.start_line,
-        start_col=name_start_col,
-        end_line=proc.loc.start_line,
-        end_col=name_start_col + len(proc.name),
-        source_path=proc.loc.source_path,
-    )
+    return name_token_span(proc.loc, proc.name, prefix_len=1)
 
 
 def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
@@ -628,15 +619,7 @@ def _resolve_in_segment(
                 name=seg.name,
                 declaration_span=target.loc if target is not None else None,
                 scope_proc=None,
-                cursor_span=Span(
-                    start_byte=seg.loc.start_byte + 1,
-                    end_byte=seg.loc.start_byte + 1 + len(seg.name),
-                    start_line=seg.loc.start_line,
-                    start_col=name_start,
-                    end_line=seg.loc.start_line,
-                    end_col=name_start + len(seg.name),
-                    source_path=seg.loc.source_path,
-                ),
+                cursor_span=name_token_span(seg.loc, seg.name, prefix_len=1),
             )
         # Recurse into args.
 
@@ -701,15 +684,7 @@ def _resolve_in_type_def(td: TypeDef, pos: lsp.Position, type_by_name: dict) -> 
             name=td.name,
             declaration_span=td.loc,
             scope_proc=None,
-            cursor_span=Span(
-                start_byte=td.loc.start_byte + 1,
-                end_byte=td.loc.start_byte + 1 + len(td.name),
-                start_line=td.loc.start_line,
-                start_col=name_start,
-                end_line=td.loc.start_line,
-                end_col=name_start + len(td.name),
-                source_path=td.loc.source_path,
-            ),
+            cursor_span=name_token_span(td.loc, td.name, prefix_len=1),
         )
     for f in td.fields:
         r = _resolve_in_type_expr(f.type_expr, pos, type_by_name)
@@ -1340,18 +1315,7 @@ def _find_all_references(
 def _collect_call_refs(seg, name: str, out: List[Span]) -> None:
     if isinstance(seg, CallSegment):
         if seg.name == name and seg.loc is not None:
-            name_start_col = seg.loc.start_col + 1
-            out.append(
-                Span(
-                    start_byte=seg.loc.start_byte + 1,
-                    end_byte=seg.loc.start_byte + 1 + len(seg.name),
-                    start_line=seg.loc.start_line,
-                    start_col=name_start_col,
-                    end_line=seg.loc.start_line,
-                    end_col=name_start_col + len(seg.name),
-                    source_path=seg.loc.source_path,
-                )
-            )
+            out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
         # Recurse args
         for arg in seg.args or []:
             for inner_attr in ("__call_segment__", "__python_segment__"):
@@ -1364,18 +1328,7 @@ def _collect_call_refs(seg, name: str, out: List[Span]) -> None:
 
 def _collect_input_refs(seg, name: str, out: List[Span]) -> None:
     if isinstance(seg, InputSegment) and seg.name == name and seg.loc is not None:
-        name_start_col = seg.loc.start_col + 1
-        out.append(
-            Span(
-                start_byte=seg.loc.start_byte + 1,
-                end_byte=seg.loc.start_byte + 1 + len(seg.name),
-                start_line=seg.loc.start_line,
-                start_col=name_start_col,
-                end_line=seg.loc.start_line,
-                end_col=name_start_col + len(seg.name),
-                source_path=seg.loc.source_path,
-            )
-        )
+        out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
     elif isinstance(seg, CallSegment):
         for arg in seg.args or []:
             for inner_attr in ("__call_segment__", "__python_segment__"):

@@ -5,7 +5,7 @@ from __future__ import annotations
 from ...lang.ast import ProcedureDef
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType
-from ..resolved_types import ResolvedKediType, as_resolved_kedi_type
+from ...resolved_types import ResolvedKediType, as_resolved_kedi_type
 
 
 class TypeResolver:

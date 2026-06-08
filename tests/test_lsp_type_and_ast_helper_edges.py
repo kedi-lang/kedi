@@ -1,7 +1,8 @@
-"""LSP feature helper edge-case tests."""
+"""LSP type rendering and AST description helper edge-case tests."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -10,37 +11,8 @@ from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line
 
 
-def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
-    from kedi.lang.ast import (
-        AssignBlockStmt,
-        AssignStmt,
-        AutoSpec,
-        BacktickLineStmt,
-        CallSegment,
-        EvalDataset,
-        EvalMetric,
-        EvalSuite,
-        InputSegment,
-        OptimizeSpan,
-        OutputSegment,
-        ProcedureDef,
-        Program,
-        PythonBlock,
-        PythonExprSegment,
-        ReturnBlockStmt,
-        ReturnStmt,
-        Span,
-        Stmt,
-        TemplateLine,
-        TestSuite,
-        TextSegment,
-        TypeApply,
-        TypeDef,
-        TypeExpr,
-        TypeField,
-        TypeRef,
-        TypeUnion,
-    )
+def test_resolve_in_type_def_rejects_missing_or_out_of_range_location() -> None:
+    from kedi.lang.ast import Span, TypeDef
 
     pos = position_at_line(0, 4)
     assert features._resolve_in_type_def(TypeDef("Person", [], loc=None), pos, {}) is None
@@ -52,8 +24,15 @@ def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
         )
         is None
     )
-    type_ref = TypeRef(name="Person", loc=Span(0, 6, 1, 1, 1, 7))
-    type_apply = TypeApply(name="list", args=[type_ref], loc=Span(0, 12, 1, 1, 1, 13))
+
+
+def test_type_expr_to_str_covers_ref_apply_union_and_fallback(tmp_path: Path) -> None:
+    from kedi.lang.ast import TypeApply, TypeExpr, TypeRef, TypeUnion
+
+    type_ref = TypeRef(name="Person", loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=7))
+    type_apply = TypeApply(
+        name="list", args=[type_ref], loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=13)
+    )
     type_union = TypeUnion(
         left=type_apply,
         right=TypeRef(name="str", loc=make_edge_span(tmp_path)),
@@ -65,6 +44,8 @@ def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
     assert features._type_expr_to_str(type_union) == "list[Person] | str"
     assert "TypeExpr" in features._type_expr_to_str(TypeExpr())
 
+
+def test_prelude_defined_names_skips_broken_and_collects_symbols() -> None:
     assert features._prelude_defined_names(None) == set()
     assert features._prelude_defined_names("class Broken(:\n") == set()
     assert {
@@ -83,6 +64,10 @@ def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
         "async def async_fn(): pass\n"
         "x = y = 1\n"
     )
+
+
+def test_proc_signature_markdown_variants(tmp_path: Path) -> None:
+    from kedi.lang.ast import AutoSpec, OptimizeSpan, ProcedureDef
 
     proc = ProcedureDef(
         name="p",
@@ -113,6 +98,34 @@ def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
         ProcedureDef(name="doc", params=[], docstring="doc", loc=make_edge_span(tmp_path))
     )
 
+
+def test_describe_ast_node_covers_supported_nodes(tmp_path: Path) -> None:
+    from kedi.lang.ast import (
+        AssignBlockStmt,
+        AssignStmt,
+        AutoSpec,
+        BacktickLineStmt,
+        CallSegment,
+        EvalDataset,
+        EvalMetric,
+        EvalSuite,
+        InputSegment,
+        OptimizeSpan,
+        OutputSegment,
+        ProcedureDef,
+        PythonBlock,
+        PythonExprSegment,
+        ReturnBlockStmt,
+        ReturnStmt,
+        Stmt,
+        TemplateLine,
+        TestSuite,
+        TextSegment,
+        TypeDef,
+        TypeField,
+    )
+
+    proc = ProcedureDef(name="p", params=["x"], body=[], loc=make_edge_span(tmp_path))
     described_nodes = [
         proc,
         TypeDef(
@@ -146,6 +159,11 @@ def test_lsp_type_and_ast_helper_edges(tmp_path, monkeypatch):
     assert all(features._describe_ast_node(node) for node in described_nodes)
     assert features._describe_ast_node(Stmt(loc=make_edge_span(tmp_path))) is None
 
+
+def test_generic_hover_returns_none_without_actionable_nodes(tmp_path: Path) -> None:
+    from kedi.lang.ast import Program, Stmt
+
+    pos = position_at_line(0, 4)
     assert features._generic_hover(Program(), pos) is None
     assert (
         features._generic_hover(

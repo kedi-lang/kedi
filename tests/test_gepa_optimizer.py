@@ -6,8 +6,6 @@ from kedi.reporter import BufferReporter
 from kedi.lang import parse_program
 from kedi.optimization.gepa import GEPAOptimizer
 
-GEPA_AVAILABLE = True
-
 
 def test_gepa_optimizer_accepts_injected_reporter() -> None:
     from kedi.optimization.config import OptimizerConfig

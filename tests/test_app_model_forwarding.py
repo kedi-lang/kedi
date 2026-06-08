@@ -464,10 +464,18 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
             assert model in {"openai/gpt-4o", "custom-dspy-model"}
 
     class FakeGEPAOptimizer:
-        def __init__(self, *, config: object, runtime: object, source_path: Path) -> None:
+        def __init__(
+            self,
+            *,
+            config: object,
+            runtime: object,
+            source_path: Path,
+            reporter: object | None = None,
+        ) -> None:
             self.config = config
             self.runtime = runtime
             self.source_path = source_path
+            self.reporter = reporter
 
         def optimize_procedure(self, **kwargs: Any) -> tuple[str, float]:
             return "gepa prompt", 0.75

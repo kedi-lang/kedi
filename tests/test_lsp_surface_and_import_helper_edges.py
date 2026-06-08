@@ -1,30 +1,26 @@
-"""LSP feature helper edge-case tests."""
+"""LSP surface, import, and module helper edge-case tests."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from kedi.lsp import ast_helpers, features, module_surface
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line, position_of
 
 
-def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
-    from kedi.lang.ast import (
-        AssignStmt,
-        InputSegment,
-        ModuleExport,
-        ModuleImport,
-        OutputSegment,
-        Program,
-        Span,
-    )
-    from kedi.lang.parser import parse_program
-
+def test_lsp_type_registry_includes_builtins(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "builtins" in features._build_lsp_type_registry()["str"]
     monkeypatch.setattr(features, "_typing_extensions", None)
     assert "str" in features._build_lsp_type_registry()
-    monkeypatch.undo()
+
+
+def test_program_path_and_export_name_rules(tmp_path: Path) -> None:
+    from kedi.lang.ast import AssignStmt, Program
+
     assert module_surface.program_path(Program(source_map=SimpleNamespace(documents=[]))) is None
     mapped_prog = Program(
         source_map=SimpleNamespace(documents=[SimpleNamespace(path=str(tmp_path / "m.kedi"))])
@@ -35,21 +31,33 @@ def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
     assert not module_surface.is_public_export_name("")
     assert not module_surface.is_public_export_name("_private")
 
+
+def test_program_line_text_edges(tmp_path: Path) -> None:
+    from kedi.lang.ast import Program
+
     source_map = SimpleNamespace(get_line=lambda path, line: f"{path}:{line}")
     mapped_line_prog = Program(loc=make_edge_span(tmp_path), source_map=source_map)
     assert features._program_line_text(mapped_line_prog, 7) == f"{tmp_path / 'x.kedi'}:7"
     assert features._program_line_text(Program(source_text="one"), 2) is None
     assert features._program_line_text(Program(source_map=source_map), 1) is None
     assert features._program_line_text(Program(), 1) is None
+
+
+def test_input_output_name_span_without_location() -> None:
+    from kedi.lang.ast import InputSegment, OutputSegment
+
     assert features._output_name_span(OutputSegment(name="x")) is None
     assert features._input_name_span(InputSegment(name="x")) is None
+
+
+def test_module_docstring_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
     assert module_surface.extract_module_docstring("") is None
     assert module_surface.extract_module_docstring("###\n###\n") is None
     assert module_surface.extract_module_docstring("# one\n# two\n= ok\n") == "one\ntwo"
     assert module_surface.extract_module_docstring("# one\n# two\n") == "one\ntwo"
 
     class FakeNode:
-        def __init__(self, type_: str, start: int = 0, end: int = 3):
+        def __init__(self, type_: str, start: int = 0, end: int = 3) -> None:
             self.type = type_
             self.start_byte = start
             self.end_byte = end
@@ -63,7 +71,10 @@ def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
         ),
     )
     assert module_surface.extract_module_docstring("###") is None
-    monkeypatch.undo()
+
+
+def test_import_name_span_edges(tmp_path: Path) -> None:
+    from kedi.lang.ast import ModuleImport, Program
 
     assert features._import_name_span(Program(), ModuleImport("profiles")) is None
     no_line_prog = Program(imports=[ModuleImport("profiles", loc=make_edge_span(tmp_path))])
@@ -73,6 +84,13 @@ def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
         imports=[ModuleImport("profiles", loc=make_edge_span(tmp_path))],
     )
     assert features._import_name_span(wrong_line_prog, wrong_line_prog.imports[0]) is None
+
+
+def test_exported_name_at_position_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.lang.ast import ModuleExport, Program, Span
 
     export_src = "> export:\n  *\n  !bad\n  Name\n"
     export_prog = Program(
@@ -110,8 +128,9 @@ def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
         features, "_program_line_text", lambda *args, **kwargs: FindlessLine("  Name")
     )
     assert features._exported_name_at_position(export_prog, position_of(export_src, "Name")) is None
-    monkeypatch.undo()
 
+
+def test_load_imported_surface_edges(tmp_path: Path) -> None:
     assert module_surface.load_imported_surface(tmp_path / "missing.kedi", set()).modules == {}
     assert (
         module_surface.load_imported_surface(
@@ -160,6 +179,11 @@ def test_lsp_surface_and_import_helper_edges(tmp_path, monkeypatch):
     missing_export_module = tmp_path / "missing_export.kedi"
     missing_export_module.write_text("> export:\n  absent\n", encoding="utf-8")
     assert module_surface.load_imported_surface(missing_export_module, set()).procedures == {}
+
+
+def test_missing_import_diagnostics_and_unresolved_surface(tmp_path: Path) -> None:
+    from kedi.lang.ast import ModuleImport, Program
+    from kedi.lang.parser import parse_program
 
     missing_import_prog = Program(imports=[ModuleImport("missing", loc=None)])
     assert features._missing_import_diagnostics(missing_import_prog) == []

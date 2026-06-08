@@ -1,60 +1,59 @@
-"""LSP feature helper edge-case tests."""
+"""LSP symbol resolution and reference-collection helper edge-case tests."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
+
+import pytest
 
 from kedi.lsp import features
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line
 
 
-def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
-    from kedi.lang.ast import (
-        AssignBlockStmt,
-        AssignStmt,
-        AutoSpec,
-        CallArg,
-        CallSegment,
-        EvalDataset,
-        EvalMetric,
-        EvalSuite,
-        InputSegment,
-        OptimizeSpan,
-        OutputSegment,
-        ProcDefStmt,
-        ProcedureDef,
-        Program,
-        ProgramWithValidation,
-        ReturnStmt,
-        Span,
-        TemplateLine,
-        TestCase,
-        TestSuite,
-        TextSegment,
-        TypeApply,
-        TypeDef,
-        TypeField,
-        TypeRef,
-        TypeUnion,
-    )
+@pytest.fixture
+def resolution_pos() -> object:
+    return position_at_line(line=0, character=4)
 
-    type_ref = TypeRef(
+
+@pytest.fixture
+def person_type_ref(tmp_path: Path) -> object:
+    from kedi.lang.ast import TypeRef
+
+    return TypeRef(
         name="Person",
         loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=7),
     )
-    type_apply = TypeApply(
+
+
+@pytest.fixture
+def list_person_apply(tmp_path: Path, person_type_ref: object) -> object:
+    from kedi.lang.ast import TypeApply
+
+    return TypeApply(
         name="list",
-        args=[type_ref],
+        args=[person_type_ref],
         loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=13),
     )
-    type_union = TypeUnion(
-        left=type_apply,
+
+
+@pytest.fixture
+def list_person_union(tmp_path: Path, list_person_apply: object) -> object:
+    from kedi.lang.ast import TypeRef, TypeUnion
+
+    return TypeUnion(
+        left=list_person_apply,
         right=TypeRef(name="str", loc=make_edge_span(tmp_path)),
         loc=make_edge_span(tmp_path),
     )
-    pos = position_at_line(line=0, character=4)
-    proc = ProcedureDef(
+
+
+@pytest.fixture
+def sample_proc(tmp_path: Path) -> object:
+    from kedi.lang.ast import ProcedureDef
+
+    return ProcedureDef(
         name="p",
         params=["x"],
         body=[],
@@ -62,6 +61,10 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         return_type_annotation="str",
         loc=make_edge_span(tmp_path),
     )
+
+
+def test_collect_call_and_input_refs_follow_nested_args(tmp_path: Path) -> None:
+    from kedi.lang.ast import CallArg, CallSegment, InputSegment, Span
 
     nested_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
@@ -82,7 +85,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
     features._collect_call_refs(outer_call, "inner", calls)
     features._collect_call_refs(outer_call, "rendered", calls)
     assert len(calls) == 2
-    inputs: list[Span] = []
+
     nested_input_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
         nested_input_arg,
@@ -95,6 +98,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         "__render_segments__",
         [InputSegment(name="needle", loc=make_edge_span(tmp_path))],
     )
+    inputs: list[Span] = []
     features._collect_input_refs(
         CallSegment(
             name="outer", args=[nested_input_arg, rendered_input_arg], loc=make_edge_span(tmp_path)
@@ -104,18 +108,32 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
     )
     assert len(inputs) == 2
 
+
+def test_collect_type_refs_in_expr_stmt_and_type_def(
+    tmp_path: Path,
+    person_type_ref: object,
+    list_person_apply: object,
+    list_person_union: object,
+) -> None:
+    from kedi.lang.ast import OutputSegment, Span, TypeDef, TypeField
+
     refs: list[Span] = []
-    features._collect_type_refs_in_expr(type_union, "Person", refs)
-    features._collect_type_refs_in_expr(type_apply, "list", refs)
+    features._collect_type_refs_in_expr(list_person_union, "Person", refs)
+    features._collect_type_refs_in_expr(list_person_apply, "list", refs)
     features._collect_type_refs_in_stmt(
-        OutputSegment(name="x", type_expr=type_ref, loc=make_edge_span(tmp_path)), "Person", refs
+        OutputSegment(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+        "Person",
+        refs,
     )
     features._collect_type_refs_in_type_def(
-        TypeDef("Box", [TypeField("item", type_expr=type_ref)]), "Person", refs
+        TypeDef("Box", [TypeField("item", type_expr=person_type_ref)]), "Person", refs
     )
     assert refs
 
-    assert features._position_in_proc_name(proc, position_at_line(line=1, character=1)) is False
+
+def test_find_local_declaration_in_procedure_body(tmp_path: Path) -> None:
+    from kedi.lang.ast import AssignStmt, OutputSegment, ProcedureDef, TemplateLine
+
     assert features._find_local_declaration(None, "x") is None
     local_proc = ProcedureDef(
         "local",
@@ -132,6 +150,16 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
     assert features._find_local_declaration(local_proc, "y") is not None
     assert features._find_local_declaration(local_proc, "z") is None
 
+
+def test_resolve_in_procedure_uses_param_decls(
+    tmp_path: Path,
+    sample_proc: object,
+    resolution_pos: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert (
+        features._position_in_proc_name(sample_proc, position_at_line(line=1, character=1)) is False
+    )
     monkeypatch.setattr(
         features,
         "_param_decls",
@@ -140,51 +168,64 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
             ("x", make_edge_span(tmp_path)),
         ],
     )
-    assert features._resolve_in_procedure(proc, pos, {}, {}, {}) is not None
-    monkeypatch.undo()
+    assert features._resolve_in_procedure(sample_proc, resolution_pos, {}, {}, {}) is not None
 
+
+def test_resolve_in_type_expr_and_stmt(
+    tmp_path: Path,
+    person_type_ref: object,
+    resolution_pos: object,
+) -> None:
+    from kedi.lang.ast import AssignBlockStmt, OutputSegment, TypeApply, TypeDef, TypeRef, TypeUnion
+
+    person_def = {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))}
     assert (
         features._resolve_in_type_expr(
             TypeUnion(
-                left=type_ref,
+                left=person_type_ref,
                 right=TypeRef(name="Other", loc=make_edge_span(tmp_path)),
                 loc=make_edge_span(tmp_path),
             ),
-            pos,
-            {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))},
+            resolution_pos,
+            person_def,
         )
         is not None
     )
     assert (
         features._resolve_in_type_expr(
-            TypeApply(name="list", args=[type_ref], loc=make_edge_span(tmp_path)),
+            TypeApply(name="list", args=[person_type_ref], loc=make_edge_span(tmp_path)),
             position_at_line(line=0, character=4),
-            {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))},
+            person_def,
         )
         is not None
     )
     assert (
         features._resolve_in_stmt(
-            AssignBlockStmt(name="x", type_expr=type_ref, loc=make_edge_span(tmp_path)),
-            pos,
+            AssignBlockStmt(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            resolution_pos,
             None,
             {},
-            {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))},
+            person_def,
             {},
         )
         is not None
     )
     assert (
         features._resolve_in_segment(
-            OutputSegment(name="x", type_expr=type_ref, loc=make_edge_span(tmp_path)),
-            pos,
+            OutputSegment(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            resolution_pos,
             None,
             {},
-            {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))},
+            person_def,
             {},
         )
         is not None
     )
+
+
+def test_resolve_in_type_def_field(tmp_path: Path) -> None:
+    from kedi.lang.ast import TypeDef, TypeField
+
     field_ref = features._resolve_in_type_def(
         TypeDef(
             "Person",
@@ -207,6 +248,14 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         )
         is None
     )
+
+
+def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
+    tmp_path: Path,
+    resolution_pos: object,
+) -> None:
+    from kedi.lang.ast import AssignBlockStmt, TypeApply, TypeRef, TypeUnion
+
     assert (
         features._resolve_in_type_expr(
             TypeUnion(
@@ -218,7 +267,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
                 ),
                 loc=make_edge_span(tmp_path),
             ),
-            pos,
+            resolution_pos,
             {},
         )
         is None
@@ -234,7 +283,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
                 ],
                 loc=make_edge_span(tmp_path),
             ),
-            pos,
+            resolution_pos,
             {},
         )
         is None
@@ -248,7 +297,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
                 ),
                 loc=make_edge_span(tmp_path),
             ),
-            pos,
+            resolution_pos,
             None,
             {},
             {},
@@ -256,6 +305,10 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         )
         is None
     )
+
+
+def test_resolve_in_segment_nested_inputs(tmp_path: Path) -> None:
+    from kedi.lang.ast import CallArg, CallSegment, InputSegment, OutputSegment, TypeRef
 
     resolve_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
@@ -270,6 +323,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         {},
     )
     assert resolved is not None and resolved.name == "resolved"
+
     rendered_resolve_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
         rendered_resolve_arg,
@@ -285,6 +339,7 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         {},
     )
     assert rendered_resolved is not None and rendered_resolved.name == "rendered"
+
     missing_inner_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
         missing_inner_arg,
@@ -321,13 +376,52 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
                 ),
                 loc=make_edge_span(tmp_path),
             ),
-            pos,
+            position_at_line(line=0, character=4),
             None,
             {},
             {},
             {},
         )
         is None
+    )
+
+
+def test_smallest_enclosing_validation_program(tmp_path: Path, resolution_pos: object) -> None:
+    from kedi.lang.ast import (
+        AssignStmt,
+        AutoSpec,
+        CallArg,
+        CallSegment,
+        EvalDataset,
+        EvalMetric,
+        EvalSuite,
+        InputSegment,
+        OptimizeSpan,
+        ProcDefStmt,
+        ProcedureDef,
+        ProgramWithValidation,
+        TemplateLine,
+        TestCase,
+        TestSuite,
+        TextSegment,
+        TypeDef,
+        TypeField,
+    )
+
+    nested_arg = CallArg(loc=make_edge_span(tmp_path))
+    setattr(
+        nested_arg,
+        "__call_segment__",
+        CallSegment(name="inner", args=[], loc=make_edge_span(tmp_path)),
+    )
+    rendered_arg = CallArg(loc=make_edge_span(tmp_path))
+    setattr(
+        rendered_arg,
+        "__render_segments__",
+        [CallSegment(name="rendered", args=[], loc=make_edge_span(tmp_path))],
+    )
+    outer_call = CallSegment(
+        name="outer", args=[nested_arg, rendered_arg], loc=make_edge_span(tmp_path)
     )
 
     program = ProgramWithValidation(
@@ -398,7 +492,23 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
             ),
         ],
     )
-    assert features._smallest_enclosing(program, pos) is not None
+    assert features._smallest_enclosing(program, resolution_pos) is not None
+
+
+def test_find_all_references_for_procedures_and_types(
+    tmp_path: Path,
+    person_type_ref: object,
+) -> None:
+    from kedi.lang.ast import (
+        AssignStmt,
+        CallSegment,
+        ProcedureDef,
+        Program,
+        ReturnStmt,
+        TemplateLine,
+        TypeDef,
+        TypeField,
+    )
 
     ref_prog = Program(
         procedures=[
@@ -416,9 +526,11 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
             ProcedureDef(
                 name="typed",
                 params=["x"],
-                body=[AssignStmt(name="v", type_expr=type_ref, loc=make_edge_span(tmp_path))],
-                param_type_exprs={"x": type_ref, "skip": None},
-                return_type_expr=type_ref,
+                body=[
+                    AssignStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path))
+                ],
+                param_type_exprs={"x": person_type_ref, "skip": None},
+                return_type_expr=person_type_ref,
                 loc=make_edge_span(tmp_path),
             ),
         ],
@@ -431,10 +543,14 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
                 segments=[CallSegment(name="target", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
             ),
-            AssignStmt(name="v", type_expr=type_ref, loc=make_edge_span(tmp_path)),
+            AssignStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
         ],
         type_defs=[
-            TypeDef("Person", [TypeField("item", type_expr=type_ref)], loc=make_edge_span(tmp_path))
+            TypeDef(
+                "Person",
+                [TypeField("item", type_expr=person_type_ref)],
+                loc=make_edge_span(tmp_path),
+            )
         ],
     )
     duplicate_span = make_edge_span(tmp_path)
@@ -459,6 +575,57 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
         == []
     )
 
+
+def test_document_symbol_helpers(tmp_path: Path) -> None:
+    from kedi.lang.ast import (
+        EvalDataset,
+        EvalMetric,
+        EvalSuite,
+        OptimizeSpan,
+        ProcDefStmt,
+        ProcedureDef,
+        ProgramWithValidation,
+        TestCase,
+        TestSuite,
+    )
+
+    program = ProgramWithValidation(
+        procedures=[
+            ProcedureDef(
+                "outer",
+                [],
+                body=cast(
+                    Any,
+                    [
+                        ProcDefStmt(
+                            proc=ProcedureDef("inner", [], body=[], loc=make_edge_span(tmp_path)),
+                            loc=make_edge_span(tmp_path),
+                        ),
+                    ],
+                ),
+                optimize_spans=[OptimizeSpan("prompt", loc=make_edge_span(tmp_path))],
+                loc=make_edge_span(tmp_path),
+            )
+        ],
+        evals=[
+            EvalSuite(
+                "outer",
+                datasets={"train": EvalDataset("train", "[]", loc=make_edge_span(tmp_path))},
+                test_datasets={
+                    "holdout": EvalDataset("holdout", "[]", loc=make_edge_span(tmp_path))
+                },
+                metrics=[EvalMetric("score", "return 1", loc=make_edge_span(tmp_path))],
+                loc=make_edge_span(tmp_path),
+            )
+        ],
+        tests=[
+            TestSuite(
+                "outer",
+                [TestCase("basic", "assert True", loc=make_edge_span(tmp_path))],
+                loc=make_edge_span(tmp_path),
+            )
+        ],
+    )
     proc_symbol = features._proc_symbol(program.procedures[0])
     assert proc_symbol.children
     assert any(child.name == "inner" for child in proc_symbol.children)
@@ -483,6 +650,8 @@ def test_lsp_symbol_resolution_helper_edges(tmp_path, monkeypatch):
     assert test_symbol.children is not None
     assert test_symbol.children[0].name == "basic"
 
+
+def test_range_and_overlap_helpers() -> None:
     assert features._empty_range().start.line == 0
     assert features._resolve_overlaps([]) == []
     assert features._resolve_overlaps([(0, -2, 1, 1, 0), (0, 0, 1, 2, 0)])

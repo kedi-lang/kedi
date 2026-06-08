@@ -200,7 +200,7 @@ class CodegenManager:
                 # Implementation compiled, run tests
                 test_run_error = self.run_tests_and_get_errors(source_path)
                 if not test_run_error:
-                    self._reporter.emit(" ✓\n", flush=True)
+                    self._reporter.emit(" ✓", flush=True)
                     impl_success = True
                     break
 
@@ -212,7 +212,7 @@ class CodegenManager:
             # Implementation failed all attempts, prepare feedback for next stage
             test_error_feedback = f"Previous tests may have been too strict or incorrect.\nLast implementation error: {impl_error_feedback}"
 
-        self._reporter.emit(" ✗\n", flush=True)
+        self._reporter.emit(" ✗", flush=True)
         # Clean up failed cache - don't persist code that doesn't pass tests
         self.cleanup_failed_cache(source_path)
         return False

@@ -491,10 +491,18 @@ def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
     calls: list[tuple[Path, str, str, str, bool, int]] = []
 
     class FakeManager:
-        def __init__(self, agent: object, config: object, *, use_cache: bool) -> None:
+        def __init__(
+            self,
+            agent: object,
+            config: object,
+            *,
+            use_cache: bool,
+            reporter: object | None = None,
+        ) -> None:
             self.agent = agent
             self.config = config
             self.use_cache = use_cache
+            self.reporter = reporter
 
         def orchestrate_generation(
             self,

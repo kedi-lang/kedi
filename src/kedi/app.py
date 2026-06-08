@@ -96,6 +96,7 @@ def run_optimization_cli(
     adapter_model: str | None = None,
     optimizer_fresh: bool = False,
     runtime_args: CliArgs | None = None,
+    quiet: bool = False,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
 
@@ -213,8 +214,14 @@ def run_optimization_cli(
     # Get optimizer instance
     if optimizer == "gepa":
         from .optimization.gepa import GEPAOptimizer
+        from .reporter import CliReporter
 
-        opt = GEPAOptimizer(config=config, runtime=rt, source_path=source_path)
+        opt = GEPAOptimizer(
+            config=config,
+            runtime=rt,
+            source_path=source_path,
+            reporter=CliReporter(quiet=quiet),
+        )
     else:
         opt = get_optimizer(optimizer)
 
@@ -313,6 +320,7 @@ def run_evals_cli(
     optimize: bool = False,
     use_cache: bool = True,
     runtime_args: CliArgs | None = None,
+    quiet: bool = False,
 ) -> Tuple[int, str]:
     """Run eval suites. Set ``optimize=True`` only when not calling ``run_optimization_cli`` first
     (e.g. programmatic API). The CLI runs optimization in ``run_optimization_cli`` and passes
@@ -332,12 +340,13 @@ def run_evals_cli(
             adapter=adapter,
             adapter_model=adapter_model,
             runtime_args=runtime_args,
+            quiet=quiet,
         )
         if code != 0:
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model)
+    ok, err = maybe_run_codegen(source, model=codegen_model, quiet=quiet)
     if not ok:
         return 1, (err or "Code generation failed")
 
@@ -362,6 +371,7 @@ def maybe_run_codegen(
     model: str | None = None,
     retries: int | None = None,
     use_cache: bool = True,
+    quiet: bool = False,
 ) -> Tuple[bool, str | None]:
     try:
         root = Path(source_path).resolve()
@@ -388,6 +398,7 @@ def maybe_run_codegen(
             model=model,
             max_retries=max_retries,
             use_cache=use_cache,
+            quiet=quiet,
         )
         if not ok:
             return False, "Code generation failed to produce passing tests."

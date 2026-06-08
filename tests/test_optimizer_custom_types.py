@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
 from pydantic import BaseModel
 
 from kedi.lang import compile_program, parse_program
 from kedi.optimization.services import OptimizationDataLoader, TypeResolver
 from tests.optimization_helpers import parse_validation_program
 
-PYDANTIC_AVAILABLE = True
-
-
 # ==================== Pydantic Model Tests ====================
 
 
-@pytest.mark.skipif(not PYDANTIC_AVAILABLE, reason="Pydantic not available")
 def test_pydantic_input_output():
     """Test optimizer with Pydantic model inputs and outputs."""
 
@@ -45,7 +40,6 @@ def test_pydantic_input_output():
     assert "person" in param_types or len(param_types) >= 0  # Type resolution may vary
 
 
-@pytest.mark.skipif(not PYDANTIC_AVAILABLE, reason="Pydantic not available")
 def test_pydantic_in_dataset():
     """Test loading data with Pydantic models."""
 

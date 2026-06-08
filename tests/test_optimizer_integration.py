@@ -5,8 +5,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from kedi.lang import compile_program, parse_program
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
@@ -18,8 +16,6 @@ from kedi.optimization.services import (
     TypeResolver,
 )
 from tests.optimization_helpers import parse_validation_program
-
-GEPA_AVAILABLE = True
 
 
 def test_mock_optimizer_end_to_end():
@@ -207,7 +203,6 @@ def test_type_resolution_integration():
     assert len(result) == 2
 
 
-@pytest.mark.skipif(not GEPA_AVAILABLE, reason="GEPA optimizer not available")
 def test_gepa_optimizer_integration_setup():
     """Test GEPA optimizer can be instantiated and configured."""
     config = OptimizerConfig(

@@ -142,6 +142,8 @@ def test_utils_parse_args_and_attrdict() -> None:
     assert plain.present == "ok"
     with pytest.raises(AttributeError):
         _ = plain.missing
+    with pytest.raises(AttributeError):
+        _ = plain.__deepcopy__
 
     copied = copy.copy(AttrDict())
     with pytest.raises(AttributeError):

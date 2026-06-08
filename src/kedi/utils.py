@@ -16,6 +16,8 @@ class AttrDict(dict[K, V]):
         self._default = default
 
     def __getattr__(self, key: str) -> V:
+        if key.startswith("__") and key.endswith("__"):
+            raise AttributeError(key)
         if key in self:
             return super().__getitem__(cast(K, key))
         default = self.__dict__.get("_default", _MISSING)

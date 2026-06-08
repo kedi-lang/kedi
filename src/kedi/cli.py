@@ -125,6 +125,11 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     help="For GEPA: delete .optimized.json, scores, and checkpoint dir so optimization starts from the source template only",
 )
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
+@click.option(
+    "--quiet",
+    is_flag=True,
+    help="Suppress progress output from codegen and GEPA optimization",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -147,6 +152,7 @@ def main(
     optimize: bool = False,
     optimizer_fresh: bool = False,
     no_cache: bool = False,
+    quiet: bool = False,
 ):
     try:
         with open(source, "r", encoding="utf-8") as f:
@@ -172,6 +178,7 @@ def main(
                 adapter_model=adapter_model,
                 optimizer_fresh=optimizer_fresh,
                 runtime_args=runtime_args,
+                quiet=quiet,
             )
             if msg:
                 if code != 0:
@@ -209,6 +216,7 @@ def main(
                     optimize=False,
                     use_cache=not no_cache,
                     runtime_args=runtime_args,
+                    quiet=quiet,
                 )
                 if out:
                     if code != 0:
@@ -226,6 +234,7 @@ def main(
             model=codegen_model,
             retries=codegen_retries,
             use_cache=not no_cache,
+            quiet=quiet,
         )
         if not ok:
             click.echo(err or "Code generation failed.", err=True)
