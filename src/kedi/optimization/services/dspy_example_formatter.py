@@ -8,8 +8,7 @@ import dspy
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
-
-DSPY_AVAILABLE = True
+from ...reporter import NullReporter, Reporter
 
 
 class DSPyExampleFormatter:
@@ -20,13 +19,14 @@ class DSPyExampleFormatter:
     computes span-level inputs from procedure parameters.
     """
 
-    def __init__(self, runtime: KediRuntime):
+    def __init__(self, runtime: KediRuntime, *, reporter: Reporter | None = None):
         """Initialize formatter with runtime for span input computation.
 
         Args:
             runtime: Kedi runtime for executing procedures to get span inputs
         """
         self.runtime = runtime
+        self._reporter = reporter or NullReporter()
 
     def format_examples(
         self,
@@ -47,9 +47,6 @@ class DSPyExampleFormatter:
             List of dspy.Example objects with span input fields (if span provided)
             or procedure parameter fields (fallback)
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required for DSPyExampleFormatter")
-
         examples = []
         total = len(data)
 
@@ -71,7 +68,7 @@ class DSPyExampleFormatter:
             if span and proc_name:
                 span_inputs = self._compute_span_inputs(span, proc_name, proc_input_dict)
                 if idx == 1 or idx % 5 == 0 or idx == total:
-                    print(f"   Formatting example {idx}/{total}...", flush=True)
+                    self._reporter.emit(f"   Formatting example {idx}/{total}...", flush=True)
                 input_fields = list(span_inputs.keys())
             else:
                 # Fallback: use procedure parameters

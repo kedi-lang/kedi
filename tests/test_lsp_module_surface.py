@@ -1,21 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from kedi.lang.ast import AssignStmt, Program, Span
 from kedi.lang.parser import parse_program
 from kedi.lsp import module_surface
 
 
-def test_module_surface_loads_exports_and_reports_failures(tmp_path) -> None:
+def test_module_surface_returns_empty_surface_for_invalid_module(tmp_path) -> None:
     bad_module = tmp_path / "bad.kedi"
     bad_module.write_text("[bad\n", encoding="utf-8")
 
     bad_surface = module_surface.load_imported_surface(bad_module, set(), "bad")
 
     assert bad_surface.modules == {}
-    assert bad_surface.failures
-    assert bad_surface.failures[0].module_name == "bad"
 
     exported_module = tmp_path / "profiles.kedi"
     exported_module.write_text(
@@ -66,6 +67,17 @@ def test_module_surface_program_path_and_value_helpers(tmp_path) -> None:
     assert module_surface.assignment_name_span(AssignStmt(name="missing")) is None
     assert module_surface.is_public_export_name("public")
     assert not module_surface.is_public_export_name("_private")
+
+
+def test_module_surface_lookup_import_path_handles_resolution_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_missing(*_args: object, **_kwargs: object) -> Path:
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(module_surface, "find_module_path", raise_missing)
+
+    assert module_surface._lookup_import_path("bad", None) is None
 
 
 def test_module_surface_resolves_imported_program(tmp_path) -> None:

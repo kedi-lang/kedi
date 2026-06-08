@@ -24,7 +24,7 @@ from kedi.codegen.translator import (
     python_impl_to_kedi_impl,
     python_tests_to_kedi_tests,
 )
-from kedi.console import KediConsole
+from kedi.reporter import BufferReporter, CliReporter, NullReporter
 from kedi.lang.ast import ProcedureDef, TypeDef, TypeField
 from kedi.tests_runner import TestCaseResult as KediTestCaseResult
 from kedi.tests_runner import TestRunResult as KediTestRunResult
@@ -43,55 +43,39 @@ def test_codegen_cache_paths(tmp_path: Path) -> None:
     assert not CodegenManager(MockPassingAgent(), use_cache=False).is_cached(src, "foo")
 
 
-def test_kedi_console_semantic_helpers_render_without_markup() -> None:
-    buffer = StringIO()
-    console = KediConsole(file=buffer, force_terminal=False, color_system=None)
+def test_buffer_reporter_captures_emit_and_progress() -> None:
+    reporter = BufferReporter()
+    reporter.emit("GEPA span 1/2")
+    reporter.emit("count: 2", end="")
+    reporter.progress_char()
+    reporter.emit("done")
 
-    console.banner("GEPA span 1/2")
-    console.section("datasets")
-    console.section("no rule", rule="")
-    console.detail("count: 2")
-    console.inline("working", end="", flush=True)
-    console.progress_char()
-    console.ok("done")
-    console.warn("careful")
-    console.fail("stop")
-
-    output = buffer.getvalue()
+    output = reporter.getvalue()
     assert "GEPA span 1/2" in output
-    assert "datasets" in output
-    assert "no rule" in output
     assert "count: 2" in output
-    assert "working" in output
     assert "." in output
-    assert "✓ done" in output
-    assert "⚠ careful" in output
-    assert "✗ stop" in output
+    assert "done" in output
 
 
-def test_kedi_console_uses_plain_output_defaults() -> None:
+def test_cli_reporter_writes_plain_text() -> None:
     buffer = StringIO()
-    console = KediConsole(file=buffer, force_terminal=False, color_system=None)
-
-    console.print("[green]plain[/green]", end="")
-
+    reporter = CliReporter(file=buffer)
+    reporter.emit("[green]plain[/green]", end="")
     assert buffer.getvalue() == "[green]plain[/green]"
 
 
-def test_kedi_console_quiet_mode_suppresses_semantic_output() -> None:
+def test_cli_reporter_quiet_mode_suppresses_output() -> None:
     buffer = StringIO()
-    console = KediConsole(file=buffer, force_terminal=False, color_system=None, quiet=True)
-
-    console.banner("hidden")
-    console.section("hidden", rule="")
-    console.detail("hidden")
-    console.progress_char()
-    console.inline("hidden", end="", flush=True)
-    console.ok("hidden")
-    console.warn("hidden")
-    console.fail("hidden")
-
+    reporter = CliReporter(quiet=True, file=buffer)
+    reporter.emit("hidden")
+    reporter.progress_char()
     assert buffer.getvalue() == ""
+
+
+def test_null_reporter_discards_emit_and_progress() -> None:
+    reporter = NullReporter()
+    reporter.emit("hidden")
+    reporter.progress_char()
 
 
 def test_codegen_translator_covers_signature_type_test_and_impl_shapes() -> None:

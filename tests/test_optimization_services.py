@@ -11,7 +11,7 @@ import dspy
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import EvalSuite, ProcedureDef, ProgramWithValidation
+from kedi.lang.ast import EvalSuite, ProcedureDef
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import (
     DSPyConfigurationService,
@@ -28,14 +28,7 @@ from kedi.optimization.services import (
 )
 from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
 from kedi.optimization.utils import extract_output_fields
-
-DSPY_AVAILABLE = True
-
-
-def _parse_validation_program(src: str) -> ProgramWithValidation:
-    prog = parse_program(src)
-    assert isinstance(prog, ProgramWithValidation)
-    return prog
+from tests.optimization_helpers import parse_validation_program
 
 
 # ==================== OptimizationDataLoader Tests ====================
@@ -53,7 +46,7 @@ def test_data_loader_single_param():
     return [(1, 2), (2, 4), (3, 6)]
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -78,7 +71,7 @@ def test_data_loader_multi_param():
     return [((1, 2), 3), ((2, 3), 5), ((3, 4), 7)]
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -105,7 +98,7 @@ def test_data_loader_test_data():
     return [(4, 8), (5, 10)]
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -134,7 +127,7 @@ def test_data_loader_dict_format():
     return {"a": 2, "b": 4, "c": 6}
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -160,7 +153,7 @@ def test_data_loader_errors_inline_data_and_tuple_normalization():
   > test_data: broken_tests:
     = `1 / 0`
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
     loader = OptimizationDataLoader(rt)
     eval_suite = prog.evals[0]
@@ -209,7 +202,7 @@ def test_metric_factory_simple_metric():
     return (1.0 if result == expected else 0.0, None)
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -248,7 +241,7 @@ def test_metric_factory_with_feedback():
         return (0.0, f"Expected {expected}, got {result}")
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -280,7 +273,7 @@ def test_metric_factory_bool_return():
     return result == expected
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -562,7 +555,10 @@ def test_program_loader_normalizes_polluted_optimized_prompt():
         assert span.template_lines[0].optimized_prompt_prefix == "Use exact IDs only."
 
 
-def test_program_loader_debug_output_shows_before_and_after_injection(capsys):
+def test_program_loader_debug_output_shows_before_and_after_injection() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
     with tempfile.TemporaryDirectory() as tmpdir:
         source_path = Path(tmpdir) / "test.kedi"
         source_path.write_text(
@@ -580,18 +576,21 @@ def test_program_loader_debug_output_shows_before_and_after_injection(capsys):
             encoding="utf-8",
         )
 
-        program = load_program_with_optimized_prompts(source_path, debug=True)
+        program = load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
 
-        captured = capsys.readouterr()
-        assert "[DEBUG] Checking for optimized prompts: True" in captured.err
-        assert "[DEBUG] BEFORE injection - solve::solver:" in captured.err
-        assert "[DEBUG] AFTER injection - solve::solver:" in captured.err
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: True" in output
+        assert "[DEBUG] BEFORE injection - solve::solver:" in output
+        assert "[DEBUG] AFTER injection - solve::solver:" in output
         assert program.procedures[0].optimize_spans[0].template_lines[
             0
         ].optimized_prompt_prefix == ("Use a direct numeric answer.")
 
 
-def test_program_loader_debug_output_without_optimized_prompts(capsys):
+def test_program_loader_debug_output_without_optimized_prompts() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
     with tempfile.TemporaryDirectory() as tmpdir:
         source_path = Path(tmpdir) / "test.kedi"
         source_path.write_text(
@@ -601,15 +600,18 @@ def test_program_loader_debug_output_without_optimized_prompts(capsys):
 """.strip()
         )
 
-        load_program_with_optimized_prompts(source_path, debug=True)
+        load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
 
-        captured = capsys.readouterr()
-        assert "[DEBUG] Checking for optimized prompts: False" in captured.err
-        assert "BEFORE injection" not in captured.err
-        assert "AFTER injection" not in captured.err
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: False" in output
+        assert "BEFORE injection" not in output
+        assert "AFTER injection" not in output
 
 
-def test_program_loader_debug_output_with_stale_optimized_prompts(capsys):
+def test_program_loader_debug_output_with_stale_optimized_prompts() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
     with tempfile.TemporaryDirectory() as tmpdir:
         source_path = Path(tmpdir) / "test.kedi"
         source_path.write_text(
@@ -624,19 +626,18 @@ def test_program_loader_debug_output_with_stale_optimized_prompts(capsys):
             encoding="utf-8",
         )
 
-        load_program_with_optimized_prompts(source_path, debug=True)
+        load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
 
-        captured = capsys.readouterr()
-        assert "[DEBUG] Checking for optimized prompts: True" in captured.err
-        assert "[DEBUG] Optimized path:" in captured.err
-        assert "BEFORE injection" not in captured.err
-        assert "AFTER injection" not in captured.err
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: True" in output
+        assert "[DEBUG] Optimized path:" in output
+        assert "BEFORE injection" not in output
+        assert "AFTER injection" not in output
 
 
 # ==================== StructuredTypeHandler Tests ====================
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_type_handler_simple_signature():
     """Test creating simple DSPy signature."""
     src = """
@@ -658,7 +659,6 @@ def test_type_handler_simple_signature():
     assert "result" in signature
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_type_handler_multi_output():
     """Test signature with multiple outputs."""
     src = "@test(x: int) -> int:\n  = `x * 2`"
@@ -679,7 +679,6 @@ def test_type_handler_multi_output():
 # ==================== DSPy-Dependent Service Tests ====================
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_module_builder_basic():
     """Test building a basic DSPy module."""
     src = """
@@ -702,7 +701,6 @@ def test_dspy_module_builder_basic():
     assert hasattr(module, "predictor")
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_single_param():
     """Test formatting examples with single parameter."""
     from kedi.lang import compile_program, parse_program
@@ -720,7 +718,6 @@ def test_dspy_example_formatter_single_param():
     assert examples[0]._expected == 2
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_multi_param():
     """Test formatting examples with multiple parameters."""
     from kedi.lang import compile_program, parse_program
@@ -739,7 +736,6 @@ def test_dspy_example_formatter_multi_param():
     assert examples[0]._expected == 3
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_gepa_metric_wrapper_basic():
     """Test wrapping a basic metric."""
     wrapper = GEPAMetricWrapper()
@@ -747,7 +743,7 @@ def test_gepa_metric_wrapper_basic():
     def simple_metric(input_val, expected):
         return (1.0 if input_val * 2 == expected else 0.0, None)
 
-    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"], [("result", "int")])
+    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"])
 
     # Create mock Example and Prediction
     gold = dspy.Example(x=2, _expected=4).with_inputs("x")
@@ -758,7 +754,6 @@ def test_gepa_metric_wrapper_basic():
     assert score == 1.0 or (hasattr(score, "score") and score.score == 1.0)
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_gepa_metric_wrapper_string_extraction():
     """Test metric wrapper with properly typed DSPy outputs."""
     wrapper = GEPAMetricWrapper()
@@ -770,7 +765,7 @@ def test_gepa_metric_wrapper_string_extraction():
         # (procedure override returns pred_output which equals expected)
         return (1.0 if expected == expected else 0.0, None)
 
-    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"], [("result", "int")])
+    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"])
 
     gold = dspy.Example(x=2, _expected=4).with_inputs("x")
     # DSPy returns properly typed outputs when using structured signatures
@@ -781,7 +776,6 @@ def test_gepa_metric_wrapper_string_extraction():
     assert (hasattr(result, "score") and result.score == 1.0) or result == 1.0
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_prompt_extractor():
     """Test extracting prompts from optimized module."""
     extractor = DSPyPromptExtractor()
@@ -810,7 +804,6 @@ def test_dspy_prompt_extractor():
     assert prompts[span.name] == "Optimized prompt: <x>"
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     """Extractor should persist only the optimized prefix, not prefix+base(+base)."""
     extractor = DSPyPromptExtractor()
@@ -840,7 +833,6 @@ def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     assert prompts[span.name] == "Use the exact identifier."
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_score_calculator():
     """Test calculating training scores."""
     calculator = DSPyScoreCalculator()
@@ -870,7 +862,6 @@ def test_dspy_score_calculator():
     assert score == 1.0
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_config_service_basic():
     """Test DSPy configuration service."""
     config = OptimizerConfig(

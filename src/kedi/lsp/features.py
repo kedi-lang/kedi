@@ -27,6 +27,7 @@ the server publishes as a semantic-tokens legend.
 from __future__ import annotations
 
 import ast as _py_ast
+from collections.abc import Callable, Sequence
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
@@ -92,14 +93,11 @@ from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
 from ..module_registry import describe_module_search_paths, module_search_paths
+from .ast_helpers import assignment_name_span
+from .ast_spans import name_token_span
 from .module_surface import (
-    ImportedSurface,
     ImportedValueInfo,
-    assignment_name_span,
-    extract_module_docstring,
     imported_surface_for_program,
-    is_public_export_name,
-    load_imported_surface,
     program_path,
     resolved_import_path,
     top_level_value_infos,
@@ -142,7 +140,7 @@ def _build_lsp_type_registry() -> dict[str, str]:
         if module is None:
             continue
         for name in getattr(module, "__all__", ()):
-            if not name.startswith("_") and hasattr(module, name):  # pragma: no branch
+            if not name.startswith("_") and hasattr(module, name):
                 registry.setdefault(name, origin)
     return registry
 
@@ -226,58 +224,16 @@ class SymbolRef:
     cursor_span: Span
 
 
-def _program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
-    return program_path(prog)
-
-
-def _resolved_import_path(
-    prog: Program | ProgramWithValidation, module_import_name: str
-) -> Optional[Path]:
-    return resolved_import_path(prog, module_import_name)
-
-
-def _assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
-    return assignment_name_span(stmt)
-
-
 def _output_name_span(seg: OutputSegment) -> Optional[Span]:
     if seg.loc is None:
         return None
-    name_start_col = seg.loc.start_col + 1  # skip '['
-    return Span(
-        start_byte=seg.loc.start_byte + 1,
-        end_byte=seg.loc.start_byte + 1 + len(seg.name),
-        start_line=seg.loc.start_line,
-        start_col=name_start_col,
-        end_line=seg.loc.start_line,
-        end_col=name_start_col + len(seg.name),
-        source_path=seg.loc.source_path,
-    )
+    return name_token_span(seg.loc, seg.name, prefix_len=1)
 
 
 def _input_name_span(seg: InputSegment) -> Optional[Span]:
     if seg.loc is None:
         return None
-    name_start_col = seg.loc.start_col + 1  # skip '<'
-    return Span(
-        start_byte=seg.loc.start_byte + 1,
-        end_byte=seg.loc.start_byte + 1 + len(seg.name),
-        start_line=seg.loc.start_line,
-        start_col=name_start_col,
-        end_line=seg.loc.start_line,
-        end_col=name_start_col + len(seg.name),
-        source_path=seg.loc.source_path,
-    )
-
-
-def _top_level_value_infos(
-    prog: Program | ProgramWithValidation,
-) -> dict[str, ImportedValueInfo]:
-    return top_level_value_infos(prog)
-
-
-def _is_public_export_name(name: str) -> bool:
-    return is_public_export_name(name)
+    return name_token_span(seg.loc, seg.name, prefix_len=1)
 
 
 def _program_line_text(
@@ -295,10 +251,6 @@ def _program_line_text(
         if path:
             return source_map.get_line(path, line_number)
     return None
-
-
-def _extract_module_docstring(source: str) -> Optional[str]:
-    return extract_module_docstring(source)
 
 
 def _import_name_span(
@@ -358,23 +310,9 @@ def _exported_name_at_position(
             end_col=start_col + len(export_name),
             source_path=export.loc.source_path,
         )
-        if _position_inside(pos, span):  # pragma: no branch
+        if _position_inside(pos, span):
             return export_name, span
     return None
-
-
-def _imported_surface_for_program(
-    prog: Program | ProgramWithValidation,
-) -> ImportedSurface:
-    return imported_surface_for_program(prog)
-
-
-def _load_imported_surface(
-    path: Path,
-    seen: set[Path],
-    module_name: Optional[str] = None,
-) -> ImportedSurface:
-    return load_imported_surface(path, seen, module_name)
 
 
 def _missing_import_diagnostics(
@@ -382,13 +320,13 @@ def _missing_import_diagnostics(
 ) -> List[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     for module_import in getattr(prog, "imports", []):
-        module_path = _resolved_import_path(prog, module_import.module)
+        module_path = resolved_import_path(prog, module_import.module)
         if module_path is not None:
             continue
         span = _import_name_span(prog, module_import) or module_import.loc
         if span is None:
             continue
-        paths = module_search_paths(module_import.module, source_path=_program_path(prog))
+        paths = module_search_paths(module_import.module, source_path=program_path(prog))
         diagnostics.append(
             lsp.Diagnostic(
                 range=_span_to_range(span),
@@ -408,12 +346,12 @@ def _resolve_symbol_at(
     prog: Union[Program, ProgramWithValidation], pos: lsp.Position
 ) -> Optional[SymbolRef]:
     """Identify what the cursor is on. Returns ``None`` if nothing useful."""
-    imported_surface = _imported_surface_for_program(prog)
+    imported_surface = imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
     proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
     type_by_name.update(imported_surface.types)
-    top_level_values = _top_level_value_infos(prog)
+    top_level_values = top_level_value_infos(prog)
 
     for module_import in getattr(prog, "imports", []):
         name_span = _import_name_span(prog, module_import)
@@ -458,7 +396,7 @@ def _resolve_symbol_at(
                 scope_proc=None,
                 cursor_span=export_span,
             )
-        if export_name in imported_surface.values:  # pragma: no branch
+        if export_name in imported_surface.values:
             target = imported_surface.values[export_name]
             return SymbolRef(
                 kind="imported_value",
@@ -609,7 +547,7 @@ def _resolve_in_stmt(
         return None
     # AssignStmt / AssignBlockStmt target name
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
-        name_span = _assignment_name_span(stmt)
+        name_span = assignment_name_span(stmt)
         if name_span is not None and _position_inside(pos, name_span):
             return SymbolRef(
                 kind="local",
@@ -743,7 +681,7 @@ def _resolve_in_segment(
                 cursor_span=name_span,
             )
         # type annotation
-        if seg.type_expr is not None:  # pragma: no branch
+        if seg.type_expr is not None:
             r = _resolve_in_type_expr(seg.type_expr, pos, type_by_name)
             if r is not None:
                 return r
@@ -844,7 +782,7 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
         return None
     for stmt in proc.body:
         if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
-            return _assignment_name_span(stmt)
+            return assignment_name_span(stmt)
         for seg in _segments_of(stmt):
             if isinstance(seg, OutputSegment) and seg.name == name:
                 return _output_name_span(seg)
@@ -898,7 +836,7 @@ def compute_hover(
         return _generic_hover(prog, pos)
 
     range_ = _span_to_range(sym.cursor_span)
-    imported_surface = _imported_surface_for_program(prog)
+    imported_surface = imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
     proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
@@ -1280,10 +1218,10 @@ def _prelude_defined_names(code: str | None) -> set[str]:
         elif isinstance(stmt, (_py_ast.Import, _py_ast.ImportFrom)):
             for alias in stmt.names:
                 names.add(alias.asname or alias.name.split(".")[-1])
-        elif isinstance(stmt, (_py_ast.Assign, _py_ast.AnnAssign)):  # pragma: no branch
+        elif isinstance(stmt, (_py_ast.Assign, _py_ast.AnnAssign)):
             targets = stmt.targets if isinstance(stmt, _py_ast.Assign) else [stmt.target]
             for target in targets:
-                if isinstance(target, _py_ast.Name):  # pragma: no branch
+                if isinstance(target, _py_ast.Name):
                     names.add(target.id)
     return names
 
@@ -1313,7 +1251,7 @@ def compute_definition(
     if sym is None or sym.declaration_span is None:
         return None
     target_uri = uri
-    if sym.declaration_span.source_path:  # pragma: no branch
+    if sym.declaration_span.source_path:
         decl_path = Path(sym.declaration_span.source_path).resolve()
         if source_path is None or decl_path != Path(source_path).resolve():
             target_uri = decl_path.as_uri()
@@ -1382,7 +1320,7 @@ def _find_all_references(
         "param_decl",
         "local",
         "output_decl",
-    ):  # pragma: no branch
+    ):
         if sym.scope_proc is not None:
             for stmt in sym.scope_proc.body:
                 for seg in _segments_of(stmt):
@@ -1633,7 +1571,7 @@ def compute_signature_help(
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
         return None
-    imported_surface = _imported_surface_for_program(prog)
+    imported_surface = imported_surface_for_program(prog)
     proc_by_name = {p.name: p for p in _all_procedures(prog)}
     proc_by_name.update(imported_surface.procedures)
 
@@ -1644,11 +1582,11 @@ def compute_signature_help(
             continue
         for stmt in proc.body:
             call = _innermost_call_at(stmt, pos)
-            if call is not None:  # pragma: no branch
+            if call is not None:
                 target_call = call
     for stmt in prog.toplevel_body:
         call = _innermost_call_at(stmt, pos)
-        if call is not None:  # pragma: no branch
+        if call is not None:
             target_call = call
     if prog.toplevel_return is not None:
         call = _innermost_call_at(prog.toplevel_return, pos)
@@ -1714,7 +1652,7 @@ def _innermost_call_in_segment(seg, pos: lsp.Position) -> Optional[CallSegment]:
                 inner = getattr(arg, attr, None)
                 if inner is not None:
                     r = _innermost_call_in_segment(inner, pos)
-                    if r is not None:  # pragma: no branch
+                    if r is not None:
                         deepest = r
             for inner in getattr(arg, "__render_segments__", None) or []:
                 r = _innermost_call_in_segment(inner, pos)
@@ -1763,7 +1701,7 @@ def compute_inlay_hints(
     def visit_segment(seg, enclosing_proc: Optional[ProcedureDef]) -> None:
         if isinstance(seg, CallSegment):
             target = proc_by_name.get(seg.name)
-            if target is not None and seg.args and target.params:  # pragma: no branch
+            if target is not None and seg.args and target.params:
                 for i, arg in enumerate(seg.args):
                     if i >= len(target.params):
                         break
@@ -2125,7 +2063,7 @@ def _procedure_docstring_nodes(root: Node) -> List[Node]:
     def visit(node: Node) -> None:
         if node.type == "procedure_def":
             body = node.child_by_field_name("body")
-            if body is not None:  # pragma: no branch
+            if body is not None:
                 named = [child for child in body.children if child.is_named]
                 if named and named[0].type == "block_comment":
                     out.append(named[0])
@@ -2135,6 +2073,43 @@ def _procedure_docstring_nodes(root: Node) -> List[Node]:
 
     visit(root)
     return out
+
+
+def _python_code_lines(text: str) -> list[str]:
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    return lines
+
+
+def _emit_token_spans_for_range(
+    *,
+    src_lines: Sequence[str],
+    emit: Callable[[int, int, int, int, int], None],
+    start_line: int,
+    start_col: int,
+    end_line: int,
+    end_col: int,
+    token_type: int,
+    token_mods: int,
+) -> None:
+    """Emit one or more LSP semantic-token spans for a possibly multi-line range."""
+    if start_line == end_line:
+        emit(start_line, start_col, end_col - start_col, token_type, token_mods)
+        return
+    if start_line < len(src_lines):
+        emit(
+            start_line,
+            start_col,
+            max(0, len(src_lines[start_line]) - start_col),
+            token_type,
+            token_mods,
+        )
+    for line_idx in range(start_line + 1, end_line):
+        if line_idx < len(src_lines):
+            emit(line_idx, 0, len(src_lines[line_idx]), token_type, token_mods)
+    if end_col > 0 and end_line < len(src_lines):
+        emit(end_line, 0, end_col, token_type, token_mods)
 
 
 def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp.SemanticTokens:
@@ -2178,7 +2153,7 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
 
     def in_python_region(node: Node) -> bool:
         for s, e in python_byte_ranges:
-            if node.start_byte >= s and node.end_byte <= e:  # pragma: no branch
+            if node.start_byte >= s and node.end_byte <= e:
                 return True
         return False
 
@@ -2205,26 +2180,19 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
         kedi_sc = (base_col + sc) if sl == 0 else sc
         kedi_el = base_line + el
         kedi_ec = (base_col + ec) if el == 0 else ec
-        if kedi_sl == kedi_el:
-            emit(kedi_sl, kedi_sc, kedi_ec - kedi_sc, ttype, mods)
-            return
-        # Multi-line: split per line so the LSP spec is satisfied.
-        if kedi_sl < len(src_lines):  # pragma: no branch
-            emit(
-                kedi_sl,
-                kedi_sc,
-                max(0, len(src_lines[kedi_sl]) - kedi_sc),
-                ttype,
-                mods,
-            )
-        for li in range(kedi_sl + 1, kedi_el):
-            if li < len(src_lines):  # pragma: no branch
-                emit(li, 0, len(src_lines[li]), ttype, mods)
-        if kedi_ec > 0 and kedi_el < len(src_lines):  # pragma: no branch
-            emit(kedi_el, 0, kedi_ec, ttype, mods)
+        _emit_token_spans_for_range(
+            src_lines=src_lines,
+            emit=emit,
+            start_line=kedi_sl,
+            start_col=kedi_sc,
+            end_line=kedi_el,
+            end_col=kedi_ec,
+            token_type=ttype,
+            token_mods=mods,
+        )
 
     # ---- 1. Kedi tokens via highlights.scm ----------------------------
-    if _KEDI_HIGHLIGHTS_QUERY is not None:  # pragma: no branch
+    if _KEDI_HIGHLIGHTS_QUERY is not None:
         _emit_query_captures(
             _KEDI_HIGHLIGHTS_QUERY,
             tree.root_node,
@@ -2234,7 +2202,7 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
             skip_if=lambda node: in_python_region(node) or in_docstring_region(node),
         )
     docstring_token = _capture_to_token("variable")
-    if docstring_token is not None:  # pragma: no branch
+    if docstring_token is not None:
         ttype, mods = docstring_token
         for node in docstring_nodes:
             emit_node(node, ttype, mods)
@@ -2407,10 +2375,7 @@ def _collect_python_ranges(
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
             from ..lang.parser.escapes import dedent_block
 
-            lines = text.split("\n")
-            if lines and lines[-1] == "":  # pragma: no branch
-                lines = lines[:-1]
-            dedented = "\n".join(dedent_block(lines))
+            dedented = "\n".join(dedent_block(_python_code_lines(text)))
             out.append(
                 {
                     "kind": "fenced",

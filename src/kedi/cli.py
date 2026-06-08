@@ -195,9 +195,7 @@ def main(
                 if code != 0:
                     ctx.exit(code)
                 return code
-            if (
-                do_eval
-            ):  # pragma: no branch - enclosing condition guarantees this when --test is false.
+            else:
                 # Optimization is handled above by run_optimization_cli when --optimize is set.
                 # Do not pass optimize=True here or GEPA would run twice with default budget/model.
                 code, out = run_evals_cli(

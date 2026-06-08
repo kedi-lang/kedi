@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from ...lang import Program, parse_program
+from ...reporter import CliReporter, NullReporter, Reporter
 from ...source_loading import load_kedi_source_bundle
 from .prompt_loader import OptimizedPromptLoader
 
@@ -14,6 +15,7 @@ def load_program_with_optimized_prompts(
     source_path: Path,
     *,
     debug: bool = False,
+    reporter: Reporter | None = None,
 ) -> Program:
     """Load and parse a program, injecting optimized prompts if available.
 
@@ -27,11 +29,14 @@ def load_program_with_optimized_prompts(
 
     Args:
         source_path: Path to the .kedi source file
-        debug: If True, print debug information about prompt injection
+        debug: If True, emit debug information about prompt injection
+        reporter: Optional reporter for debug output (defaults to stderr)
 
     Returns:
         Parsed Program object with optimized prompts injected (if available)
     """
+    _reporter = NullReporter() if not debug else (reporter or CliReporter(file=sys.stderr))
+
     loaded = load_kedi_source_bundle(source_path)
     program = parse_program(
         loaded.text,
@@ -44,42 +49,35 @@ def load_program_with_optimized_prompts(
 
     if debug:
         has_prompts = prompt_loader.has_optimized_prompts()
-        print(f"[DEBUG] Checking for optimized prompts: {has_prompts}", file=sys.stderr)
+        _reporter.emit(f"[DEBUG] Checking for optimized prompts: {has_prompts}")
         if has_prompts:
-            print(
-                f"[DEBUG] Optimized path: {prompt_loader.optimized_path}",
-                file=sys.stderr,
-            )
+            _reporter.emit(f"[DEBUG] Optimized path: {prompt_loader.optimized_path}")
 
     if prompt_loader.has_optimized_prompts():
         if debug:
-            # Show prompts before injection
             from ..utils import span_to_instruction
 
             for proc in program.procedures:
                 if proc.optimize_spans:
                     for span in proc.optimize_spans:
                         original = span_to_instruction(span)
-                        print(
+                        _reporter.emit(
                             f"[DEBUG] BEFORE injection - {proc.name}::{span.name}: "
-                            f"{original[:80]}...",
-                            file=sys.stderr,
+                            f"{original[:80]}..."
                         )
 
         prompt_loader.inject_optimized_prompts(program)
 
         if debug:
-            # Verify injection happened
             from ..utils import span_to_instruction
 
             for proc in program.procedures:
                 if proc.optimize_spans:
                     for span in proc.optimize_spans:
                         injected = span_to_instruction(span)
-                        print(
+                        _reporter.emit(
                             f"[DEBUG] AFTER injection - {proc.name}::{span.name}: "
-                            f"{injected[:80]}...",
-                            file=sys.stderr,
+                            f"{injected[:80]}..."
                         )
 
     return program

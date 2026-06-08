@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
+from .optimization.utils import normalize_metric_result
 from .source_loading import load_kedi_source_bundle
 
 
@@ -91,25 +92,17 @@ def run_tests(
             if runtime_globals:
                 rt.set_initial_globals(runtime_globals)
         except Exception:
-            # Fallback to original loading method
-            if runtime_globals is None:
-                rt = _load_program_with_validations(src_main, adapter=adapter)
-            else:
-                rt = _load_program_with_validations(
-                    src_main,
-                    adapter=adapter,
-                    runtime_globals=runtime_globals,
-                )
-    else:
-        # Source code string - use original loading method
-        if runtime_globals is None:
-            rt = _load_program_with_validations(src_main, adapter=adapter)
-        else:
             rt = _load_program_with_validations(
                 src_main,
                 adapter=adapter,
                 runtime_globals=runtime_globals,
             )
+    else:
+        rt = _load_program_with_validations(
+            src_main,
+            adapter=adapter,
+            runtime_globals=runtime_globals,
+        )
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -169,25 +162,17 @@ def run_evals(
             if runtime_globals:
                 rt.set_initial_globals(runtime_globals)
         except Exception:
-            # Fallback to original loading method if optimized prompt loading fails
-            if runtime_globals is None:
-                rt = _load_program_with_validations(src_main, adapter=adapter)
-            else:
-                rt = _load_program_with_validations(
-                    src_main,
-                    adapter=adapter,
-                    runtime_globals=runtime_globals,
-                )
-    else:
-        # Source code string - use original loading method
-        if runtime_globals is None:
-            rt = _load_program_with_validations(src_main, adapter=adapter)
-        else:
             rt = _load_program_with_validations(
                 src_main,
                 adapter=adapter,
                 runtime_globals=runtime_globals,
             )
+    else:
+        rt = _load_program_with_validations(
+            src_main,
+            adapter=adapter,
+            runtime_globals=runtime_globals,
+        )
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
 
@@ -263,13 +248,7 @@ def run_evals(
                         val = _execute_python_block(m.code, rt, {})
                     else:
                         val = _eval_python_inline(rt, m.code, {})
-                    if isinstance(val, tuple) and len(val) == 2:
-                        score = float(val[0])
-                        feedback = None if val[1] is None else str(val[1])
-                    elif isinstance(val, tuple):
-                        raise TypeError("Metric tuple result must be (score, feedback)")
-                    else:
-                        score = float(val)
+                    score, feedback = normalize_metric_result(val)
                 except Exception as e:
                     score = 0.0
                     feedback = f"error: {e}"
@@ -336,18 +315,7 @@ def run_evals(
                             else:
                                 val = _eval_python_inline(rt, m.code, metric_env)
 
-                            # Process result
-                            if isinstance(val, bool):
-                                score_val = 1.0 if val else 0.0
-                                feedback_val = None
-                            elif isinstance(val, tuple) and len(val) == 2:
-                                score_val = float(val[0])
-                                feedback_val = None if val[1] is None else str(val[1])
-                            elif isinstance(val, tuple):
-                                raise TypeError("Metric tuple result must be (score, feedback)")
-                            else:
-                                score_val = float(val)
-                                feedback_val = None
+                            score_val, feedback_val = normalize_metric_result(val)
 
                             eval_scores.append(score_val)
                             if feedback_val:

@@ -29,13 +29,13 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
     rt = core.KediRuntime(adapter=MockAdapter())
 
     @rt.procedure
-    def foo(city: str):  # type: ignore[no-redef]
-        rt.m([rt.i("city"), " is located in ", rt.o("country"), ". "])  # type: ignore[name-defined]
-        return rt.i("country")  # type: ignore[name-defined]
+    def foo_city_country(city: str) -> Any:
+        rt.m([rt.i("city"), " is located in ", rt.o("country"), ". "])
+        return rt.i("country")
 
     @rt.main
-    def main():  # type: ignore[no-redef]
-        return rt.c("foo", "Sivas")  # type: ignore[name-defined]
+    def main_city_country() -> Any:
+        return rt.c("foo_city_country", "Sivas")
 
     out = rt.run_main()
     assert isinstance(out, str)
@@ -47,12 +47,12 @@ def test_runtime_nested_calls(monkeypatch: Any) -> None:
     rt = core.KediRuntime(adapter=MockAdapter())
 
     @rt.procedure
-    def get_country_info(city: str):  # type: ignore[no-redef]
-        rt.m([rt.i("city"), " is located in ", rt.o("country")])  # type: ignore[name-defined]
-        return rt.i("country")  # type: ignore[name-defined]
+    def get_country_info_nested(city: str) -> Any:
+        rt.m([rt.i("city"), " is located in ", rt.o("country")])
+        return rt.i("country")
 
     @rt.procedure
-    def get_language(country: str):  # type: ignore[no-redef]
+    def get_language_nested(country: str) -> Any:
         rt.m(
             [
                 "The primary language spoken in ",
@@ -60,20 +60,20 @@ def test_runtime_nested_calls(monkeypatch: Any) -> None:
                 " is ",
                 rt.o("language"),
             ]
-        )  # type: ignore[name-defined]
-        return rt.i("language")  # type: ignore[name-defined]
+        )
+        return rt.i("language")
 
     @rt.procedure
-    def translate_greeting(language: str):  # type: ignore[no-redef]
-        rt.m(["'Hello' in ", rt.i("language"), " is ", rt.o("greeting")])  # type: ignore[name-defined]
-        return rt.i("greeting")  # type: ignore[name-defined]
+    def translate_greeting_nested(language: str) -> Any:
+        rt.m(["'Hello' in ", rt.i("language"), " is ", rt.o("greeting")])
+        return rt.i("greeting")
 
     @rt.main
-    def main():  # type: ignore[no-redef]
+    def main_nested_calls() -> Any:
         return rt.c(
-            "translate_greeting",
-            rt.c("get_language", rt.c("get_country_info", "Paris")),
-        )  # type: ignore[name-defined]
+            "translate_greeting_nested",
+            rt.c("get_language_nested", rt.c("get_country_info_nested", "Paris")),
+        )
 
     out = rt.run_main()
     assert isinstance(out, str)

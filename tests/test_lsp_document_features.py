@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from lsprotocol import types as lsp
-
 from kedi.lsp import features
+from tests.lsp_helpers import inlay_hints_for_lines, signature_help_at
 
 # ---------------------------------------------------------------------
 # Document symbols
@@ -54,12 +53,7 @@ def test_formatting_is_noop_for_clean_source():
 
 def test_signature_help_inside_call():
     src = "@add(x: int, y: int) -> int:\n  = `x + y`\n\n= <add(1, 2)>\n"
-    # Cursor between `(` and the first arg.
-    sig = features.compute_signature_help(
-        source=src,
-        source_path="/tmp/x.kedi",
-        pos=lsp.Position(line=3, character=7),
-    )
+    sig = signature_help_at(src, "/tmp/x.kedi", "1")
     assert sig is not None
     assert sig.signatures
     label = sig.signatures[0].label
@@ -69,11 +63,7 @@ def test_signature_help_inside_call():
 
 def test_signature_help_outside_call_returns_none():
     src = "= ok\n"
-    sig = features.compute_signature_help(
-        source=src,
-        source_path="/tmp/x.kedi",
-        pos=lsp.Position(line=0, character=3),
-    )
+    sig = signature_help_at(src, "/tmp/x.kedi", "ok")
     assert sig is None
 
 
@@ -84,28 +74,13 @@ def test_signature_help_outside_call_returns_none():
 
 def test_inlay_hint_parameter_names_for_call():
     src = "@add(x: int, y: int) -> int:\n  = `x + y`\n\n= <add(1, 2)>\n"
-    hints = features.compute_inlay_hints(
-        source=src,
-        source_path="/tmp/x.kedi",
-        rng=lsp.Range(
-            start=lsp.Position(line=0, character=0),
-            end=lsp.Position(line=10, character=0),
-        ),
-    )
-    # At least one parameter hint should appear.
+    hints = inlay_hints_for_lines(src, "/tmp/x.kedi", 0, 10)
     labels = [h.label for h in hints]
     assert any("x:" in str(lbl) for lbl in labels)
 
 
 def test_inlay_hint_str_default_for_untyped_output():
     src = "@p():\n  Pick a [n].\n  = <n>\n"
-    hints = features.compute_inlay_hints(
-        source=src,
-        source_path="/tmp/x.kedi",
-        rng=lsp.Range(
-            start=lsp.Position(line=0, character=0),
-            end=lsp.Position(line=10, character=0),
-        ),
-    )
+    hints = inlay_hints_for_lines(src, "/tmp/x.kedi", 0, 10)
     labels = [str(h.label) for h in hints]
     assert any(": str" in lbl for lbl in labels)

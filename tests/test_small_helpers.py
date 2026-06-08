@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import runpy
 from pathlib import Path
@@ -17,7 +18,7 @@ from kedi.lang.type_render import (
     type_expr_to_python,
 )
 from kedi.source_loading import SourceDocument, load_kedi_source_bundle, merge_source_documents
-from kedi.utils import AttrDict, cast_value, parse_args
+from kedi.utils import AttrDict, parse_args
 
 
 def test_kedi_diagnostic_format_without_and_with_snippet() -> None:
@@ -126,13 +127,7 @@ def test_tree_sitter_parser_handles_parser_initialized_inside_lock(
     monkeypatch.setattr(parser_module, "_parser", original_parser)
 
 
-def test_utils_cast_value_parse_args_and_attrdict() -> None:
-    assert cast_value("true") is True
-    assert cast_value("false") is False
-    assert cast_value("12") == 12
-    assert cast_value("1.5") == 1.5
-    assert cast_value("not-a-number") == "not-a-number"
-
+def test_utils_parse_args_and_attrdict() -> None:
     parsed = parse_args(
         ["--count", "1", "--count", "2", "positional", "--enabled", "--name", "Ada"]
     )
@@ -145,8 +140,12 @@ def test_utils_cast_value_parse_args_and_attrdict() -> None:
 
     plain = AttrDict({"present": "ok"})
     assert plain.present == "ok"
-    with pytest.raises(KeyError):
+    with pytest.raises(AttributeError):
         _ = plain.missing
+
+    copied = copy.copy(AttrDict())
+    with pytest.raises(AttributeError):
+        _ = copied.missing
 
 
 def test_source_loading_maps_empty_and_missing_lines(tmp_path: Path) -> None:

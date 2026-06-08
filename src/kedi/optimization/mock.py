@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from ..lang.ast import OptimizeSpan
+from ..resolved_types import ResolvedKediType, resolved_type_name, runtime_isinstance
 from .interfaces import OptimizerAdapter
 from .utils import span_to_instruction
 
@@ -28,7 +29,7 @@ class MockOptimizer(OptimizerAdapter):
         self,
         proc_name: str,
         proc_params: list[str],
-        param_types: dict[str, type],
+        param_types: dict[str, ResolvedKediType],
         spans: list[OptimizeSpan],
         train_data: Iterable[tuple[Any, Any]],
         test_data: Iterable[tuple[Any, Any]] | None,
@@ -105,7 +106,7 @@ class MockOptimizer(OptimizerAdapter):
         self,
         proc_name: str,
         proc_params: list[str],
-        param_types: dict[str, type],
+        param_types: dict[str, ResolvedKediType],
         train_data: list[tuple[Any, Any]],
     ) -> None:
         """Validate types for all training examples.
@@ -132,10 +133,10 @@ class MockOptimizer(OptimizerAdapter):
                 # Single param: input_val is the value itself (not a tuple)
                 param_name = proc_params[0]
                 expected_type = param_types.get(param_name)
-                if expected_type and not isinstance(input_val, expected_type):
+                if expected_type and not runtime_isinstance(input_val, expected_type):
                     raise TypeError(
                         f"Training example {idx} for '{proc_name}': "
-                        f"Parameter '{param_name}' expected {expected_type.__name__}, "
+                        f"Parameter '{param_name}' expected {resolved_type_name(expected_type)}, "
                         f"got {type(input_val).__name__}"
                     )
             else:
@@ -155,9 +156,9 @@ class MockOptimizer(OptimizerAdapter):
                 # Validate each element matches corresponding param type
                 for param_idx, (param_name, arg_val) in enumerate(zip(proc_params, input_val)):
                     expected_type = param_types.get(param_name)
-                    if expected_type and not isinstance(arg_val, expected_type):
+                    if expected_type and not runtime_isinstance(arg_val, expected_type):
                         raise TypeError(
                             f"Training example {idx} for '{proc_name}': "
                             f"Parameter '{param_name}' (position {param_idx}) expected "
-                            f"{expected_type.__name__}, got {type(arg_val).__name__}"
+                            f"{resolved_type_name(expected_type)}, got {type(arg_val).__name__}"
                         )

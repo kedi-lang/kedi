@@ -5,13 +5,16 @@ from __future__ import annotations
 from .interfaces import OptimizerAdapter
 from .mock import MockOptimizer
 
-try:
-    from .gepa import GEPAOptimizer
+GEPAOptimizer: type[OptimizerAdapter] | None
 
+try:
+    from .gepa import GEPAOptimizer as _GEPAOptimizerImpl
+
+    GEPAOptimizer = _GEPAOptimizerImpl
     GEPA_AVAILABLE = True
 except ImportError:
+    GEPAOptimizer = None
     GEPA_AVAILABLE = False
-    GEPAOptimizer = None  # type: ignore
 
 
 def get_optimizer(name: str) -> OptimizerAdapter | None:

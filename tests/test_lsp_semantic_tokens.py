@@ -19,10 +19,12 @@ def test_semantic_tokens_full_emits_tokens():
 
 
 def test_semantic_tokens_legend_constants():
-    # Sanity: standard order of types/modifiers.
-    assert features.SEMANTIC_TOKEN_TYPES[12] == "function"
-    assert features.SEMANTIC_TOKEN_TYPES[1] == "type"
-    assert features.SEMANTIC_TOKEN_MODIFIERS[0] == "declaration"
+    assert "function" in features.SEMANTIC_TOKEN_TYPES
+    assert "type" in features.SEMANTIC_TOKEN_TYPES
+    assert "declaration" in features.SEMANTIC_TOKEN_MODIFIERS
+    assert features.SEMANTIC_TOKEN_TYPES.index("function") == 12
+    assert features.SEMANTIC_TOKEN_TYPES.index("type") == 1
+    assert features.SEMANTIC_TOKEN_MODIFIERS.index("declaration") == 0
 
 
 def test_semantic_tokens_docstring_comment_uses_variable_token():

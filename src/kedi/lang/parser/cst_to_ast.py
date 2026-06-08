@@ -446,7 +446,7 @@ class _Walker:
                 if child.type != "module_export_name":
                     continue
                 name_node = _field(child, "name")
-                if name_node is not None:  # pragma: no branch
+                if name_node is not None:
                     names.append(_identifier_name(self.source, name_node))
         return ModuleExport(names=names, export_all=export_all, loc=self._span(node))
 
@@ -858,7 +858,7 @@ class _Walker:
             # be preserved, so we stop stripping at the first such
             # position.
             shift = 0
-            for idx, ch in enumerate(first.text):  # pragma: no branch
+            for idx, ch in enumerate(first.text):
                 if ch not in (" ", "\t"):
                     break
                 if idx in first.escaped_whitespace:
@@ -1115,7 +1115,7 @@ class _Walker:
                         f"Unknown directive in @test body: {c.type!r}",
                         code="K-VALID-DIR",
                     )
-                elif c.type == "ERROR" or c.is_error:  # pragma: no branch
+                elif c.type == "ERROR" or c.is_error:
                     self._error(
                         c,
                         "Unknown directive in @test body",
@@ -1142,7 +1142,7 @@ class _Walker:
                 elif c.type == "eval_metric":
                     metric_count += 1
                     suite_e.metrics.append(self._walk_eval_metric(c))
-                elif c.type == "ERROR" or c.is_error:  # pragma: no branch
+                elif c.type == "ERROR" or c.is_error:
                     self._error(
                         c,
                         "Unknown directive in @eval body",
@@ -1179,10 +1179,10 @@ class _Walker:
                         (c for c in _named_children(inner) if c.type == "inline_python_expr"),
                         None,
                     )
-                    if bn is not None:  # pragma: no branch
+                    if bn is not None:
                         code = self._walk_inline_python_expr(bn)
                     is_block = False
-                elif inner.type == "python_block":  # pragma: no branch
+                elif inner.type == "python_block":
                     code = self._walk_python_block_code(inner)
                     is_block = True
         return TestCase(name=name, code=code, is_block=is_block, loc=self._span(node))

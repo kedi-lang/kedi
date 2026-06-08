@@ -11,10 +11,13 @@ from typing import Any, Optional
 import dspy
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
-from ...lang.ast import OutputSegment, TemplateLine
+from ...reporter import CliReporter, Reporter
+from ..dspy_introspection import (
+    extract_signature_instructions,
+    find_primary_predictor,
+    is_non_default_instruction,
+)
 from ..utils import normalize_optimized_prompt_prefix
-
-DSPY_AVAILABLE = True
 
 
 class GEPAMetricWrapper:
@@ -37,7 +40,8 @@ class GEPAMetricWrapper:
     runs.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, reporter: Reporter | None = None) -> None:
+        self._reporter = reporter or CliReporter()
         self._prediction_cache: "weakref.WeakKeyDictionary[Any, tuple[float, Optional[str]]]" = (
             weakref.WeakKeyDictionary()
         )
@@ -51,33 +55,20 @@ class GEPAMetricWrapper:
         self,
         kedi_metric: Callable[[Any, Any], tuple[float, str | None]],
         proc_params: list[str],
-        span_or_output_fields: Any = None,  # Can be span object or list of output fields (backward compat)
+        *,
+        span: Any = None,
         module_ref: Any = None,
-        proc_def: Any = None,
     ) -> Callable:
         """Wrap Kedi metric for GEPA.
 
         Args:
             kedi_metric: Kedi metric function (input, expected) -> (score, feedback)
             proc_params: Procedure parameter names
-            span_or_output_fields: OptimizeSpan object OR list of (name, type) tuples for backward compatibility
+            span: Optimize span whose template receives prompt/output overrides
             module_ref: Reference to GEPA's module (for extracting current instructions)
-            proc_def: Procedure definition for sibling span overrides
-
         Returns:
             GEPA-compatible metric function
         """
-        # Determine if we have a span or output_fields list
-        span = None
-        output_fields = None
-        if span_or_output_fields is not None:
-            if isinstance(span_or_output_fields, list):
-                # Backward compatibility: list of output fields
-                output_fields = span_or_output_fields
-            else:
-                # New behavior: span object
-                span = span_or_output_fields
-
         progress = {
             "count": 0,
             "total_score": 0.0,
@@ -98,7 +89,7 @@ class GEPAMetricWrapper:
             cnt = progress["count"]
             # Not compared to max_metric_calls: GEPA's budget counts internal eval units;
             # DSPy may invoke this callback more often than that.
-            print(f"   [metric callback {cnt}] starting...", flush=True)
+            self._reporter.emit(f"   [metric callback {cnt}] starting...", flush=True)
 
             try:
                 example_obj = context.get("module_inputs", gold)
@@ -124,11 +115,8 @@ class GEPAMetricWrapper:
                     try:
                         # Extract outputs from DSPy prediction and inject them into the span
                         # This ensures the Kedi procedure uses the DSPy-generated outputs
-                        # Only apply output override if we have a span (not just output_fields for backward compat)
                         if span and prediction_obj:
-                            output_override = self._extract_prediction_outputs(
-                                prediction_obj, span, output_fields
-                            )
+                            output_override = self._extract_prediction_outputs(prediction_obj, span)
                             if output_override:
                                 output_override_handle = self._apply_output_override(
                                     span, output_override
@@ -149,7 +137,7 @@ class GEPAMetricWrapper:
                         is_new_best = score_float > progress["best_score"]
                         if is_new_best:
                             progress["best_score"] = score_float
-                        print(
+                        self._reporter.emit(
                             f"   [metric callback {cnt}] score={score_float:.3f}  "
                             f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
                             f"({elapsed:.0f}s)",
@@ -172,7 +160,7 @@ class GEPAMetricWrapper:
                 cnt = progress["count"]
                 avg = progress["total_score"] / cnt
                 elapsed = time.monotonic() - progress["start_time"]
-                print(
+                self._reporter.emit(
                     f"   [metric callback {cnt}] score=0.000 (error)  "
                     f"avg={avg:.3f}  best={progress['best_score']:.3f}  "
                     f"({elapsed:.0f}s)",
@@ -228,21 +216,14 @@ class GEPAMetricWrapper:
         self,
         prediction: Any,
         span: Any,
-        output_fields_override: list[tuple[str, str]] | None = None,
     ) -> dict[str, Any] | None:
         """Extract output values from DSPy prediction that match the span's outputs."""
-        if not prediction:
+        if not prediction or not span:
             return None
 
-        # Get output field names from span or override
-        if output_fields_override:
-            output_fields = output_fields_override
-        elif span:
-            from ..utils import extract_output_fields
+        from ..utils import extract_output_fields
 
-            output_fields = extract_output_fields(span)
-        else:
-            return None
+        output_fields = extract_output_fields(span)
 
         if not output_fields:
             return None
@@ -280,47 +261,6 @@ class GEPAMetricWrapper:
             line.optimized_output_override = original
 
     # Removed prediction-based output override; metric evaluates Kedi directly
-
-    def _line_output_names(self, template_line: TemplateLine) -> list[str]:
-        """Return output names declared in a template line."""
-        names: list[str] = []
-        for segment in getattr(template_line, "segments", []):
-            if isinstance(segment, OutputSegment):
-                names.append(segment.name)
-        return names
-
-    def _apply_default_overrides(
-        self,
-        proc_def: Any,
-        active_span: Any,
-    ) -> list[tuple[TemplateLine, dict[str, Any] | None]] | None:
-        """Apply benign overrides to all spans except the active one.
-        Ensures other optimize spans do not trigger LLM calls during metric eval.
-        """
-        handles: list[tuple[TemplateLine, dict[str, Any] | None]] = []
-        spans = getattr(proc_def, "optimize_spans", None)
-        if not spans:
-            return None
-        for sp in spans:
-            if sp is active_span:
-                continue
-            for tl in getattr(sp, "template_lines", []) or []:
-                names = self._line_output_names(tl)
-                if not names:
-                    continue
-                mapping = {name: "" for name in names}
-                handles.append((tl, tl.optimized_output_override))
-                tl.optimized_output_override = mapping
-        return handles or None
-
-    def _restore_sibling_overrides(
-        self,
-        handle: list[tuple[TemplateLine, dict[str, Any] | None]] | None,
-    ) -> None:
-        if not handle:
-            return
-        for tl, original in handle:
-            tl.optimized_output_override = original
 
     def _stringify_feedback(self, feedback: Any) -> Optional[str]:
         """Convert arbitrary feedback into a printable string."""
@@ -382,30 +322,18 @@ class GEPAMetricWrapper:
         """Extract current optimized instructions from GEPA's module."""
         if not module:
             return None
-
         try:
-            predictor: Any = getattr(module, "predictor", None)
+            predictor = find_primary_predictor(module)
+            if predictor is None:
+                predictor = getattr(module, "predictor", None)
             if predictor is None and hasattr(module, "named_predictors"):
                 named = module.named_predictors()
                 if named:
-                    predictor = named[0][1] if isinstance(named[0], tuple) else named[0]
-                else:
-                    return None
-
-            sig = getattr(predictor, "signature", None)
-            if sig is None:
-                return None
-
-            instructions = getattr(sig, "instructions", None) or getattr(sig, "_instructions", None)
-
-            if isinstance(instructions, str) and instructions.strip():
-                default_pattern = "Given the fields"
-                if (
-                    default_pattern not in instructions
-                    or len(instructions) > len(default_pattern) + 50
-                ):
-                    return instructions.strip()
-
+                    first = named[0]
+                    predictor = first[1] if isinstance(first, tuple) else first
+            instructions = extract_signature_instructions(predictor)
+            if instructions and is_non_default_instruction(instructions):
+                return instructions
             return None
         except Exception:
             return None

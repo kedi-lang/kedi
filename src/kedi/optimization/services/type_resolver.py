@@ -5,6 +5,7 @@ from __future__ import annotations
 from ...lang.ast import ProcedureDef
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType
+from ..resolved_types import ResolvedKediType, as_resolved_kedi_type
 
 
 class TypeResolver:
@@ -25,7 +26,7 @@ class TypeResolver:
     def resolve_param_types(
         self,
         procedure: ProcedureDef,
-    ) -> dict[str, type]:
+    ) -> dict[str, ResolvedKediType]:
         """Resolve parameter type annotations to Python types.
 
         Uses the runtime's type environment to evaluate type annotation strings,
@@ -38,7 +39,7 @@ class TypeResolver:
             Dictionary mapping parameter names to Python types.
             Parameters without annotations or unresolvable types are omitted.
         """
-        param_types: dict[str, type] = {}
+        param_types: dict[str, ResolvedKediType] = {}
 
         if not procedure.param_type_annotations:
             return param_types
@@ -52,15 +53,9 @@ class TypeResolver:
             try:
                 resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
-                # Validate it's actually a type
-                if isinstance(resolved_type, type):
-                    param_types[param_name] = resolved_type
-                # Handle typing constructs (List, Dict, etc.)
-                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
-                    "<class 'typing."
-                ):
-                    # Store typing constructs as-is (they're still valid)
-                    param_types[param_name] = resolved_type  # type: ignore
+                stored_type = as_resolved_kedi_type(resolved_type)
+                if stored_type is not None:
+                    param_types[param_name] = stored_type
             except Exception:
                 # Type resolution failed - skip this parameter
                 # Optimizer will skip type validation for unresolvable types
@@ -71,7 +66,7 @@ class TypeResolver:
     def resolve_output_types(
         self,
         output_fields: list[tuple[str, str | None]],
-    ) -> dict[str, type]:
+    ) -> dict[str, ResolvedKediType]:
         """Resolve output field type annotations to Python types.
 
         Args:
@@ -80,7 +75,7 @@ class TypeResolver:
         Returns:
             Dictionary mapping field names to Python types
         """
-        output_types: dict[str, type] = {}
+        output_types: dict[str, ResolvedKediType] = {}
 
         if not output_fields:
             return output_types
@@ -95,14 +90,9 @@ class TypeResolver:
             try:
                 resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
-                # Validate it's actually a type
-                if isinstance(resolved_type, type):
-                    output_types[field_name] = resolved_type
-                # Handle typing constructs
-                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
-                    "<class 'typing."
-                ):
-                    output_types[field_name] = resolved_type  # type: ignore
+                stored_type = as_resolved_kedi_type(resolved_type)
+                if stored_type is not None:
+                    output_types[field_name] = stored_type
                 else:
                     # Fallback to str if type resolution fails
                     output_types[field_name] = str

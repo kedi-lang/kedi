@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 K = TypeVar("K")  # key type
 V = TypeVar("V")  # value type
@@ -15,36 +15,13 @@ class AttrDict(dict[K, V]):
         super().__init__(*args, **kwargs)
         self._default = default
 
-    def __getattr__(self, key: K) -> V:
+    def __getattr__(self, key: str) -> V:
         if key in self:
-            return self[key]
-        if self._default is not _MISSING:
-            return self._default
-        return self[key]
-
-
-def cast_value(value: str) -> int | float | bool | str:
-    """
-    Cast a string value to its corresponding Python type.
-
-    Args:
-        value: The string value to cast.
-
-    Returns:
-        An int, float, bool, or str depending on the value.
-    """
-    lowered = value.lower().strip()
-    if lowered == "true":
-        return True
-    elif lowered == "false":
-        return False
-
-    try:
-        if "." not in value:
-            return int(value)
-        return float(value)
-    except ValueError:
-        return value
+            return super().__getitem__(cast(K, key))
+        default = self.__dict__.get("_default", _MISSING)
+        if default is not _MISSING:
+            return default
+        raise AttributeError(key)
 
 
 def parse_args(args: list[str]) -> AttrDict[str, ArgType]:

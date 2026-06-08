@@ -225,13 +225,13 @@ def test_escape_helpers_cover_error_whitespace_and_dedent_edges() -> None:
 def test_runtime_core_edge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     rt = KediRuntime()
 
-    @rt.procedure
-    def repeated() -> str:
-        return "first"
+    def _register_repeated(value: str) -> None:
+        @rt.procedure
+        def repeated() -> str:
+            return value
 
-    @rt.procedure
-    def repeated() -> str:  # type: ignore[no-redef]  # noqa: F811
-        return "second"
+    _register_repeated("first")
+    _register_repeated("second")
 
     @rt.procedure
     def add_one(value: int) -> int:

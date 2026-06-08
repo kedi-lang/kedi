@@ -145,6 +145,20 @@ def test_cst_walker_defensive_edges(monkeypatch):
         _FakeNode("module_export", fields={"body": export_body}, end=16)
     )
     assert export.names == ["name", "name"]
+    export_body_missing_name = _FakeNode(
+        "body",
+        children=[
+            _FakeNode("module_export_name"),
+            _FakeNode(
+                "module_export_name",
+                fields={"name": _FakeNode("identifier", start=12, end=16)},
+            ),
+        ],
+    )
+    export_missing = export_walker._walk_module_export(
+        _FakeNode("module_export", fields={"body": export_body_missing_name}, end=16)
+    )
+    assert export_missing.names == ["name"]
 
     proc_walker = _fake_walker(b"proc")
     proc = proc_walker._walk_procedure_def(
@@ -203,6 +217,21 @@ def test_cst_walker_defensive_edges(monkeypatch):
         )
     )
     assert template_with_noise.segments[0].text == "stmt"
+    whitespace_only = _fake_walker(b"   ")._walk_template_expr(
+        _FakeNode(
+            "template_expr",
+            children=[_FakeNode("text_segment", start=0, end=3)],
+        )
+    )
+    assert whitespace_only[0].text == ""
+    escaped_leading = _fake_walker(b"\\s hello")._walk_template_expr(
+        _FakeNode(
+            "template_expr",
+            children=[_FakeNode("text_segment", start=0, end=8)],
+        )
+    )
+    assert escaped_leading[0].escaped_whitespace == {0}
+    assert escaped_leading[0].text == "  hello"
     assert stmt_walker._walk_type_expr(_FakeNode("type_expr")) is None
     weird_type = _FakeNode("type_expr", children=[_FakeNode("weird_type")])
     assert stmt_walker._walk_type_expr(weird_type) is None
@@ -352,6 +381,19 @@ def test_cst_walker_defensive_edges(monkeypatch):
         )
     )
     assert isinstance(test_suite, cst_module.TestSuite)
+    ignored_test_body = _FakeNode("body", children=[_FakeNode("line_comment")])
+    ignored_test_suite = validation_walker._walk_validation_block(
+        _FakeNode(
+            "validation_block",
+            fields={
+                "kw": _FakeNode("kw", start=0, end=4),
+                "procedure": _FakeNode("identifier", start=0, end=4),
+                "body": ignored_test_body,
+            },
+        )
+    )
+    assert isinstance(ignored_test_suite, cst_module.TestSuite)
+    assert ignored_test_suite.cases == []
 
     eval_walker = _fake_walker(b"eval")
     eval_body = _FakeNode(
@@ -369,12 +411,58 @@ def test_cst_walker_defensive_edges(monkeypatch):
         )
     )
     assert isinstance(eval_suite, cst_module.EvalSuite)
+    ignored_eval_body = _FakeNode("body", children=[_FakeNode("line_comment")])
+    ignored_eval_suite = eval_walker._walk_validation_block(
+        _FakeNode(
+            "validation_block",
+            fields={
+                "kw": _FakeNode("kw", start=0, end=4),
+                "procedure": _FakeNode("identifier", start=0, end=4),
+                "body": ignored_eval_body,
+            },
+        )
+    )
+    assert isinstance(ignored_eval_suite, cst_module.EvalSuite)
     assert (
         validation_walker._walk_test_case(
             _FakeNode("test_case", fields={"name": _FakeNode("identifier", start=0, end=4)})
         ).code
         == ""
     )
+    backtick_without_inline = validation_walker._walk_test_case(
+        _FakeNode(
+            "test_case",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "code": _FakeNode(
+                    "code",
+                    children=[
+                        _FakeNode("backtick_line_stmt", children=[_FakeNode("line_comment")])
+                    ],
+                ),
+            },
+        )
+    )
+    assert backtick_without_inline.code == ""
+    block_test_case = validation_walker._walk_test_case(
+        _FakeNode(
+            "test_case",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "code": _FakeNode(
+                    "code",
+                    children=[
+                        _FakeNode(
+                            "python_block",
+                            fields={"code": _FakeNode("python_code", start=0, end=4)},
+                        )
+                    ],
+                ),
+            },
+        )
+    )
+    assert block_test_case.is_block is True
+    assert block_test_case.code == "test"
 
     unknown_validation = _fake_walker(b"what")._walk_validation_block(
         _FakeNode(

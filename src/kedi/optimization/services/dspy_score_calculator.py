@@ -8,8 +8,6 @@ from typing import Any, cast
 
 import dspy
 
-DSPY_AVAILABLE = True
-
 
 class DSPyScoreCalculator:
     """Service for calculating average training scores.
@@ -36,9 +34,6 @@ class DSPyScoreCalculator:
         Returns:
             Average score (0.0-1.0)
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         scores = []
         sample = trainset[: min(sample_size, len(trainset))]
 

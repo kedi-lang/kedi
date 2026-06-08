@@ -4,11 +4,19 @@ from __future__ import annotations
 
 import ast
 
-from lsprotocol import types as lsp
-
 from kedi.lsp import features
 from kedi.lsp.python_virtual import compute_python_virtual_document
-from tests.lsp_helpers import decode_semantic_tokens, hover_value, position_of
+from tests.lsp_helpers import (
+    decode_semantic_tokens,
+    definition_at,
+    hover_at,
+    hover_text_at,
+    inlay_hints_for_lines,
+    prepare_rename_at,
+    references_at,
+    rename_at,
+    signature_help_at,
+)
 
 # ---------------------------------------------------------------------
 # Hover
@@ -17,11 +25,7 @@ from tests.lsp_helpers import decode_semantic_tokens, hover_value, position_of
 
 def test_hover_on_procedure_header_shows_signature():
     src = "@translate(text: str) -> str:\n  = <text>\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "translate")
     assert "translate" in body
     assert "text: str" in body
     assert "str" in body
@@ -29,22 +33,14 @@ def test_hover_on_procedure_header_shows_signature():
 
 def test_hover_on_defaulted_procedure_header_shows_defaults():
     src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "translate")
     assert "text: str" in body
     assert 'style: str = `"brief"`' in body
 
 
 def test_hover_on_untyped_procedure_header_defaults_param_to_str():
     src = "@translate(text) -> str:\n  = <text>\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "translate")
     assert "text: str" in body
 
 
@@ -57,11 +53,7 @@ def test_hover_on_procedure_header_includes_docstring():
         "  ###\n"
         "  = <text>\n"
     )
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=0, character=3)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "translate")
     assert "translate" in body
     assert "Translate the provided text." in body
     assert "Keep the answer concise." in body
@@ -71,20 +63,14 @@ def test_hover_on_docstring_comment_uses_procedure_docstring():
     src = (
         "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
     )
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=6)
-    )
-    assert hover is not None
-    assert "translate" in hover_value(hover)
-    assert "Translate the provided text." in hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "Translate the provided text.")
+    assert "translate" in body
+    assert "Translate the provided text." in body
 
 
 def test_hover_on_regular_block_comment_stays_none():
     src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=3, character=6)
-    )
-    assert hover is None
+    assert hover_at(src, "example.kedi", "Not a docstring.") is None
 
 
 def test_python_ranges_exclude_header_inline_defaults():
@@ -104,21 +90,12 @@ def test_python_ranges_exclude_header_inline_defaults():
 
 def test_hover_on_header_default_expression_defers_to_python():
     src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=24),
-    )
-    assert hover is None
+    assert hover_at(src, "example.kedi", "get_name") is None
 
 
 def test_hover_on_nested_procedure_header_shows_signature():
     src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=4)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "@bar")
     assert "bar" in body
     assert "name: str" in body
     assert "str" in body
@@ -126,11 +103,7 @@ def test_hover_on_nested_procedure_header_shows_signature():
 
 def test_hover_on_nested_text_segment_works():
     src = "@foo():\n  @bar():\n    Hello world\n    = Done\n  = dn\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=2, character=8)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "world")
     assert "Text segment" in body
     assert "Hello world" in body
 
@@ -145,20 +118,15 @@ def test_hover_and_definition_on_imported_procedure(tmp_path):
     src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
     main.write_text(src, encoding="utf-8")
 
-    hover = features.compute_hover(
-        source=src,
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=4),
-    )
-    assert hover is not None
-    assert "make_profile" in hover_value(hover)
-    assert "name: str" in hover_value(hover)
+    body = hover_text_at(src, str(main), "make_profile")
+    assert "make_profile" in body
+    assert "name: str" in body
 
-    location = features.compute_definition(
-        source=src,
-        uri=main.resolve().as_uri(),
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=4),
+    location = definition_at(
+        src,
+        main.resolve().as_uri(),
+        str(main),
+        "make_profile",
     )
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
@@ -175,20 +143,15 @@ def test_hover_on_imported_type_in_annotation(tmp_path):
     src = '> import: profiles\n\n[p: Profile] = `Profile(name="Ada")`\n'
     main.write_text(src, encoding="utf-8")
 
-    hover = features.compute_hover(
-        source=src,
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=5),
-    )
-    assert hover is not None
-    assert "Profile" in hover_value(hover)
-    assert "not defined in this module" not in hover_value(hover)
+    body = hover_text_at(src, str(main), "Profile")
+    assert "Profile" in body
+    assert "not defined in this module" not in body
 
-    location = features.compute_definition(
-        source=src,
-        uri=main.resolve().as_uri(),
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=5),
+    location = definition_at(
+        src,
+        main.resolve().as_uri(),
+        str(main),
+        "Profile",
     )
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
@@ -205,20 +168,15 @@ def test_hover_on_imported_value(tmp_path):
     src = "> import: profiles\n\n= <xd>\n"
     main.write_text(src, encoding="utf-8")
 
-    hover = features.compute_hover(
-        source=src,
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=3),
-    )
-    assert hover is not None
-    assert "Imported value" in hover_value(hover)
-    assert "`xd: int`" in hover_value(hover)
+    body = hover_text_at(src, str(main), "xd")
+    assert "Imported value" in body
+    assert "`xd: int`" in body
 
-    location = features.compute_definition(
-        source=src,
-        uri=main.resolve().as_uri(),
-        source_path=str(main),
-        pos=lsp.Position(line=2, character=3),
+    location = definition_at(
+        src,
+        main.resolve().as_uri(),
+        str(main),
+        "xd",
     )
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
@@ -240,21 +198,16 @@ def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_
     src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
     main.write_text(src, encoding="utf-8")
 
-    hover = features.compute_hover(
-        source=src,
-        source_path=str(main),
-        pos=lsp.Position(line=0, character=12),
-    )
-    assert hover is not None
-    assert "**Module** `profiles`" in hover_value(hover)
-    assert "Profile utilities" in hover_value(hover)
-    assert "Used across the workspace." in hover_value(hover)
+    body = hover_text_at(src, str(main), "profiles")
+    assert "**Module** `profiles`" in body
+    assert "Profile utilities" in body
+    assert "Used across the workspace." in body
 
-    location = features.compute_definition(
-        source=src,
-        uri=main.resolve().as_uri(),
-        source_path=str(main),
-        pos=lsp.Position(line=0, character=12),
+    location = definition_at(
+        src,
+        main.resolve().as_uri(),
+        str(main),
+        "profiles",
     )
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
@@ -268,19 +221,14 @@ def test_hover_and_definition_on_internal_registry_module_name():
     assert internal_path is not None
 
     src = "> import: this\n\n= ok\n"
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=11),
-    )
-    assert hover is not None
-    assert "**Module** `this`" in hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "this")
+    assert "**Module** `this`" in body
 
-    location = features.compute_definition(
-        source=src,
-        uri="file:///tmp/example.kedi",
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=11),
+    location = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "this",
     )
     assert location is not None
     assert location.uri == internal_path.as_uri()
@@ -303,33 +251,24 @@ def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(
     src = '> import: profiles\n\n= <make_profile(`"Ada"`)>\n'
     main.write_text(src, encoding="utf-8")
 
-    hover = features.compute_hover(
-        source=src,
-        source_path=str(main),
-        pos=lsp.Position(line=0, character=12),
-    )
-    assert hover is not None
-    assert "**Module** `profiles`" in hover_value(hover)
-    assert "Not a module docstring." not in hover_value(hover)
+    body = hover_text_at(src, str(main), "profiles")
+    assert "**Module** `profiles`" in body
+    assert "Not a module docstring." not in body
 
 
 def test_hover_and_definition_on_exported_procedure_name():
     src = "@make_profile(name: str) -> str:\n  = <name>\n\n> export:\n  make_profile\n"
 
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=4, character=4),
-    )
-    assert hover is not None
-    assert "make_profile" in hover_value(hover)
-    assert "name: str" in hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "make_profile", occurrence=2)
+    assert "make_profile" in body
+    assert "name: str" in body
 
-    location = features.compute_definition(
-        source=src,
-        uri="file:///tmp/example.kedi",
-        source_path="example.kedi",
-        pos=lsp.Position(line=4, character=4),
+    location = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "make_profile",
+        occurrence=2,
     )
     assert location is not None
     assert location.range.start.line == 0
@@ -338,20 +277,16 @@ def test_hover_and_definition_on_exported_procedure_name():
 def test_hover_and_definition_on_exported_value_name():
     src = "[profile_id: int] = `1`\n\n> export:\n  profile_id\n"
 
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=3, character=4),
-    )
-    assert hover is not None
-    assert "Module value" in hover_value(hover)
-    assert "profile_id" in hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "profile_id", occurrence=2)
+    assert "Module value" in body
+    assert "profile_id" in body
 
-    location = features.compute_definition(
-        source=src,
-        uri="file:///tmp/example.kedi",
-        source_path="example.kedi",
-        pos=lsp.Position(line=3, character=4),
+    location = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "profile_id",
+        occurrence=2,
     )
     assert location is not None
     assert location.range.start.line == 0
@@ -359,11 +294,7 @@ def test_hover_and_definition_on_exported_value_name():
 
 def test_hover_on_input_segment():
     src = "@p(name):\n  Hello, <name>!\n  = done\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=11)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "name", occurrence=2)
     assert "name" in body
     # Hover labels parameter references as such when the input matches
     # an enclosing-procedure parameter.
@@ -372,36 +303,20 @@ def test_hover_on_input_segment():
 
 def test_hover_on_output_segment_shows_type():
     src = "@p():\n  Pick a [n: int].\n  = <n>\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=10)
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "n")
     assert "Output" in body
     assert "n" in body
 
 
 def test_hover_on_assignment_target_shows_local_variable():
     src = "@p():\n  [x: str] = ok\n  = <x>\n"
-    hover = features.compute_hover(
-        source=src, source_path="example.kedi", pos=lsp.Position(line=1, character=3)
-    )
-
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "x")
     assert "Local" in body
     assert "`x`" in body
 
 
 def test_hover_on_runtime_args_shows_attrdict_type():
-    hover = features.compute_hover(
-        source="= <args>\n",
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=3),
-    )
-
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at("= <args>\n", "example.kedi", "args")
     assert "Runtime value" in body
     assert "AttrDict[str, ArgType]" in body
 
@@ -483,12 +398,13 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         ("review_code(`args", 1, 1, "Review code with CLI args"),
     ]
     for needle, occurrence, offset, expected in hover_checks:
-        hover = features.compute_hover(
+        assert expected in hover_text_at(
             src,
             source_path,
-            position_of(src, needle, occurrence=occurrence, offset=offset),
+            needle,
+            occurrence=occurrence,
+            offset=offset,
         )
-        assert expected in hover_value(hover)
 
     definitions = [
         ("this", 1, 1, "src/kedi/modules/this.kedi"),
@@ -498,53 +414,52 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         ("review_code\n  global_note", 1, 1, source_path),
     ]
     for needle, occurrence, offset, expected_uri in definitions:
-        loc = features.compute_definition(
+        loc = definition_at(
             src,
             uri,
             source_path,
-            position_of(src, needle, occurrence=occurrence, offset=offset),
+            needle,
+            occurrence=occurrence,
+            offset=offset,
         )
         assert loc is not None
         assert expected_uri in loc.uri
 
-    refs = features.compute_references(
+    refs = references_at(
         src,
         uri,
         source_path,
-        position_of(src, "@review_code", offset=2),
-        include_declaration=True,
+        "@review_code",
+        True,
+        offset=2,
     )
     assert len(refs) >= 2
     assert any(ref.range.start.line == 12 for ref in refs)
     assert any(ref.range.start.line == 52 for ref in refs)
 
-    prepare = features.compute_prepare_rename(
+    prepare = prepare_rename_at(
         src,
         source_path,
-        position_of(src, "[review: Review]", occurrence=2, offset=2),
+        "[review: Review]",
+        occurrence=2,
+        offset=2,
     )
     assert prepare is not None
     assert prepare.start.line == 28
     assert prepare.start.character == 3
     assert prepare.end.character == 9
 
-    signature = features.compute_signature_help(
+    signature = signature_help_at(
         src,
         source_path,
-        position_of(src, "review_code(`args", offset=len("review_code(`args.language")),
+        "review_code(`args",
+        offset=len("review_code(`args.language"),
     )
     assert signature is not None
     assert signature.signatures[0].label.startswith("@review_code(")
     assert signature.active_parameter == 0
 
-    hints = features.compute_inlay_hints(
-        src,
-        source_path,
-        lsp.Range(
-            start=lsp.Position(line=0, character=0),
-            end=lsp.Position(line=80, character=0),
-        ),
-    )
+    hints = inlay_hints_for_lines(src, source_path, 0, 80)
     assert {str(hint.label) for hint in hints} >= {"language: ", "code: "}
 
     decoded = decode_semantic_tokens(features.compute_semantic_tokens_full(src, source_path).data)
@@ -586,22 +501,16 @@ def test_hover_on_builtin_and_typing_types_is_not_undefined():
     )
 
     checks = [
-        ("list", lsp.Position(line=0, character=10), "builtins.list"),
-        ("int", lsp.Position(line=0, character=15), "builtins.int"),
-        ("Optional", lsp.Position(line=0, character=24), "typing.Optional"),
-        ("str", lsp.Position(line=0, character=33), "builtins.str"),
-        ("Literal", lsp.Position(line=0, character=42), "typing.Literal"),
-        ("bool", lsp.Position(line=1, character=15), "builtins.bool"),
+        ("list", "builtins.list"),
+        ("int", "builtins.int"),
+        ("Optional", "typing.Optional"),
+        ("str", "builtins.str"),
+        ("Literal", "typing.Literal"),
+        ("bool", "builtins.bool"),
     ]
 
-    for name, pos, origin in checks:
-        hover = features.compute_hover(
-            source=src,
-            source_path="example.kedi",
-            pos=pos,
-        )
-        assert hover is not None, name
-        body = hover_value(hover)
+    for name, origin in checks:
+        body = hover_text_at(src, "example.kedi", name)
         assert name in body
         assert origin in body
         assert f"Kedi type resolved to Python's {origin}." in body
@@ -614,54 +523,22 @@ def test_hover_on_builtin_and_typing_types_is_not_undefined():
 def test_builtin_type_definition_and_rename_are_disabled():
     src = "@p(x: Optional[str]) -> bool:\n  = <x>\n"
     uri = "file:///tmp/example.kedi"
-    pos = lsp.Position(line=0, character=6)
-
-    assert (
-        features.compute_definition(
-            source=src,
-            uri=uri,
-            source_path="/tmp/example.kedi",
-            pos=pos,
-        )
-        is None
-    )
-    assert (
-        features.compute_prepare_rename(
-            source=src,
-            source_path="/tmp/example.kedi",
-            pos=pos,
-        )
-        is None
-    )
-    assert (
-        features.compute_rename(
-            source=src,
-            uri=uri,
-            source_path="/tmp/example.kedi",
-            pos=pos,
-            new_name="Maybe",
-        )
-        is None
-    )
+    assert definition_at(src, uri, "/tmp/example.kedi", "Optional") is None
+    assert prepare_rename_at(src, "/tmp/example.kedi", "Optional") is None
+    assert rename_at(src, uri, "/tmp/example.kedi", "Optional", "Maybe") is None
 
 
 def test_hover_on_type_definition_builtin_and_typing_types_is_not_undefined():
     src = "~Person(name: str, friend: Optional[str])\n= ok\n"
 
     checks = [
-        ("str", lsp.Position(line=0, character=14), "builtins.str"),
-        ("Optional", lsp.Position(line=0, character=27), "typing.Optional"),
-        ("str", lsp.Position(line=0, character=36), "builtins.str"),
+        ("str", "builtins.str"),
+        ("Optional", "typing.Optional"),
+        ("str", "builtins.str"),
     ]
 
-    for name, pos, origin in checks:
-        hover = features.compute_hover(
-            source=src,
-            source_path="example.kedi",
-            pos=pos,
-        )
-        assert hover is not None, name
-        body = hover_value(hover)
+    for name, origin in checks:
+        body = hover_text_at(src, "example.kedi", name)
         assert name in body
         assert origin in body
         assert "not defined" not in body
@@ -669,34 +546,19 @@ def test_hover_on_type_definition_builtin_and_typing_types_is_not_undefined():
 
 def test_hover_on_type_definition_shows_field_defaults():
     src = "~Person(name: str, salary: int = `0`)\n= ok\n"
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=1),
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "Person")
     assert "salary: int = `0`" in body
 
 
 def test_hover_on_type_definition_defaults_untyped_field_to_str():
     src = "~Person(name)\n= ok\n"
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=1),
-    )
-    assert hover is not None
-    assert "name: str" in hover_value(hover)
+    assert "name: str" in hover_text_at(src, "example.kedi", "Person")
 
 
 def test_custom_type_definition_still_jumps_to_kedi_type():
     src = "~Person(name: str)\n@p(x: Person):\n  = <x>\n"
-    loc = features.compute_definition(
-        source=src,
-        uri="file:///tmp/example.kedi",
-        source_path="/tmp/example.kedi",
-        pos=lsp.Position(line=1, character=6),
+    loc = definition_at(
+        src, "file:///tmp/example.kedi", "/tmp/example.kedi", "Person", occurrence=2
     )
     assert loc is not None
     assert loc.range.start.line == 0
@@ -704,35 +566,20 @@ def test_custom_type_definition_still_jumps_to_kedi_type():
 
 def test_custom_type_definition_field_type_still_jumps_to_kedi_type():
     src = "~Person(name: str)\n~Team(member: Person)\n= ok\n"
-    loc = features.compute_definition(
-        source=src,
-        uri="file:///tmp/example.kedi",
-        source_path="/tmp/example.kedi",
-        pos=lsp.Position(line=1, character=14),
-    )
+    loc = definition_at(src, "file:///tmp/example.kedi", "/tmp/example.kedi", "Person")
     assert loc is not None
     assert loc.range.start.line == 0
 
 
 def test_unknown_type_hover_stays_runtime_resolved():
     src = "@p(x: UnknownType):\n  = <x>\n"
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=6),
-    )
-    assert hover is not None
-    assert "not defined in this module" in hover_value(hover)
-    assert "resolved at runtime" in hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "UnknownType")
+    assert "not defined in this module" in body
+    assert "resolved at runtime" in body
 
 
 def test_hover_on_unparseable_returns_none():
-    hover = features.compute_hover(
-        source="@p(:\n  ???\n",
-        source_path="example.kedi",
-        pos=lsp.Position(line=0, character=1),
-    )
-    assert hover is None
+    assert hover_at("@p(:\n  ???\n", "example.kedi", "p", offset=1) is None
 
 
 def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
@@ -748,13 +595,7 @@ def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
         "\n"
         "= <`person`>\n"
     )
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=8, character=19),
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "Person", occurrence=2)
     assert "Person" in body
     assert "defined in the Python prelude" in body
     assert "not defined in this module" not in body
@@ -776,13 +617,7 @@ def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():
         "\n"
         "= <`person`>\n"
     )
-    hover = features.compute_hover(
-        source=src,
-        source_path="example.kedi",
-        pos=lsp.Position(line=12, character=19),
-    )
-    assert hover is not None
-    body = hover_value(hover)
+    body = hover_text_at(src, "example.kedi", "Person", occurrence=2)
     assert "Person" in body
     assert "defined in a top-level Python block" in body
     assert "not defined in this module" not in body

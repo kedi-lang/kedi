@@ -2,28 +2,26 @@
 
 from __future__ import annotations
 
-from io import StringIO
-
-from kedi.console import KediConsole
+from kedi.reporter import BufferReporter
 from kedi.lang import parse_program
 from kedi.optimization.gepa import GEPAOptimizer
 
 GEPA_AVAILABLE = True
 
 
-def test_gepa_optimizer_accepts_injected_console() -> None:
+def test_gepa_optimizer_accepts_injected_reporter() -> None:
     from kedi.optimization.config import OptimizerConfig
 
-    buffer = StringIO()
+    reporter = BufferReporter()
     optimizer = GEPAOptimizer(
         config=OptimizerConfig(max_metric_calls=10),
         runtime=None,
-        console=KediConsole(file=buffer, force_terminal=False, color_system=None),
+        reporter=reporter,
     )
 
-    optimizer.console.print("optimizer-ready", end="")
+    optimizer._reporter.emit("optimizer-ready", end="")
 
-    assert buffer.getvalue() == "optimizer-ready"
+    assert reporter.getvalue() == "optimizer-ready"
 
 
 def test_gepa_optimizer_interface():

@@ -2,6 +2,8 @@ from typing import Any, Protocol, TypeVar
 
 from typing_extensions import runtime_checkable
 
+from ..resolved_types import ResolvedKediType
+
 T = TypeVar("T", covariant=True)
 
 
@@ -11,7 +13,7 @@ class AgentAdapter(Protocol[T]):
         self,
         *,
         template: str,
-        output_schema: dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **kwargs: Any,
     ) -> T:
         """
@@ -29,7 +31,7 @@ class AgentAdapter(Protocol[T]):
         self,
         *,
         template: str,
-        output_schema: dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **kwargs: Any,
     ) -> T:
         """

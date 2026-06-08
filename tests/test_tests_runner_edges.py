@@ -210,7 +210,12 @@ def test_run_tests_and_evals_path_detection_exceptions_and_non_string_inputs(
         _validation_tests: list[Any] = []
         _validation_evals: list[Any] = []
 
-    def fake_load(src_main: object, *, adapter: object) -> EmptyRuntime:
+    def fake_load(
+        src_main: object,
+        *,
+        adapter: object,
+        runtime_globals: dict[str, Any] | None = None,
+    ) -> EmptyRuntime:
         return EmptyRuntime()
 
     def raise_exists(self: Path) -> bool:
@@ -235,7 +240,7 @@ def test_run_tests_and_evals_path_detection_missing_file(
     monkeypatch.setattr(
         tests_runner,
         "_load_program_with_validations",
-        lambda src_main, *, adapter: EmptyRuntime(),
+        lambda src_main, *, adapter, runtime_globals=None: EmptyRuntime(),
     )
 
     assert run_tests("missing-file.kedi", adapter=None) == []

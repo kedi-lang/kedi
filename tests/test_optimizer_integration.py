@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.mock import MockOptimizer
@@ -18,14 +17,9 @@ from kedi.optimization.services import (
     OptimizationResultWriter,
     TypeResolver,
 )
+from tests.optimization_helpers import parse_validation_program
 
 GEPA_AVAILABLE = True
-
-
-def _parse_validation_program(src: str) -> ProgramWithValidation:
-    prog = parse_program(src)
-    assert isinstance(prog, ProgramWithValidation)
-    return prog
 
 
 def test_mock_optimizer_end_to_end():
@@ -52,7 +46,7 @@ def test_mock_optimizer_end_to_end():
     return (1.0 if result == expected else 0.0, None)
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     proc = prog.procedures[0]
@@ -144,7 +138,7 @@ def test_data_loader_and_metric_integration():
     return (1.0 if result == expected else 0.0, None)
     ```
 """
-    prog = _parse_validation_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     proc = prog.procedures[0]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ..lang.ast import (
     CallSegment,
     InputSegment,
@@ -14,6 +16,29 @@ from ..lang.ast import (
 )
 from ..lang.compiler.environment import KediRuntime
 from ..lang.compiler.evaluation import evaluate_call, evaluate_python_inline, lookup_value
+
+__all__ = [
+    "extract_input_fields",
+    "extract_output_fields",
+    "normalize_metric_result",
+    "normalize_optimized_prompt_prefix",
+    "render_instruction_lines",
+    "span_to_instruction",
+    "template_line_to_string",
+]
+
+
+def normalize_metric_result(val: object) -> tuple[float, str | None]:
+    """Normalize metric return values to ``(score, feedback)``."""
+    if isinstance(val, bool):
+        return (1.0 if val else 0.0, None)
+    if isinstance(val, tuple) and len(val) == 2:
+        score = float(cast(float | int | str, val[0]))
+        feedback = None if val[1] is None else str(val[1])
+        return (score, feedback)
+    if isinstance(val, tuple):
+        raise TypeError("Metric tuple result must be (score, feedback)")
+    return (float(cast(float | int | str, val)), None)
 
 
 def template_line_to_string(template_line: TemplateLine) -> str:

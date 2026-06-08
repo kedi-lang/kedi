@@ -7,6 +7,8 @@ from typing import Any, cast
 
 from lsprotocol import types as lsp
 
+from tests.lsp_helpers import position_of
+
 
 def test_server_can_be_constructed():
     from kedi.lsp.server import make_server
@@ -108,7 +110,7 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
     )
 
     text_document = SimpleNamespace(uri=uri)
-    position = lsp.Position(line=0, character=1)
+    position = position_of(source, "hello")
 
     handlers[lsp.TEXT_DOCUMENT_DID_OPEN](SimpleNamespace(text_document=text_document))
     handlers[lsp.TEXT_DOCUMENT_DID_CHANGE](SimpleNamespace(text_document=text_document))

@@ -9,9 +9,8 @@ from typing import Any, cast
 import dspy
 
 from ...lang.ast import OptimizeSpan
+from ..dspy_introspection import extract_signature_instructions, is_non_default_instruction
 from ..utils import normalize_optimized_prompt_prefix, span_to_instruction
-
-DSPY_AVAILABLE = True
 
 
 class DSPyPromptExtractor:
@@ -35,9 +34,6 @@ class DSPyPromptExtractor:
         Returns:
             Dictionary mapping span.name -> optimized prompt string
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         optimized_prompts = {}
         predictors = self._find_predictors(optimized_module)
 
@@ -131,15 +127,8 @@ class DSPyPromptExtractor:
         if not hasattr(predictor, "signature"):
             return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
 
-        sig = predictor.signature
-        instructions = getattr(sig, "instructions", None) or getattr(sig, "_instructions", None)
-
-        if not isinstance(instructions, str) or not instructions.strip():
-            return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
-
-        # Filter out default DSPy signature instructions
-        default_pattern = "Given the fields"
-        if default_pattern not in instructions or len(instructions) > len(default_pattern) + 50:
+        instructions = extract_signature_instructions(predictor)
+        if instructions and is_non_default_instruction(instructions):
             return normalize_optimized_prompt_prefix(span, instructions)
 
         return normalize_optimized_prompt_prefix(span, span_to_instruction(span))

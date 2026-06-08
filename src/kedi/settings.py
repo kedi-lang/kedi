@@ -1,6 +1,6 @@
 import dotenv
-from pydantic import ConfigDict, Field
-from pydantic_settings import BaseSettings
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing_extensions import Literal
 
 dotenv.load_dotenv()
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
     groq_api_key: str | None = Field(None, description="API key for Groq API access")
 
-    model_config = ConfigDict(case_sensitive=False, extra="allow")  # type: ignore
+    model_config = SettingsConfigDict(case_sensitive=False, extra="allow")
 
 
 settings = Settings.model_validate({})

@@ -43,8 +43,12 @@ def test_one_dataset_per_metric():
   > metric: m1(inputs):
     = `1.0`
 """
+    from kedi.lang.ast import EvalSuite, ProgramWithValidation
+
     prog = parse_program(src)
-    eval_suite = prog.evals[0]  # type: ignore
+    assert isinstance(prog, ProgramWithValidation)
+    eval_suite = prog.evals[0]
+    assert isinstance(eval_suite, EvalSuite)
 
     # Should have exactly one metric
     assert len(eval_suite.metrics) == 1

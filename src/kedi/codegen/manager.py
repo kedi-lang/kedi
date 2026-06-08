@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..console import KediConsole
+from ..reporter import CliReporter, Reporter
 from ..lang.ast import Program
 from ..lang.parser import parse_program
 from ..source_loading import merge_source_documents
@@ -23,12 +23,12 @@ class CodegenManager:
         agent: CodegenAgent,
         config: CodegenConfig | None = None,
         use_cache: bool = True,
-        console: KediConsole | None = None,
+        reporter: Reporter | None = None,
     ) -> None:
         self.agent = agent
         self.config = config or CodegenConfig()
         self.use_cache = use_cache
-        self.console = console or KediConsole()
+        self._reporter = reporter or CliReporter()
 
     def cache_path_for(self, source_path: Path) -> Path:
         return source_path.with_suffix(".cache.kedi")
@@ -145,7 +145,7 @@ class CodegenManager:
         # Convert Kedi signature to Python signature
         python_sig = kedi_signature_to_python_signature(proc_header)
 
-        self.console.inline(f"Code generation in progress for {name}", end="", flush=True)
+        self._reporter.emit(f"Code generation in progress for {name}", end="", flush=True)
 
         # Iterative generation: each stage gets more attempts
         test_error_feedback = None
@@ -157,7 +157,7 @@ class CodegenManager:
             # Try generating tests (num_attempts times)
             test_success = False
             for test_attempt in range(num_attempts):
-                self.console.progress_char()
+                self._reporter.progress_char()
                 python_tests = self.agent.generate_tests(
                     python_sig, prompt, context, test_error_feedback
                 )
@@ -181,7 +181,7 @@ class CodegenManager:
             # Tests compiled, now try generating implementation (num_attempts times)
             impl_success = False
             for impl_attempt in range(num_attempts):
-                self.console.progress_char()
+                self._reporter.progress_char()
                 python_impl = self.agent.generate_impl(
                     python_sig, prompt, context, python_tests, impl_error_feedback
                 )
@@ -200,7 +200,7 @@ class CodegenManager:
                 # Implementation compiled, run tests
                 test_run_error = self.run_tests_and_get_errors(source_path)
                 if not test_run_error:
-                    self.console.inline(" ✓\n", flush=True)
+                    self._reporter.emit(" ✓\n", flush=True)
                     impl_success = True
                     break
 
@@ -212,7 +212,7 @@ class CodegenManager:
             # Implementation failed all attempts, prepare feedback for next stage
             test_error_feedback = f"Previous tests may have been too strict or incorrect.\nLast implementation error: {impl_error_feedback}"
 
-        self.console.inline(" ✗\n", flush=True)
+        self._reporter.emit(" ✗\n", flush=True)
         # Clean up failed cache - don't persist code that doesn't pass tests
         self.cleanup_failed_cache(source_path)
         return False
