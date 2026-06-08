@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..lang.ast import OptimizeSpan
-from ..resolved_types import ResolvedKediType
 from ..lang.compiler.environment import KediRuntime
 from ..reporter import CliReporter, Reporter
+from ..resolved_types import ResolvedKediType
 from .config import OptimizerConfig
 from .gepa_reflection import build_reflection_lm
 from .gepa_session import GEPASession

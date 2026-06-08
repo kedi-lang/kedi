@@ -24,8 +24,8 @@ from kedi.codegen.translator import (
     python_impl_to_kedi_impl,
     python_tests_to_kedi_tests,
 )
-from kedi.reporter import BufferReporter, CliReporter, NullReporter
 from kedi.lang.ast import ProcedureDef, TypeDef, TypeField
+from kedi.reporter import BufferReporter, CliReporter, NullReporter
 from kedi.tests_runner import TestCaseResult as KediTestCaseResult
 from kedi.tests_runner import TestRunResult as KediTestRunResult
 from kedi.tests_runner import run_tests

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..reporter import CliReporter, Reporter
 from ..lang.ast import Program
 from ..lang.parser import parse_program
+from ..reporter import CliReporter, Reporter
 from ..source_loading import merge_source_documents
 from ..tests_runner import run_tests
 from .interfaces import CodegenAgent, CodegenConfig, ProgramContext

@@ -2,13 +2,6 @@
 
 from __future__ import annotations
 
-from kedi.resolved_types import (
-    as_resolved_kedi_type,
-    is_resolved_kedi_type,
-    resolved_type_name,
-    runtime_isinstance,
-)
-
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -16,6 +9,12 @@ import pytest
 from lsprotocol import types as lsp
 
 from kedi.lsp import features, module_surface
+from kedi.resolved_types import (
+    as_resolved_kedi_type,
+    is_resolved_kedi_type,
+    resolved_type_name,
+    runtime_isinstance,
+)
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_of
 
@@ -281,7 +280,6 @@ def test_python_code_lines_strips_trailing_empty_split_line() -> None:
 
 def test_resolve_symbol_at_skips_unmatched_type_defs_before_match() -> None:
     from kedi.lang import parse_program
-
     from tests.lsp_helpers import position_of
 
     src = "~Alpha(x)\n~Beta(y)\n"

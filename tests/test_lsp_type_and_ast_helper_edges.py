@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-
 from kedi.lsp import features
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line

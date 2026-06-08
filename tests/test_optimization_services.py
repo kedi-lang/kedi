@@ -30,7 +30,6 @@ from kedi.optimization.services.program_loader import load_program_with_optimize
 from kedi.optimization.utils import extract_output_fields
 from tests.optimization_helpers import parse_validation_program
 
-
 # ==================== OptimizationDataLoader Tests ====================
 
 

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from kedi.reporter import BufferReporter
 from kedi.lang import parse_program
 from kedi.optimization.gepa import GEPAOptimizer
+from kedi.reporter import BufferReporter
 
 
 def test_gepa_optimizer_accepts_injected_reporter() -> None:

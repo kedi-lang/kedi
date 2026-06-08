@@ -10,8 +10,8 @@ from typing import Any, cast
 import dspy
 
 from ..lang.ast import OptimizeSpan
-from ..resolved_types import ResolvedKediType
 from ..reporter import Reporter
+from ..resolved_types import ResolvedKediType
 from .config import OptimizerConfig
 from .services.dspy_example_formatter import DSPyExampleFormatter
 from .services.dspy_module_builder import DSPyModuleBuilder

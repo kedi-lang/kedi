@@ -27,10 +27,10 @@ the server publishes as a semantic-tokens legend.
 from __future__ import annotations
 
 import ast as _py_ast
-from collections.abc import Callable, Sequence
 import builtins as _builtins
 import importlib.resources
 import typing as _typing
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -38,11 +38,10 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import Node
+from tree_sitter import Node, Tree
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
-from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod

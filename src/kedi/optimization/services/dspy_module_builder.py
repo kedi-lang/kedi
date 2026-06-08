@@ -6,11 +6,11 @@ from typing import cast
 
 import dspy
 
-from ...lang.ast import OptimizeSpan
-from ...resolved_types import ResolvedKediType
-from ...lang.compiler.environment import KediRuntime
-from ..utils import extract_input_fields, extract_output_fields
 from ...dynamic_models import build_dynamic_model
+from ...lang.ast import OptimizeSpan
+from ...lang.compiler.environment import KediRuntime
+from ...resolved_types import ResolvedKediType
+from ..utils import extract_input_fields, extract_output_fields
 from .type_handler import StructuredTypeHandler
 
 

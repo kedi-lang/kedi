@@ -15,8 +15,6 @@ from kedi.lang.ast import (
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services.gepa_metric_wrapper import GEPAMetricWrapper
-
-
 from tests.optimization_helpers import make_optimize_span
 
 

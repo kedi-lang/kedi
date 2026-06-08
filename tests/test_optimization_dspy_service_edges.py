@@ -25,8 +25,6 @@ from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder, _K
 from kedi.optimization.services.dspy_prompt_extractor import DSPyPromptExtractor
 from kedi.optimization.services.dspy_score_calculator import DSPyScoreCalculator
 from kedi.optimization.services.prompt_loader import OptimizedPromptLoader
-
-
 from tests.optimization_helpers import make_optimize_span
 
 
