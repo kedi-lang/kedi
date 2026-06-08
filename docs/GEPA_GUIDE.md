@@ -1,5 +1,9 @@
 # GEPA Optimizer Fixes and Debugging Guide
 
+> Status: debugging/reference note. This document explains historical GEPA
+> integration fixes and diagnostic patterns; it is not the canonical language
+> guide. For current Kedi syntax, start with `docs/KEDI_DSL.md`.
+
 ## Table of Contents
 1. [Overview](#overview)
 2. [Critical Bugs Fixed](#critical-bugs-fixed)
@@ -915,4 +919,3 @@ For issues or questions about GEPA optimization:
 - `src/kedi/optimization/services/gepa_metric_wrapper.py` - Metric bridge
 - `src/kedi/lang/compiler/statement_compiler.py` - Template execution
 - `tests/dspy_mocks.py` - Mock infrastructure for testing
-

@@ -4,14 +4,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from typing import Any, cast
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 
 class DSPyScoreCalculator:
@@ -39,9 +34,6 @@ class DSPyScoreCalculator:
         Returns:
             Average score (0.0-1.0)
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         scores = []
         sample = trainset[: min(sample_size, len(trainset))]
 
@@ -83,7 +75,7 @@ class DSPyScoreCalculator:
         if hasattr(example, "inputs") and callable(example.inputs):
             inputs = example.inputs()
             if inputs:
-                return inputs
+                return cast(dict[str, Any], inputs)
 
         # Fallback: extract from __dict__
         if hasattr(example, "__dict__"):

@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
 from ..lang.ast import OptimizeSpan
+from ..resolved_types import ResolvedKediType
 
 
 class OptimizerAdapter(Protocol):
@@ -20,7 +21,7 @@ class OptimizerAdapter(Protocol):
         self,
         proc_name: str,
         proc_params: list[str],
-        param_types: dict[str, type],
+        param_types: dict[str, ResolvedKediType],
         spans: list[OptimizeSpan],
         train_data: Iterable[tuple[Any, Any]],
         test_data: Iterable[tuple[Any, Any]] | None,

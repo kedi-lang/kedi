@@ -2,24 +2,28 @@ from __future__ import annotations
 
 import functools
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable
+
+from typing_extensions import ParamSpec
 
 from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 
-F = TypeVar("F", bound=Callable[..., Any])
+P = ParamSpec("P")
 
 
-def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
+def llm_retry(
+    tries: int = 3, delay_s: float = 0.0
+) -> Callable[[Callable[P, Any]], Callable[P, Any]]:
     """Decorator to retry flaky LLM assertions a few times.
 
     Retries the wrapped test function up to `tries` times when an AssertionError is raised.
     Optionally sleeps `delay_s` seconds between attempts.
     """
 
-    def decorator(func: F) -> F:
+    def decorator(func: Callable[P, Any]) -> Callable[P, Any]:
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any):  # type: ignore[override]
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
             for attempt in range(tries):
                 try:
                     return func(*args, **kwargs)
@@ -28,8 +32,9 @@ def llm_retry(tries: int = 3, delay_s: float = 0.0) -> Callable[[F], F]:
                         raise
                     if delay_s > 0:
                         time.sleep(delay_s)
+            raise AssertionError("unreachable")
 
-        return wrapper  # type: ignore[return-value]
+        return wrapper
 
     return decorator
 

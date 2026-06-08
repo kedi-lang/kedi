@@ -18,26 +18,77 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO_NAME: ${{ github.repository }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          USER_NAME: ${{ github.actor }}
+          SERVER_URL: ${{ github.server_url }}
+          SHA: ${{ github.sha }}
         run: |
-          EVENT_NAME="${{ github.event_name }}"
-          REPO_NAME="${{ github.repository }}"
-          BRANCH_NAME="${{ github.ref_name }}"
-          USER="${{ github.actor }}"
-          
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            URL="${{ github.event.pull_request.html_url }}"
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            PR_BODY="${{ github.event.pull_request.body }}"
-            COMMIT_MSGS=""
-          else
-            URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
-            PR_TITLE=""
-            PR_BODY=""
-            COMMIT_MSGS="${{ github.event.head_commit.message }}"
+          if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are not configured; skipping notification."
+            exit 0
           fi
-          
-          MESSAGE="🔔 Repo: $REPO_NAME%0AEvent: $EVENT_NAME%0AUser: $USER%0ABranch: $BRANCH_NAME%0AURL: $URL%0APR Title: $PR_TITLE%0APR Body: $PR_BODY%0ACommits: $COMMIT_MSGS"
-          
-          curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
-            -d chat_id="$TELEGRAM_CHAT_ID" \
-            -d text="$MESSAGE"
+
+          PAYLOAD_FILE="${RUNNER_TEMP:-.}/telegram_payload.json"
+          export PAYLOAD_FILE
+
+          python << 'PYTHON_EOF'
+          import json
+          import os
+          from pathlib import Path
+          from urllib.parse import unquote
+
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+          event_name = os.environ["EVENT_NAME"]
+          repo_name = os.environ["REPO_NAME"]
+          branch_name = os.environ["BRANCH_NAME"]
+          actor = os.environ["USER_NAME"]
+
+          def text(value: object) -> str:
+              if value is None:
+                  return ""
+              return unquote(str(value))
+
+          if event_name == "pull_request":
+              pull_request = event.get("pull_request") or {}
+              url = text(pull_request.get("html_url"))
+              pr_title = text(pull_request.get("title"))
+              pr_body = text(pull_request.get("body"))
+              commit_msgs = ""
+          else:
+              url = f'{os.environ["SERVER_URL"]}/{repo_name}/commit/{os.environ["SHA"]}'
+              pr_title = ""
+              pr_body = ""
+              commit_msgs = text((event.get("head_commit") or {}).get("message"))
+
+          message = "\n".join(
+              [
+                  f"🔔 Repo: {repo_name}",
+                  f"Event: {event_name}",
+                  f"User: {actor}",
+                  f"Branch: {branch_name}",
+                  f"URL: {url}",
+                  f"PR Title: {pr_title}",
+                  f"PR Body: {pr_body}",
+                  f"Commits: {commit_msgs}",
+              ]
+          )
+          if len(message) > 4000:
+              message = f"{message[:3997]}..."
+
+          payload = {
+              "chat_id": os.environ["TELEGRAM_CHAT_ID"],
+              "text": message,
+              "disable_web_page_preview": True,
+          }
+          Path(os.environ["PAYLOAD_FILE"]).write_text(
+              json.dumps(payload, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PYTHON_EOF
+
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            --data-binary @"$PAYLOAD_FILE" \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage"

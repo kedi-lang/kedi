@@ -1,5 +1,9 @@
 # Tutorial: GEPA for AIME (Math)
 
+> Status: external DSPy/GEPA reference tutorial. Keep examples here as
+> task-oriented optimizer context; use `docs/KEDI_DSL.md` for current Kedi
+> language syntax.
+
 In this tutorial, we optimize GPT-4.1 Mini's Chain of Thought (`dspy.ChainOfThought`) for solving math problems (AIME) using the `dspy.GEPA` optimizer!
 
 ## Setup

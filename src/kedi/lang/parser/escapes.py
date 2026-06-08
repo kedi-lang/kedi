@@ -211,7 +211,7 @@ def dedent_block(lines: List[str]) -> List[str]:
             elif s[j] == "\t":
                 removed += 4
                 j += 1
-            else:
+            else:  # pragma: no cover - min_indent is derived from the same whitespace rules.
                 break
         dedented.append(s[j:])
     return dedented

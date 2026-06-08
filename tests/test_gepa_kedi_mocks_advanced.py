@@ -15,18 +15,21 @@ import warnings
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
-from tests.dspy_mocks import (
-    RangeAwareAdapter,
-    Recorder,
-    install_mock_dspy,
-)
+from tests.dspy_mocks import RangeAwareAdapter, Recorder, install_mock_dspy
+
+
+@pytest.fixture(autouse=True)
+def _isolated_gepa_cwd(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 def _prepare(src: str, proc_index: int = 0, eval_index: int = 0):
     prog = parse_program(src)
+    assert isinstance(prog, ProgramWithValidation)
     rt = compile_program(prog, adapter=RangeAwareAdapter())
     proc = prog.procedures[proc_index]
     resolver = TypeResolver(rt)
@@ -238,8 +241,10 @@ def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPa
 
     body_stmts = proc.body
     for stmt in body_stmts:
-        if hasattr(stmt, "optimized_prompt_prefix"):
-            if stmt.optimized_prompt_prefix is None and hasattr(stmt, "segments"):
+        optimized_prompt_prefix = getattr(stmt, "optimized_prompt_prefix", None)
+        segments = getattr(stmt, "segments", None)
+        if optimized_prompt_prefix is None:
+            if segments is not None:
                 pass
 
 

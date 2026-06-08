@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+from collections.abc import Sequence
 
 from ...agent_adapter.adapters import DSPyAdapter
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType
+from ...resolved_types import ResolvedKediType, as_resolved_kedi_type, resolved_type_name
 
 
 class StructuredTypeHandler:
@@ -34,8 +28,8 @@ class StructuredTypeHandler:
 
     def build_output_schema(
         self,
-        output_fields: list[tuple[str, str | None]],
-    ) -> dict[str, type]:
+        output_fields: Sequence[tuple[str, str | None]],
+    ) -> dict[str, ResolvedKediType]:
         """Convert Kedi output fields to output schema dict.
 
         Resolves type annotations from AST to Python types using the runtime's
@@ -47,7 +41,7 @@ class StructuredTypeHandler:
         Returns:
             Dictionary mapping field names to Python types
         """
-        output_schema: dict[str, type] = {}
+        output_schema: dict[str, ResolvedKediType] = {}
 
         for field_name, type_anno in output_fields:
             if not type_anno:
@@ -58,14 +52,9 @@ class StructuredTypeHandler:
             try:
                 resolved_type = KediType(type_anno).resolve(self.runtime, {})
 
-                # Validate it's a type or typing construct
-                if isinstance(resolved_type, type):
-                    output_schema[field_name] = resolved_type
-                elif hasattr(resolved_type, "__origin__") or str(type(resolved_type)).startswith(
-                    "<class 'typing."
-                ):
-                    # Handle typing constructs (List, Dict, etc.)
-                    output_schema[field_name] = resolved_type  # type: ignore
+                stored_type = as_resolved_kedi_type(resolved_type)
+                if stored_type is not None:
+                    output_schema[field_name] = stored_type
                 else:
                     # Fallback to str
                     output_schema[field_name] = str
@@ -78,9 +67,9 @@ class StructuredTypeHandler:
     async def create_dspy_signature(
         self,
         inputs: list[str],
-        output_fields: list[tuple[str, str | None]],
+        output_fields: Sequence[tuple[str, str | None]],
         use_string_signature: bool = True,
-    ) -> dspy.Signature | str:
+    ) -> str:
         """Create DSPy Signature using adapter pattern.
 
         Delegates to DSPyAdapter.type_builder() to handle structured types
@@ -97,9 +86,6 @@ class StructuredTypeHandler:
         Raises:
             ImportError: If DSPy is not available
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required for signature creation")
-
         # Build output schema from fields
         output_schema = self.build_output_schema(output_fields)
 
@@ -150,12 +136,9 @@ class StructuredTypeHandler:
                                 break
 
                         if matching_field and matching_field in output_schema:
-                            type_name = (
-                                output_schema[matching_field].__name__
-                                if hasattr(output_schema[matching_field], "__name__")
-                                else str(output_schema[matching_field])
+                            output_parts.append(
+                                f"{out_name}: {resolved_type_name(output_schema[matching_field])}"
                             )
-                            output_parts.append(f"{out_name}: {type_name}")
                         else:
                             output_parts.append(out_name)
 
@@ -165,12 +148,9 @@ class StructuredTypeHandler:
                 output_parts = []
                 for out_name, _ in output_fields:
                     if out_name in output_schema:
-                        type_name = (
-                            output_schema[out_name].__name__
-                            if hasattr(output_schema[out_name], "__name__")
-                            else str(output_schema[out_name])
+                        output_parts.append(
+                            f"{out_name}: {resolved_type_name(output_schema[out_name])}"
                         )
-                        output_parts.append(f"{out_name}: {type_name}")
                     else:
                         output_parts.append(out_name)
                 output_str = ", ".join(output_parts)
@@ -186,7 +166,7 @@ class StructuredTypeHandler:
     def create_dspy_signature_sync(
         self,
         inputs: list[str],
-        output_fields: list[tuple[str, str | None]],
+        output_fields: Sequence[tuple[str, str | None]],
         use_string_signature: bool = True,
     ) -> str:
         """Synchronous wrapper for create_dspy_signature.

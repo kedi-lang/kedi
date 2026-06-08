@@ -8,6 +8,7 @@ from typing import Any
 from ...lang.ast import EvalMetric, ProcedureDef
 from ...lang.compiler import _eval_python_inline, _execute_python_block
 from ...lang.compiler.environment import KediRuntime
+from ..utils import normalize_metric_result
 
 
 class MetricFactory:
@@ -87,34 +88,10 @@ class MetricFactory:
                     self.runtime._current_env.reset(token)
 
                 # Process result - must return (float, str | None)
-                return self._normalize_metric_result(val)
+                return normalize_metric_result(val)
 
             except Exception as e:
                 # Metric execution failed - return 0.0 score with error
                 return (0.0, f"error: {e}")
 
         return metric_fn
-
-    def _normalize_metric_result(self, val: Any) -> tuple[float, str | None]:
-        """Normalize metric result to (score, feedback) tuple.
-
-        Handles:
-        - bool: True -> (1.0, None), False -> (0.0, None)
-        - tuple of 2: (score, feedback)
-        - single value: (float(value), None)
-
-        Args:
-            val: Value returned from metric code
-
-        Returns:
-            (score, feedback) tuple
-        """
-        if isinstance(val, bool):
-            return (1.0 if val else 0.0, None)
-        elif isinstance(val, tuple) and len(val) == 2:
-            score = float(val[0])
-            feedback = None if val[1] is None else str(val[1])
-            return (score, feedback)
-        else:
-            score = float(val)
-            return (score, None)

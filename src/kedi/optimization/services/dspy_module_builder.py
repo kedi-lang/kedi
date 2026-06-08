@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-try:
-    import dspy
+from typing import cast
 
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from ...lang.ast import OptimizeSpan
+from ...resolved_types import ResolvedKediType
 from ...lang.compiler.environment import KediRuntime
 from ..utils import extract_input_fields, extract_output_fields
+from ...dynamic_models import build_dynamic_model
 from .type_handler import StructuredTypeHandler
 
 
@@ -43,16 +41,13 @@ class DSPyModuleBuilder:
         Args:
             runtime: Kedi runtime for structured type handling
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required for DSPyModuleBuilder")
-
         self.type_handler = StructuredTypeHandler(runtime)
 
     def build_module(
         self,
         span: OptimizeSpan,
         proc_params: list[str],
-        param_types: dict[str, type],
+        param_types: dict[str, ResolvedKediType],
     ) -> dspy.Module:
         """Build DSPy module for a single span.
 
@@ -64,9 +59,6 @@ class DSPyModuleBuilder:
         Returns:
             DSPy Module instance
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         # Extract inputs and outputs from span
         span_inputs = extract_input_fields(span)
         span_outputs = extract_output_fields(span)
@@ -89,7 +81,7 @@ class DSPyModuleBuilder:
         rt = self.type_handler.runtime
 
         class SingleSpanModule(dspy.Module):
-            def __init__(self, sig: dspy.Signature):
+            def __init__(self, sig: type[dspy.Signature]):
                 super().__init__()
                 # Use the globally configured LM (inherits max_tokens from dspy.settings)
                 # DSPy automatically uses JSON mode via its adapter system for structured outputs
@@ -109,15 +101,13 @@ class DSPyModuleBuilder:
         self,
         inputs: list[str],
         outputs: list[tuple[str, str | None]],
-        param_types: dict[str, type],
-    ) -> dspy.Signature:
+        param_types: dict[str, ResolvedKediType],
+    ) -> type[dspy.Signature]:
         """Create DSPy Signature with input and output fields.
 
         Uses actual Pydantic types for structured outputs to enable proper
         type enforcement via DSPy's JSON mode and structured output adapters.
         """
-        from pydantic import create_model
-
         # Create field definitions
         field_definitions = {}
 
@@ -136,13 +126,12 @@ class DSPyModuleBuilder:
                 # Fallback to str if no type annotation
                 field_definitions[field] = (str, dspy.OutputField())
 
-        return create_model(
-            "_ProcedureSignature",
-            __base__=dspy.Signature,
-            **field_definitions,
-        )
+        model = build_dynamic_model("_ProcedureSignature", dspy.Signature, field_definitions)
+        return cast(type[dspy.Signature], model)
 
-    def _resolve_type_annotation(self, type_anno: str, param_types: dict[str, type]) -> type:
+    def _resolve_type_annotation(
+        self, type_anno: str, param_types: dict[str, ResolvedKediType]
+    ) -> ResolvedKediType:
         """Resolve a type annotation string to an actual Python type.
 
         Args:

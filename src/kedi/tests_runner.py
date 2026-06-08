@@ -6,6 +6,7 @@ from typing import Any, List, Optional
 
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
+from .optimization.utils import normalize_metric_result
 from .source_loading import load_kedi_source_bundle
 
 
@@ -35,7 +36,12 @@ class EvalRunResult:
     metrics: List[EvalMetricResult]
 
 
-def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> Any:
+def _load_program_with_validations(
+    src_main: str,
+    *,
+    adapter: Optional[Any],
+    runtime_globals: dict[str, Any] | None = None,
+) -> Any:
     # src_main may be the full source content or a filesystem path
     text: str
     if "\n" in src_main or "@" in src_main:
@@ -50,16 +56,21 @@ def _load_program_with_validations(src_main: str, *, adapter: Optional[Any]) -> 
         source_map = loaded.source_map
     prog = parse_program(text, source_path=source_path, source_map=source_map)
     rt = compile_program(prog, adapter=adapter)
+    if runtime_globals:
+        rt.set_initial_globals(runtime_globals)
     return rt
 
 
-def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunResult]:
+def run_tests(
+    src_main: str,
+    *,
+    adapter: Optional[Any] = None,
+    runtime_globals: dict[str, Any] | None = None,
+) -> List[TestRunResult]:
     from pathlib import Path
 
     from .lang.compiler import compile_program
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     # Check if src_main is a file path or source code string
     source_path = None
@@ -78,12 +89,20 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
         try:
             program = load_program_with_optimized_prompts(source_path)
             rt = compile_program(program, adapter=adapter)
+            if runtime_globals:
+                rt.set_initial_globals(runtime_globals)
         except Exception:
-            # Fallback to original loading method
-            rt = _load_program_with_validations(src_main, adapter=adapter)
+            rt = _load_program_with_validations(
+                src_main,
+                adapter=adapter,
+                runtime_globals=runtime_globals,
+            )
     else:
-        # Source code string - use original loading method
-        rt = _load_program_with_validations(src_main, adapter=adapter)
+        rt = _load_program_with_validations(
+            src_main,
+            adapter=adapter,
+            runtime_globals=runtime_globals,
+        )
     suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
     results: List[TestRunResult] = []
     for suite in suites:
@@ -106,12 +125,15 @@ def run_tests(src_main: str, *, adapter: Optional[Any] = None) -> List[TestRunRe
     return results
 
 
-def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunResult]:
+def run_evals(
+    src_main: str,
+    *,
+    adapter: Optional[Any] = None,
+    runtime_globals: dict[str, Any] | None = None,
+) -> List[EvalRunResult]:
     from pathlib import Path
 
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     # Check if src_main is a file path or source code string
     # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path
@@ -137,12 +159,20 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
             program = load_program_with_optimized_prompts(source_path)
             # Compile with optimized prompts
             rt = compile_program(program, adapter=adapter)
+            if runtime_globals:
+                rt.set_initial_globals(runtime_globals)
         except Exception:
-            # Fallback to original loading method if optimized prompt loading fails
-            rt = _load_program_with_validations(src_main, adapter=adapter)
+            rt = _load_program_with_validations(
+                src_main,
+                adapter=adapter,
+                runtime_globals=runtime_globals,
+            )
     else:
-        # Source code string - use original loading method
-        rt = _load_program_with_validations(src_main, adapter=adapter)
+        rt = _load_program_with_validations(
+            src_main,
+            adapter=adapter,
+            runtime_globals=runtime_globals,
+        )
     suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
     results: List[EvalRunResult] = []
 
@@ -218,11 +248,7 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                         val = _execute_python_block(m.code, rt, {})
                     else:
                         val = _eval_python_inline(rt, m.code, {})
-                    if isinstance(val, tuple) and len(val) == 2:
-                        score = float(val[0])
-                        feedback = None if val[1] is None else str(val[1])
-                    else:
-                        score = float(val)
+                    score, feedback = normalize_metric_result(val)
                 except Exception as e:
                     score = 0.0
                     feedback = f"error: {e}"
@@ -289,16 +315,7 @@ def run_evals(src_main: str, *, adapter: Optional[Any] = None) -> List[EvalRunRe
                             else:
                                 val = _eval_python_inline(rt, m.code, metric_env)
 
-                            # Process result
-                            if isinstance(val, bool):
-                                score_val = 1.0 if val else 0.0
-                                feedback_val = None
-                            elif isinstance(val, tuple) and len(val) == 2:
-                                score_val = float(val[0])
-                                feedback_val = None if val[1] is None else str(val[1])
-                            else:
-                                score_val = float(val)
-                                feedback_val = None
+                            score_val, feedback_val = normalize_metric_result(val)
 
                             eval_scores.append(score_val)
                             if feedback_val:

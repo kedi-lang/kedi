@@ -13,6 +13,7 @@ def test_colon_to_slash_for_litellm() -> None:
 def test_slash_form_unchanged_for_litellm() -> None:
     assert normalize_for_litellm("acme/foo/bar-baz") == "acme/foo/bar-baz"
     assert normalize_for_litellm("groq/llama-3-8b") == "groq/llama-3-8b"
+    assert normalize_for_litellm("acme/foo:bar-baz") == "acme/foo:bar-baz"
 
 
 def test_slash_to_colon_for_pydantic() -> None:

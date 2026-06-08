@@ -5,10 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ...lang.ast import (
-    Program,
-    TemplateLine,
-)
+from ...lang.ast import Program, TemplateLine
 from ..utils import normalize_optimized_prompt_prefix
 
 

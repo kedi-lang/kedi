@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
@@ -211,13 +211,14 @@ class StatementExecutor:
                     self._sync_env(closure_env)
 
                 elif isinstance(stmt, TypeDefStmt):
-                    register_type(self.rt, stmt.typedef, type_scope, closure_env)
+                    if stmt.typedef is not None:
+                        register_type(self.rt, stmt.typedef, type_scope, closure_env)
 
                 elif isinstance(stmt, ProcDefStmt):
                     # Register nested procedure dynamically with current closure
                     from .procedure_compiler import ProcedureCompiler
 
-                    child: ProcedureDef = stmt.proc  # type: ignore
+                    child = cast(ProcedureDef, stmt.proc)
                     child.lexical_env = dict(closure_env)
                     proc_compiler = ProcedureCompiler(self.rt)
                     fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
@@ -281,7 +282,7 @@ class StatementExecutor:
             self._sync_env(env)
 
         elif isinstance(stmt, ProcDefStmt):
-            if is_toplevel:
+            if is_toplevel and stmt.proc is not None:
                 # Register top-level procedure
                 from .procedure_compiler import ProcedureCompiler
 

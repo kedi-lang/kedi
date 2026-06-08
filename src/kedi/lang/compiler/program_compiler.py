@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 def compile_program(
     prog: Program,
     *,
-    adapter: AgentAdapter | None = None,
+    adapter: AgentAdapter[Any] | None = None,
     executor: Executor | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
@@ -39,7 +39,7 @@ class ProgramCompiler:
 
     def __init__(
         self,
-        adapter: AgentAdapter | None,
+        adapter: AgentAdapter[Any] | None,
         *,
         executor: Executor | None = None,
         module_stack: tuple[Path, ...] = (),
@@ -114,10 +114,13 @@ class ProgramCompiler:
                 self._merge_exports(module_path, imported_prog, imported_rt)
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
-        return resolve_module_path(
-            module_import.module,
-            source_path=self._program_path(prog),
-        )
+        try:
+            return resolve_module_path(
+                module_import.module,
+                source_path=self._program_path(prog),
+            )
+        except FileNotFoundError as exc:
+            raise ModuleNotFoundError(str(exc)) from exc
 
     def _load_imported_program(self, module_path: Path) -> Program:
         from ..parser import parse_program
@@ -162,7 +165,7 @@ class ProgramCompiler:
 
         stack = getattr(rt, "_type_env_stack", None)
         if isinstance(stack, list):
-            for layer in stack:
+            for layer in cast(list[dict[str, Any]], stack):
                 names.extend(name for name in layer if self._is_public_name(name))
 
         for env_name in ("_globals_env", "_prelude_env", "_import_env"):
@@ -187,8 +190,9 @@ class ProgramCompiler:
         stack = getattr(imported_rt, "_type_env_stack", None)
         if isinstance(stack, list):
             for layer in reversed(stack):
-                if name in layer:
-                    return "type", layer[name]
+                if isinstance(layer, dict) and name in layer:
+                    typed_layer = cast(dict[str, Any], layer)
+                    return "type", typed_layer[name]
 
         for env_name in ("_globals_env", "_prelude_env", "_import_env"):
             env = getattr(imported_rt, env_name, None)
@@ -222,7 +226,11 @@ class ProgramCompiler:
         metadata = get_procedure_metadata(fn)
         if metadata is not None:
             setattr(wrapper, "__kedi_procedure_metadata__", metadata)
-            setattr(wrapper, "__kedi_procedure_def__", getattr(fn, "__kedi_procedure_def__", None))
+            setattr(
+                wrapper,
+                "__kedi_procedure_def__",
+                getattr(fn, "__kedi_procedure_def__", None),
+            )
             wrapper.__doc__ = metadata.docstring
         return wrapper
 
@@ -251,7 +259,7 @@ class ProgramCompiler:
         @self.rt.main
         def _main() -> Any:
             # Initialize top-level environment
-            kwargs: dict[str, Any] = {}
+            kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             setattr(self.rt, "_globals_env", kwargs)
 
             # Execute top-level statements

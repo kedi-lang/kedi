@@ -143,6 +143,8 @@ class ProcedureCompiler:
             for stmt in proc.body:
                 if isinstance(stmt, ProcDefStmt):
                     child = stmt.proc
+                    if child is None:
+                        continue
                     # Capture lexical environment
                     child.lexical_env = dict(closure_env)
                     fn_nested = self._make_procedure_impl(child, child.lexical_env)

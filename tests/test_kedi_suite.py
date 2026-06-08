@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -19,9 +20,19 @@ def _iter_kedi_files() -> Iterable[Path]:
     return sorted(p for p in root.glob("*.kedi") if p.is_file())
 
 
+def _groq_live_available() -> bool:
+    if not os.environ.get("GROQ_API_KEY"):
+        return False
+    try:
+        socket.getaddrinfo("api.groq.com", 443)
+    except OSError:
+        return False
+    return True
+
+
 requires_groq = pytest.mark.skipif(
-    not os.environ.get("GROQ_API_KEY"),
-    reason="GROQ_API_KEY not set; real LLM tests are skipped",
+    not _groq_live_available(),
+    reason="GROQ_API_KEY missing or Groq endpoint is not reachable; real LLM tests are skipped",
 )
 
 
@@ -84,8 +95,8 @@ def test_parse_cli_args() -> None:
 
     assert parse_args(args) == {
         "foo": "bar",
-        "retries": 5,
-        "temperature": 0.7,
+        "retries": "5",
+        "temperature": "0.7",
         "test": True,
         "no_cache": True,
     }

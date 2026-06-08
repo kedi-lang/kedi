@@ -5,29 +5,26 @@ Mirrors the DSPy AIME tutorial using Kedi's optimization framework.
 Evaluates GPT-4.1 Mini on AIME 2025 problems before and after GEPA optimization.
 
 Usage:
-    python examples/aime.py
-    python examples/aime.py --optimizer-model openai/gpt-4.1 --max-metric-calls 560
+    uv run examples/aime.py
+    uv run examples/aime.py --optimizer-model openai/gpt-4.1 --max-metric-calls 560
 """
 
 import argparse
 import json
 import os
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 # Check dependencies before importing Kedi
-try:
-    import datasets
-except ImportError:
+if find_spec("datasets") is None:
     print("Error: 'datasets' package is required but not installed.", file=sys.stderr)
-    print("Install it with: pip install datasets", file=sys.stderr)
+    print("Install it with: uv add datasets", file=sys.stderr)
     sys.exit(1)
 
-try:
-    import dspy
-except ImportError:
+if find_spec("dspy") is None:
     print("Error: 'dspy-ai' package is required but not installed.", file=sys.stderr)
-    print("Install it with: pip install dspy-ai", file=sys.stderr)
+    print("Install it with: uv add dspy-ai", file=sys.stderr)
     sys.exit(1)
 
 if not os.environ.get("OPENAI_API_KEY"):

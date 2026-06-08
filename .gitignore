@@ -11,7 +11,6 @@ __pycache__/
 *.so
 
 # Dev files
-Makefile
 dev/
 test.marker
 markers.md
@@ -234,4 +233,3 @@ tmp
 /*.kedi
 kedi-docs/
 docs/*_PLAN.md
-/*.kedi

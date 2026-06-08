@@ -4,16 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
+from ...reporter import NullReporter, Reporter
 
 
 class DSPyExampleFormatter:
@@ -24,13 +19,14 @@ class DSPyExampleFormatter:
     computes span-level inputs from procedure parameters.
     """
 
-    def __init__(self, runtime: KediRuntime):
+    def __init__(self, runtime: KediRuntime, *, reporter: Reporter | None = None):
         """Initialize formatter with runtime for span input computation.
 
         Args:
             runtime: Kedi runtime for executing procedures to get span inputs
         """
         self.runtime = runtime
+        self._reporter = reporter or NullReporter()
 
     def format_examples(
         self,
@@ -51,9 +47,6 @@ class DSPyExampleFormatter:
             List of dspy.Example objects with span input fields (if span provided)
             or procedure parameter fields (fallback)
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required for DSPyExampleFormatter")
-
         examples = []
         total = len(data)
 
@@ -75,7 +68,7 @@ class DSPyExampleFormatter:
             if span and proc_name:
                 span_inputs = self._compute_span_inputs(span, proc_name, proc_input_dict)
                 if idx == 1 or idx % 5 == 0 or idx == total:
-                    print(f"   Formatting example {idx}/{total}...", flush=True)
+                    self._reporter.emit(f"   Formatting example {idx}/{total}...", flush=True)
                 input_fields = list(span_inputs.keys())
             else:
                 # Fallback: use procedure parameters
@@ -127,6 +120,7 @@ class DSPyExampleFormatter:
             return {name: str(proc_inputs[name]) for name in span_input_names}
 
         # Slow path: span uses computed intermediate values — must run procedure.
+        original_env = self.runtime._current_env.get()
         try:
             # Find the procedure definition in the runtime
             if hasattr(self.runtime, "_main") and self.runtime._main:
@@ -156,9 +150,6 @@ class DSPyExampleFormatter:
             # Call the procedure - this will populate the runtime environment
             # We need to intercept the environment at the point of the span
             try:
-                # Store original environment
-                original_env = self.runtime._current_env.get()
-
                 # Set our environment
                 self.runtime._current_env.set(env)
 
@@ -170,9 +161,10 @@ class DSPyExampleFormatter:
 
                 # Extract span input values from environment
                 span_input_values = {}
-                for input_name in span_input_names:
-                    if input_name in final_env:
-                        span_input_values[input_name] = str(final_env[input_name])
+                if final_env is not None:
+                    for input_name in span_input_names:
+                        if input_name in final_env:
+                            span_input_values[input_name] = str(final_env[input_name])
 
                 if span_input_values:
                     return span_input_values

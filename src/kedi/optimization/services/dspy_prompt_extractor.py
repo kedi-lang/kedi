@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Iterable
+from typing import Any, cast
 
-try:
-    import dspy
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
+import dspy
 
 from ...lang.ast import OptimizeSpan
+from ..dspy_introspection import extract_signature_instructions, is_non_default_instruction
 from ..utils import normalize_optimized_prompt_prefix, span_to_instruction
 
 
@@ -37,9 +34,6 @@ class DSPyPromptExtractor:
         Returns:
             Dictionary mapping span.name -> optimized prompt string
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         optimized_prompts = {}
         predictors = self._find_predictors(optimized_module)
 
@@ -59,17 +53,21 @@ class DSPyPromptExtractor:
         try:
             named = module.named_predictors()
             if isinstance(named, dict):
-                predictors.update(named)
-            elif hasattr(named, "items"):
-                predictors.update(dict(named.items()))
+                items = cast(Iterable[tuple[str, Any]], named.items())
+            else:
+                items = cast(Iterable[tuple[str, Any]], named)
+            for name, predictor in items:
+                if isinstance(predictor, dspy.Predict):
+                    predictors[str(name)] = predictor
         except Exception:
             pass
 
         # Check for direct predictor attribute
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            if hasattr(module, "predictor"):
-                predictors["_main"] = module.predictor
+            predictor = getattr(module, "predictor", None)
+            if isinstance(predictor, dspy.Predict):
+                predictors["_main"] = predictor
 
         # Search all attributes
         if not predictors:
@@ -106,11 +104,13 @@ class DSPyPromptExtractor:
             return list(predictors.values())[index]
 
         # Strategy 4: Common attributes
-        if hasattr(module, "predictor"):
-            return module.predictor
+        predictor = getattr(module, "predictor", None)
+        if isinstance(predictor, dspy.Predict):
+            return predictor
 
-        if hasattr(module, "student") and hasattr(module.student, "predictor"):
-            return module.student.predictor
+        student_predictor = getattr(getattr(module, "student", None), "predictor", None)
+        if isinstance(student_predictor, dspy.Predict):
+            return student_predictor
 
         return None
 
@@ -127,20 +127,8 @@ class DSPyPromptExtractor:
         if not hasattr(predictor, "signature"):
             return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
 
-        sig = predictor.signature
-        instructions = None
-
-        if hasattr(sig, "instructions"):
-            instructions = sig.instructions
-        elif hasattr(sig, "_instructions"):
-            instructions = sig._instructions
-
-        if not instructions or not instructions.strip():
-            return normalize_optimized_prompt_prefix(span, span_to_instruction(span))
-
-        # Filter out default DSPy signature instructions
-        default_pattern = "Given the fields"
-        if default_pattern not in instructions or len(instructions) > len(default_pattern) + 50:
+        instructions = extract_signature_instructions(predictor)
+        if instructions and is_non_default_instruction(instructions):
             return normalize_optimized_prompt_prefix(span, instructions)
 
         return normalize_optimized_prompt_prefix(span, span_to_instruction(span))

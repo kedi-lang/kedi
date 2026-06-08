@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, create_model
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from ..core import KediRuntime
+from ..dynamic_models import build_dynamic_model
 from .ast import ProcedureDef, Program, ProgramWithValidation
 from .compiler.environment import build_type_env
 from .compiler.type_system import KediType
@@ -35,11 +36,14 @@ def procedure_json_schema(
         default_value = rt.executor.evaluate_type_expression(rt, default_expr, default_env)
         field_defs[param_name] = (param_type, copy.deepcopy(default_value))
 
-    model = create_model(  # type: ignore[call-overload]
-        f"_{proc.name}Parameters",
-        __base__=BaseModel,
-        __config__=ConfigDict(extra="forbid", title=proc.name),
-        **field_defs,  # type: ignore[arg-type]
+    model = cast(
+        type[BaseModel],
+        build_dynamic_model(
+            f"_{proc.name}Parameters",
+            BaseModel,
+            field_defs,
+            __config__=ConfigDict(extra="forbid", title=proc.name),
+        ),
     )
     schema = _strip_introspection_descriptions(model.model_json_schema())
     schema["description"] = build_procedure_description(
@@ -118,7 +122,7 @@ def _resolve_param_type(
         (proc.param_type_annotations or {}).get(param_name),
     )
     if kedi_type.is_none():
-        return Any
+        return str
     resolved = kedi_type.resolve(rt, local_env)
     if resolved is None:
         raise TypeError(

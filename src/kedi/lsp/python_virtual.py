@@ -47,11 +47,7 @@ from ..lang.ast import (
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
-from .features import (
-    _known_lsp_type_origin,
-    compute_header_python_ranges,
-    compute_python_ranges,
-)
+from .features import _known_lsp_type_origin, compute_header_python_ranges, compute_python_ranges
 
 Position = dict[str, int]
 Range = dict[str, Position]
@@ -266,6 +262,7 @@ def compute_python_virtual_document(
     builder.add("from __future__ import annotations")
     for import_line in _typing_import_lines(program):
         builder.add(import_line)
+    _emit_runtime_args_stub(builder)
     builder.add("")
 
     for typedef in program.type_defs:
@@ -343,6 +340,9 @@ def compute_python_virtual_document(
 
 def _fallback_virtual_document(source: str, ranges: list[dict[str, Any]]) -> dict[str, Any]:
     builder = VirtualBuilder(source, None)
+    builder.add("from __future__ import annotations")
+    _emit_runtime_args_stub(builder)
+    builder.add("")
     for r in ranges:
         builder.add_mapped_region(
             PythonRegion(kind=r["kind"], range=r["range"], text=r.get("text", ""))
@@ -354,6 +354,16 @@ def _fallback_virtual_document(source: str, ranges: list[dict[str, Any]]) -> dic
         "symbols": builder.symbols,
         "focusKey": None,
     }
+
+
+def _emit_runtime_args_stub(builder: VirtualBuilder) -> None:
+    builder.add("from typing import Generic, TypeAlias, TypeVar, Union")
+    builder.add("_K = TypeVar('_K')")
+    builder.add("_V = TypeVar('_V')")
+    builder.add("ArgType: TypeAlias = Union[str, bool, None]")
+    builder.add("class AttrDict(dict[_K, _V], Generic[_K, _V]):")
+    builder.add("    def __getattr__(self, key: _K) -> _V: ...")
+    builder.add("args: AttrDict[str, ArgType] = ...")
 
 
 def _find_focused_procedure(
@@ -382,7 +392,9 @@ def _split_leading_toplevel_python(
     leading: list[PythonBlock] = []
     index = 0
     while index < len(statements) and isinstance(statements[index], PythonBlock):
-        leading.append(statements[index])
+        statement = statements[index]
+        assert isinstance(statement, PythonBlock)
+        leading.append(statement)
         index += 1
     return leading, statements[index:]
 
@@ -925,7 +937,7 @@ def _emit_metric(
         for name in procedure.params:
             if name == metric.dataset_name:
                 continue
-            builder.add(f"    {_proc_param_to_python(procedure, name)} = ...")
+            builder.add(f"    {name}: {_proc_param_type_to_python(procedure, name)} = ...")
     region = cursor.next("fenced" if metric.is_block else "inline", metric.loc)
     if region is not None:
         builder.add_mapped_region(region, "    ")
@@ -1222,16 +1234,20 @@ def _type_to_python(
 
 
 def _proc_param_to_python(proc: ProcedureDef, name: str) -> str:
-    typ = _type_to_python(
-        (proc.param_type_exprs or {}).get(name),
-        (proc.param_type_annotations or {}).get(name),
-        default="str",
-    )
+    typ = _proc_param_type_to_python(proc, name)
     piece = f"{name}: {typ}"
     default = (proc.param_defaults or {}).get(name)
     if default is not None:
         piece += f" = {default}"
     return piece
+
+
+def _proc_param_type_to_python(proc: ProcedureDef, name: str) -> str:
+    return _type_to_python(
+        (proc.param_type_exprs or {}).get(name),
+        (proc.param_type_annotations or {}).get(name),
+        default="str",
+    )
 
 
 def _type_field_to_python(field: TypeField) -> str:
@@ -1300,5 +1316,5 @@ def _path_from_uri(uri: Any) -> Optional[str]:
     return unquote(parsed.path)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

@@ -6,8 +6,32 @@ import pytest
 from click.testing import CliRunner
 
 from kedi.cli import main as cli_main
-from kedi.errors import KediExecutionError
+from kedi.error_rendering import (
+    RenderStyle,
+    _best_python_trace_frame_index,
+    _column_caret,
+    _inline_python_source_caret,
+    _line_at,
+    _role_style,
+    _span_caret,
+    render_execution_error,
+    render_parse_error,
+)
+from kedi.errors import (
+    KediExecutionError,
+    KediKeyExecutionError,
+    KediPythonOrigin,
+    KediPythonTrace,
+    KediTraceFrame,
+    KediTypeExecutionError,
+    KediValueExecutionError,
+    build_execution_error,
+    frame_label,
+    python_error_message,
+)
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import Span
+from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
 from kedi.source_loading import load_kedi_source_bundle
 
 
@@ -124,7 +148,9 @@ def test_cli_renders_toplevel_body_error_without_return(tmp_path: Path) -> None:
     assert "1 / 0" in result.output
 
 
-def test_cli_renders_embedded_python_trace_once_for_assignment_block(tmp_path: Path) -> None:
+def test_cli_renders_embedded_python_trace_once_for_assignment_block(
+    tmp_path: Path,
+) -> None:
     srcp = tmp_path / "sample.kedi"
     srcp.write_text(
         '[x: str] = ```\n# comment\nreturn "value\n```\n',
@@ -174,7 +200,7 @@ def test_cli_renders_missing_import_with_kedi_trace(tmp_path: Path) -> None:
     assert "Execution error:" not in result.output
     assert "Kedi stack trace:" in result.output
     assert f'File "{srcp}", line 1, in import missing_registry_module' in result.output
-    assert "Kedi error: FileNotFoundError" in result.output
+    assert "Kedi error: ModuleNotFoundError" in result.output
     assert "missing_registry_module.kedi" in result.output
 
 
@@ -197,3 +223,311 @@ def test_cli_unexpected_exception_uses_kedi_error_renderer(
     assert "Kedi stack trace:" in result.output
     assert "Kedi error: RuntimeError" in result.output
     assert "boom" in result.output
+
+
+def test_error_helpers_cover_message_subclasses_and_frame_labels() -> None:
+    assert python_error_message(RuntimeError(), "inline") == "Inline Python error: RuntimeError"
+    assert (
+        python_error_message(RuntimeError("boom"), "unknown") == "Python error: RuntimeError: boom"
+    )
+
+    assert isinstance(
+        build_execution_error(KeyError("missing"), frames=(), python_origins={}),
+        KediKeyExecutionError,
+    )
+    assert isinstance(
+        build_execution_error(TypeError("bad type"), frames=(), python_origins={}),
+        KediTypeExecutionError,
+    )
+    assert isinstance(
+        build_execution_error(ValueError("bad value"), frames=(), python_origins={}),
+        KediValueExecutionError,
+    )
+
+    assert frame_label("program") == "top-level program"
+    assert frame_label("procedure") == "procedure"
+    assert frame_label("procedure", "run") == "procedure run"
+    assert frame_label("template") == "template line"
+    assert frame_label("assignment") == "assignment"
+    assert frame_label("assignment_block") == "assignment block"
+    assert frame_label("return") == "return"
+    assert frame_label("return_block") == "return block"
+    assert frame_label("python_inline") == "inline python"
+    assert frame_label("python_block") == "python block"
+    assert frame_label("python_side_effects") == "python statement"
+    assert frame_label("prelude") == "prelude"
+    assert frame_label("type_expression") == "type expression"
+    assert frame_label("custom_frame") == "custom frame"
+
+
+def test_python_origin_trace_maps_source_line_when_source_map_is_available(
+    tmp_path: Path,
+) -> None:
+    source_path = str(tmp_path / "sample.kedi")
+    span = Span(
+        0,
+        10,
+        3,
+        1,
+        3,
+        11,
+        source_path=source_path,
+    )
+
+    class SourceMap:
+        def get_line(self, path: str, line_no: int) -> str:
+            assert path == source_path
+            return f"line {line_no}"
+
+    traced = KediPythonOrigin(
+        filename="<kedi-python:block:1>",
+        kind="block",
+        code="return 1",
+        span=span,
+        wrapper_line_offset=2,
+        kedi_line_offset=1,
+        procedure_name="boom",
+    ).to_trace(5, source_map=SourceMap(), python_col=7)
+
+    assert traced.python_lineno == 3
+    assert traced.kedi_lineno == 6
+    assert traced.source_snippet == "line 6"
+    assert traced.procedure_name == "boom"
+    assert traced.python_col == 7
+
+    unspanned = KediPythonOrigin(
+        filename="<kedi-python:inline:1>",
+        kind="inline",
+        code="1 / 0",
+        span=None,
+        wrapper_line_offset=5,
+    ).to_trace(2)
+
+    assert unspanned.python_lineno == 1
+    assert unspanned.kedi_lineno is None
+    assert unspanned.source_snippet is None
+
+    spanned_without_map = KediPythonOrigin(
+        filename="<kedi-python:inline:2>",
+        kind="inline",
+        code="name",
+        span=span,
+    ).to_trace(1)
+
+    assert spanned_without_map.kedi_lineno == 3
+    assert spanned_without_map.source_snippet is None
+
+
+def test_render_execution_error_covers_empty_frames_keyerror_and_multitrace_styles() -> None:
+    key_error = KediExecutionError("missing", original=KeyError("missing"))
+    key_output = render_execution_error(key_error, use_color=False)
+    assert "Kedi stack trace:" in key_output
+    assert "Kedi error: KeyError" in key_output
+    assert "missing" in key_output
+
+    span = Span(0, 22, 7, 1, 7, 23, source_path="/tmp/sample.kedi")
+    frame = KediTraceFrame(
+        kind="python_block",
+        label="python block",
+        span=span,
+        source_snippet="[x: int] = ```",
+    )
+    traces = (
+        KediPythonTrace(
+            filename="<kedi-python:block:1>",
+            kind="block",
+            code="def call():\n    return 1",
+            span=span,
+            traceback_lineno=1,
+            python_lineno=1,
+            kedi_lineno=7,
+        ),
+        KediPythonTrace(
+            filename="<kedi-python:block:1>",
+            kind="block",
+            code="value = 1 # comment\nreturn value",
+            span=span,
+            traceback_lineno=2,
+            python_lineno=1,
+            python_col=12,
+            kedi_lineno=7,
+        ),
+    )
+    output = render_execution_error(
+        KediExecutionError(
+            "division",
+            frames=(
+                KediTraceFrame(kind="program", label="top-level program"),
+                frame,
+            ),
+            python_traces=traces,
+            original=ZeroDivisionError("division by zero"),
+        ),
+        use_color=False,
+    )
+
+    assert "in top-level program" in output
+    assert "embedded Python call, line 1" in output
+    assert "embedded Python error, line 1" in output
+    assert "value = 1 # comment" in output
+    assert "Python block error: ZeroDivisionError" in output
+    assert _role_style(RenderStyle.MONO_LIGHT, "header") == "bold"
+
+
+def test_render_execution_error_cleans_syntax_and_fallback_details() -> None:
+    syntax = SyntaxError("unterminated string literal (detected at line 3)")
+    output = render_execution_error(
+        KediExecutionError("fallback message", original=syntax),
+        use_color=False,
+    )
+    assert "detected at line" not in output
+    assert "unterminated string literal" in output
+
+    class EmptyError(Exception):
+        def __str__(self) -> str:
+            return ""
+
+    fallback = render_execution_error(
+        KediExecutionError("fallback message", original=EmptyError()),
+        use_color=False,
+    )
+    assert "fallback message" in fallback
+
+
+def test_render_parse_error_handles_multiple_diagnostics_and_linecache(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "bad.kedi"
+    source.write_text("@boom(\n= nope\n", encoding="utf-8")
+    diagnostics = [
+        KediDiagnostic(
+            severity="error",
+            message="first error",
+            span=Span(0, 5, 1, 1, 1, 6, source_path=str(source)),
+        ),
+        KediDiagnostic(
+            severity="error",
+            message="second error",
+            span=Span(6, 7, 2, 1, 2, 2),
+        ),
+    ]
+
+    output = render_parse_error(KediParseError(diagnostics), use_color=False)
+
+    assert "Kedi parse error: first error" in output
+    assert "Kedi parse error: second error" in output
+    assert "@boom(" in output
+    assert 'File "<source>", line 2, column 1' in output
+
+    snippet_output = render_parse_error(
+        KediParseError(
+            [
+                KediDiagnostic(
+                    severity="error",
+                    message="snippet error",
+                    span=Span(0, 3, 1, 1, 1, 4),
+                    snippet="# comment",
+                )
+            ]
+        ),
+        use_color=False,
+    )
+    assert "# comment" in snippet_output
+
+
+def test_error_renderer_helper_edges_cover_carets_matching_and_empty_details() -> None:
+    output = render_execution_error(
+        KediExecutionError(
+            "",
+            frames=(
+                KediTraceFrame(
+                    kind="template",
+                    label="template line",
+                    span=Span(0, 7, 1, 1, 1, 8, source_path="/tmp/no_snippet.kedi"),
+                ),
+            ),
+            python_traces=(
+                KediPythonTrace(
+                    filename="<kedi-python:unknown>",
+                    kind="unknown",
+                    code="x = 1",
+                    span=Span(10, 17, 2, 1, 2, 8, source_path="/tmp/other.kedi"),
+                    traceback_lineno=1,
+                    python_lineno=1,
+                ),
+            ),
+            original=None,
+        ),
+        use_color=False,
+    )
+    assert "Python error: RuntimeError" in output
+
+    no_detail_output = render_execution_error(KediExecutionError(""), use_color=False)
+    assert "Kedi error: RuntimeError" in no_detail_output
+
+    inline_span = Span(0, 18, 1, 1, 1, 19, source_path="/tmp/inline.kedi")
+    inline_trace = KediPythonTrace(
+        filename="<kedi-python:inline>",
+        kind="inline",
+        code="1 / 0",
+        span=inline_span,
+        traceback_lineno=1,
+        python_lineno=1,
+        kedi_lineno=1,
+    )
+    inline_output = render_execution_error(
+        KediExecutionError(
+            "division",
+            frames=(
+                KediTraceFrame(
+                    kind="python_inline",
+                    label="inline python",
+                    span=inline_span,
+                    source_snippet="= <`1 / 0`>",
+                ),
+            ),
+            python_traces=(inline_trace,),
+            original=ZeroDivisionError("division by zero"),
+        ),
+        use_color=False,
+    )
+    assert "= <`1 / 0`>" in inline_output
+    assert "embedded Python line 1" in inline_output
+
+    same_span_frame = KediTraceFrame(
+        kind="template",
+        label="template line",
+        span=inline_span,
+    )
+    assert _best_python_trace_frame_index((same_span_frame,), inline_trace) == 0
+    assert (
+        _best_python_trace_frame_index(
+            (KediTraceFrame(kind="template", label="template line", span=None),),
+            inline_trace,
+        )
+        is None
+    )
+
+    multiline_span = Span(0, 10, 1, 1, 2, 4, source_path="/tmp/multiline.kedi")
+    assert _span_caret(multiline_span, "`x`") is None
+    assert _inline_python_source_caret(multiline_span, "`x`") is None
+    assert _inline_python_source_caret(Span(0, 5, 1, 1, 1, 6), "value") == (0, 5)
+    assert _inline_python_source_caret(Span(0, 5, 1, 1, 1, 6), "`value") == (0, 5)
+    assert _inline_python_source_caret(Span(0, 2, 1, 1, 1, 3), "``") == (0, 2)
+    assert _column_caret("abc", 0, None) is None
+    assert _line_at("one\nTwo", 3) == ""
+
+    highlighted_output = render_parse_error(
+        KediParseError(
+            [
+                KediDiagnostic(
+                    severity="error",
+                    message="type declaration",
+                    span=Span(0, 7, 1, 1, 1, 8),
+                    snippet="~Person",
+                )
+            ]
+        ),
+        use_color=False,
+    )
+    assert "~Person" in highlighted_output

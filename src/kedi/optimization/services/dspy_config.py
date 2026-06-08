@@ -3,26 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
-try:
-    import dspy
-    from dspy import LM
-    from dspy.adapters.chat_adapter import ChatAdapter
-    from dspy.adapters.json_adapter import (
-        JSONAdapter,
-        _get_structured_outputs_response_format,
-    )
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None  # type: ignore
-    LM = None  # type: ignore
-    JSONAdapter = None  # type: ignore
-    ChatAdapter = None  # type: ignore
+import dspy
+from dspy import LM
+from dspy.adapters.chat_adapter import ChatAdapter
+from dspy.adapters.json_adapter import JSONAdapter, _get_structured_outputs_response_format
 
 from ...model_normalization import normalize_for_litellm
+from ...reporter import CliReporter, Reporter
 from ..config import OptimizerConfig
 
 logger = logging.getLogger(__name__)
@@ -87,17 +76,14 @@ class DSPyConfigurationService:
     that require specific temperature and max_tokens settings.
     """
 
-    def __init__(self, config: OptimizerConfig):
+    def __init__(self, config: OptimizerConfig, *, reporter: Reporter | None = None):
         """Initialize DSPy configuration service.
 
         Args:
             config: Optimizer configuration with model and token settings
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError(
-                "DSPy is required for DSPyConfigurationService. Install with: pip install dspy-ai"
-            )
         self.config = config
+        self._reporter = reporter or CliReporter()
 
     def configure_main_lm(self, model: str | None = None) -> None:
         """Configure main DSPy LM with proper token limits.
@@ -108,9 +94,6 @@ class DSPyConfigurationService:
         Args:
             model: Model identifier (uses config.optimizer_model if None)
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         model = model or self.config.optimizer_model
         if not model:
             raise ValueError("No model specified for main LM configuration")
@@ -119,14 +102,15 @@ class DSPyConfigurationService:
         # Use configured max_tokens
         max_tokens = self.config.get_optimizer_max_tokens()
 
-        print("🔧 Configuring main DSPy LM:")
-        print(f"   Model: {model}")
-        print(f"   Max tokens: {max_tokens}")
+        self._reporter.emit("🔧 Configuring main DSPy LM:")
+        self._reporter.emit(f"   Model: {model}")
+        self._reporter.emit(f"   Max tokens: {max_tokens}")
 
         # WORKAROUND: Monkey-patch DSPy's LM class BEFORE creating any instances
         # This fixes DSPy's bug where internal LM instances use hardcoded max_tokens=4000
         if not hasattr(LM, "_kedi_patched"):
-            original_init = LM.__init__
+            lm_cls = cast(Any, LM)
+            original_init = lm_cls.__init__
             configured_max_tokens = max_tokens
 
             def patched_init(
@@ -163,9 +147,9 @@ class DSPyConfigurationService:
                     **kwargs,
                 )
 
-            LM.__init__ = patched_init
-            LM._kedi_patched = True
-            print(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
+            lm_cls.__init__ = patched_init
+            setattr(LM, "_kedi_patched", True)
+            self._reporter.emit(f"   🔧 Patched DSPy LM to use max_tokens={max_tokens} by default")
 
         # Create LM with configured settings
         # Enable JSON mode for more reliable structured outputs
@@ -183,14 +167,14 @@ class DSPyConfigurationService:
             cache=False,
             adapter=AdaptiveJSONAdapter(),
         )
-        print("   ✅ Main LM configured (AdaptiveJSONAdapter)")
+        self._reporter.emit("   ✅ Main LM configured (AdaptiveJSONAdapter)")
 
         # Verify the configuration was applied
         if hasattr(dspy.settings, "lm") and dspy.settings.lm:
             lm_obj = dspy.settings.lm
-            print(f"   Verification: DSPy settings.lm = {lm_obj}")
+            self._reporter.emit(f"   Verification: DSPy settings.lm = {lm_obj}")
             if hasattr(lm_obj, "kwargs"):
-                print(f"   LM kwargs: {lm_obj.kwargs}")
+                self._reporter.emit(f"   LM kwargs: {lm_obj.kwargs}")
 
         # CRITICAL: Disable DSPy cache (both disk and memory)
         dspy.configure_cache(
@@ -210,9 +194,6 @@ class DSPyConfigurationService:
         Returns:
             Configured LM instance for reflection
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         model = model or self.config.reflection_model
         if not model:
             raise ValueError("No model specified for reflection LM configuration")
@@ -235,9 +216,6 @@ class DSPyConfigurationService:
         Raises:
             RuntimeError: If DSPy LM is not configured
         """
-        if not DSPY_AVAILABLE:
-            raise ImportError("DSPy is required")
-
         if not hasattr(dspy.settings, "lm") or dspy.settings.lm is None:
             raise RuntimeError("DSPy LM not configured. Call configure_main_lm() first.")
 

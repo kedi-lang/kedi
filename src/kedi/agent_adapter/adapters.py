@@ -1,8 +1,12 @@
 import asyncio
+from typing import cast
 
 import dspy
 from dspy import LM
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel
+
+from ..dynamic_models import build_dynamic_model
+from ..resolved_types import ResolvedKediType
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
@@ -28,7 +32,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         super().__init__(model, **kwargs)
 
     @staticmethod
-    def type_builder(output_schema: dict[str, type]) -> type[OutputDataT]:
+    def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[OutputDataT]:
         """
         Type builder to create a Pydantic model from a given output schema.
         Args:
@@ -38,12 +42,13 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         assert output_schema, "Output schema cannot be empty."
         field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
-        return create_model("_OutputModel", __base__=BaseModel, **field_definitions)  # type: ignore[return-value]
+        model = build_dynamic_model("_OutputModel", BaseModel, field_definitions)
+        return cast(type[OutputDataT], model)
 
     async def produce(
         self,
         template: str,
-        output_schema: dict[str, type] | None = None,
+        output_schema: dict[str, ResolvedKediType] | None = None,
         output_type: type[OutputDataT] | None = None,
         **kwargs,
     ) -> OutputDataT:
@@ -64,7 +69,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     def produce_sync(
         self,
         template: str,
-        output_schema: dict[str, type] | None = None,
+        output_schema: dict[str, ResolvedKediType] | None = None,
         output_type: type[OutputDataT] | None = None,
         **kwargs,
     ) -> OutputDataT:
@@ -98,7 +103,9 @@ class DSPyAdapter:
         )
 
     @staticmethod
-    async def type_builder(output_schema: dict[str, type], **kwargs) -> type[dspy.Signature]:
+    async def type_builder(
+        output_schema: dict[str, ResolvedKediType], **kwargs
+    ) -> type[dspy.Signature]:
         """
         Type builder to create a dictionary schema from a given output type.
         Args:
@@ -112,16 +119,13 @@ class DSPyAdapter:
             field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
         }
         field_definitions.update({"user_prompt": (str, dspy.InputField())})
-        return create_model(
-            "_OutputSignature",
-            __base__=dspy.Signature,
-            **field_definitions,
-        )
+        model = build_dynamic_model("_OutputSignature", dspy.Signature, field_definitions)
+        return cast(type[dspy.Signature], model)
 
     async def produce(
         self,
         template: str,
-        output_schema: dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **kwargs,
     ) -> dspy.Prediction:
         """
@@ -137,7 +141,7 @@ class DSPyAdapter:
     def produce_sync(
         self,
         template: str,
-        output_schema: dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **kwargs,
     ) -> dspy.Prediction:
         """

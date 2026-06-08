@@ -172,13 +172,13 @@ class TestValidAdapterResponses:
 
         from pydantic import BaseModel
 
-        class PersonModel(BaseModel):
+        class LocalPersonModel(BaseModel):
             name: str
             age: int
 
         class CompanyModel(BaseModel):
             name: str
-            employees: List[PersonModel]
+            employees: List[LocalPersonModel]
 
             def total_employees(self) -> int:
                 return len(self.employees)
@@ -187,8 +187,8 @@ class TestValidAdapterResponses:
             "company": CompanyModel(
                 name="TechCorp",
                 employees=[
-                    PersonModel(name="Alice", age=30),
-                    PersonModel(name="Bob", age=25),
+                    LocalPersonModel(name="Alice", age=30),
+                    LocalPersonModel(name="Bob", age=25),
                 ],
             )
         }
@@ -287,31 +287,6 @@ class TestValidAdapterResponses:
         result = _run_with_responses(src, responses)
         assert "Type: PersonModel" in result
         assert "Name: Charlie" in result
-
-
-class TestEdgeCases:
-    """Test edge cases and error handling."""
-
-    def test_missing_output_key(self):
-        """Test that missing output keys raise appropriate errors."""
-        src = """
-        ```
-        from pydantic import BaseModel
-        
-        class Person(BaseModel):
-            name: str
-        ```
-        
-        [person: Person] is a person.
-        
-        = "Success"
-        """
-
-        # Empty responses - should cause missing key error
-        runtime = compile_program(parse_program(src), adapter=EmptyMockAdapter())
-
-        with pytest.raises(ValueError, match="LLM did not return required key: person"):
-            runtime.run_main()
 
 
 class TestEdgeCases:

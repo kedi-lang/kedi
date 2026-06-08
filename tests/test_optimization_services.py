@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
+import dspy
 import pytest
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import EvalSuite, ProcedureDef
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import (
     DSPyConfigurationService,
@@ -23,21 +26,9 @@ from kedi.optimization.services import (
     StructuredTypeHandler,
     TypeResolver,
 )
-from kedi.optimization.services.program_loader import (
-    load_program_with_optimized_prompts,
-)
+from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
 from kedi.optimization.utils import extract_output_fields
-
-# Skip DSPy-dependent tests if DSPy is not available
-try:
-    import dspy
-    from dspy import LM
-
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    dspy = None
-    LM = None
+from tests.optimization_helpers import parse_validation_program
 
 
 # ==================== OptimizationDataLoader Tests ====================
@@ -55,7 +46,7 @@ def test_data_loader_single_param():
     return [(1, 2), (2, 4), (3, 6)]
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -80,7 +71,7 @@ def test_data_loader_multi_param():
     return [((1, 2), 3), ((2, 3), 5), ((3, 4), 7)]
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -107,7 +98,7 @@ def test_data_loader_test_data():
     return [(4, 8), (5, 10)]
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -136,7 +127,7 @@ def test_data_loader_dict_format():
     return {"a": 2, "b": 4, "c": 6}
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     loader = OptimizationDataLoader(rt)
@@ -145,6 +136,49 @@ def test_data_loader_dict_format():
 
     assert len(train_data) == 3
     assert all(isinstance(item, tuple) for item in train_data)
+
+
+def test_data_loader_errors_inline_data_and_tuple_normalization():
+    src = """
+@test(x: int) -> int:
+  = `x`
+
+@eval: test:
+  > data: inline_cases:
+    = `[(1, 2), (3, 4, 5), 6]`
+  > data: broken:
+    = `1 / 0`
+  > test_data: inline_tests:
+    = `[(7, 8)]`
+  > test_data: broken_tests:
+    = `1 / 0`
+"""
+    prog = parse_validation_program(src)
+    rt = compile_program(prog, adapter=None)
+    loader = OptimizationDataLoader(rt)
+    eval_suite = prog.evals[0]
+
+    assert loader.load_training_data(eval_suite, "inline_cases") == [
+        (1, 2),
+        (3, None),
+        (6, None),
+    ]
+    assert loader.load_training_data(eval_suite) == [(1, 2), (3, None), (6, None)]
+    assert loader.load_test_data(eval_suite, "inline_tests") == [(7, 8)]
+    assert loader.load_test_data(EvalSuite("test"), "missing") is None
+
+    with pytest.raises(ValueError, match="No training datasets"):
+        loader.load_training_data(EvalSuite("test"))
+    with pytest.raises(ValueError, match="Dataset 'missing' not found"):
+        loader.load_training_data(eval_suite, "missing")
+    with pytest.raises(RuntimeError, match="Error loading training data 'broken'"):
+        loader.load_training_data(eval_suite, "broken")
+    with pytest.raises(RuntimeError, match="Error loading test data 'broken_tests'"):
+        loader.load_test_data(eval_suite, "broken_tests")
+    with pytest.raises(ValueError, match="must return an iterable"):
+        loader._convert_to_list("abc", "letters")
+    with pytest.raises(ValueError, match="must return an iterable"):
+        loader._convert_to_list(123, "number")
 
 
 # ==================== MetricFactory Tests ====================
@@ -168,7 +202,7 @@ def test_metric_factory_simple_metric():
     return (1.0 if result == expected else 0.0, None)
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -207,7 +241,7 @@ def test_metric_factory_with_feedback():
         return (0.0, f"Expected {expected}, got {result}")
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -239,7 +273,7 @@ def test_metric_factory_bool_return():
     return result == expected
     ```
 """
-    prog = parse_program(src)
+    prog = parse_validation_program(src)
     rt = compile_program(prog, adapter=None)
 
     factory = MetricFactory(rt)
@@ -273,7 +307,7 @@ def test_type_resolver_basic_types():
     param_types = resolver.resolve_param_types(proc)
 
     assert "x" in param_types
-    assert param_types["x"] == int
+    assert param_types["x"] is int
 
 
 def test_type_resolver_no_annotations():
@@ -291,6 +325,62 @@ def test_type_resolver_no_annotations():
 
     # Should return empty dict if no annotations
     assert param_types == {}
+
+
+def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
+    src = """
+@test(items: list[int], missing: MissingType, raw) -> str:
+  = ok
+"""
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+    resolver = TypeResolver(rt)
+    proc = prog.procedures[0]
+
+    param_types = resolver.resolve_param_types(proc)
+    assert "items" in param_types
+    assert "missing" not in param_types
+    assert "raw" not in param_types
+
+    assert resolver.resolve_output_types([]) == {}
+    outputs = resolver.resolve_output_types(
+        [
+            ("plain", None),
+            ("count", "int"),
+            ("items", "list[int]"),
+            ("unknown", "MissingType"),
+        ]
+    )
+    assert outputs["plain"] is str
+    assert outputs["count"] is int
+    assert getattr(outputs["items"], "__origin__", None) is list
+    assert outputs["unknown"] is str
+
+
+def test_type_resolver_direct_fallback_paths(monkeypatch):
+    rt = compile_program(parse_program("= ok"), adapter=None)
+    resolver = TypeResolver(rt)
+
+    assert resolver.resolve_param_types(ProcedureDef("plain", ["x"])) == {}
+
+    def fail_resolve(self: Any, runtime: Any, env: Any) -> Any:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("kedi.optimization.services.type_resolver.KediType.resolve", fail_resolve)
+
+    proc = ProcedureDef("broken", ["x"], param_type_annotations={"x": "int"})
+    assert resolver.resolve_param_types(proc) == {}
+    assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
+
+    def resolve_to_value(self: Any, runtime: Any, env: Any) -> object:
+        return object()
+
+    monkeypatch.setattr(
+        "kedi.optimization.services.type_resolver.KediType.resolve",
+        resolve_to_value,
+    )
+
+    assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
 
 
 # ==================== OptimizationResultWriter Tests ====================
@@ -323,6 +413,26 @@ def test_result_writer_create_files():
 
         scores_path = source_path.with_suffix(source_path.suffix + ".optimized_scores.json")
         assert scores_path.exists()
+
+
+def test_result_writer_merges_scores_and_recovers_from_invalid_json():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text("# Test")
+        scores_path = source_path.with_suffix(source_path.suffix + ".optimized_scores.json")
+        scores_path.write_text("{bad json", encoding="utf-8")
+
+        writer = OptimizationResultWriter(source_path)
+        writer.write_training_scores({"fresh": 0.5})
+
+        assert json.loads(scores_path.read_text(encoding="utf-8")) == {"fresh": 0.5}
+
+        writer.write_training_scores({"other": 0.75})
+
+        assert json.loads(scores_path.read_text(encoding="utf-8")) == {
+            "fresh": 0.5,
+            "other": 0.75,
+        }
 
 
 def test_result_writer_format_display():
@@ -365,6 +475,8 @@ def test_result_writer_delete_existing():
 
         assert not opt_path.exists()
         assert not scores_path.exists()
+
+        writer.delete_existing_optimized_files()
 
 
 def test_program_loader_preserves_output_fields_with_optimized_prefix():
@@ -443,10 +555,89 @@ def test_program_loader_normalizes_polluted_optimized_prompt():
         assert span.template_lines[0].optimized_prompt_prefix == "Use exact IDs only."
 
 
+def test_program_loader_debug_output_shows_before_and_after_injection() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> int:
+  > optimize: solver:
+    Input: <x>
+    Answer: [answer: int]
+  = `answer`
+""".strip()
+        )
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            json.dumps({"solve": {"solver": "Use a direct numeric answer."}}),
+            encoding="utf-8",
+        )
+
+        program = load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
+
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: True" in output
+        assert "[DEBUG] BEFORE injection - solve::solver:" in output
+        assert "[DEBUG] AFTER injection - solve::solver:" in output
+        assert program.procedures[0].optimize_spans[0].template_lines[
+            0
+        ].optimized_prompt_prefix == ("Use a direct numeric answer.")
+
+
+def test_program_loader_debug_output_without_optimized_prompts() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> str:
+  = <x>
+""".strip()
+        )
+
+        load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
+
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: False" in output
+        assert "BEFORE injection" not in output
+        assert "AFTER injection" not in output
+
+
+def test_program_loader_debug_output_with_stale_optimized_prompts() -> None:
+    from kedi.reporter import BufferReporter
+
+    reporter = BufferReporter()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source_path = Path(tmpdir) / "test.kedi"
+        source_path.write_text(
+            """
+@solve(x: str) -> str:
+  = <x>
+""".strip()
+        )
+        optimized_path = source_path.with_suffix(source_path.suffix + ".optimized.json")
+        optimized_path.write_text(
+            json.dumps({"solve": {"old_span": "Use stale prompt."}}),
+            encoding="utf-8",
+        )
+
+        load_program_with_optimized_prompts(source_path, debug=True, reporter=reporter)
+
+        output = reporter.getvalue()
+        assert "[DEBUG] Checking for optimized prompts: True" in output
+        assert "[DEBUG] Optimized path:" in output
+        assert "BEFORE injection" not in output
+        assert "AFTER injection" not in output
+
+
 # ==================== StructuredTypeHandler Tests ====================
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_type_handler_simple_signature():
     """Test creating simple DSPy signature."""
     src = """
@@ -468,7 +659,6 @@ def test_type_handler_simple_signature():
     assert "result" in signature
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_type_handler_multi_output():
     """Test signature with multiple outputs."""
     src = "@test(x: int) -> int:\n  = `x * 2`"
@@ -489,7 +679,6 @@ def test_type_handler_multi_output():
 # ==================== DSPy-Dependent Service Tests ====================
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_module_builder_basic():
     """Test building a basic DSPy module."""
     src = """
@@ -512,7 +701,6 @@ def test_dspy_module_builder_basic():
     assert hasattr(module, "predictor")
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_single_param():
     """Test formatting examples with single parameter."""
     from kedi.lang import compile_program, parse_program
@@ -530,7 +718,6 @@ def test_dspy_example_formatter_single_param():
     assert examples[0]._expected == 2
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_example_formatter_multi_param():
     """Test formatting examples with multiple parameters."""
     from kedi.lang import compile_program, parse_program
@@ -549,7 +736,6 @@ def test_dspy_example_formatter_multi_param():
     assert examples[0]._expected == 3
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_gepa_metric_wrapper_basic():
     """Test wrapping a basic metric."""
     wrapper = GEPAMetricWrapper()
@@ -557,7 +743,7 @@ def test_gepa_metric_wrapper_basic():
     def simple_metric(input_val, expected):
         return (1.0 if input_val * 2 == expected else 0.0, None)
 
-    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"], [("result", "int")])
+    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"])
 
     # Create mock Example and Prediction
     gold = dspy.Example(x=2, _expected=4).with_inputs("x")
@@ -568,7 +754,6 @@ def test_gepa_metric_wrapper_basic():
     assert score == 1.0 or (hasattr(score, "score") and score.score == 1.0)
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_gepa_metric_wrapper_string_extraction():
     """Test metric wrapper with properly typed DSPy outputs."""
     wrapper = GEPAMetricWrapper()
@@ -580,7 +765,7 @@ def test_gepa_metric_wrapper_string_extraction():
         # (procedure override returns pred_output which equals expected)
         return (1.0 if expected == expected else 0.0, None)
 
-    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"], [("result", "int")])
+    gepa_metric = wrapper.wrap_metric(simple_metric, ["x"])
 
     gold = dspy.Example(x=2, _expected=4).with_inputs("x")
     # DSPy returns properly typed outputs when using structured signatures
@@ -591,7 +776,6 @@ def test_gepa_metric_wrapper_string_extraction():
     assert (hasattr(result, "score") and result.score == 1.0) or result == 1.0
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_prompt_extractor():
     """Test extracting prompts from optimized module."""
     extractor = DSPyPromptExtractor()
@@ -610,7 +794,7 @@ def test_dspy_prompt_extractor():
     class MockModule(dspy.Module):
         def __init__(self):
             super().__init__()
-            sig = dspy.Signature("x -> result")
+            sig = cast(Any, dspy).Signature("x -> result")
             self.predictor = dspy.Predict(sig.with_instructions("Optimized prompt: <x>"))
 
     module = MockModule()
@@ -620,7 +804,6 @@ def test_dspy_prompt_extractor():
     assert prompts[span.name] == "Optimized prompt: <x>"
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     """Extractor should persist only the optimized prefix, not prefix+base(+base)."""
     extractor = DSPyPromptExtractor()
@@ -639,7 +822,7 @@ def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     class MockModule(dspy.Module):
         def __init__(self):
             super().__init__()
-            sig = dspy.Signature("x -> result")
+            sig = cast(Any, dspy).Signature("x -> result")
             self.predictor = dspy.Predict(
                 sig.with_instructions(f"Use the exact identifier.\n{base}\n{base}")
             )
@@ -650,7 +833,6 @@ def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     assert prompts[span.name] == "Use the exact identifier."
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_score_calculator():
     """Test calculating training scores."""
     calculator = DSPyScoreCalculator()
@@ -680,7 +862,6 @@ def test_dspy_score_calculator():
     assert score == 1.0
 
 
-@pytest.mark.skipif(not DSPY_AVAILABLE, reason="DSPy not available")
 def test_dspy_config_service_basic():
     """Test DSPy configuration service."""
     config = OptimizerConfig(

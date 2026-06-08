@@ -1,0 +1,12 @@
+minimum_pre_commit_version: "4.0.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: make-prod
+        name: make prod
+        entry: make prod
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]

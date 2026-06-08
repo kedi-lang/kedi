@@ -5,6 +5,7 @@ from typing import List
 
 from ..lang import parse_program
 from ..lang.ast import ProcedureDef
+from ..reporter import CliReporter, Reporter
 from ..source_loading import single_file_source_map
 from .interfaces import CodegenConfig
 from .manager import CodegenManager
@@ -40,6 +41,8 @@ def run_codegen(
     model: str | None = None,
     max_retries: int = 5,
     use_cache: bool = True,
+    quiet: bool = False,
+    reporter: Reporter | None = None,
 ) -> bool:
     text = Path(source_path).read_text(encoding="utf-8")
     prog = parse_program(
@@ -52,6 +55,7 @@ def run_codegen(
         _select_agent(agent_kind, model),
         CodegenConfig(max_retries=max_retries),
         use_cache=use_cache,
+        reporter=reporter or CliReporter(quiet=quiet),
     )
     success_all = True
     for proc in procs:

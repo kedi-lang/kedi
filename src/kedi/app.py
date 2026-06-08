@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Callable, Tuple
 
@@ -11,6 +12,7 @@ from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
 from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
+from .utils import ArgType, AttrDict
 
 
 class _LazyRuntimeAdapter:
@@ -39,16 +41,32 @@ def _build_runtime_adapter(adapter: str, model: str | None):
     return _LazyRuntimeAdapter(lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b"))
 
 
+CliArgs = AttrDict[str, ArgType]
+
+
+def _runtime_globals(runtime_args: CliArgs | None) -> dict[str, Any]:
+    return {"args": runtime_args or AttrDict({}, default=None)}
+
+
+def _set_runtime_args(rt: Any, runtime_args: CliArgs | None) -> None:
+    if runtime_args is not None:
+        rt.set_initial_globals(_runtime_globals(runtime_args))
+
+
 def run_tests_cli(
     source: str,
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
     ok, err = maybe_run_codegen(source, model=model)
     if not ok:
         return 1, (err or "Code generation failed")
-    results = run_tests(source, adapter=_build_runtime_adapter(adapter, model))
+    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
+    if runtime_args is not None:
+        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+    results = run_tests(source, **kwargs)
     failed = sum(1 for s in results for c in s.cases if not c.success)
     lines = ["Tests:"]
     for suite in results:
@@ -77,6 +95,8 @@ def run_optimization_cli(
     adapter: str = "pydantic",
     adapter_model: str | None = None,
     optimizer_fresh: bool = False,
+    runtime_args: CliArgs | None = None,
+    quiet: bool = False,
 ) -> Tuple[int, str]:
     """Run optimization on procedures with optimize spans.
 
@@ -152,7 +172,7 @@ def run_optimization_cli(
         except ImportError:
             return (
                 1,
-                "DSPy is required for GEPA optimizer. Install with: pip install dspy-ai",
+                "DSPy is required for GEPA optimizer. Install with: uv add dspy-ai",
             )
     else:
         model = adapter_model or "groq:qwen/qwen3-32b"
@@ -164,7 +184,7 @@ def run_optimization_cli(
             except ImportError:
                 return (
                     1,
-                    "DSPy is required for dspy adapter. Install with: pip install dspy-ai",
+                    "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
                 )
         else:
             adapter_for_runtime = PydanticAdapter(model=model)
@@ -184,6 +204,7 @@ def run_optimization_cli(
             prompt_loader.inject_optimized_prompts(prog)
 
     rt = compile_program(prog, adapter=adapter_for_runtime)
+    _set_runtime_args(rt, runtime_args)
 
     # Initialize services
     data_loader = OptimizationDataLoader(rt)
@@ -193,8 +214,14 @@ def run_optimization_cli(
     # Get optimizer instance
     if optimizer == "gepa":
         from .optimization.gepa import GEPAOptimizer
+        from .reporter import CliReporter
 
-        opt = GEPAOptimizer(config=config, runtime=rt, source_path=source_path)
+        opt = GEPAOptimizer(
+            config=config,
+            runtime=rt,
+            source_path=source_path,
+            reporter=CliReporter(quiet=quiet),
+        )
     else:
         opt = get_optimizer(optimizer)
 
@@ -209,7 +236,8 @@ def run_optimization_cli(
         eval_suite = eval_map[proc.name]
 
         # Load training data using service
-        dataset_name = list(eval_suite.datasets.keys())[0] if eval_suite.datasets else None
+        dataset_names = list(eval_suite.datasets.keys())
+        dataset_name = dataset_names[0] if dataset_names else None
         if not dataset_name:
             return 1, f"Procedure '{proc.name}' needs training data"
 
@@ -277,7 +305,7 @@ def run_optimization_cli(
         display_text = result_writer.format_prompts_for_display(optimized_dict, optimized_path)
         return 0, display_text
 
-    return 0, ""
+    return 0, ""  # pragma: no cover - successful optimization always records a result.
 
 
 def run_evals_cli(
@@ -291,6 +319,8 @@ def run_evals_cli(
     reflection_model: str | None = None,
     optimize: bool = False,
     use_cache: bool = True,
+    runtime_args: CliArgs | None = None,
+    quiet: bool = False,
 ) -> Tuple[int, str]:
     """Run eval suites. Set ``optimize=True`` only when not calling ``run_optimization_cli`` first
     (e.g. programmatic API). The CLI runs optimization in ``run_optimization_cli`` and passes
@@ -309,19 +339,21 @@ def run_evals_cli(
             reflection_model=reflection_model,
             adapter=adapter,
             adapter_model=adapter_model,
+            runtime_args=runtime_args,
+            quiet=quiet,
         )
         if code != 0:
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model)
+    ok, err = maybe_run_codegen(source, model=codegen_model, quiet=quiet)
     if not ok:
         return 1, (err or "Code generation failed")
 
-    results = run_evals(
-        str(source_path),
-        adapter=_build_runtime_adapter(adapter, adapter_model),
-    )
+    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, adapter_model)}
+    if runtime_args is not None:
+        kwargs["runtime_globals"] = _runtime_globals(runtime_args)
+    results = run_evals(str(source_path), **kwargs)
 
     lines = ["Evals:"]
     for suite in results:
@@ -339,6 +371,7 @@ def maybe_run_codegen(
     model: str | None = None,
     retries: int | None = None,
     use_cache: bool = True,
+    quiet: bool = False,
 ) -> Tuple[bool, str | None]:
     try:
         root = Path(source_path).resolve()
@@ -365,6 +398,7 @@ def maybe_run_codegen(
             model=model,
             max_retries=max_retries,
             use_cache=use_cache,
+            quiet=quiet,
         )
         if not ok:
             return False, "Code generation failed to produce passing tests."
@@ -375,18 +409,22 @@ def maybe_run_codegen(
         return False, str(e)
 
 
-def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[int, str]:
+def run_program_cli(
+    source: str,
+    *,
+    adapter: str,
+    model: str | None,
+    runtime_args: CliArgs | None = None,
+) -> Tuple[int, str]:
     from pathlib import Path
 
-    from .optimization.services.program_loader import (
-        load_program_with_optimized_prompts,
-    )
+    from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     DEBUG = os.getenv("KEDI_DEBUG_OPTIMIZED", "0") == "1"
 
     source_path = Path(source).resolve()
     if DEBUG:
-        print(f"[DEBUG run_program_cli] Source: {source_path}", file=os.sys.stderr)
+        print(f"[DEBUG run_program_cli] Source: {source_path}", file=sys.stderr)
 
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
@@ -395,6 +433,7 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
     # program. Fall back to the configured adapter only if runtime actually
     # needs LLM-backed template expansion.
     rt = compile_program(program, adapter=None)
+    _set_runtime_args(rt, runtime_args)
     try:
         out = rt.run_main()
         return 0, ("" if out is None else str(out))
@@ -404,5 +443,6 @@ def run_program_cli(source: str, *, adapter: str, model: str | None) -> Tuple[in
 
     adapter_impl = _build_runtime_adapter(adapter, model)
     rt = compile_program(program, adapter=adapter_impl)
+    _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))

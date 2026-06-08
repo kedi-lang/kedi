@@ -50,6 +50,7 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
+    assert procedure is not None
 
     schema = procedure_json_schema(runtime, procedure)
     print(json.dumps(schema, indent=2, ensure_ascii=False))

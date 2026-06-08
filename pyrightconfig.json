@@ -1,0 +1,9 @@
+{
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "standard",
+  "exclude": ["**/.*", "examples/**", "tests"],
+  "extraPaths": ["src"],
+  "reportAny": "none",
+  "reportExplicitAny": "none",
+  "reportArgumentType": "none",
+}

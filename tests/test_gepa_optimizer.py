@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
-import pytest
-
+from kedi.reporter import BufferReporter
 from kedi.lang import parse_program
-
-try:
-    from kedi.optimization.gepa import GEPAOptimizer
-
-    GEPA_AVAILABLE = GEPAOptimizer is not None
-except ImportError:
-    GEPA_AVAILABLE = False
-    GEPAOptimizer = None
+from kedi.optimization.gepa import GEPAOptimizer
 
 
-@pytest.mark.skipif(not GEPAOptimizer, reason="DSPy not available or GEPA optimizer not importable")
+def test_gepa_optimizer_accepts_injected_reporter() -> None:
+    from kedi.optimization.config import OptimizerConfig
+
+    reporter = BufferReporter()
+    optimizer = GEPAOptimizer(
+        config=OptimizerConfig(max_metric_calls=10),
+        runtime=None,
+        reporter=reporter,
+    )
+
+    optimizer._reporter.emit("optimizer-ready", end="")
+
+    assert reporter.getvalue() == "optimizer-ready"
+
+
 def test_gepa_optimizer_interface():
     """Test GEPA optimizer implements the interface correctly."""
     from kedi.optimization.config import OptimizerConfig
