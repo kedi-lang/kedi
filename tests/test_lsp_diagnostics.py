@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from lsprotocol import types as lsp
 
+from kedi.lang.ast import Program, Span
+from kedi.lang.parser.diagnostics import KediDiagnostic
 from kedi.lsp import features
 
 # ---------------------------------------------------------------------
@@ -14,6 +19,25 @@ from kedi.lsp import features
 def test_diagnostics_empty_for_valid_program():
     src = "@p():\n  = ok\n"
     assert features.compute_diagnostics(src, "example.kedi") == []
+
+
+def test_diagnostics_surfaces_parser_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    warning = KediDiagnostic(
+        severity="warning",
+        message="legacy warning",
+        span=Span(0, 1, 1, 1, 1, 2),
+        code="K-TEST-WARN",
+    )
+    prog = Program(parser_warnings=[warning])
+
+    def _fake_parse(*_args: Any, **_kwargs: Any) -> Program:
+        return prog
+
+    monkeypatch.setattr(features, "parse_program", _fake_parse)
+    diags = features.compute_diagnostics("= ok\n", "example.kedi")
+    assert len(diags) == 1
+    assert diags[0].code == "K-TEST-WARN"
+    assert diags[0].severity == lsp.DiagnosticSeverity.Warning
 
 
 def test_diagnostics_reports_duplicate_type_field():

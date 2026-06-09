@@ -86,9 +86,9 @@ def test_runtime_nested_calls(monkeypatch: Any) -> None:
 CASES: List[tuple[str, str]] = [
     ("= Paris\n", "Paris"),
     ("@echo(x):\n  = <x>\n\n= <echo(alpha)>\n", "alpha"),
-    ("@p(x):\n  generate [y] from <x>\n  = <y>\n\n= <p(foo)>\n", "y-value"),
+    ("@p(x):\n  >> generate [y] from <x>\n  = <y>\n\n= <p(foo)>\n", "y-value"),
     (
-        "@p(x):\n  generate [a], [b] for <x>\n  = <a>-<b>\n\n= <p(z)>\n",
+        "@p(x):\n  >> generate [a], [b] for <x>\n  = <a>-<b>\n\n= <p(z)>\n",
         "a-value-b-value",
     ),
     (
@@ -108,9 +108,9 @@ CASES: List[tuple[str, str]] = [
         "alpha, beta, gamma",
     ),
     ("@pair(a,b):\n  = <a>|<b>\n\n= <pair(foo,bar)>\n", "foo|bar"),
-    ("@q(c):\n  <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n", "r-value"),
+    ("@q(c):\n  >> <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n", "r-value"),
     (
-        "@chain(s):\n  make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n",
+        "@chain(s):\n  >> make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n",
         "y-value",
     ),
     ("=    A     B   C     \n", "A     B   C"),
@@ -119,16 +119,16 @@ CASES: List[tuple[str, str]] = [
         "left   x   mid   y   right",
     ),
     (
-        "@mk():\n  produce [v]\n  = <v>\n\n@use():\n  = pre-<mk()>-post\n\n= <use()>\n",
+        "@mk():\n  >> produce [v]\n  = <v>\n\n@use():\n  = pre-<mk()>-post\n\n= <use()>\n",
         "pre-v-value-post",
     ),
     (
-        "@make():\n  [a] and [b]\n  = <a>/<b>\n\n@use():\n  = (<make()>)\n\n= <use()>\n",
+        "@make():\n  >> [a] and [b]\n  = <a>/<b>\n\n@use():\n  = (<make()>)\n\n= <use()>\n",
         "(a-value/b-value)",
     ),
     ("@id(x):\n  = <x>\n\n@wrap(x):\n  = \\[<x>\\]\n\n= <wrap(<id(num)>)>\n", "[num]"),
     (
-        "@calc(a,b):\n  get [sum] from <a> and <b>\n  get [prod] from <a> and <b>\n  = <sum>-<prod>\n\n= <calc(2,3)>\n",
+        "@calc(a,b):\n  >> get [sum] from <a> and <b>\n  get [prod] from <a> and <b>\n  = <sum>-<prod>\n\n= <calc(2,3)>\n",
         "sum-value-prod-value",
     ),
     (
@@ -140,7 +140,7 @@ CASES: List[tuple[str, str]] = [
         "alpha-beta!",
     ),
     (
-        "@proc(s):\n  prepare [out] from <s>\n  using <out> now\n  = done <out>\n\n= <proc(z)>\n",
+        "@proc(s):\n  >> prepare [out] from <s>\n  using <out> now\n  = done <out>\n\n= <proc(z)>\n",
         "done out-value",
     ),
     (
@@ -152,14 +152,14 @@ CASES: List[tuple[str, str]] = [
         "alice, bob, and charlie",
     ),
     ("@g():\n  = one\n  = two\n\n= <g()>\n", "two"),
-    ("@h():\n  set [a]\n  set [b]\n  = <b>\n\n= <h()>\n", "b-value"),
-    ("@s(x):\n  override [x]\n  = <x>\n\n= <s(orig)>\n", "x-value"),
+    ("@h():\n  >> set [a]\n  set [b]\n  = <b>\n\n= <h()>\n", "b-value"),
+    ("@s(x):\n  >> override [x]\n  = <x>\n\n= <s(orig)>\n", "x-value"),
     (
         "@k(a,b):\n  = <a>+<b>\n\n@z(x):\n  = <k(alpha, <x>)>\n\n= <z(beta)>\n",
         "alpha+beta",
     ),
     ("=   hello   world    \n", "hello   world"),
-    ("@m():\n  A [x] B [y] C\n  = <x>|<y>\n\n= <m()>\n", "x-value|y-value"),
+    ("@m():\n  >> A [x] B [y] C\n  = <x>|<y>\n\n= <m()>\n", "x-value|y-value"),
     ("@q(x):\n  = (<x>)\n\n= result:<q(ok)>\n", "result:(ok)"),
 ]
 
@@ -178,7 +178,7 @@ def test_valid_basic_paris(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@get_country(city):\n"
-            "  <city> is located in [country].\n"
+            "  >> <city> is located in [country].\n"
             "  = <country>\n\n"
             "= <get_country(Paris)>\n"
         ),
@@ -190,7 +190,7 @@ def test_valid_basic_paris(monkeypatch: Any) -> None:
 def test_validation_blocks_parse_and_run(monkeypatch: Any) -> None:
     src = (
         "@get_cities_in(country) -> list[str]:\n"
-        "  All cities in <country> are [cities: list[str]].\n"
+        "  >> All cities in <country> are [cities: list[str]].\n"
         "  = `cities`\n\n"
         "@test: get_cities_in:\n"
         "  > case: tr_cities_len:\n"
@@ -232,13 +232,13 @@ def test_valid_nested_calls(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@get_country_info(city):\n"
-            "  <city> is located in [country].\n"
+            "  >> <city> is located in [country].\n"
             "  = <country>\n\n"
             "@get_language(country):\n"
-            "  The primary language spoken in <country> is [language].\n"
+            "  >> The primary language spoken in <country> is [language].\n"
             "  = <language>\n\n"
             "@translate_greeting(language):\n"
-            "  'Hello' in <language> is [greeting]\n"
+            "  >> 'Hello' in <language> is [greeting]\n"
             "  = <greeting>\n\n"
             "= <translate_greeting(<get_language(<get_country_info(Paris)>)>)>\n"
         ),
@@ -289,7 +289,7 @@ def test_inline_python_with_variables(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@add(x,y):\n"
-            "  <x> + <y> is [s]; computed: <`int(x)+int(y)`>\n"
+            "  >> <x> + <y> is [s]; computed: <`int(x)+int(y)`>\n"
             "  = <`int(x)+int(y)`>\n\n"
             "= <add(2, 3)>\n"
         ),
@@ -328,7 +328,7 @@ def test_inline_python_with_procedure_calls(monkeypatch: Any) -> None:
             "@times2(n: int):\n"
             "  = <`int(n)*2`>\n\n"
             "@calc(a,b):\n"
-            "  double of <a> is <`times2(int(a))`> and sum is <`int(a)+int(b)`>\n"
+            "  >> double of <a> is <`times2(int(a))`> and sum is <`int(a)+int(b)`>\n"
             "  = result:<`times2(int(a)+int(b))`>\n\n"
             "= <calc(4, 5)>\n"
         ),
@@ -341,8 +341,8 @@ def test_inline_python_chaining_llm_outputs(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@chain():\n"
-            "  get [x]\n"
-            "  then compute <`len(x)`> and set [y]\n"
+            "  >> get [x]\n"
+            "  >> then compute <`len(x)`> and set [y]\n"
             "  = <`str(len(x)) + '-' + str(len(y))`>\n\n"
             "= <chain()>\n"
         ),
@@ -405,7 +405,7 @@ def test_inline_python_assert_failure_in_return(monkeypatch: Any) -> None:
 
 
 def test_inline_python_assert_failure_in_template_line(monkeypatch: Any) -> None:
-    src = "@p():\n  <`assert False`>\n  = ok\n\n= <p()>\n"
+    src = "@p():\n  >> <`assert False`>\n  = ok\n\n= <p()>\n"
     rt = _compile(src)
     with pytest.raises(RuntimeError):
         rt.run_main()
@@ -449,9 +449,9 @@ def test_python_block_with_llm_outputs(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@pipeline(x):\n"
-            "  from <x> we ask for [y]\n"
+            "  >> from <x> we ask for [y]\n"
             "  [z: str] = ```\n  return 'prefix-' + y\n  ```\n"
-            "  final [out] uses <`z`>\n"
+            "  >> final [out] uses <`z`>\n"
             "  = <out>\n\n"
             "= <pipeline(alpha)>\n"
         ),
@@ -484,7 +484,7 @@ def test_assign_then_llm(monkeypatch: Any) -> None:
         (
             "@p(city):\n"
             "  [c] = <city>\n"
-            "  <c> is located in [country] \n"
+            "  >> <c> is located in [country] \n"
             "  = <country>\n\n"
             "= <p(Paris)>\n"
         ),
@@ -519,7 +519,7 @@ def test_assign_works_before_return(monkeypatch: Any) -> None:
 def test_assign_interacts_with_outputs(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@p():\n  gain [a]\n  [b] = <a>\n  = <b>\n\n= <p()>\n"),
+        ("@p():\n  >> gain [a]\n  [b] = <a>\n  = <b>\n\n= <p()>\n"),
     )
     assert out == "a-value"
 
@@ -530,7 +530,7 @@ def test_assign_interacts_with_outputs(monkeypatch: Any) -> None:
 def test_typed_output_string(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        "@p():\n  city is [city: str]\n  = <city>\n\n= <p()>\n",
+        "@p():\n  >> city is [city: str]\n  = <city>\n\n= <p()>\n",
     )
     assert isinstance(out, str)
     assert len(out) > 0
@@ -539,7 +539,7 @@ def test_typed_output_string(monkeypatch: Any) -> None:
 def test_typed_output_list_of_str(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        "@p(country):\n  neighbors: [neigh: list[str]]\n  = <`','.join(neigh)`>\n\n= <p(Turkey)>\n",
+        "@p(country):\n  >> neighbors: [neigh: list[str]]\n  = <`','.join(neigh)`>\n\n= <p(Turkey)>\n",
     )
     assert "," in out or out == ""
 
@@ -563,7 +563,7 @@ def test_typed_assignment_list_int(monkeypatch: Any) -> None:
 def test_mixed_typed_and_untyped_outputs(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@p():\n  get [a: int] and [b]\n  = <`str(a)+'-'+str(len(str(b)))`>\n\n= <p()>\n"),
+        ("@p():\n  >> get [a: int] and [b]\n  = <`str(a)+'-'+str(len(str(b)))`>\n\n= <p()>\n"),
     )
     assert "-" in out
 
@@ -573,7 +573,7 @@ def test_typed_output_used_in_python_block(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@p():\n"
-            "  numbers [arr: list[int]]\n"
+            "  >> numbers [arr: list[int]]\n"
             "  [s: int] = ```\n  return sum(arr)\n  ```\n"
             "  = <`str(s)`>\n\n"
             "= <p()>\n"
@@ -587,7 +587,7 @@ def test_typed_list_cross_call_and_inline(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@id(x):\n  = <x>\n\n"
-            "@p():\n  items [xs: list[str]] from <id(seed)>\n  [ys: list[str]] = `[v+'!' for v in xs]`\n  = <`'-'.join(ys)`>\n\n"
+            "@p():\n  >> items [xs: list[str]] from <id(seed)>\n  [ys: list[str]] = `[v+'!' for v in xs]`\n  = <`'-'.join(ys)`>\n\n"
             "= <p()>\n"
         ),
     )
@@ -597,7 +597,9 @@ def test_typed_list_cross_call_and_inline(monkeypatch: Any) -> None:
 def test_typed_assignment_then_llm(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@p():\n  [prefix: str] = pre-\n  name is [name: str]\n  = <prefix><name>\n\n= <p()>\n"),
+        (
+            "@p():\n  [prefix: str] = pre-\n  >> name is [name: str]\n  = <prefix><name>\n\n= <p()>\n"
+        ),
     )
     assert isinstance(out, str)
 
@@ -607,7 +609,7 @@ def test_typed_outputs_multiple(monkeypatch: Any) -> None:
         monkeypatch,
         (
             "@p():\n"
-            "  need [a: int], [b: float], and [c: bool]\n"
+            "  >> need [a: int], [b: float], and [c: bool]\n"
             "  = <a>-<`int(b)`>-<`'T' if c else 'F'`>\n\n"
             "= <p()>\n"
         ),
@@ -618,7 +620,7 @@ def test_typed_outputs_multiple(monkeypatch: Any) -> None:
 def test_typed_output_in_return_context(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@mk():\n  produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n= <mk()>\n"),
+        ("@mk():\n  >> produce [vals: list[int]]\n  = <`str(sum(vals))`>\n\n= <mk()>\n"),
     )
     assert out.isdigit()
 
@@ -626,7 +628,7 @@ def test_typed_output_in_return_context(monkeypatch: Any) -> None:
 def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
     out = _run(
         monkeypatch,
-        ("@p():\n  value [x: NotARealType]\n  = <x>\n\n= <p()>\n"),
+        ("@p():\n  >> value [x: NotARealType]\n  = <x>\n\n= <p()>\n"),
     )
     assert isinstance(out, str)
 
@@ -636,9 +638,9 @@ def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
     [
         "@p():\n [x: int] = `2**5`\n = <`x+1`>\n\n= <p()>\n",
         "@p():\n [s: str] = hello\n = <s>!\n\n= <p()>\n",
-        "@p():\n arr [a: list[int]]\n [first: int] = ```\n return a[0] if a else 0\n ```\n = <`str(first)`>\n\n= <p()>\n",
-        "@times2(n):\n = <`int(n)*2`>\n\n@use():\n list [xs: list[int]]\n [ys: list[int]] = `[2,4]`\n = <`str(sum(int(v) for v in ys))`>\n\n= <use()>\n",
-        "@p():\n alpha [a] and ints [b: list[int]]\n = <a>-<`sum(b)`>\n\n= <p()>\n",
+        "@p():\n >> arr [a: list[int]]\n [first: int] = ```\n return a[0] if a else 0\n ```\n = <`str(first)`>\n\n= <p()>\n",
+        "@times2(n):\n = <`int(n)*2`>\n\n@use():\n >> list [xs: list[int]]\n [ys: list[int]] = `[2,4]`\n = <`str(sum(int(v) for v in ys))`>\n\n= <use()>\n",
+        "@p():\n >> alpha [a] and ints [b: list[int]]\n = <a>-<`sum(b)`>\n\n= <p()>\n",
     ],
 )
 def test_parametrized_typed_snippets(monkeypatch: Any, src: str) -> None:

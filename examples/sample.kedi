@@ -5,20 +5,20 @@
 
 
 @get_country(city):
-  <city> is located in [country: str].
+  >> <city> is located in [country: str].
   = <country>
 
-Some kedi string
+>> Some kedi string
 @get_language(country: str) -> str:
-  The primary language spoken in <country> is [language: str].
+  >> The primary language spoken in <country> is [language: str].
   = <language>
 
 # Procedure using inline Python
 @translate_greeting(language: str):
-  'Hello' in <language> is [greeting: str] #sdf
-  <`print(f"Translating to {language}...")`>
+  >> 'Hello' in <language> is [greeting: str] #sdf
+  `print(f"Translating to {language}...")`
   = <greeting> # sdjkhbvkdfsv
-  
+
 ###
 dfkvsjnlkjnsdfv
 sdfv
@@ -45,15 +45,15 @@ sdfv
 
 # Procedure with typed list output
 @get_neighbors(country: str):
-  Countries bordering <country> are [neighbors: list[str]]
+  >> Countries bordering <country> are [neighbors: list[str]]
   = <`', '.join(neighbors)`>
 
-# Procedure with multiple outputs
+# Procedure with multiple outputs (one template block)
 @get_city_info(city: str):
-  For <city>, determine: \
-  - Population: [population: int] \
-  - Area in km²: [area: float] \
-  - Is capital: [is_capital: bool] \ 
+  >> For <city>, determine:
+  - Population: [population: int]
+  - Area in km²: [area: float]
+  - Is capital: [is_capital: bool]
   - Famous landmarks: [landmarks: list[str]]
   = City <city> has <population> people in <area> km²
 
@@ -69,13 +69,11 @@ COMMENT
 
 ~Person(a, b:int, c)
 
-[a:int] Kedi string starts with output field
-
 # COMMENT
 @foo(): # COMMENT
   @bar():
     # COMMENT
-    Kedi text <some_in> # COMMENT
+    >> Kedi text <some_in> # COMMENT
     Kedi text [some_out: int] Text # COMMENT
     [a:int] Kedi string starts with output field
     <a> Kedi string that starts with a substitution
@@ -85,17 +83,17 @@ COMMENT
   = <`'foo'`> # COMMENT
 
 @show_escapes():
-  Use \<angle brackets\> [x: int] \[\[unescaped\] \@at symbol and \= equals\,
-  = Use \<angle brackets\> [x: int] \[unescaped\] \@at symbol and \= equals 
+  >> Use \<angle brackets\> [x: int] \[\[unescaped\] \@at symbol and \= equals\,
+  = Use \<angle brackets\> [x: int] \[unescaped\] \@at symbol and \= equals
 
 # Complex nested calls
 @trip_planner(start_city: str):
   [country] = <get_country(<start_city>)>
   [neighbor] = <get_neighbors(<country>)>
-  Plan a trip from <start_city> to [destination] in <neighbor>.
+  >> Plan a trip from <start_city> to [destination] in <neighbor>.
   [itinerary: list[str]] = ```
   return [
-    f"Day 1: Explore {start_city}", 
+    f"Day 1: Explore {start_city}",
     f"Day 2: Travel to {destination}",
     f"Day 3: Return to {start_city}"
   ]
@@ -105,12 +103,11 @@ COMMENT
 # Assignment at top level
 [global_city: str] = Paris
 
-# Python block at top level 
+# Python block at top level
 ```
 # fdskjnbf
 import math
-radius = 6371  # Earth radius in km >>
-# (note: '>>' was a literal closer in legacy; kept inside python block)
+radius = 6371  # Earth radius in km
 pi_approx = math.pi
 ```
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 
 from kedi.agent_adapter import AgentAdapter
 from kedi.utils import AttrDict
+
+_OUTPUT_KEY_RE = re.compile(r"\[([A-Za-z_]\w*)(?::[^\]]*)?\]")
 
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
@@ -24,11 +27,13 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         output_schema: Dict[str, type] | None = None,
         **_: Any,
     ) -> AttrDict[str, Any]:
-        start = template.find("[")
-        end = template.find("]", start + 1)
         keys: List[str] = []
-        if start != -1 and end != -1:
-            keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
+        seen: set[str] = set()
+        for match in _OUTPUT_KEY_RE.finditer(template):
+            key = match.group(1)
+            if key not in seen:
+                seen.add(key)
+                keys.append(key)
         annotations: Dict[str, Any] = dict(output_schema or {})
         data: Dict[str, Any] = {}
         for k in keys:

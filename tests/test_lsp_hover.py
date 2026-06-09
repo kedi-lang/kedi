@@ -60,16 +60,14 @@ def test_hover_on_procedure_header_includes_docstring():
 
 
 def test_hover_on_docstring_comment_uses_procedure_docstring():
-    src = (
-        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
-    )
+    src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
     body = hover_text_at(src, "example.kedi", "Translate the provided text.")
     assert "translate" in body
     assert "Translate the provided text." in body
 
 
 def test_hover_on_regular_block_comment_stays_none():
-    src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
+    src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  >> Not a docstring.\n  ###\n"
     assert hover_at(src, "example.kedi", "Not a docstring.") is None
 
 
@@ -102,7 +100,7 @@ def test_hover_on_nested_procedure_header_shows_signature():
 
 
 def test_hover_on_nested_text_segment_works():
-    src = "@foo():\n  @bar():\n    Hello world\n    = Done\n  = dn\n"
+    src = "@foo():\n  @bar():\n    >> Hello world\n    = Done\n  = dn\n"
     body = hover_text_at(src, "example.kedi", "world")
     assert "Text segment" in body
     assert "Hello world" in body
@@ -293,7 +291,7 @@ def test_hover_and_definition_on_exported_value_name():
 
 
 def test_hover_on_input_segment():
-    src = "@p(name):\n  Hello, <name>!\n  = done\n"
+    src = "@p(name):\n  >> Hello, <name>!\n  = done\n"
     body = hover_text_at(src, "example.kedi", "name", occurrence=2)
     assert "name" in body
     # Hover labels parameter references as such when the input matches
@@ -302,7 +300,7 @@ def test_hover_on_input_segment():
 
 
 def test_hover_on_output_segment_shows_type():
-    src = "@p():\n  Pick a [n: int].\n  = <n>\n"
+    src = "@p():\n  >> Pick a [n: int].\n  = <n>\n"
     body = hover_text_at(src, "example.kedi", "n")
     assert "Output" in body
     assert "n" in body
@@ -496,7 +494,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
 def test_hover_on_builtin_and_typing_types_is_not_undefined():
     src = (
         "@p(items: list[int], x: Optional[str], y: Literal[int]) -> bool:\n"
-        "  Flag: [flag: bool]\n"
+        "  >> Flag: [flag: bool]\n"
         "  = <x>\n"
     )
 
@@ -591,7 +589,7 @@ def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
         '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
         "    age: int = Field(gt=50)\n"
         "```\n\n"
-        "Fake me a [person: Person]\n"
+        ">> Fake me a [person: Person]\n"
         "\n"
         "= <`person`>\n"
     )
@@ -613,7 +611,7 @@ def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():
         '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
         "    age: int = Field(gt=50)\n"
         "```\n\n"
-        "Fake me a [person: Person]\n"
+        ">> Fake me a [person: Person]\n"
         "\n"
         "= <`person`>\n"
     )

@@ -54,7 +54,7 @@ def test_hover_on_unknown_call_local_and_field() -> None:
 
 
 def test_hover_on_plain_text_segment() -> None:
-    generic = hover_text_at("@p():\n  plain prompt text\n", "/tmp/x.kedi", "plain")
+    generic = hover_text_at("@p():\n  >> plain prompt text\n", "/tmp/x.kedi", "plain")
     assert "Text segment" in generic
 
 

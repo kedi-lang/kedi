@@ -1,12 +1,4 @@
-"""Advanced GEPA optimizer tests combining optimization with other Kedi features.
-
-Tests that the optimizer works correctly when combined with:
-  - Typed outputs (int, float, list[str])
-  - Python preprocessing blocks before spans
-  - Multiline spans
-  - Optimization preserving non-optimized procedure behavior
-  - Complex span inputs with computed values
-"""
+">> Advanced GEPA optimizer tests combining optimization with other Kedi features.\n\n>> Tests that the optimizer works correctly when combined with:\n  >> - Typed outputs (int, float, list[str])\n  - Python preprocessing blocks before spans\n  - Multiline spans\n  - Optimization preserving non-optimized procedure behavior\n  - Complex span inputs with computed values\n"
 
 from __future__ import annotations
 
@@ -71,8 +63,7 @@ def _optimize(monkeypatch, src, train_data, max_calls=40, proc_index=0, eval_ind
 
 
 def test_optimization_with_typed_int_float_outputs(monkeypatch: pytest.MonkeyPatch):
-    """Span with both [v: int] and [w: float] outputs.
-    MockLM should produce correct types for both."""
+    ">> Span with both [v: int] and [w: float] outputs.\n    >> MockLM should produce correct types for both."
     src = """
 @compute(seed: str) -> float:
   > optimize: typed_span:

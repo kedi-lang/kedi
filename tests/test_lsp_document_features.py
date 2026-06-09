@@ -80,7 +80,7 @@ def test_inlay_hint_parameter_names_for_call():
 
 
 def test_inlay_hint_str_default_for_untyped_output():
-    src = "@p():\n  Pick a [n].\n  = <n>\n"
+    src = "@p():\n  >> Pick a [n].\n  = <n>\n"
     hints = inlay_hints_for_lines(src, "/tmp/x.kedi", 0, 10)
     labels = [str(h.label) for h in hints]
     assert any(": str" in lbl for lbl in labels)

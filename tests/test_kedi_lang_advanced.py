@@ -26,7 +26,7 @@ def _run(monkeypatch: Any, src: str) -> Any:
 
 ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     (
-        "@pipe(a,b):\n  step one for [x]\n  step two for [y: int]\n  = <`str(y)+'-'+x`>\n\n= <pipe(alpha, beta)>\n",
+        "@pipe(a,b):\n  >> step one for [x]\n  step two for [y: int]\n  = <`str(y)+'-'+x`>\n\n= <pipe(alpha, beta)>\n",
         "42-x-value",
     ),
     (
@@ -34,7 +34,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "out:2",
     ),
     (
-        "@kw(a,b,c):\n  combine [out: str] from <`a+b+c`>\n  = <out>\n\n= <kw(1,2,3)>\n",
+        "@kw(a,b,c):\n  >> combine [out: str] from <`a+b+c`>\n  = <out>\n\n= <kw(1,2,3)>\n",
         "out-value",
     ),
     (
@@ -42,12 +42,12 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
         "[8]",
     ),
     (
-        "@types():\n  list [xs: list[int]]\n  [doubled: list[int]] = ```\n  return [v*2 for v in xs]\n  ```\n  = <`str(sum(doubled))`>\n\n= <types()>\n",
+        "@types():\n  >> list [xs: list[int]]\n  [doubled: list[int]] = ```\n  return [v*2 for v in xs]\n  ```\n  = <`str(sum(doubled))`>\n\n= <types()>\n",
         "6",
     ),
     (
         # Multiple outputs, mixture typed and untyped
-        "@multi():\n  a [p] and b [q: int] and c [r: list[str]]\n  = <p>-<`q+1`>-<`len(r)`>\n\n= <multi()>\n",
+        "@multi():\n  >> a [p] and b [q: int] and c [r: list[str]]\n  = <p>-<`q+1`>-<`len(r)`>\n\n= <multi()>\n",
         "p-value-43-2",
     ),
     (
@@ -77,7 +77,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Output typed list[str] then chain in python
-        "@cities():\n  get [arr: list[str]]\n  = <`'-'.join(arr)`>\n\n= <cities()>\n",
+        "@cities():\n  >> get [arr: list[str]]\n  = <`'-'.join(arr)`>\n\n= <cities()>\n",
         "arr-a-arr-b",
     ),
     (
@@ -102,7 +102,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Using variable from assignment then overriding via LLM output
-        "@override():\n  [x] = base\n  confirm [x]\n  = <x>\n\n= <override()>\n",
+        "@override():\n  [x] = base\n  >> confirm [x]\n  = <x>\n\n= <override()>\n",
         "x-value",
     ),
     (
@@ -117,17 +117,17 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # TypedDict path when any typed output exists
-        "@typed():\n  need [a: int] and [b]\n  = <`str(a)+'-'+b`>\n\n= <typed()>\n",
+        "@typed():\n  >> need [a: int] and [b]\n  = <`str(a)+'-'+b`>\n\n= <typed()>\n",
         "42-b-value",
     ),
     (
         # No-op m() when no outputs on a line
-        "@noop():\n  this line has no outputs and only text\n  = done\n\n= <noop()>\n",
+        "@noop():\n  >> this line has no outputs and only text\n  = done\n\n= <noop()>\n",
         "done",
     ),
     (
         # Complex inline python with statements fallback to exec
-        "@assertion():\n  <`assert 1+1==2`>\n  = ok\n\n= <assertion()>\n",
+        "@assertion():\n  >> <`assert 1+1==2`>\n  = ok\n\n= <assertion()>\n",
         "ok",
     ),
 ]
@@ -184,7 +184,7 @@ RUNTIME_ERROR_CASES = [
     ),
     (
         # Unknown variable usage in a template line (triggered via rt.m)
-        "@p():\n  using <missing> we need [x]\n  = done\n\n= <p()>\n",
+        "@p():\n  >> using <missing> we need [x]\n  = done\n\n= <p()>\n",
         KeyError,
     ),
     # Note: Duplicate procedure definitions are now allowed (for cache merging); last wins
@@ -228,7 +228,7 @@ def test_nested_calls_and_args(monkeypatch: Any) -> None:
     src = (
         "@f(a,b,c):\n  = <a>-<b>-<c>\n\n"
         "@g(x):\n  = <`x+'!'`>\n\n"
-        "@h(p,q):\n  <f(p, <g(q)>, <`p+q`>)> yields [r]\n  = <r>\n\n"
+        "@h(p,q):\n  >> <f(p, <g(q)>, <`p+q`>)> yields [r]\n  = <r>\n\n"
         "= <h(A, B)>\n"
     )
     out = _run(monkeypatch, src)
@@ -236,7 +236,7 @@ def test_nested_calls_and_args(monkeypatch: Any) -> None:
 
 
 def test_list_type_nested_and_python(monkeypatch: Any) -> None:
-    src = "@p():\n  matrix [m: list[list[int]]]\n  [flat: list[int]] = ```\n  return [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
+    src = "@p():\n  >> matrix [m: list[list[int]]]\n  [flat: list[int]] = ```\n  return [v for row in m for v in row]\n  ```\n  = <`str(sum(flat))`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     # Our fake agent returns [] for unknown nested typing; allow "0" or empty leading
     assert out == "0" or out.startswith("")
@@ -259,7 +259,7 @@ def test_assignment_string_render_when_not_pure_python(monkeypatch: Any) -> None
 
 
 def test_output_updates_env_for_later_use(monkeypatch: Any) -> None:
-    src = "@p():\n  color is [color]\n  = <`color.upper()`>\n\n= <p()>\n"
+    src = "@p():\n  >> color is [color]\n  = <`color.upper()`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.isupper()
 
@@ -293,7 +293,7 @@ def test_nested_procedure_definition_is_ignored_and_call_fails(
     monkeypatch: Any,
 ) -> None:
     # Nested procedure is parsed but not registered; calling it should fail
-    src = "@outer():\n  text\n  @inner():\n    = hi\n  = done\n\n= <inner()>\n"
+    src = "@outer():\n  >> text\n  @inner():\n    = hi\n  = done\n\n= <inner()>\n"
     rt = _compile(src)
     with pytest.raises(KeyError):
         rt.run_main()
@@ -301,7 +301,7 @@ def test_nested_procedure_definition_is_ignored_and_call_fails(
 
 def test_unmatched_closers_in_template_raise(monkeypatch: Any) -> None:
     with pytest.raises(Exception):
-        parse_program("hello > world\n=")
+        parse_program(">> hello > world\n=")
 
 
 def test_call_with_empty_literals_and_vars(monkeypatch: Any) -> None:
@@ -344,7 +344,7 @@ def test_inline_python_exec_statement_returns_empty_string(monkeypatch: Any) -> 
 def test_unallowed_language_fence_inline(monkeypatch: Any) -> None:
     # '```python' should not start a block; treated as text then '=' return missing => parse error
     with pytest.raises(Exception):
-        parse_program("```python\npass\n```\n=")
+        parse_program("```python\n>> pass\n```\n=")
 
 
 def test_call_with_multiple_mixed_arguments(monkeypatch: Any) -> None:
@@ -371,7 +371,7 @@ def test_unknown_var_in_python_block_raises(monkeypatch: Any) -> None:
 
 
 def test_assign_and_then_output(monkeypatch: Any) -> None:
-    src = "@p():\n  [seed] = base\n  using <seed> we need [out]\n  = <out>\n\n= <p()>\n"
+    src = "@p():\n  [seed] = base\n  >> using <seed> we need [out]\n  = <out>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "out-value"
 
@@ -472,17 +472,7 @@ def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
-    """A raw backtick mid-template is now a parse error (was: literal text).
-
-    Tree-sitter refactor (Phase-6): the new grammar treats `` ` `` as a
-    segment delimiter consistently. The pre-refactor parser accepted
-    `[x] = \\`1+1\\` and more <s>` and rendered it as the literal
-    string ``\\`1+1\\` and more ok`` — a quirky special case where
-    backticks inside a template body became literal text only when
-    additional content followed. Users who want a literal backtick
-    must now escape it (``\\\\\\``) or wrap an inline-Python segment
-    in angle brackets (``<\\`expr\\`>``); we reject the old form.
-    """
+    ">> A raw backtick mid-template is now a parse error (was: literal text).\n\n    >> Tree-sitter refactor (Phase-6): the new grammar treats `` ` `` as a\n    segment delimiter consistently. The pre-refactor parser accepted\n    `[x] = \\`1+1\\` and more <s>` and rendered it as the literal\n    string ``\\`1+1\\` and more ok`` — a quirky special case where\n    backticks inside a template body became literal text only when\n    additional content followed. Users who want a literal backtick\n    must now escape it (``\\\\\\``) or wrap an inline-Python segment\n    in angle brackets (``<\\`expr\\`>``); we reject the old form.\n"
     import pytest
 
     src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
@@ -509,7 +499,7 @@ def test_assignment_then_reassignment(monkeypatch: Any) -> None:
 
 
 def test_output_then_python_block_consumes(monkeypatch: Any) -> None:
-    src = "@p():\n  need [v: int]\n  [w: int] = ```\n  return v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
+    src = "@p():\n  >> need [v: int]\n  [w: int] = ```\n  return v * 4\n  ```\n  = <`str(w)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "168" or out.isdigit()
 
@@ -536,13 +526,15 @@ def test_python_block_indent_normalization(monkeypatch: Any) -> None:
 
 
 def test_inline_python_statement_then_value(monkeypatch: Any) -> None:
-    src = "@p():\n  <`assert 3>2`>\n  = <`str(10)`>\n\n= <p()>\n"
+    src = "@p():\n  >> <`assert 3>2`>\n  = <`str(10)`>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "10"
 
 
 def test_nested_list_type_output_then_use(monkeypatch: Any) -> None:
-    src = "@p():\n  mat [m: list[list[str]]]\n  = <`str(sum(len(row) for row in m))`>\n\n= <p()>\n"
+    src = (
+        "@p():\n  >> mat [m: list[list[str]]]\n  = <`str(sum(len(row) for row in m))`>\n\n= <p()>\n"
+    )
     out = _run(monkeypatch, src)
     assert out == "0" or out.isdigit()
 
@@ -569,7 +561,7 @@ def test_unmatched_end_kedi_in_python_block_ignored(monkeypatch: Any) -> None:
 
 
 def test_complex_chain_of_assign_prompt_and_return(monkeypatch: Any) -> None:
-    src = "@complex(a,b):\n  [u] = <a>-<b>\n  <u> gives [v: str]\n  [w: int] = `len(v)`\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
+    src = "@complex(a,b):\n  [u] = <a>-<b>\n  >> <u> gives [v: str]\n  [w: int] = `len(v)`\n  = <`v+'|'+str(w)`>\n\n= <complex(x, y)>\n"
     out = _run(monkeypatch, src)
     assert "|" in out
 
@@ -589,7 +581,7 @@ def test_standalone_backtick_invalid_mixed_content(monkeypatch: Any) -> None:
 
 
 def test_standalone_backtick_interacts_with_outputs(monkeypatch: Any) -> None:
-    src = "@p():\n  need [v]\n  `v = v + '-z'`\n  = <v>\n\n= <p()>\n"
+    src = "@p():\n  >> need [v]\n  `v = v + '-z'`\n  = <v>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out.endswith("-z") or out != ""
 

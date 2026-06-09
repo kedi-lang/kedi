@@ -162,7 +162,7 @@ def test_python_virtual_document_includes_prelude_symbols_for_toplevel_scope():
         '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
         "    age: int = Field(gt=50)\n"
         "```\n\n"
-        "Fake me a [person: Person]\n"
+        ">> Fake me a [person: Person]\n"
         "\n"
         "= <`person`>\n"
     )
@@ -182,7 +182,7 @@ def test_focused_virtual_document_stubs_unfocused_module_python():
         '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
         "    age: int = Field(gt=50)\n"
         "```\n\n"
-        "Fake me a [person: Person]\n"
+        ">> Fake me a [person: Person]\n"
         "\n"
         "= <`person`>\n"
     )
@@ -237,7 +237,7 @@ def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
         '    name: str = Field(examples=["Ayşe", "Ali", "Berk"])\n'
         "    age: int = Field(gt=50)\n"
         "```\n\n"
-        "Fake me a [person: Person]\n"
+        ">> Fake me a [person: Person]\n"
         "\n"
         "= <`person`>\n"
     )
@@ -358,7 +358,7 @@ def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types()
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     src = (
         "@get_country(city):\n"
-        "  <city> is located in [country: str].\n"
+        "  >> <city> is located in [country: str].\n"
         "  = <country>\n"
         "\n"
         "@eval: get_country:\n"
@@ -591,7 +591,9 @@ def test_python_virtual_helper_edges(monkeypatch):
     pv._emit_type_stub(empty_type_builder, TypeDef(name="Empty", fields=[]), {})
     assert "    pass" in empty_type_builder.finish()
 
-    nested_builder = pv.VirtualBuilder("@outer():\n  @inner():\n    ###\n    doc\n    ###\n", None)
+    nested_builder = pv.VirtualBuilder(
+        "@outer():\n  @inner():\n    ###\n    >> doc\n    ###\n", None
+    )
     inner = ProcedureDef(
         name="inner",
         params=[],

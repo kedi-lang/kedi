@@ -78,6 +78,7 @@ from ..lang.ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Span,
+    TemplateBlock,
     TemplateLine,
     TestSuite,
     TextSegment,
@@ -176,6 +177,11 @@ def _position_inside(pos: lsp.Position, span: Span) -> bool:
 
 def _segments_of(stmt) -> list:
     """All segment children of a statement (``segments`` or ``expr``)."""
+    if isinstance(stmt, TemplateBlock):
+        segs: list = []
+        for line in stmt.lines:
+            segs.extend(line.segments)
+        return segs
     return list(getattr(stmt, "segments", []) or []) + list(getattr(stmt, "expr", []) or [])
 
 
@@ -188,7 +194,10 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
         prog = parse_program(source, source_path=source_path)
-        return _missing_import_diagnostics(prog)
+        out = _missing_import_diagnostics(prog)
+        for warning in prog.parser_warnings:
+            out.append(_diag_to_lsp(warning))
+        return out
     except KediParseError as exc:
         return [_diag_to_lsp(d) for d in exc.diagnostics]
 
@@ -991,6 +1000,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(tl)
             return
         # Statements with segment children
+        if isinstance(node, TemplateBlock):
+            for line in node.lines:
+                visit(line)
+            return
         if isinstance(node, (TemplateLine, ReturnStmt)):
             for seg in getattr(node, "segments", []) or []:
                 visit(seg)
@@ -1029,8 +1042,13 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         visit(proc)
     for td in getattr(prog, "type_defs", []) or []:
         visit(td)
-    for stmt in getattr(prog, "top_level_statements", []) or []:
+    for stmt in (
+        getattr(prog, "toplevel_body", None) or getattr(prog, "top_level_statements", None) or []
+    ):
         visit(stmt)
+    toplevel_return = getattr(prog, "toplevel_return", None)
+    if toplevel_return is not None:
+        visit(toplevel_return)
     if isinstance(prog, ProgramWithValidation):
         for s in prog.tests or []:
             visit(s)
@@ -1049,9 +1067,16 @@ def _describe_ast_node(node) -> Optional[str]:
         ann = node.type_annotation or "str"
         default = f" = `{node.default_expr}`" if node.default_expr is not None else ""
         return f"**Type field** `{node.name}: {ann}{default}` — member of a Kedi type."
+    if isinstance(node, TemplateBlock):
+        line_count = len(node.lines)
+        return (
+            "**Template block** `>> …` — multiline LLM prompt run. "
+            f"{line_count} line(s) are newline-joined into **one** agent call; "
+            "`<name>` on later rows refers to `[name]` outputs declared earlier in the block."
+        )
     if isinstance(node, TemplateLine):
         return (
-            "**Template line** — text the LLM sees as a prompt segment. "
+            "**Template line** — one row in a template block (or a legacy bare line). "
             "Inputs `<x>`, outputs `[x: T]`, calls `<f(...)>`, inline Python `` `...` ``, "
             "and literal text are stitched into one prompt."
         )

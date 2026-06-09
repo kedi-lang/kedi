@@ -1,6 +1,6 @@
 # Kedi
 
-[![coverage](https://img.shields.io/github/actions/workflow/status/kedi-lang/kedi/tests.yml?branch=stable&label=coverage)](https://github.com/kedi-lang/kedi/actions/workflows/tests.yml)
+[![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)](https://github.com/kedi-lang/kedi/actions/workflows/tests.yml)
 
 ## A typed reasoning layer for LLM orchestration
 

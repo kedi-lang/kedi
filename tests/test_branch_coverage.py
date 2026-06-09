@@ -31,6 +31,15 @@ def test_resolved_type_helpers_cover_typing_aliases() -> None:
     assert runtime_isinstance("x", list[str]) is True
 
 
+def test_smallest_enclosing_visits_toplevel_return() -> None:
+    from kedi.lang.parser import parse_program
+
+    src = ">> [x]\n= <x>\n"
+    prog = parse_program(src)
+    pos = position_of(src, "<x>")
+    assert features._smallest_enclosing(prog, pos) is not None
+
+
 def test_type_registry_skips_private_and_missing_names(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_module = SimpleNamespace(
         __all__=("_private", "Visible", "Missing"),
@@ -265,9 +274,7 @@ def test_procedure_docstring_nodes_without_body(monkeypatch) -> None:
 
 
 def test_semantic_tokens_without_docstring_capture(monkeypatch) -> None:
-    src = (
-        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
-    )
+    src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
     monkeypatch.setattr(features, "_capture_to_token", lambda _name: None)
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)
@@ -353,12 +360,12 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
 
 
 def test_semantic_tokens_multiline_python_emit_edges() -> None:
-    src = "= <`def f():\n    return 1\n`>\n"
+    src = "= <`def f():\n    >> return 1\n`>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert len(tokens.data) % 5 == 0
 
 
 def test_semantic_tokens_multiline_python_short_source() -> None:
-    src = "= <`a\nb`>\n"
+    src = "= <`a\n>> b`>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)

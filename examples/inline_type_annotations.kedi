@@ -1,6 +1,6 @@
 # Inline Python Type Annotations Example
 
-This example demonstrates the new backtick-wrapped type annotations feature.
+# This example demonstrates the new backtick-wrapped type annotations feature.
 
 # Basic types with backticks
 [x: `int`] = `42`

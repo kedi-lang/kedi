@@ -35,6 +35,7 @@ from ..lang.ast import (
     ReturnStmt,
     Span,
     Stmt,
+    TemplateBlock,
     TemplateLine,
     TestCase,
     TypeApply,
@@ -759,6 +760,10 @@ def _emit_statements(
             region = cursor.next("inline", stmt.loc)
             if region is not None:
                 builder.add_mapped_region(region, indent)
+            continue
+        if isinstance(stmt, TemplateBlock):
+            for line in stmt.lines:
+                _emit_segments(builder, cursor, line, scope, indent)
             continue
         if isinstance(stmt, TemplateLine):
             _emit_segments(builder, cursor, stmt, scope, indent)

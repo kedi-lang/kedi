@@ -74,11 +74,7 @@ def test_parse_unknown_directive_error():
     # ``> auto:`` and ``> optimize: <name>:`` inside a procedure body
     # and rejects everything else as a parse error. Callers should
     # migrate to ``> auto:``.
-    src2 = """
-@foo():
-  > directive: name: arg:
-    Some content
-"""
+    src2 = "\n@foo():\n  > directive: name: arg:\n    >> Some content\n"
     with pytest.raises(Exception):
         parse_program(src2)
 

@@ -12,7 +12,7 @@ from kedi.lsp import module_surface
 
 def test_module_surface_returns_empty_surface_for_invalid_module(tmp_path) -> None:
     bad_module = tmp_path / "bad.kedi"
-    bad_module.write_text("[bad\n", encoding="utf-8")
+    bad_module.write_text(">> [bad\n", encoding="utf-8")
 
     bad_surface = module_surface.load_imported_surface(bad_module, set(), "bad")
 

@@ -37,7 +37,7 @@ def test_definition_jumps_to_nested_procedure():
 
 
 def test_definition_returns_none_for_non_reference():
-    src = "@p():\n  Hello world\n  = ok\n"
+    src = "@p():\n  >> Hello world\n  = ok\n"
     loc = definition_at(src, "file:///tmp/example.kedi", "/tmp/example.kedi", "Hello")
     assert loc is None
 

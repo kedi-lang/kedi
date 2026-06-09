@@ -83,7 +83,7 @@ def test_imported_values_are_visible_inside_local_procedures(tmp_path: Path) -> 
 
 def test_imported_procedure_runs_with_its_own_runtime_context(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
-        "@ask() -> str:\n  Say [answer].\n  = <answer>\n\n> export:\n  ask\n",
+        "@ask() -> str:\n  >> Say [answer].\n  = <answer>\n\n> export:\n  ask\n",
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"

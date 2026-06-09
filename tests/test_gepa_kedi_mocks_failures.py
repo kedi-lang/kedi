@@ -135,9 +135,7 @@ def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_bad_reflection_nan_range_recovers(monkeypatch: pytest.MonkeyPatch):
-    """When reflection produces RANGE[NaN,NaN], optimizer still completes
-    without crashing. The NaN response is injected by reflection_fail_once()
-    which affects the first MockLM._reflection_response call."""
+    ">> When reflection produces RANGE[NaN,NaN], optimizer still completes\n    >> without crashing. The NaN response is injected by reflection_fail_once()\n    which affects the first MockLM._reflection_response call."
     install_mock_dspy(monkeypatch)
     Recorder.reset()
     reflection_fail_once()

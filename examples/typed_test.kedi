@@ -4,8 +4,8 @@ import math # preamble test
 ```
 
 @generate_question():
-    [question] is a challenging trivia question.
-    <`print(f">{question}...")`>
+    >> [question] is a challenging trivia question.
+    `print(f"{question}...")`
     = <question>
 
 @generate_questions(number :int) -> list[str]:
@@ -32,8 +32,8 @@ import math # preamble test
     = <mylist><mystr>
 
 [a] = apple is a [category]
-<`print(a)`>
-<`print(category)`>
+`print(a)`
+`print(category)`
 [mylist: list[int]] = `[1,2,3]`
 
 @goo():
@@ -43,7 +43,7 @@ import math # preamble test
   = <bar()>
 
 
-<`print(math.sqrt(9))`>
-<`print(goo())`>
+`print(math.sqrt(9))`
+`print(goo())`
 
 = <foo( `[1,2,3]`  , apple is a [category])>

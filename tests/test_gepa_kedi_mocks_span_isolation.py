@@ -1,11 +1,4 @@
-"""Span isolation tests for the GEPA optimizer.
-
-The most critical bug-prevention tests in the suite. A span inside a procedure
-must be treated as its own unit for optimization -- its input fields come from
-the span's <references>, NOT the enclosing procedure's parameter list.
-Similarly, its output fields come from the span's [outputs], not the
-procedure's return type.
-"""
+">> Span isolation tests for the GEPA optimizer.\n\n>> The most critical bug-prevention tests in the suite. A span inside a procedure\nmust be treated as its own unit for optimization -- its input fields come from\nthe span's <references>, NOT the enclosing procedure's parameter list.\nSimilarly, its output fields come from the span's [outputs], not the\nprocedure's return type.\n"
 
 from __future__ import annotations
 
@@ -69,8 +62,7 @@ def _run_optimization(monkeypatch, src, train_data, max_calls=10):
 
 
 def test_span_inputs_keys_are_span_level(monkeypatch: pytest.MonkeyPatch):
-    """Procedure (a, b, c) with [p] = pre-<a>-<b> and span using <p>.
-    Predict kwargs keys must be {'p'}, never {'a','b','c'}."""
+    ">> Procedure (a, b, c) with [p] = pre-<a>-<b> and span using <p>.\n    >> Predict kwargs keys must be {'p'}, never {'a','b','c'}."
     src = """
 @proc(a: int, b: int, c: int) -> int:
   [p] = pre-<a>-<b>
@@ -102,8 +94,7 @@ def test_span_inputs_keys_are_span_level(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_span_input_values_are_computed_correctly(monkeypatch: pytest.MonkeyPatch):
-    """Same setup as above, but also verify the VALUE of the span input 'p'.
-    Given a=1, b=2, [p] = pre-<a>-<b> should produce p = 'pre-1-2'."""
+    ">> Same setup as above, but also verify the VALUE of the span input 'p'.\n    >> Given a=1, b=2, [p] = pre-<a>-<b> should produce p = 'pre-1-2'."
     src = """
 @proc(a: int, b: int, c: int) -> int:
   [p] = pre-<a>-<b>
@@ -216,9 +207,7 @@ def test_span_uses_direct_param_still_isolated(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_span_outputs_listed_in_instructions(monkeypatch: pytest.MonkeyPatch):
-    """A span with output [x: float] and [label: str] inside a procedure
-    that returns int. The span's instructions should reference the span's
-    output fields, not the procedure's return type."""
+    ">> A span with output [x: float] and [label: str] inside a procedure\n    >> that returns int. The span's instructions should reference the span's\n    output fields, not the procedure's return type."
     src = """
 @proc(seed: str) -> int:
   > optimize: detailed_span:
