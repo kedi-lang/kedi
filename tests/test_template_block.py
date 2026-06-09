@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import pytest
 from typing import Any
 
+import pytest
+
 from kedi.lang import compile_program, parse_program
-from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lang.ast import (
     InputSegment,
     OutputSegment,
@@ -14,6 +14,7 @@ from kedi.lang.ast import (
     TextSegment,
 )
 from kedi.lang.compiler.evaluation import merge_template_block_lines
+from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp import features
 from kedi.lsp.features import compute_diagnostics, compute_hover, compute_semantic_tokens_full
 from kedi.lsp.python_virtual import compute_python_virtual_document
