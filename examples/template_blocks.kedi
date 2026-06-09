@@ -1,0 +1,13 @@
+# Template blocks (`>>`) — multiline prompts in a single LLM run
+
+>> What's the [capital] of Turkey?
+What's the [population: int] of <capital>?
+
+@chain_facts(topic: str):
+  >> Introduce [headline] about <topic>.
+  Expand on <headline> with [detail].
+
+  >> Summarize <detail> in [conclusion: str].
+  = <conclusion>
+
+= <chain_facts(`"Kedi DSL"`)>

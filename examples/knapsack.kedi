@@ -1,9 +1,9 @@
 @solve_knapsack(items: str, capacity: int) -> int:
   > optimize: solver:
-    <items>\n\
-    Knapsack capacity: <capacity>\n\
-    Pick items to maximize total value without exceeding capacity.\n\
-    Reasoning: [reasoning: str]\n\
+    <items>
+    Knapsack capacity: <capacity>
+    Pick items to maximize total value without exceeding capacity.
+    Reasoning: [reasoning: str]
     Total value: [value: int]
 
   = `value`

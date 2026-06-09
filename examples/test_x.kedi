@@ -7,7 +7,7 @@ class X(BaseModel):
         return self.a
 ```
 
-[x: X] is an X object with field 'a' set to 'hello'.
+>> [x: X] is an X object with field 'a' set to 'hello'.
 
 = ```
 try:

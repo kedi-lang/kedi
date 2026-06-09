@@ -4,8 +4,8 @@ import math # preamble test
 ```
 
 @generate_question():
-    [question] is a challenging trivia question.
-    <`print(f">{question}...")`>
+    >> [question] is a challenging trivia question.
+    `print(f"{question}...")`
     = <question>
 
 @generate_questions(number :int) -> list[str]:

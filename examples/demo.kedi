@@ -1,22 +1,22 @@
 @get_country(city):
-  <city> is located in [country].
+  >> <city> is located in [country].
   = <country>
 
 @get_language(country):
-  The primary language spoken in <country> is [language].
+  >> The primary language spoken in <country> is [language].
   = <language>
 
 @translate_greeting(language):
-  'Hello' in <language> is [greeting]
+  >> 'Hello' in <language> is [greeting]
   = <greeting>
 
 @neighboring_country(country):
-  A country neighboring <country> is [neighbor].
+  >> A country neighboring <country> is [neighbor].
   = <neighbor>
 
 @describe_trip(city):
   [caps_city] = <`city.upper()`>
-  Start in <caps_city>.
+  >> Start in <caps_city>.
   <city> is located in [country].
   The primary language spoken in <country> is [language].
   'Hello' in <language> is [greeting].
@@ -25,21 +25,21 @@
   # Build a simple derived variable using full Python access
   route = f"{city} -> {neighbor}"
   ```
-  Now, plan a 3-day itinerary in [itinerary] for <city> using <language> and greeting <greeting>.
+  >> Now, plan a 3-day itinerary in [itinerary] for <city> using <language> and greeting <greeting>.
   = Itinerary for <caps_city>: <itinerary> (Country: <country>, Neighbor: <neighbor>, Greeting: <greeting>, Route: <`route`>, LangLen: <`len(language)`>)
 
 @word_chain(word):
-  <`print(f"word chain starts with {word}...")`>
-  [word] is a word that starts with the last letter of <word>.
-  <`print(word)`>
-  [word] is a word that starts with the last letter of <word>.
-  <`print(word)`>
-  [word] is a word that starts with the last letter of <word>.
-  <`print(word)`>
-  [word] is a word that starts with the last letter of <word>.
-  <`print(word)`>
-  [word] is a word that starts with the last letter of <word>.
-  <`print(f"word chain ends with {word}...")`>
+  `print(f"word chain starts with {word}...")`
+  >> [word] is a word that starts with the last letter of <word>.
+  `print(word)`
+  >> [word] is a word that starts with the last letter of <word>.
+  `print(word)`
+  >> [word] is a word that starts with the last letter of <word>.
+  `print(word)`
+  >> [word] is a word that starts with the last letter of <word>.
+  `print(word)`
+  >> [word] is a word that starts with the last letter of <word>.
+  `print(f"word chain ends with {word}...")`
   = <word>
 
 @make_title(name):
@@ -53,7 +53,7 @@
   greeting = translate_greeting(language)
   title = make_title("John")
   ```
-  [summary] = Report: <`title`>; Language: <`language`>; Greeting: <`greeting`>
+  >> [summary] Report: <`title`>; Language: <`language`>; Greeting: <`greeting`>
   Extra: <city> has a neighbor <neighboring_country(<country>)>.
   = <summary>
 
@@ -62,11 +62,11 @@
 # Top-level Python block to set a note
 note = "Demo run"
 ```
-<`print("Paris country:", get_country(city))`>
-<`print("Language:", get_language(get_country(city)))`>
-<`print("Greeting:", translate_greeting(get_language(get_country(city))))`>
-<`print("Word chain from apple:", word_chain("apple"))`>
-<`print("Trip description:", describe_trip(city))`>
-<`print("Report:", compose_report(city))`>
-<`print("Note:", note)`>
+`print("Paris country:", get_country(city))`
+`print("Language:", get_language(get_country(city)))`
+`print("Greeting:", translate_greeting(get_language(get_country(city))))`
+`print("Word chain from apple:", word_chain("apple"))`
+`print("Trip description:", describe_trip(city))`
+`print("Report:", compose_report(city))`
+`print("Note:", note)`
 = Done
