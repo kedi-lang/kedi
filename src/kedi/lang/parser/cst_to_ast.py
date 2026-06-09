@@ -66,6 +66,7 @@ from ..ast import (
     Segment,
     Span,
     Stmt,
+    TemplateBlock,
     TemplateLine,
     TestCase,
     TestSuite,
@@ -269,8 +270,10 @@ class _Walker:
                 prog.toplevel_return = self._walk_return_block_stmt(child)
             elif t == "backtick_line_stmt":
                 prog.toplevel_body.append(self._walk_backtick_line_stmt(child))
+            elif t == "template_block_stmt":
+                prog.toplevel_body.append(self._walk_template_block_stmt(child))
             elif t == "template_line":
-                prog.toplevel_body.append(self._walk_template_line(child))
+                prog.toplevel_body.append(self._walk_template_line(child, deprecated=True))
             elif t in ("block_comment", "line_comment"):
                 # Extras — not part of the AST. Already handled by
                 # tree-sitter; we skip them here.
@@ -297,6 +300,7 @@ class _Walker:
         if any(d.severity == "error" for d in self.diagnostics):
             raise KediParseError(self.diagnostics)
 
+        prog.parser_warnings = [d for d in self.diagnostics if d.severity == "warning"]
         return prog
 
     # ----- diagnostics helpers -----
@@ -308,6 +312,16 @@ class _Walker:
         self.diagnostics.append(
             KediDiagnostic(
                 severity="error",
+                message=message,
+                span=self._span(node),
+                code=code,
+            )
+        )
+
+    def _warn(self, node: Node, message: str, *, code: str) -> None:
+        self.diagnostics.append(
+            KediDiagnostic(
+                severity="warning",
                 message=message,
                 span=self._span(node),
                 code=code,
@@ -579,8 +593,10 @@ class _Walker:
             return self._walk_python_block(node)
         if t == "backtick_line_stmt":
             return self._walk_backtick_line_stmt(node)
+        if t == "template_block_stmt":
+            return self._walk_template_block_stmt(node)
         if t == "template_line":
-            return self._walk_template_line(node)
+            return self._walk_template_line(node, deprecated=True)
         if t in ("block_comment", "line_comment"):
             return None
         if t == "ERROR" or node.is_error:
@@ -691,12 +707,31 @@ class _Walker:
         self._error(node, "backtick_line_stmt missing inline_python_expr child")
         return BacktickLineStmt(code="", loc=self._span(node))
 
-    def _walk_template_line(self, node: Node) -> TemplateLine:
-        # Single named child is template_expr.
+    def _template_line_from_expr(self, expr_node: Node) -> TemplateLine:
+        return TemplateLine(
+            segments=self._walk_template_expr(expr_node),
+            loc=self._span(expr_node),
+        )
+
+    def _walk_template_block_stmt(self, node: Node) -> TemplateBlock:
+        lines: List[TemplateLine] = []
+        head = _field(node, "head")
+        if head is not None:
+            lines.append(self._template_line_from_expr(head))
+        for cont in node.children_by_field_name("continuation"):
+            lines.append(self._template_line_from_expr(cont))
+        return TemplateBlock(lines=lines, loc=self._span(node))
+
+    def _walk_template_line(self, node: Node, *, deprecated: bool = False) -> TemplateLine:
+        if deprecated:
+            self._warn(
+                node,
+                "Bare template lines are deprecated; prefix with `>>` to start a template block.",
+                code="K-DEPR-TEMPLATE",
+            )
         for child in _named_children(node):
             if child.type == "template_expr":
-                segs = self._walk_template_expr(child)
-                return TemplateLine(segments=segs, loc=self._span(node))
+                return self._template_line_from_expr(child)
         return TemplateLine(segments=[], loc=self._span(node))
 
     # =================================================================

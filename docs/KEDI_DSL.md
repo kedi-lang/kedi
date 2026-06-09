@@ -113,15 +113,32 @@ To export every public name in a module, use `> export: *`:
 
 Public names are names that do not start with `_`. If a module has no export directive, importing it does not expose any names.
 
-### Template Lines
+### Template Blocks (`>>`)
 
-Template lines are the basic building blocks that mix literal text with dynamic content:
+Template prompts are opened with `>>`. Continuation lines at the same indent
+belong to the same block and are **newline-joined into one LLM run**. Outputs
+from earlier rows appear as `[name]` placeholders in the merged prompt; later
+rows may reference them with `<name>` (left as literal text for the model).
 
 ```kedi
-Hello, this is plain text
-The answer is <variable> and result is <compute(5)>
-Please provide [output] for this query
+>> What's the [capital] of Turkey?
+What's the [population: int] of <capital>?
 ```
+
+Inside procedures, multiple blocks are separated by blank lines or a new `>>`:
+
+```kedi
+@do_something():
+  >> Foo bar [baz]
+  Baz foo [bar]
+  Bar baz [foo]
+
+  >> Bar baz [foooo]
+  = <foooo>
+```
+
+Bare template lines (without `>>`) are **deprecated** at procedure and top level.
+They remain valid inside `> optimize:` / `> auto:` bodies.
 
 ### Substitutions (R-values)
 

@@ -86,6 +86,14 @@ class _FakeNode:
     def child_by_field_name(self, name: str):
         return self._fields.get(name)
 
+    def children_by_field_name(self, name: str):
+        child = self._fields.get(name)
+        if child is None:
+            return []
+        if isinstance(child, list):
+            return child
+        return [child]
+
     def field_name_for_child(self, child_id: int):
         return self._field_names_by_id.get(child_id)
 
@@ -204,6 +212,8 @@ def test_cst_walker_defensive_edges(monkeypatch):
     )
     assert backtick_with_noise.code == "stmt"
     assert stmt_walker._walk_template_line(_FakeNode("template_line")).segments == []
+    empty_template_block = stmt_walker._walk_template_block_stmt(_FakeNode("template_block_stmt"))
+    assert empty_template_block.lines == []
     template_with_noise = stmt_walker._walk_template_line(
         _FakeNode(
             "template_line",

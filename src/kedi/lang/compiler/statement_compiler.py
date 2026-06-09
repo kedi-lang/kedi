@@ -15,6 +15,7 @@ from ..ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Stmt,
+    TemplateBlock,
     TemplateLine,
 )
 from ..parser.escapes import preserve_escaped_whitespace
@@ -23,6 +24,7 @@ from .evaluation import (
     evaluate_python_inline,
     execute_inline_side_effects,
     execute_python_block,
+    merge_template_block_lines,
     prepare_segments,
     render_expression,
 )
@@ -35,7 +37,9 @@ class StatementCompiler:
     def __init__(self, rt: KediRuntime):
         self.rt = rt
 
-    def compile_template_line(self, stmt: TemplateLine) -> Callable:
+    def compile_template_line(
+        self, stmt: TemplateLine, *, trace_label: str | None = None
+    ) -> Callable:
         """Compile a template line to a function.
 
         If the template has an optimized_prompt_prefix, it is prepended to the
@@ -43,11 +47,10 @@ class StatementCompiler:
         This allows GEPA to output plain text without needing correct type names,
         while preserving the original prompt's type annotations for proper resolution.
         """
+        label = trace_label or "template line"
 
         def _fn(**kwargs: Any) -> Any:
-            with self.rt.trace_frame(
-                KediTraceFrame(kind="template", label="template line", span=stmt.loc)
-            ):
+            with self.rt.trace_frame(KediTraceFrame(kind="template", label=label, span=stmt.loc)):
                 # If an override is provided, short-circuit LLM invocation and inject values.
                 if stmt.optimized_output_override is not None:
                     env = self.rt._current_env.get()
@@ -73,6 +76,13 @@ class StatementCompiler:
                 return self.rt.m(expr)
 
         return _fn
+
+    def compile_template_block(self, stmt: TemplateBlock) -> Callable:
+        """Compile a ``>>`` template block as one newline-joined LLM run."""
+        merged = merge_template_block_lines(stmt.lines, loc=stmt.loc)
+        n = len(stmt.lines)
+        label = f"template block ({n} line{'s' if n != 1 else ''})"
+        return self.compile_template_line(merged, trace_label=label)
 
     def compile_return(self, stmt: ReturnStmt) -> Callable:
         """Compile a return statement to a function."""
@@ -206,7 +216,11 @@ class StatementExecutor:
 
         try:
             for stmt in proc.body:
-                if isinstance(stmt, TemplateLine):
+                if isinstance(stmt, TemplateBlock):
+                    self.compiler.compile_template_block(stmt)(**closure_env)
+                    self._sync_env(closure_env)
+
+                elif isinstance(stmt, TemplateLine):
                     self.compiler.compile_template_line(stmt)(**closure_env)
                     self._sync_env(closure_env)
 
@@ -277,7 +291,11 @@ class StatementExecutor:
         """Execute a single statement (for top-level execution)."""
         from ..ast import ProcDefStmt
 
-        if isinstance(stmt, TemplateLine):
+        if isinstance(stmt, TemplateBlock):
+            self.compiler.compile_template_block(stmt)(**env)
+            self._sync_env(env)
+
+        elif isinstance(stmt, TemplateLine):
             self.compiler.compile_template_line(stmt)(**env)
             self._sync_env(env)
 

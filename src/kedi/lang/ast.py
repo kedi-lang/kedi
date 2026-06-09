@@ -27,7 +27,10 @@ new ``type_expr`` field for every annotation it observes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Union
+
+if TYPE_CHECKING:
+    from .parser.diagnostics import KediDiagnostic
 
 # =====================================================================
 # Source-range tracking
@@ -189,6 +192,18 @@ class TemplateLine(Stmt):
 
 
 @dataclass
+class TemplateBlock(Stmt):
+    """Multiline template run opened by ``>>``.
+
+    Rows are newline-joined and executed as a single LLM prompt. Within the
+    block, ``<name>`` references to outputs declared on earlier rows are kept
+    as literal placeholders in the merged prompt.
+    """
+
+    lines: List[TemplateLine] = field(default_factory=list)
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 
@@ -310,6 +325,7 @@ class Program:
     type_defs: List[TypeDef] = field(default_factory=list)
     source_text: Optional[str] = field(default=None, repr=False, compare=False)
     source_map: Any = field(default=None, repr=False, compare=False)
+    parser_warnings: List[KediDiagnostic] = field(default_factory=list, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

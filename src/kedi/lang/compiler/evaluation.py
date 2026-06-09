@@ -15,6 +15,8 @@ from ..ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     Segment,
+    Span,
+    TemplateLine,
     TextSegment,
     VarArg,
 )
@@ -66,6 +68,59 @@ def execute_inline_side_effects(
             env_map,
             kedi_line_offset=kedi_line_offset,
         )
+
+
+def merge_template_block_lines(
+    lines: list[TemplateLine],
+    *,
+    loc: Span | None = None,
+) -> TemplateLine:
+    """Merge ``>>`` block rows into one template (newline-joined, single LLM run)."""
+    if not lines:
+        return TemplateLine(segments=[], loc=loc)
+    if len(lines) == 1:
+        line = lines[0]
+        if loc is None:
+            return line
+        return TemplateLine(
+            segments=line.segments,
+            optimized_prompt_prefix=line.optimized_prompt_prefix,
+            optimized_output_override=line.optimized_output_override,
+            loc=loc,
+        )
+
+    output_names: set[str] = set()
+    for line in lines:
+        for seg in line.segments:
+            if isinstance(seg, OutputSegment):
+                output_names.add(seg.name)
+
+    merged_segments: list[Segment] = []
+    for index, line in enumerate(lines):
+        if index > 0:
+            merged_segments.append(TextSegment(text="\n"))
+        for seg in line.segments:
+            if isinstance(seg, InputSegment) and seg.name in output_names:
+                merged_segments.append(TextSegment(text=f"<{seg.name}>"))
+            else:
+                merged_segments.append(seg)
+
+    merged_override: dict[str, Any] | None = None
+    for line in lines:
+        if line.optimized_output_override:
+            merged_override = {**(merged_override or {}), **line.optimized_output_override}
+
+    prefix = next(
+        (line.optimized_prompt_prefix for line in lines if line.optimized_prompt_prefix),
+        None,
+    )
+
+    return TemplateLine(
+        segments=merged_segments,
+        optimized_prompt_prefix=prefix,
+        optimized_output_override=merged_override,
+        loc=loc or lines[0].loc,
+    )
 
 
 def prepare_segments(

@@ -31,6 +31,15 @@ def test_resolved_type_helpers_cover_typing_aliases() -> None:
     assert runtime_isinstance("x", list[str]) is True
 
 
+def test_smallest_enclosing_visits_toplevel_return() -> None:
+    from kedi.lang.parser import parse_program
+
+    src = ">> [x]\n= <x>\n"
+    prog = parse_program(src)
+    pos = position_of(src, "<x>")
+    assert features._smallest_enclosing(prog, pos) is not None
+
+
 def test_type_registry_skips_private_and_missing_names(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_module = SimpleNamespace(
         __all__=("_private", "Visible", "Missing"),
