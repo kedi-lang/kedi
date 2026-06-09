@@ -5,11 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from ...agent_profile import AgentProfile, block_agent_profile_scope
+from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
+from ...agent_profile.model import eval_model_directive, eval_use_profile
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ...module_registry import resolve_module_path
 from ...source_loading import load_kedi_source_bundle
-from ..ast import ModuleImport, Program, ReturnStmt
+from ..ast import (
+    ModelDirectiveStmt,
+    ModuleImport,
+    ProcedureDef,
+    ProfileDefStmt,
+    Program,
+    ReturnStmt,
+    UseProfileStmt,
+)
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
@@ -66,11 +77,18 @@ class ProgramCompiler:
                 raise RuntimeError(f"Cyclic Kedi import detected: {cycle}")
             active_stack = (*active_stack, current_path)
 
+        setattr(self.rt, "_profile_registry", {})
+
         self._compile_imports(prog, active_stack)
 
         # Execute prelude
         if prog.prelude is not None:
             self._setup_prelude(prog.prelude, prog.prelude_loc)
+
+        cast(dict[str, Any], getattr(self.rt, "_profile_registry")).update(
+            build_profile_registry(prog)
+        )
+        capture_procedure_profiles(self.rt, prog)
 
         # Register top-level types
         type_env = getattr(self.rt, "_type_env_stack")[0]
@@ -86,8 +104,8 @@ class ProgramCompiler:
             self.rt.procedure(fn)
 
         # Setup main entry point when there is executable top-level code.
-        if prog.toplevel_body or prog.toplevel_return is not None:
-            self._setup_main(prog.toplevel_body, prog.toplevel_return)
+        if prog.ordered_toplevel or prog.toplevel_body or prog.toplevel_return is not None:
+            self._setup_main(prog)
 
         # Attach validation suites
         self._attach_validation(prog)
@@ -148,6 +166,8 @@ class ProgramCompiler:
                 self.rt._procedures[name] = self._wrap_imported_procedure(name, value, imported_rt)
             elif kind == "type":
                 getattr(self.rt, "_type_env_stack")[0][name] = value
+            elif kind == "profile":
+                cast(dict[str, Any], getattr(self.rt, "_profile_registry"))[name] = value
             else:
                 self.rt._import_env[name] = value
 
@@ -172,6 +192,10 @@ class ProgramCompiler:
             env = getattr(rt, env_name, None)
             if isinstance(env, dict):
                 names.extend(name for name in env if self._is_public_name(name))
+
+        profile_registry = getattr(rt, "_profile_registry", None)
+        if isinstance(profile_registry, dict):
+            names.extend(name for name in profile_registry if self._is_public_name(name))
 
         return list(dict.fromkeys(names))
 
@@ -198,6 +222,10 @@ class ProgramCompiler:
             env = getattr(imported_rt, env_name, None)
             if isinstance(env, dict) and name in env:
                 return "value", env[name]
+
+        profile_registry = getattr(imported_rt, "_profile_registry", None)
+        if isinstance(profile_registry, dict) and name in profile_registry:
+            return "profile", profile_registry[name]
 
         raise RuntimeError(f"Kedi export {name!r} is not defined in {module_path}")
 
@@ -253,14 +281,18 @@ class ProgramCompiler:
                 self.rt.executor.execute_prelude(self.rt, prelude_code),
             )
 
-    def _setup_main(self, toplevel_body: list, toplevel_return) -> None:
+    def _setup_main(self, prog: Program) -> None:
         """Setup main entry point for top-level execution."""
+        toplevel_sequence = prog.ordered_toplevel or list(prog.toplevel_body)
+        toplevel_return = prog.toplevel_return
+        profile_registry = getattr(self.rt, "_profile_registry", {})
 
         @self.rt.main
         def _main() -> Any:
             # Initialize top-level environment
             kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             setattr(self.rt, "_globals_env", kwargs)
+            active = AgentProfile.empty()
 
             # Execute top-level statements
             with self.rt.trace_frame(
@@ -270,24 +302,34 @@ class ProgramCompiler:
                     span=None,
                 )
             ):
-                for stmt in toplevel_body:
-                    self.executor.execute_single_statement(stmt, kwargs, is_toplevel=True)
+                for item in toplevel_sequence:
+                    if isinstance(item, ProcedureDef):
+                        continue
+                    if isinstance(item, ModelDirectiveStmt):
+                        active = active.merge(eval_model_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, UseProfileStmt):
+                        active = active.merge(
+                            eval_use_profile(self.rt, item, profile_registry, kwargs)
+                        )
+                        continue
+                    if isinstance(item, ProfileDefStmt):
+                        continue
+                    with block_agent_profile_scope(active):
+                        self.executor.execute_single_statement(item, kwargs, is_toplevel=True)
 
                 if toplevel_return is None:
                     return None
 
-                # Execute return
-                if isinstance(toplevel_return, ReturnStmt):
-                    return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
-                else:  # ReturnBlockStmt
+                with block_agent_profile_scope(active):
+                    if isinstance(toplevel_return, ReturnStmt):
+                        return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
                     code = toplevel_return.code
-                    # Top-level: always return string rendering for native returns
                     if "\n" in code or code.strip().startswith("return"):
                         result = execute_python_block(
                             code, self.rt, kwargs, span=toplevel_return.loc
                         )
                         return "" if result is None else str(result)
-                    # Inline python native return
                     value = evaluate_python_inline(self.rt, code, kwargs, span=toplevel_return.loc)
                     return "" if value is None else str(value)
 

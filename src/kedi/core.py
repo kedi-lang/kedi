@@ -294,7 +294,21 @@ class KediRuntime:
         if self.adapter is None:
             raise RuntimeError("No adapter provided to KediRuntime")
 
-        result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile import AgentProfileOverrideUnsupported, current_block_agent_profile
+
+        profile = current_block_agent_profile()
+        override_ctx = nullcontext()
+        if isinstance(self.adapter, SupportsProfileOverride):
+            if profile.needs_model_override(self.adapter.default_model()):
+                override_ctx = self.adapter.profile_override(profile)
+        elif profile.model is not None:
+            raise AgentProfileOverrideUnsupported(
+                f"Active adapter does not support model profile override (requested model={profile.model!r})"
+            )
+
+        with override_ctx:
+            result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
 
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute

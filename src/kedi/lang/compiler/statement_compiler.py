@@ -6,10 +6,13 @@ from typing import Any, Callable, cast
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
+from ...agent_profile import AgentProfile, block_agent_profile_scope
+from ...agent_profile.model import eval_model_directive, eval_use_profile
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
+    ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
     ReturnBlockStmt,
@@ -17,6 +20,7 @@ from ..ast import (
     Stmt,
     TemplateBlock,
     TemplateLine,
+    UseProfileStmt,
 )
 from ..parser.escapes import preserve_escaped_whitespace
 from .evaluation import (
@@ -29,6 +33,8 @@ from .evaluation import (
     render_expression,
 )
 from .type_system import KediType, assign_value_from_native, detect_rhs_kind
+
+_NO_RETURN = object()
 
 
 class StatementCompiler:
@@ -199,8 +205,7 @@ class StatementExecutor:
 
     def execute(self, proc: Any, closure_env: dict[str, Any]) -> Any:
         """Execute procedure body statements and return the last return value."""
-        from ..ast import ProcDefStmt, TypeDefStmt
-        from .type_system import pop_type_env, push_type_env, register_type
+        from .type_system import pop_type_env, push_type_env
 
         last_return: Any = None
         type_scope = push_type_env(self.rt)
@@ -214,63 +219,33 @@ class StatementExecutor:
         if isinstance(parent_stack, list) and len(parent_stack) >= 2:
             type_scope.update(parent_stack[-2])
 
+        captured = getattr(proc, "captured_agent_profile", None)
+        active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        profile_registry = getattr(self.rt, "_profile_registry", {})
+
         try:
             for stmt in proc.body:
-                if isinstance(stmt, TemplateBlock):
-                    self.compiler.compile_template_block(stmt)(**closure_env)
-                    self._sync_env(closure_env)
+                if isinstance(stmt, ModelDirectiveStmt):
+                    active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, UseProfileStmt):
+                    active = active.merge(
+                        eval_use_profile(self.rt, stmt, profile_registry, closure_env)
+                    )
+                    continue
 
-                elif isinstance(stmt, TemplateLine):
-                    self.compiler.compile_template_line(stmt)(**closure_env)
-                    self._sync_env(closure_env)
-
-                elif isinstance(stmt, TypeDefStmt):
-                    if stmt.typedef is not None:
-                        register_type(self.rt, stmt.typedef, type_scope, closure_env)
-
-                elif isinstance(stmt, ProcDefStmt):
-                    # Register nested procedure dynamically with current closure
-                    from .procedure_compiler import ProcedureCompiler
-
-                    child = cast(ProcedureDef, stmt.proc)
-                    child.lexical_env = dict(closure_env)
-                    proc_compiler = ProcedureCompiler(self.rt)
-                    fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
-
-                    # Save existing procedure if present, track new ones
-                    procs = self.rt._procedures
-                    if child.name in procs and child.name not in saved_procs:
-                        saved_procs[child.name] = procs[child.name]
-                    elif child.name not in procs:
-                        new_proc_names.append(child.name)
-                    procs[child.name] = fn_nested
-
-                elif isinstance(stmt, PythonBlock):
-                    self.compiler.execute_python_block(stmt, closure_env)
-
-                elif isinstance(stmt, BacktickLineStmt):
-                    self.compiler.execute_backtick_line(stmt, closure_env)
-
-                elif isinstance(stmt, AssignBlockStmt):
-                    self.compiler.execute_assignment_block(stmt, closure_env)
-
-                elif isinstance(stmt, AssignStmt):
-                    self.compiler.execute_assignment(stmt, closure_env)
-
-                elif isinstance(stmt, ReturnStmt):
-                    # For typed procedures, preserve native value if resolvable; otherwise render to string
-                    if getattr(proc, "return_type_annotation", None):
-                        native, rendered = evaluate_assignment_rhs(
-                            self.rt, stmt.segments, closure_env
-                        )
-                        last_return = (
-                            native if native is not None else preserve_escaped_whitespace(rendered)
-                        )
-                    else:
-                        last_return = self.compiler.compile_return(stmt)(**closure_env)
-
-                elif isinstance(stmt, ReturnBlockStmt):
-                    last_return = self.compiler.compile_return_block(stmt, closure_env)
+                with block_agent_profile_scope(active):
+                    result = self._execute_body_statement(
+                        stmt,
+                        proc,
+                        closure_env,
+                        type_scope,
+                        saved_procs,
+                        new_proc_names,
+                        active,
+                    )
+                    if result is not _NO_RETURN:
+                        last_return = result
 
         finally:
             pop_type_env(self.rt)
@@ -284,6 +259,78 @@ class StatementExecutor:
                 procs[name] = old_fn
 
         return last_return
+
+    def _execute_body_statement(
+        self,
+        stmt: Stmt,
+        proc: Any,
+        closure_env: dict[str, Any],
+        type_scope: dict[str, Any],
+        saved_procs: dict[str, Any],
+        new_proc_names: list[str],
+        active: AgentProfile,
+    ) -> Any:
+        from ..ast import ProcDefStmt, TypeDefStmt
+        from .procedure_compiler import ProcedureCompiler
+        from .type_system import register_type
+
+        if isinstance(stmt, TemplateBlock):
+            self.compiler.compile_template_block(stmt)(**closure_env)
+            self._sync_env(closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TemplateLine):
+            self.compiler.compile_template_line(stmt)(**closure_env)
+            self._sync_env(closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TypeDefStmt):
+            if stmt.typedef is not None:
+                register_type(self.rt, stmt.typedef, type_scope, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, ProcDefStmt):
+            child = cast(ProcedureDef, stmt.proc)
+            if child is not None:
+                child.captured_agent_profile = active.frozen_copy()
+                child.lexical_env = dict(closure_env)
+                proc_compiler = ProcedureCompiler(self.rt)
+                fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
+
+                procs = self.rt._procedures
+                if child.name in procs and child.name not in saved_procs:
+                    saved_procs[child.name] = procs[child.name]
+                elif child.name not in procs:
+                    new_proc_names.append(child.name)
+                procs[child.name] = fn_nested
+            return _NO_RETURN
+
+        if isinstance(stmt, PythonBlock):
+            self.compiler.execute_python_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, BacktickLineStmt):
+            self.compiler.execute_backtick_line(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignBlockStmt):
+            self.compiler.execute_assignment_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignStmt):
+            self.compiler.execute_assignment(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, ReturnStmt):
+            if getattr(proc, "return_type_annotation", None):
+                native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
+                return native if native is not None else preserve_escaped_whitespace(rendered)
+            return self.compiler.compile_return(stmt)(**closure_env)
+
+        if isinstance(stmt, ReturnBlockStmt):
+            return self.compiler.compile_return_block(stmt, closure_env)
+
+        return _NO_RETURN
 
     def execute_single_statement(
         self, stmt: Stmt, env: dict[str, Any], is_toplevel: bool = False

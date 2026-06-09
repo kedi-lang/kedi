@@ -147,6 +147,50 @@ def test_unexported_procedure_is_not_imported(tmp_path: Path) -> None:
         rt.run_main()
 
 
+def test_import_exposes_exported_agent_profile(tmp_path: Path) -> None:
+    (tmp_path / "models.kedi").write_text(
+        "> profile: advanced:\n    > model: opus\n\n> export:\n  advanced\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: models\n\n> use: advanced\n@ask():\n    >> answer [x]\n\n= <ask()>\n",
+        encoding="utf-8",
+    )
+
+    adapter = MockAdapter(default_model="default-model")
+    rt = _compile_file(main, adapter=adapter)
+    rt.run_main()
+
+    assert adapter.model_calls == ["opus"]
+    assert rt._profile_registry["advanced"].members[0].plain_value == "opus"
+
+
+def test_star_export_includes_agent_profiles(tmp_path: Path) -> None:
+    (tmp_path / "models.kedi").write_text(
+        "> profile: advanced:\n"
+        "    > model: opus\n"
+        "> profile: _hidden:\n"
+        "    > model: secret\n"
+        "\n"
+        "> export: *\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: models\n\n> use: advanced\n@ask():\n    >> answer [x]\n\n= <ask()>\n",
+        encoding="utf-8",
+    )
+
+    adapter = MockAdapter(default_model="default-model")
+    rt = _compile_file(main, adapter=adapter)
+    rt.run_main()
+
+    assert adapter.model_calls == ["opus"]
+    assert "advanced" in rt._profile_registry
+    assert "_hidden" not in rt._profile_registry
+
+
 def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
         "> export:\n  missing\n",

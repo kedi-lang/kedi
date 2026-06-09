@@ -1,5 +1,6 @@
 import asyncio
-from typing import cast
+from contextlib import contextmanager
+from typing import Iterator, cast
 
 import dspy
 from dspy import LM
@@ -9,6 +10,7 @@ from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
+from ..agent_profile import AgentProfile
 from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
@@ -79,6 +81,19 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
         )
 
+    def default_model(self) -> str | None:
+        model = self.model
+        return model if isinstance(model, str) else None
+
+    @contextmanager
+    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+        if not profile.needs_model_override(self.default_model()):
+            yield
+            return
+        assert profile.model is not None
+        with self.override(model=normalize_for_pydantic_ai(profile.model)):
+            yield
+
 
 class DSPyAdapter:
     def __init__(
@@ -90,6 +105,11 @@ class DSPyAdapter:
         **kwargs,
     ):
         model = normalize_for_litellm(model)
+        self._lm_model = model
+        self._lm_provider = provider
+        self._lm_max_tokens = max_tokens
+        self._lm_temperature = temperature
+        self._lm_extra_kwargs = dict(kwargs)
         dspy.settings.configure(
             lm=LM(
                 model=model,
@@ -147,3 +167,23 @@ class DSPyAdapter:
         Synchronous version of produce method.
         """
         return asyncio.run(self.produce(template, output_schema=output_schema, **kwargs))
+
+    def default_model(self) -> str | None:
+        return self._lm_model
+
+    @contextmanager
+    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+        if not profile.needs_model_override(self.default_model()):
+            yield
+            return
+        assert profile.model is not None
+        lm = LM(
+            model=normalize_for_litellm(profile.model),
+            provider=self._lm_provider,
+            max_tokens=self._lm_max_tokens,
+            temperature=self._lm_temperature,
+            cache=False,
+            **self._lm_extra_kwargs,
+        )
+        with dspy.context(lm=lm):
+            yield

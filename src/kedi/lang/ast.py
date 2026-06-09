@@ -240,6 +240,30 @@ class AssignStmt(Stmt):
 
 
 @dataclass
+class ModelDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
+class UseProfileStmt(Stmt):
+    name: str = ""
+
+
+@dataclass
+class ProfileDefStmt(Stmt):
+    name: str = ""
+    model_members: List["ProfileModelEntry"] = field(default_factory=list)
+
+
+@dataclass
+class ProfileModelEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class TypeField:
     name: str
     type_annotation: Optional[str] = None
@@ -287,6 +311,7 @@ class ProcedureDef:
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None
     optimize_spans: List[OptimizeSpan] = field(default_factory=list)
+    captured_agent_profile: Any = field(default=None, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
@@ -323,6 +348,8 @@ class Program:
     prelude: Optional[str] = None
     prelude_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     type_defs: List[TypeDef] = field(default_factory=list)
+    profile_defs: dict[str, "ProfileDefStmt"] = field(default_factory=dict)
+    ordered_toplevel: List[Union["ProcedureDef", Stmt]] = field(default_factory=list)
     source_text: Optional[str] = field(default=None, repr=False, compare=False)
     source_map: Any = field(default=None, repr=False, compare=False)
     parser_warnings: List[KediDiagnostic] = field(default_factory=list, repr=False, compare=False)

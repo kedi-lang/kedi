@@ -351,6 +351,67 @@ def test_cst_walker_defensive_edges(monkeypatch):
     )
     assert noisy_opt.template_lines == []
 
+    backtick_model = stmt_walker._walk_model_directive(
+        _FakeNode(
+            "model_directive",
+            fields={
+                "value": _FakeNode(
+                    "inline_python_expr",
+                    fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                )
+            },
+        )
+    )
+    assert backtick_model.backtick_code == "stmt"
+
+    profile_body = _FakeNode(
+        "body",
+        children=[
+            _FakeNode("line_comment"),
+            _FakeNode(
+                "model_directive",
+                fields={
+                    "value": _FakeNode(
+                        "inline_python_expr",
+                        fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                    )
+                },
+            ),
+            _FakeNode(
+                "model_directive",
+                fields={"value": _FakeNode("identifier", start=0, end=4)},
+            ),
+            _FakeNode(
+                "model_directive",
+                fields={},
+            ),
+        ],
+    )
+    profile = stmt_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": profile_body,
+            },
+        )
+    )
+    assert profile.model_members[0].backtick_code == "stmt"
+    assert profile.model_members[1].plain_value == "stmt"
+
+    empty_profile_walker = _fake_walker(b"name")
+    empty_profile_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={"name": _FakeNode("identifier", start=0, end=4)},
+        )
+    )
+    assert any(d.code == "K-PROFILE-EMPTY" for d in empty_profile_walker.diagnostics)
+
+    nested_proc = cst_module.ProcedureDef("proc", [])
+    assert stmt_walker._walk_stmt(_FakeNode("profile_directive"), nested_proc) is None
+    assert any(d.code == "K-PROFILE-SCOPE" for d in stmt_walker.diagnostics)
+
     validation_walker = _fake_walker(b"test")
     assert validation_walker._walk_validation_block(_FakeNode("validation_block")) is None
     assert (

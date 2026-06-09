@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_profile import AgentProfile
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
@@ -11,6 +13,24 @@ _OUTPUT_KEY_RE = re.compile(r"\[([A-Za-z_]\w*)(?::[^\]]*)?\]")
 
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
+    def __init__(self, *, default_model: str | None = None) -> None:
+        self.default_model_value = default_model
+        self.last_effective_model: str | None = default_model
+        self.model_calls: list[str | None] = []
+
+    def default_model(self) -> str | None:
+        return self.default_model_value
+
+    @contextmanager
+    def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+        previous = self.last_effective_model
+        if profile.model is not None:
+            self.last_effective_model = profile.model
+        try:
+            yield
+        finally:
+            self.last_effective_model = previous
+
     async def produce(
         self,
         *,
@@ -28,6 +48,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         output_schema: dict[str, ResolvedKediType] | None = None,
         **_: Any,
     ) -> AttrDict[str, Any]:
+        self.model_calls.append(self.last_effective_model)
         keys: List[str] = []
         seen: set[str] = set()
         for match in _OUTPUT_KEY_RE.finditer(template):

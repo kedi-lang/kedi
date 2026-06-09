@@ -164,7 +164,12 @@ def test_resolve_in_procedure_uses_param_decls(
             ("x", make_edge_span(tmp_path)),
         ],
     )
-    assert features._resolve_in_procedure(sample_proc, resolution_pos, {}, {}, {}) is not None
+    from kedi.lang.ast import Program
+
+    assert (
+        features._resolve_in_procedure(Program(), sample_proc, resolution_pos, {}, {}, {})
+        is not None
+    )
 
 
 def test_resolve_in_type_expr_and_stmt(
@@ -195,8 +200,11 @@ def test_resolve_in_type_expr_and_stmt(
         )
         is not None
     )
+    from kedi.lang.ast import Program
+
     assert (
         features._resolve_in_stmt(
+            Program(),
             AssignBlockStmt(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
             resolution_pos,
             None,
@@ -297,8 +305,11 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
         )
         is None
     )
+    from kedi.lang.ast import Program
+
     assert (
         features._resolve_in_stmt(
+            Program(),
             AssignBlockStmt(
                 name="x",
                 type_expr=TypeRef(

@@ -51,11 +51,14 @@ from ..ast import (
     InputSegment,
     LiteralArg,
     ModuleExport,
+    ModelDirectiveStmt,
     ModuleImport,
     OptimizeSpan,
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
+    ProfileDefStmt,
+    ProfileModelEntry,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -79,6 +82,7 @@ from ..ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    UseProfileStmt,
 )
 from .diagnostics import KediDiagnostic, KediParseError
 from .escapes import dedent_block, unescape_text_with_tracking
@@ -244,9 +248,30 @@ class _Walker:
                     prog.prelude_loc = self._span(child)
                     prelude_consumed = True
                 else:
-                    prog.toplevel_body.append(self._walk_python_block(child))
+                    stmt = self._walk_python_block(child)
+                    prog.toplevel_body.append(stmt)
+                    prog.ordered_toplevel.append(stmt)
             elif t == "procedure_def":
-                prog.procedures.append(self._walk_procedure_def(child))
+                proc = self._walk_procedure_def(child)
+                prog.procedures.append(proc)
+                prog.ordered_toplevel.append(proc)
+            elif t == "model_directive":
+                stmt = self._walk_model_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "profile_directive":
+                stmt = self._walk_profile_directive(child)
+                if stmt.name in prog.profile_defs:
+                    self._error(
+                        child, f"Duplicate profile definition: {stmt.name!r}", code="K-PROFILE-DUP"
+                    )
+                else:
+                    prog.profile_defs[stmt.name] = stmt
+                prog.ordered_toplevel.append(stmt)
+            elif t == "use_directive":
+                stmt = self._walk_use_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "type_def":
                 prog.type_defs.append(self._walk_type_def(child))
             elif t == "module_import":
@@ -261,19 +286,29 @@ class _Walker:
                 elif isinstance(suite, EvalSuite):
                     prog.evals.append(suite)
             elif t == "assign_stmt":
-                prog.toplevel_body.append(self._walk_assign_stmt(child))
+                stmt = self._walk_assign_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "assign_block_stmt":
-                prog.toplevel_body.append(self._walk_assign_block_stmt(child))
+                stmt = self._walk_assign_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "return_stmt":
                 prog.toplevel_return = self._walk_return_stmt(child)
             elif t == "return_block_stmt":
                 prog.toplevel_return = self._walk_return_block_stmt(child)
             elif t == "backtick_line_stmt":
-                prog.toplevel_body.append(self._walk_backtick_line_stmt(child))
+                stmt = self._walk_backtick_line_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "template_block_stmt":
-                prog.toplevel_body.append(self._walk_template_block_stmt(child))
+                stmt = self._walk_template_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "template_line":
-                prog.toplevel_body.append(self._walk_template_line(child, deprecated=True))
+                stmt = self._walk_template_line(child, deprecated=True)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t in ("block_comment", "line_comment"):
                 # Extras — not part of the AST. Already handled by
                 # tree-sitter; we skip them here.
@@ -570,6 +605,13 @@ class _Walker:
                 return None
             span = self._walk_optimize_directive(node, proc)
             proc.optimize_spans.append(span)
+            return None
+        if t == "model_directive":
+            return self._walk_model_directive(node)
+        if t == "use_directive":
+            return self._walk_use_directive(node)
+        if t == "profile_directive":
+            self._error(node, "'> profile:' is only valid at top level", code="K-PROFILE-SCOPE")
             return None
         if t == "assign_stmt":
             return self._walk_assign_stmt(node)
@@ -1070,6 +1112,64 @@ class _Walker:
         dedented = dedent_block(prompt_lines)
         prompt = "\n".join(dedented).strip("\n")
         return AutoSpec(prompt=prompt, loc=self._span(node))
+
+    def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
+        value_node = _field(node, "value")
+        assert value_node is not None
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return ModelDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
+
+    def _walk_use_directive(self, node: Node) -> UseProfileStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        return UseProfileStmt(
+            name=_identifier_name(self.source, name_node),
+            loc=self._span(node),
+        )
+
+    def _walk_profile_directive(self, node: Node) -> ProfileDefStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        members: list[ProfileModelEntry] = []
+        body_node = _field(node, "body")
+        if body_node is not None:
+            for child in _named_children(body_node):
+                if child.type != "model_directive":
+                    continue
+                value_node = _field(child, "value")
+                if value_node is None:
+                    continue
+                if value_node.type == "inline_python_expr":
+                    code_node = _field(value_node, "code")
+                    assert code_node is not None
+                    members.append(
+                        ProfileModelEntry(
+                            backtick_code=_src_text(self.source, code_node),
+                            loc=self._span(child),
+                        )
+                    )
+                else:
+                    members.append(
+                        ProfileModelEntry(
+                            plain_value=_src_text(self.source, value_node).strip(),
+                            loc=self._span(child),
+                        )
+                    )
+        if not members:
+            self._error(
+                node,
+                f"Profile {name!r} must contain at least one '> model:' member",
+                code="K-PROFILE-EMPTY",
+            )
+        return ProfileDefStmt(name=name, model_members=members, loc=self._span(node))
 
     def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
         name_node = _field(node, "name")

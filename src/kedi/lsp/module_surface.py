@@ -8,6 +8,7 @@ from ..lang.ast import (
     AssignBlockStmt,
     AssignStmt,
     ProcedureDef,
+    ProfileDefStmt,
     Program,
     ProgramWithValidation,
     Span,
@@ -56,12 +57,14 @@ class ImportedSurface:
     procedures: dict[str, ProcedureDef] = field(default_factory=dict)
     types: dict[str, TypeDef] = field(default_factory=dict)
     values: dict[str, ImportedValueInfo] = field(default_factory=dict)
+    profiles: dict[str, ProfileDefStmt] = field(default_factory=dict)
 
     def merge(self, other: "ImportedSurface") -> None:
         self.modules.update(other.modules)
         self.procedures.update(other.procedures)
         self.types.update(other.types)
         self.values.update(other.values)
+        self.profiles.update(other.profiles)
 
 
 def program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
@@ -197,6 +200,8 @@ def load_imported_surface(
     combined_types.update(local_types)
     combined_values = dict(nested_surface.values)
     combined_values.update(local_values)
+    combined_profiles = dict(nested_surface.profiles)
+    combined_profiles.update(getattr(prog, "profile_defs", {}))
 
     export_names: list[str] = []
     for export in getattr(prog, "exports", []):
@@ -204,7 +209,10 @@ def load_imported_surface(
             export_names.extend(
                 name
                 for name in (
-                    list(combined_procedures) + list(combined_types) + list(combined_values)
+                    list(combined_procedures)
+                    + list(combined_types)
+                    + list(combined_values)
+                    + list(combined_profiles)
                 )
                 if is_public_export_name(name)
             )
@@ -218,4 +226,6 @@ def load_imported_surface(
             resolved.types[name] = combined_types[name]
         elif name in combined_values:
             resolved.values[name] = combined_values[name]
+        elif name in combined_profiles:
+            resolved.profiles[name] = combined_profiles[name]
     return resolved
