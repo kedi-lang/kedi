@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, List
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
 _OUTPUT_KEY_RE = re.compile(r"\[([A-Za-z_]\w*)(?::[^\]]*)?\]")
@@ -14,7 +15,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **_: Any,
     ) -> AttrDict[str, Any]:
         # Simple async facade around the synchronous implementation
@@ -24,7 +25,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type] | None = None,
+        output_schema: dict[str, ResolvedKediType] | None = None,
         **_: Any,
     ) -> AttrDict[str, Any]:
         keys: List[str] = []

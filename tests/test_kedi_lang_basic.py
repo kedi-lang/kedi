@@ -108,7 +108,10 @@ CASES: List[tuple[str, str]] = [
         "alpha, beta, gamma",
     ),
     ("@pair(a,b):\n  = <a>|<b>\n\n= <pair(foo,bar)>\n", "foo|bar"),
-    ("@q(c):\n  >> <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n", "r-value"),
+    (
+        "@q(c):\n  >> <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n",
+        "r-value",
+    ),
     (
         "@chain(s):\n  >> make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n",
         "y-value",

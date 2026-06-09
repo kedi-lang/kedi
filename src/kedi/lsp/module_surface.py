@@ -17,11 +17,7 @@ from ..lang.ast import (
 from ..lang.parser import parse_program
 from ..module_registry import find_module_path, resolve_module_path
 from ..source_loading import load_kedi_source_bundle
-from .ast_helpers import (
-    assignment_name_span,
-    extract_module_docstring,
-    is_public_export_name,
-)
+from .ast_helpers import assignment_name_span, extract_module_docstring, is_public_export_name
 
 __all__ = [
     "ImportedModuleInfo",

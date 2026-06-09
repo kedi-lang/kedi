@@ -108,7 +108,10 @@ def merge_template_block_lines(
     merged_override: dict[str, Any] | None = None
     for line in lines:
         if line.optimized_output_override:
-            merged_override = {**(merged_override or {}), **line.optimized_output_override}
+            merged_override = {
+                **(merged_override or {}),
+                **line.optimized_output_override,
+            }
 
     prefix = next(
         (line.optimized_prompt_prefix for line in lines if line.optimized_prompt_prefix),

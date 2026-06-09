@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from tests.lsp_helpers import (
-    definition_at,
-    prepare_rename_at,
-    references_at,
-    rename_at,
-)
+from tests.lsp_helpers import definition_at, prepare_rename_at, references_at, rename_at
 
 # ---------------------------------------------------------------------
 # Definition

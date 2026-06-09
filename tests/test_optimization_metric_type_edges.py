@@ -6,9 +6,7 @@ from typing import Any, cast
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import (
-    ProcedureDef,
-)
+from kedi.lang.ast import ProcedureDef
 from kedi.optimization.services import type_handler as type_handler_module
 from kedi.optimization.services.metric_factory import MetricFactory
 from kedi.optimization.services.type_handler import StructuredTypeHandler
