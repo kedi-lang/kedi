@@ -1,8 +1,4 @@
-"""Unit tests for mock components used in GEPA optimizer testing.
-
-Verifies that every piece of the RANGE[lo,hi] mock protocol behaves
-deterministically and correctly in isolation, before any end-to-end tests.
-"""
+">> Unit tests for mock components used in GEPA optimizer testing.\n\n>> Verifies that every piece of the RANGE[lo,hi] mock protocol behaves\ndeterministically and correctly in isolation, before any end-to-end tests.\n"
 
 from __future__ import annotations
 
@@ -122,9 +118,7 @@ class TestMockLMOptimizer:
         assert out["score"] == 50.0
 
     def test_produces_list_for_list_field(self):
-        prompt = (
-            "Your output fields are:\n1. `tags` (list[str]): tag list\n\nInstructions: RANGE[0,10]"
-        )
+        prompt = ">> Your output fields are:\n1. `tags` (list[str]): tag list\n\n>> Instructions: RANGE[0,10]"
         out = self._call(prompt)
         assert isinstance(out["tags"], list)
         assert len(out["tags"]) == 2

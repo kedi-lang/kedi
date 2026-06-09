@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from typing import Any
 
 from kedi.lang import compile_program, parse_program
+from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lang.ast import (
     InputSegment,
     OutputSegment,
@@ -100,8 +102,8 @@ def test_template_block_stateful_run(monkeypatch: Any) -> None:
     src = (
         "@p():\n"
         "  >> Foo bar [baz]\n"
-        "  Baz foo [bar]\n"
-        "  Bar baz [foo]\n"
+        "  >> Baz foo [bar]\n"
+        "  >> Bar baz [foo]\n"
         "  = <foo>-<bar>-<baz>\n\n"
         "= <p()>\n"
     )
@@ -109,12 +111,33 @@ def test_template_block_stateful_run(monkeypatch: Any) -> None:
     assert out == "foo-value-bar-value-baz-value"
 
 
-def test_bare_template_line_emits_deprecation_warning() -> None:
-    src = "What's the [capital] of Turkey?\n= ok\n"
-    prog = parse_program(src)
-    assert any(d.code == "K-DEPR-TEMPLATE" for d in prog.parser_warnings)
+def test_bare_template_line_at_top_level_is_syntax_error() -> None:
+    src = "The [the]\n= ok\n"
+    with pytest.raises(KediParseError) as exc:
+        parse_program(src)
+    assert any(d.code == "K-BARE-TEMPLATE" for d in exc.value.diagnostics)
     diags = compute_diagnostics(src, None)
-    assert any(d.code == "K-DEPR-TEMPLATE" for d in diags)
+    assert any(d.code == "K-BARE-TEMPLATE" for d in diags)
+
+
+def test_bare_template_line_in_procedure_body_is_syntax_error() -> None:
+    src = "@p():\n  The [the]\n  = ok\n"
+    with pytest.raises(KediParseError) as exc:
+        parse_program(src)
+    assert any(d.code == "K-BARE-TEMPLATE" for d in exc.value.diagnostics)
+
+
+def test_bare_template_line_inside_block_is_continuation() -> None:
+    src = ">> First [a]\nThe [the]\n= <the>\n"
+    prog = parse_program(src)
+    block = prog.toplevel_body[0]
+    assert isinstance(block, TemplateBlock)
+    assert len(block.lines) == 2
+    assert any(
+        isinstance(seg, TextSegment) and seg.text == "The " for seg in block.lines[1].segments
+    )
+    out = _run(src)
+    assert out == "the-value"
 
 
 def test_template_block_hover_and_diagnostics() -> None:

@@ -318,16 +318,6 @@ class _Walker:
             )
         )
 
-    def _warn(self, node: Node, message: str, *, code: str) -> None:
-        self.diagnostics.append(
-            KediDiagnostic(
-                severity="warning",
-                message=message,
-                span=self._span(node),
-                code=code,
-            )
-        )
-
     def _validate_block_comments(self) -> None:
         r"""Enforce legacy `###` block-comment invariants.
 
@@ -724,10 +714,10 @@ class _Walker:
 
     def _walk_template_line(self, node: Node, *, deprecated: bool = False) -> TemplateLine:
         if deprecated:
-            self._warn(
+            self._error(
                 node,
-                "Bare template lines are deprecated; prefix with `>>` to start a template block.",
-                code="K-DEPR-TEMPLATE",
+                "Template prompts at procedure or top level must start with `>>`.",
+                code="K-BARE-TEMPLATE",
             )
         for child in _named_children(node):
             if child.type == "template_expr":

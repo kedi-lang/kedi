@@ -21,11 +21,11 @@ def test_references_returns_empty_without_symbol() -> None:
 
 
 def test_references_on_type_annotations() -> None:
-    type_src = "~Person(name)\n@p(x: Person) -> list[Person]:\n  [y: Person] = <x>\n  Value [z: Person]\n  = <x>\n"
+    type_src = "~Person(name)\n@p(x: Person) -> list[Person]:\n  [y: Person] = <x>\n  >> Value [z: Person]\n  = <x>\n"
     refs = references_at(type_src, "file:///tmp/x.kedi", "/tmp/x.kedi", "Person", True)
     assert len(refs) >= 4
     local_refs = references_at(
-        "@p(x):\n  Value [answer]\n  = <answer>\n",
+        "@p(x):\n  >> Value [answer]\n  = <answer>\n",
         "file:///tmp/x.kedi",
         "/tmp/x.kedi",
         "answer",
@@ -54,8 +54,8 @@ def test_inlay_hints_and_helper_branches() -> None:
     extra_hints = inlay_hints_for_lines("@one(x):\n  = ok\n\n= <one(1, 2)>\n", "/tmp/x.kedi", 0, 10)
     assert extra_hints
     assert inlay_hints_for_lines("@one(x):\n  = ok\n\n= <one(1)>\n", "/tmp/x.kedi", 10, 11) == []
-    assert inlay_hints_for_lines("Value [answer]\n", "/tmp/x.kedi", 10, 11) == []
-    assert inlay_hints_for_lines("Value [answer: int]\n= <answer>\n", "/tmp/x.kedi", 0, 3) == []
+    assert inlay_hints_for_lines(">> Value [answer]\n", "/tmp/x.kedi", 10, 11) == []
+    assert inlay_hints_for_lines(">> Value [answer: int]\n= <answer>\n", "/tmp/x.kedi", 0, 3) == []
 
     assert (
         features._in_range(

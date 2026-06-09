@@ -295,10 +295,6 @@ class StatementExecutor:
             self.compiler.compile_template_block(stmt)(**env)
             self._sync_env(env)
 
-        elif isinstance(stmt, TemplateLine):
-            self.compiler.compile_template_line(stmt)(**env)
-            self._sync_env(env)
-
         elif isinstance(stmt, ProcDefStmt):
             if is_toplevel and stmt.proc is not None:
                 # Register top-level procedure

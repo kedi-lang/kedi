@@ -28,9 +28,7 @@ def test_semantic_tokens_legend_constants():
 
 
 def test_semantic_tokens_docstring_comment_uses_variable_token():
-    src = (
-        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
-    )
+    src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
     variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
@@ -39,7 +37,7 @@ def test_semantic_tokens_docstring_comment_uses_variable_token():
 
 
 def test_semantic_tokens_regular_block_comment_stays_comment_token():
-    src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  Not a docstring.\n  ###\n"
+    src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  >> Not a docstring.\n  ###\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
     comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")

@@ -1,20 +1,4 @@
-"""Tests for the tree-sitter-backed parser pipeline (Phase 6).
-
-These are NEW tests added during the refactor — they verify the parts
-of the public API that the pre-refactor parser did not expose:
-
-  - ``Span`` is populated on every AST node.
-  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /
-    ``TypeUnion`` / ``TypePython``), not just opaque strings.
-  - ``parse_program`` returns ``ProgramWithValidation`` whenever
-    ``@test:`` or ``@eval:`` blocks are present.
-  - ``KediParseError`` is a ``ValueError`` subclass and carries
-    ``KediDiagnostic`` records with source locations.
-
-The pre-existing ``test_kedi_lang_*`` suites still cover the
-source-in / behavior-out side; this file complements them by asserting
-on the structured AST shape itself.
-"""
+">> Tests for the tree-sitter-backed parser pipeline (Phase 6).\n\n>> These are NEW tests added during the refactor — they verify the parts\nof the public API that the pre-refactor parser did not expose:\n\n  - ``Span`` is populated on every AST node.\n  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /\n    ``TypeUnion`` / ``TypePython``), not just opaque strings.\n  - ``parse_program`` returns ``ProgramWithValidation`` whenever\n    ``@test:`` or ``@eval:`` blocks are present.\n  - ``KediParseError`` is a ``ValueError`` subclass and carries\n    ``KediDiagnostic`` records with source locations.\n\n>> The pre-existing ``test_kedi_lang_*`` suites still cover the\nsource-in / behavior-out side; this file complements them by asserting\non the structured AST shape itself.\n"
 
 from __future__ import annotations
 
@@ -41,7 +25,7 @@ from kedi.lang.ast import (
     OutputSegment,
     ReturnBlockStmt,
     ReturnStmt,
-    TemplateLine,
+    TemplateBlock,
     TextSegment,
 )
 
@@ -510,7 +494,7 @@ def test_span_populated_on_root():
 
 
 def test_span_propagated_to_procedures_and_body():
-    src = "@hello(name):\n  Hi, [reply: str]\n  = <reply>\n"
+    src = "@hello(name):\n  >> Hi, [reply: str]\n  = <reply>\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
     assert proc.loc is not None
@@ -608,10 +592,10 @@ def test_legacy_string_annotation_still_populated():
 
 
 def test_output_segment_carries_type_expr():
-    prog = parse_program("@p():\n  Pick a [x: int].\n  = <x>\n")
-    template_line = prog.procedures[0].body[0]
-    assert isinstance(template_line, TemplateLine)
-    out = next(s for s in template_line.segments if isinstance(s, OutputSegment))
+    prog = parse_program("@p():\n  >> Pick a [x: int].\n  = <x>\n")
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    out = next(s for s in block.lines[0].segments if isinstance(s, OutputSegment))
     assert out.name == "x"
     assert isinstance(out.type_expr, TypeRef)
     assert out.type_expr.name == "int"
@@ -661,11 +645,7 @@ def test_program_returns_with_validation_when_eval_block_present():
 
 
 def test_validation_block_kw_is_validated():
-    """Walker discriminates ``test`` vs ``eval`` from the kw text and
-    rejects everything else (the kw is matched as a plain identifier
-    in the grammar to avoid keyword-extraction conflicts with
-    procedure names ``@test(...)`` / ``@eval(...)``).
-    """
+    ">> Walker discriminates ``test`` vs ``eval`` from the kw text and\n    >> rejects everything else (the kw is matched as a plain identifier\n    in the grammar to avoid keyword-extraction conflicts with\n    procedure names ``@test(...)`` / ``@eval(...)``).\n"
     with pytest.raises(KediParseError):
         parse_program("@bogus: foo:\n  > case: c:\n    `pass`\n")
 
@@ -750,10 +730,10 @@ def test_mixed_return_is_returnstmt_not_block():
 
 
 def test_template_text_escapes_decoded():
-    prog = parse_program("@p():\n  Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n")
-    template_line = prog.procedures[0].body[0]
-    assert isinstance(template_line, TemplateLine)
-    text = "".join(s.text for s in template_line.segments if isinstance(s, TextSegment))
+    prog = parse_program("@p():\n  >> Use \\<angle\\> \\[brackets\\] \\@at \\= eq\n  = ok\n")
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    text = "".join(s.text for s in block.lines[0].segments if isinstance(s, TextSegment))
     assert "<angle>" in text
     assert "[brackets]" in text
     assert "@at" in text

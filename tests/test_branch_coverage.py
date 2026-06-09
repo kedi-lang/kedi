@@ -274,9 +274,7 @@ def test_procedure_docstring_nodes_without_body(monkeypatch) -> None:
 
 
 def test_semantic_tokens_without_docstring_capture(monkeypatch) -> None:
-    src = (
-        "@translate(text: str) -> str:\n  ###\n  Translate the provided text.\n  ###\n  = <text>\n"
-    )
+    src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
     monkeypatch.setattr(features, "_capture_to_token", lambda _name: None)
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)
@@ -362,12 +360,12 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
 
 
 def test_semantic_tokens_multiline_python_emit_edges() -> None:
-    src = "= <`def f():\n    return 1\n`>\n"
+    src = "= <`def f():\n    >> return 1\n`>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert len(tokens.data) % 5 == 0
 
 
 def test_semantic_tokens_multiline_python_short_source() -> None:
-    src = "= <`a\nb`>\n"
+    src = "= <`a\n>> b`>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)

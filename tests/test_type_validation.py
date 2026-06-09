@@ -355,12 +355,7 @@ class TestEdgeCases:
 
     def test_bool_type_with_string_fails(self):
         """Test bool type with string value fails."""
-        src = """
-@check_flag(flag: bool):
-    return <`'yes' if flag else 'no'`>
-
-= <`check_flag('true')`>
-"""
+        src = "\n@check_flag(flag: bool):\n    >> return <`'yes' if flag else 'no'`>\n\n= <`check_flag('true')`>\n"
         with pytest.raises(RuntimeError):
             _run(src)
 

@@ -137,9 +137,8 @@ Inside procedures, multiple blocks are separated by blank lines or a new `>>`:
   = <foooo>
 ```
 
-Bare template lines (without `>>`) are **deprecated** at procedure and top level and
-should not appear in new code. They remain valid inside `> optimize:` / `> auto:`
-bodies only.
+Bare template lines (without `>>`) are a **parse error** at procedure and top level.
+They remain valid only inside `> optimize:` / `> auto:` bodies.
 
 ### Substitutions (R-values)
 

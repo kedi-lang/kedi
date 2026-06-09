@@ -139,7 +139,7 @@ def test_load_imported_surface_edges(tmp_path: Path) -> None:
         == {}
     )
     bad_module = tmp_path / "bad.kedi"
-    bad_module.write_text("[bad\n", encoding="utf-8")
+    bad_module.write_text(">> [bad\n", encoding="utf-8")
     bad_surface = module_surface.load_imported_surface(bad_module, set(), "bad")
     assert bad_surface.modules == {}
     bad_import_source = "> import: bad\n= ok\n"

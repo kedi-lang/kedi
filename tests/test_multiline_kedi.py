@@ -27,7 +27,7 @@ def test_inline_comments_basic(monkeypatch: Any) -> None:
 
 
 def test_inline_comments_escape(monkeypatch: Any) -> None:
-    src = "text \\# not comment\n= done\n"
+    src = ">> text \\# not comment\n= done\n"
     out = _run(src)
     assert out == "done"
 
@@ -39,7 +39,7 @@ def test_block_comment_basic(monkeypatch: Any) -> None:
 
 
 def test_block_comment_between_statements(monkeypatch: Any) -> None:
-    src = "@p():\n  ###\n  ignored lines\n  ###\n  = in body\n\n= <p()>\n"
+    src = "@p():\n  ###\n  >> ignored lines\n  ###\n  = in body\n\n= <p()>\n"
     out = _run(src)
     assert out == "in body"
 
@@ -57,7 +57,7 @@ def test_first_block_comment_in_procedure_body_becomes_docstring(
 
 
 def test_nonleading_block_comment_does_not_become_docstring(monkeypatch: Any) -> None:
-    src = "@p():\n  hello\n  ###\n  Not a docstring.\n  ###\n  = ok\n"
+    src = "@p():\n  >> hello\n  ###\n  Not a docstring.\n  ###\n  = ok\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
 
@@ -100,7 +100,7 @@ def test_multiline_and_block_comment_crosstalk(monkeypatch: Any) -> None:
         '  Ignored "= 1" line\n'
         "  [x] = 2\n"
         "  ###\n"
-        "  prefix \\\n"
+        "  >> prefix \\\n"
         "    value\n"
         "  = <x> # inline comment after assignment\n\n"
         "[x] = value # inline comment after assignment\n"
@@ -161,7 +161,7 @@ def test_multiline_escaped_backslash(monkeypatch: Any) -> None:
 
 
 def test_multiline_inside_template_line(monkeypatch: Any) -> None:
-    src = "@p():\n  prefix \\\n    [x] \\\n    suffix\n  = <x>\n\n= <p()>\n"
+    src = "@p():\n  >> prefix \\\n    [x] \\\n    suffix\n  = <x>\n\n= <p()>\n"
     out = _run(src)
     assert out.endswith("-value")
 
@@ -183,6 +183,6 @@ def test_misplaced_backslash_in_return_raises(monkeypatch: Any) -> None:
 
 
 def test_misplaced_backslash_in_template_raises(monkeypatch: Any) -> None:
-    src = "@p():\n  text \\ here\n  = ok\n\n= <p()>\n"
+    src = "@p():\n  >> text \\ here\n  = ok\n\n= <p()>\n"
     with pytest.raises(Exception):
         parse_program(src)
