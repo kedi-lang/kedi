@@ -10,6 +10,7 @@ from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
 _OUTPUT_KEY_RE = re.compile(r"\[([A-Za-z_]\w*)(?::[^\]]*)?\]")
+_PREV_WORD_RE = re.compile(r"last letter of (\S+)", re.IGNORECASE)
 
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
@@ -81,3 +82,27 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
             else:
                 data[k] = f"{k}-value"
         return AttrDict(data)
+
+
+class WordChainMockAdapter(MockAdapter):
+    """Deterministic adapter for ``word_chain.kedi`` without live LLM calls."""
+
+    def produce_sync(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, ResolvedKediType] | None = None,
+        **kwargs: Any,
+    ) -> AttrDict[str, Any]:
+        if output_schema and "word" in output_schema:
+            match = _PREV_WORD_RE.search(template)
+            if match is not None:
+                previous = match.group(1).rstrip(".,;:")
+                chain_word = previous[-1] * 2
+                self.model_calls.append(self.last_effective_model)
+                return AttrDict({"word": chain_word})
+        return super().produce_sync(
+            template=template,
+            output_schema=output_schema,
+            **kwargs,
+        )

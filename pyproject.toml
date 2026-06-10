@@ -94,6 +94,7 @@ exclude_also = [
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.6",
+    "cassetter[httpx]==0.5.0",
     "coverage>=7.14.1",
     "pre-commit>=4.6.0",
     "pytest-cov>=7.1.0",

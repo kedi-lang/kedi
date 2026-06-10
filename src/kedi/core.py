@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
@@ -198,6 +199,7 @@ class KediRuntime:
 
     @contextmanager
     def trace_frame(self, frame: KediTraceFrame):
+        __tracebackhide__ = True
         frame = self._hydrate_frame(frame)
         stack = self._trace_stack.get()
         token = self._trace_stack.set(stack + (frame,))
@@ -206,7 +208,9 @@ class KediRuntime:
         except KediExecutionError:
             raise
         except Exception as exc:
-            raise self.build_execution_error(exc) from exc
+            kedi_exc = self.build_execution_error(exc)
+            traceback = self._last_python_origin_traceback(exc) or exc.__traceback__
+            raise kedi_exc.with_traceback(traceback) from None
         finally:
             self._trace_stack.reset(token)
 
@@ -221,27 +225,69 @@ class KediRuntime:
             source_map=self._source_map,
         )
 
+    def _last_python_origin_traceback(self, exc: BaseException) -> TracebackType | None:
+        tb = exc.__traceback__
+        last = None
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename in self._python_origins:
+                last = tb
+            tb = tb.tb_next
+        if last is None:
+            return None
+        return TracebackType(
+            None,
+            last.tb_frame,
+            last.tb_lasti,
+            last.tb_lineno,
+        )
+
     def register_python_origin(
         self,
         *,
         kind: str,
         code: str,
         span: Any,
+        compile_line_offset: int = 0,
         wrapper_line_offset: int = 0,
         kedi_line_offset: int = 0,
         procedure_name: str | None = None,
+        traceback_code: str | None = None,
     ) -> str:
+        import linecache
+
         self._python_origin_counter += 1
+        origin_span = span
         filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        if span is not None and getattr(span, "source_path", None):
+            filename = span.source_path
+        elif (
+            span is not None
+            and self._source_map is not None
+            and hasattr(self._source_map, "resolve_line")
+        ):
+            resolved = self._source_map.resolve_line(span.start_line)
+            if resolved is not None:
+                filename = resolved.source_path
+                origin_span = replace(
+                    span,
+                    start_line=resolved.source_line,
+                    end_line=resolved.source_line + max(0, span.end_line - span.start_line),
+                    source_path=resolved.source_path,
+                    source_id=resolved.source_id,
+                )
         self._python_origins[filename] = KediPythonOrigin(
             filename=filename,
             kind=kind,
             code=code,
-            span=span,
+            span=origin_span,
+            compile_line_offset=compile_line_offset,
             wrapper_line_offset=wrapper_line_offset,
             kedi_line_offset=kedi_line_offset,
             procedure_name=procedure_name,
         )
+        cache_text = "\n" * compile_line_offset + (traceback_code or code)
+        lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
+        linecache.cache[filename] = (len(code), None, lines, filename)
         return filename
 
     def _hydrate_frame(self, frame: KediTraceFrame) -> KediTraceFrame:

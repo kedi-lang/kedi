@@ -27,7 +27,6 @@ class TrackingPydanticAdapter(PydanticAdapter):
 
     def produce_sync(
         self,
-        *,
         template: str,
         output_schema: dict[str, ResolvedKediType] | None = None,
         output_type: type[Any] | None = None,

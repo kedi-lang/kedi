@@ -59,6 +59,7 @@ def execute_inline_side_effects(
     kedi_line_offset: int = 0,
 ) -> None:
     """Execute Python code for side effects, syncing back existing vars only."""
+    __tracebackhide__ = True
     with rt.trace_frame(
         KediTraceFrame(kind="python_side_effects", label="python statement", span=span)
     ):

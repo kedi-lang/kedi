@@ -29,10 +29,11 @@ from kedi.errors import (
     frame_label,
     python_error_message,
 )
+from kedi.executors.base import DefaultExecutor
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import Span
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
-from kedi.source_loading import load_kedi_source_bundle
+from kedi.source_loading import load_kedi_source_bundle, single_file_source_map
 
 
 def test_runtime_error_carries_kedi_frames(tmp_path: Path) -> None:
@@ -59,6 +60,74 @@ def test_runtime_error_carries_kedi_frames(tmp_path: Path) -> None:
     assert err.python_traces[-1].python_lineno == 1
     assert err.python_traces[-1].span is not None
     assert err.python_traces[-1].span.source_path == str(srcp)
+
+
+def test_traceback_uses_source_map_path_when_span_has_no_path(tmp_path: Path) -> None:
+    srcp = tmp_path / "sample.kedi"
+    srcp.write_text("[value] = ok\n`assert value == 'nope'`\n= <value>\n", encoding="utf-8")
+    bundle = load_kedi_source_bundle(srcp, include_val=False, include_cache=False)
+    program = parse_program(bundle.text, source_map=bundle.source_map)
+    rt = compile_program(program)
+
+    with pytest.raises(KediExecutionError) as info:
+        rt.run_main()
+
+    err = info.value
+    trace = err.__traceback__
+    last_filename = None
+    while trace is not None:
+        last_filename = trace.tb_frame.f_code.co_filename
+        trace = trace.tb_next
+
+    assert last_filename == str(srcp.resolve())
+    assert err.python_traces[-1].span is not None
+    assert err.python_traces[-1].span.source_path == str(srcp.resolve())
+    assert err.python_traces[-1].kedi_lineno == 2
+
+
+def test_executor_falls_back_to_source_map_for_pathless_span(tmp_path: Path) -> None:
+    srcp = tmp_path / "sample.kedi"
+    srcp.write_text("[value] = ok\n`assert value == 'nope'`\n= <value>\n", encoding="utf-8")
+    rt = compile_program(parse_program("= ok"))
+    rt._source_map = single_file_source_map(srcp, srcp.read_text(encoding="utf-8"))
+    span = Span(
+        start_byte=13,
+        end_byte=37,
+        start_line=2,
+        start_col=1,
+        end_line=2,
+        end_col=25,
+    )
+
+    with pytest.raises(KediExecutionError) as info:
+        with rt.trace_frame(KediTraceFrame(kind="python_side_effects", label="python", span=span)):
+            DefaultExecutor().execute_side_effects(rt, "assert value == 'nope'", {"value": "ok"})
+
+    err = info.value
+    assert err.python_traces[-1].span is not None
+    assert err.python_traces[-1].span.source_path == str(srcp)
+    assert err.python_traces[-1].kedi_lineno == 2
+
+
+def test_executor_keeps_virtual_filename_when_source_map_cannot_resolve(tmp_path: Path) -> None:
+    srcp = tmp_path / "sample.kedi"
+    srcp.write_text("= ok\n", encoding="utf-8")
+    rt = compile_program(parse_program("= ok"))
+    rt._source_map = single_file_source_map(srcp, srcp.read_text(encoding="utf-8"))
+    span = Span(
+        start_byte=0,
+        end_byte=1,
+        start_line=99,
+        start_col=1,
+        end_line=99,
+        end_col=2,
+    )
+
+    with pytest.raises(KediExecutionError) as info:
+        with rt.trace_frame(KediTraceFrame(kind="python_side_effects", label="python", span=span)):
+            DefaultExecutor().execute_side_effects(rt, "raise RuntimeError('boom')", {})
+
+    assert info.value.python_traces[-1].filename.startswith("<kedi-python:side_effects:")
 
 
 def test_cli_renders_traceback_for_inline_python_error(tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ class KediPythonOrigin:
     kind: str
     code: str
     span: Span | None
+    compile_line_offset: int = 0
     wrapper_line_offset: int = 0
     kedi_line_offset: int = 0
     procedure_name: str | None = None
@@ -47,7 +48,10 @@ class KediPythonOrigin:
         source_map: Any | None = None,
         python_col: int | None = None,
     ) -> KediPythonTrace:
-        python_lineno = max(1, traceback_lineno - self.wrapper_line_offset)
+        python_lineno = max(
+            1,
+            traceback_lineno - self.compile_line_offset - self.wrapper_line_offset,
+        )
         kedi_lineno = None
         source_snippet = None
         if self.span is not None:

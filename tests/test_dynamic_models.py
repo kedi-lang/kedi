@@ -15,6 +15,5 @@ def test_build_dynamic_model_creates_typed_pydantic_model() -> None:
     model = build_dynamic_model("SampleModel", BaseModel, fields)
     instance = model(name="Ada")
 
-    assert instance.name == "Ada"
-    assert instance.count == 0
+    assert instance.model_dump() == {"name": "Ada", "count": 0}
     assert model.model_fields["name"].annotation is str

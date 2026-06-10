@@ -59,7 +59,7 @@ coverage:
 
 check-coverage:
 	@printf "$(BLUE)==>$(RESET) Checking full test coverage...\n"
-	@$(UV) run --group dev pytest --cov=. --cov-fail-under=100 -q
+	@$(UV) run --group dev pytest --record-mode=none --cov=. --cov-fail-under=100 -q
 	@printf "$(GREEN)✔ Coverage threshold satisfied.$(RESET)\n"
 
 check-matrix:
