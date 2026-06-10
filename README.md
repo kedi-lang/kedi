@@ -5,8 +5,8 @@
 ## A typed reasoning layer for LLM orchestration
 
 Kedi is a compact DSL for writing typed LLM workflows. It combines prompt-like
-template lines, Python interop, Pydantic-backed types, imports/exports, and test
-or eval blocks in one readable source file.
+template lines, Python interop, Pydantic-backed types, per-procedure model
+routing, imports/exports, and test or eval blocks in one readable source file.
 
 ### Quick Taste
 
@@ -64,6 +64,37 @@ pip install -e .
 kedi your_program.kedi
 ```
 
+### Agent Profiles
+
+Route different procedures to different models without repeating adapter
+configuration. Profiles are captured when a procedure is defined; later
+`> model:` directives do not retroactively change earlier procedures.
+
+````kedi
+> profile: fast:
+    > model: groq:qwen/qwen3-32b
+> profile: quality:
+    > model: openrouter/google/gemini-3-flash-preview
+
+> use: fast
+@draft(prompt: str) -> str:
+  >> Summarize: <prompt>
+  Summary: [summary]
+  = `summary`
+
+> use: quality
+@polish(text: str) -> str:
+  >> Improve: <text>
+  Polished: [polished]
+  = `polished`
+````
+
+- `> model: name` — set the model for subsequent procedure captures (plain name or `` `expression` ``)
+- `> profile: name:` — define a reusable profile with one or more nested `> model:` members
+- `> use: name` — apply a profile by **profile name** (not the importing module name)
+
+Profiles can be shared across files with `> export:` / `> import:` like procedures and types.
+
 ### Common Commands
 
 ```bash
@@ -71,7 +102,8 @@ kedi your_program.kedi
 kedi your_program.kedi --test
 kedi your_program.kedi --eval
 kedi your_program.kedi --eval --optimize --optimizer gepa
-kedi your_program.kedi --adapter-model groq:qwen/qwen3-32b
+kedi your_program.kedi --adapter pydantic --adapter-model groq:qwen/qwen3-32b
+kedi-lsp   # language server for editors
 ```
 
 Extra CLI arguments are available inside Python expressions and blocks as `args`:
@@ -90,17 +122,21 @@ kedi report.kedi --country Turkey --dry-run
 - Procedures: `@name(param[: type], ...) -> ret_type:`
 - Types: `str`, `int`, `float`, `bool`, `list[T]`, `dict[K, V]`, custom `~Type`
 - Untyped procedure and type fields default to `str`
+- Template blocks: `>>` opens an LLM prompt; continuation lines merge into one run
 - Template outputs: `Answer: [answer: int]`
 - Substitutions: `<value>`, `<call(arg)>`, and inline Python with backticks
 - Python blocks: triple-backtick blocks that return native Python values
+- Agent routing: `> model:`, `> profile:`, and `> use:` (see above)
 - Modules: `> import: module_name`, `> export: name`, and `> export: *`
 - Validation: `@test:` and `@eval:` blocks live next to the code they verify
+- Optimization: `> optimize: name:` marks template spans for `--optimize`
 
 ### Developer Notes
 
-- `make check`: ruff, format check, `ty`, and `basedpyright`
+- `make check`: ruff, format check, `ty check src`, and `basedpyright src`
 - `make check-coverage`: pytest with 100% coverage enforcement
 - `make prod`: full local gate used by pre-commit
+- Editor support: `kedi-lsp` (VS Code extension in `kedi-vscode/`, Zed extension in `kedi-zed/`)
 
 Kedi can also expose procedure metadata as JSON schema and Pydantic AI tools for
 tool-registration workflows.

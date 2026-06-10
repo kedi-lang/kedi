@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import socket
-import sys
 from pathlib import Path
 from typing import Iterable
 
 import pytest
+from click.testing import CliRunner
 
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from kedi.cli import main as cli_main
@@ -66,19 +66,15 @@ def test_cli_test_and_eval(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    try:
-        sys.argv = [str(srcp), "--test"]
-        print(sys.argv, file=sys.stderr)
-        cli_main.main(sys.argv)
-    except SystemExit as e:
-        assert e.code == 0
+    runner = CliRunner()
 
-    try:
-        sys.argv = [str(srcp), "--eval"]
-        print(sys.argv, file=sys.stderr)
-        cli_main.main(sys.argv)
-    except SystemExit as e:
-        assert e.code == 0
+    test_result = runner.invoke(cli_main, [str(srcp), "--test"])
+    assert test_result.exit_code == 0, test_result.output
+    assert "f::ok: OK" in test_result.output
+
+    eval_result = runner.invoke(cli_main, [str(srcp), "--eval"])
+    assert eval_result.exit_code == 0, eval_result.output
+    assert "f::s: 1.0000" in eval_result.output
 
 
 def test_parse_cli_args() -> None:
