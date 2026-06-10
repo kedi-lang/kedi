@@ -20,11 +20,12 @@ from __future__ import annotations
 import copy
 import json
 import shlex
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic import BaseModel, Field, TypeAdapter
 
 from ...core import KediRuntime
+from ...dynamic_models import build_dynamic_model
 from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
 from ..type_introspection import make_type_init
 from .environment import build_type_env
@@ -317,11 +318,7 @@ def register_type(
                 _pydantic_default(default_value),
             )
 
-    new_model = create_model(
-        typedef.name,
-        __base__=cast(Any, BaseModel),
-        **cast(Any, field_defs),
-    )
+    new_model = build_dynamic_model(typedef.name, BaseModel, field_defs)
     init_namespace = build_type_env(rt, local_env or {})
     init_namespace[typedef.name] = new_model
     setattr(

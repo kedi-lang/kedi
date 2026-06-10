@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -63,11 +64,17 @@ def test_eval_model_value_errors_and_backtick() -> None:
     with pytest.raises(ValueError, match="no value"):
         eval_model_value(rt, plain_value=None, backtick_code=None, env={})
 
-    rt.executor.evaluate_type_expression = lambda _rt, code, _env: 42  # type: ignore[method-assign]
+    def _eval_type_int(_rt: KediRuntime, code: str, _env: dict[str, Any]) -> int:
+        return 42
+
+    def _eval_type_str(_rt: KediRuntime, code: str, _env: dict[str, Any]) -> str:
+        return "gpt"
+
+    rt.executor.evaluate_type_expression = _eval_type_int  # ty: ignore[invalid-assignment]
     with pytest.raises(TypeError, match="must evaluate to str"):
         eval_model_value(rt, plain_value=None, backtick_code="bad", env={})
 
-    rt.executor.evaluate_type_expression = lambda _rt, code, _env: "gpt"  # type: ignore[method-assign]
+    rt.executor.evaluate_type_expression = _eval_type_str  # ty: ignore[invalid-assignment]
     assert eval_model_value(rt, plain_value=None, backtick_code="models['x']", env={}) == "gpt"
     assert eval_model_value(rt, plain_value="  haiku  ", backtick_code=None, env={}) == "haiku"
 
@@ -79,12 +86,16 @@ def test_eval_use_profile_unknown_and_bad_member() -> None:
         eval_use_profile(rt, stmt, {}, {})
 
     with pytest.raises(Exception, match="Unknown profile member kind"):
-        _member_to_patch(rt, SimpleNamespace(kind="other"), {})
+        _member_to_patch(rt, cast(Any, SimpleNamespace(kind="other")), {})
 
 
 def test_capture_with_backtick_model_directive() -> None:
     rt = KediRuntime()
-    rt.executor.evaluate_type_expression = lambda _rt, _code, _env: "opus"  # type: ignore[method-assign]
+
+    def _eval_type_opus(_rt: KediRuntime, _code: str, _env: dict[str, Any]) -> str:
+        return "opus"
+
+    rt.executor.evaluate_type_expression = _eval_type_opus  # ty: ignore[invalid-assignment]
     setattr(rt, "_profile_registry", {})
     prog = Program(
         ordered_toplevel=[
@@ -93,7 +104,9 @@ def test_capture_with_backtick_model_directive() -> None:
         ]
     )
     capture_procedure_profiles(rt, prog)
-    assert prog.ordered_toplevel[1].captured_agent_profile.model == "opus"
+    captured_proc = prog.ordered_toplevel[1]
+    assert isinstance(captured_proc, ProcedureDef)
+    assert captured_proc.captured_agent_profile.model == "opus"
 
 
 def test_procedure_body_use_profile_directive() -> None:
@@ -114,7 +127,7 @@ def test_nested_procedure_registration_branches() -> None:
     rt = KediRuntime()
     rt._procedures = {"inner": lambda: "stale"}
     executor = StatementExecutor(rt)
-    saved_procs: dict[str, object] = {}
+    saved_procs: dict[str, Callable[[], object]] = {}
     new_proc_names: list[str] = []
     parent = ProcedureDef(name="outer", params=[], body=[])
 
@@ -258,6 +271,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
 
     foo_use = parse_program("> use: foo\n").toplevel_body[0]
     assert isinstance(foo_use, UseProfileStmt)
+    assert foo_use.loc is not None
     assert features._directive_name_span(use_prog, foo_use.loc, "bar") is None
 
     prog = parse_program("> use: missing\n")
@@ -298,7 +312,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     body_src = "@foo():\n    > use: light\n    >> x [y]\n"
     symbols = features.compute_document_symbols(body_src, "x.kedi")
     foo = next(symbol for symbol in symbols if symbol.name == "foo")
-    assert any(child.name.startswith("> use:") for child in foo.children)
+    assert any(child.name.startswith("> use:") for child in foo.children or ())
 
     profile_span = Span(0, 30, 1, 1, 1, 30)
     member_span = Span(4, 20, 2, 5, 2, 20)

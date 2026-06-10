@@ -73,5 +73,5 @@ def test_document_symbols_include_profile_definition() -> None:
     names = [symbol.name for symbol in symbols]
     assert "> profile: light" in names
     proc = next(symbol for symbol in symbols if symbol.name == "foo")
-    child_names = [child.name for child in proc.children]
+    child_names = [child.name for child in proc.children or ()]
     assert any(name.startswith("> model:") for name in child_names)

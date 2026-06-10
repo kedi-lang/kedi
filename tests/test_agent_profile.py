@@ -13,6 +13,12 @@ def _adapter() -> MockAdapter:
     return MockAdapter(default_model="default-model")
 
 
+def _procedure_def(fn: object) -> ProcedureDef:
+    proc = getattr(fn, "__kedi_procedure_def__", None)
+    assert isinstance(proc, ProcedureDef)
+    return proc
+
+
 def test_parse_model_profile_use_directives() -> None:
     src = """
 > model: haiku
@@ -56,8 +62,8 @@ def test_procedure_capture_uses_source_order_model() -> None:
     rt = compile_program(prog, adapter=adapter)
     foo = rt._procedures["foo"]
     bar = rt._procedures["bar"]
-    foo_def = foo.__kedi_procedure_def__
-    bar_def = bar.__kedi_procedure_def__
+    foo_def = _procedure_def(foo)
+    bar_def = _procedure_def(bar)
     assert foo_def.captured_agent_profile.model == "gpt-captured"
     assert bar_def.captured_agent_profile.model == "gpt-later"
 
@@ -100,7 +106,7 @@ def test_use_profile_applies_model_at_capture_time() -> None:
 """
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
-    foo_def = rt._procedures["foo"].__kedi_procedure_def__
+    foo_def = _procedure_def(rt._procedures["foo"])
     assert foo_def.captured_agent_profile.model == "from-profile"
 
 

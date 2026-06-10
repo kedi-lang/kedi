@@ -4,7 +4,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Callable, Tuple
+from typing import Any, Tuple
 
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from .codegen.runner import run_codegen
@@ -15,30 +15,11 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 
-class _LazyRuntimeAdapter:
-    """Instantiate the real adapter only when runtime actually uses it."""
-
-    def __init__(self, factory: Callable[[], Any]) -> None:
-        self._factory = factory
-        self._inner: Any | None = None
-
-    def _get_inner(self) -> Any:
-        if self._inner is None:
-            self._inner = self._factory()
-        return self._inner
-
-    async def produce(self, *args, **kwargs):
-        return await self._get_inner().produce(*args, **kwargs)
-
-    def produce_sync(self, *args, **kwargs):
-        return self._get_inner().produce_sync(*args, **kwargs)
-
-
-def _build_runtime_adapter(adapter: str, model: str | None):
+def _build_runtime_adapter(adapter: str, model: str | None) -> PydanticAdapter | DSPyAdapter:
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "dspy":
-        return _LazyRuntimeAdapter(lambda: DSPyAdapter(model=model or "groq/qwen/qwen3-32b"))
-    return _LazyRuntimeAdapter(lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b"))
+        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
 
 
 CliArgs = AttrDict[str, ArgType]

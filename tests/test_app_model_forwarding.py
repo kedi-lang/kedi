@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -97,22 +96,7 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
     assert seen["run_adapter"] is sentinel
 
 
-def test_lazy_runtime_adapter_and_builder_paths(monkeypatch: Any) -> None:
-    made: list[str] = []
-
-    class FakeInner:
-        async def produce(self, *args: Any, **kwargs: Any) -> str:
-            return "async result"
-
-        def produce_sync(self, *args: Any, **kwargs: Any) -> str:
-            return "sync result"
-
-    lazy = app._LazyRuntimeAdapter(lambda: made.append("created") or FakeInner())
-    assert lazy.produce_sync() == "sync result"
-    assert asyncio.run(lazy.produce()) == "async result"
-    assert lazy.produce_sync() == "sync result"
-    assert made == ["created"]
-
+def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
     seen: list[tuple[str, str]] = []
 
     class FakeDSPyAdapter:
@@ -132,8 +116,8 @@ def test_lazy_runtime_adapter_and_builder_paths(monkeypatch: Any) -> None:
     monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
 
-    app._build_runtime_adapter("dspy", None).produce_sync()
-    app._build_runtime_adapter("pydantic", None).produce_sync()
+    app._build_runtime_adapter("dspy", None)
+    app._build_runtime_adapter("pydantic", None)
 
     assert seen == [
         ("dspy", "groq/qwen/qwen3-32b"),

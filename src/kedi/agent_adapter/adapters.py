@@ -138,8 +138,7 @@ class DSPyAdapter:
             field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
         }
         field_definitions.update({"user_prompt": (str, dspy.InputField())})
-        model = build_dynamic_model("_OutputSignature", dspy.Signature, field_definitions)
-        return cast(type[dspy.Signature], model)
+        return build_dynamic_model("_OutputSignature", dspy.Signature, field_definitions)
 
     async def produce(
         self,

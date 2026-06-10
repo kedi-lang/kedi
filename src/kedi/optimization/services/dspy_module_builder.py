@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import dspy
 
 from ...dynamic_models import build_dynamic_model
@@ -126,8 +124,7 @@ class DSPyModuleBuilder:
                 # Fallback to str if no type annotation
                 field_definitions[field] = (str, dspy.OutputField())
 
-        model = build_dynamic_model("_ProcedureSignature", dspy.Signature, field_definitions)
-        return cast(type[dspy.Signature], model)
+        return build_dynamic_model("_ProcedureSignature", dspy.Signature, field_definitions)
 
     def _resolve_type_annotation(
         self, type_anno: str, param_types: dict[str, ResolvedKediType]
