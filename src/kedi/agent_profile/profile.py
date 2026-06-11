@@ -1,28 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Final, Literal, cast
 
-EffortValue = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
-PydanticEffortValue = Literal["minimal", "low", "medium", "high", "xhigh"]
-
-EFFORT_VALUES: Final[frozenset[str]] = frozenset(
-    {"minimal", "low", "medium", "high", "xhigh", "max"}
-)
-
-
-def validate_effort(value: str, *, directive_name: str = "effort") -> EffortValue:
-    effort = value.strip()
-    if effort not in EFFORT_VALUES:
-        expected = ", ".join(sorted(EFFORT_VALUES))
-        raise ValueError(f"{directive_name} directive must be one of: {expected}")
-    return cast(EffortValue, effort)
-
-
-def pydantic_effort_value(value: EffortValue | str) -> PydanticEffortValue:
-    if value == "max":
-        return "xhigh"
-    return cast(PydanticEffortValue, value)
+from ..effort import EffortValue
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -69,6 +69,27 @@ def test_diagnostics_reports_legacy_optimize_empty_message():
     assert any("must have an indented block" in d.message for d in diags)
 
 
+def test_diagnostics_report_invalid_top_level_effort_value() -> None:
+    diags = features.compute_diagnostics("> effort: extreme\n", "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-EFFORT-VALUE"
+    assert "must be one of" in diag.message
+    assert diag.range.start.line == 0
+
+
+def test_diagnostics_report_invalid_profile_effort_value() -> None:
+    src = "> profile: strict:\n    > effort: extreme\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-EFFORT-VALUE"
+    assert "must be one of" in diag.message
+    assert diag.range.start.line == 1
+
+
 def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")

@@ -37,6 +37,7 @@ from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
+from ...effort import EFFORT_VALUES, is_valid_effort
 from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
@@ -363,6 +364,16 @@ class _Walker:
                 span=self._span(node),
                 code=code,
             )
+        )
+
+    def _validate_effort_plain_value(self, node: Node, value: str) -> None:
+        if is_valid_effort(value):
+            return
+        expected = ", ".join(sorted(EFFORT_VALUES))
+        self._error(
+            node,
+            f"effort directive must be one of: {expected}",
+            code="K-EFFORT-VALUE",
         )
 
     def _validate_block_comments(self) -> None:
@@ -1193,6 +1204,7 @@ class _Walker:
                 loc=self._span(node),
             )
         plain = _src_text(self.source, value_node).strip()
+        self._validate_effort_plain_value(value_node, plain)
         return EffortDirectiveStmt(plain_value=plain, loc=self._span(node))
 
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
@@ -1314,9 +1326,11 @@ class _Walker:
                             )
                         )
                     else:
+                        plain = _src_text(self.source, value_node).strip()
+                        self._validate_effort_plain_value(value_node, plain)
                         effort_members.append(
                             ProfileEffortEntry(
-                                plain_value=_src_text(self.source, value_node).strip(),
+                                plain_value=plain,
                                 loc=self._span(child),
                             )
                         )

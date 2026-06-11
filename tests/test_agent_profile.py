@@ -340,6 +340,24 @@ def test_backtick_effort_applies_in_profile_and_body() -> None:
     assert adapter.effort_calls == ["high"]
 
 
+def test_invalid_plain_effort_rejected_at_top_level() -> None:
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program("> effort: extreme\n")
+
+    assert any(diag.code == "K-EFFORT-VALUE" for diag in exc_info.value.diagnostics)
+
+
+def test_invalid_plain_effort_rejected_inside_profile() -> None:
+    src = """
+> profile: strict:
+    > effort: extreme
+"""
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program(src)
+
+    assert any(diag.code == "K-EFFORT-VALUE" for diag in exc_info.value.diagnostics)
+
+
 def test_agent_profile_merge() -> None:
     base = AgentProfile(model="a", effort="low", system="old")
     merged = base.merge(AgentProfile(model="b", effort="high", system="new"))

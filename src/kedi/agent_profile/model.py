@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
-from .profile import AgentProfile, EffortValue, validate_effort
+from .profile import AgentProfile
 from .registry import (
     ProfileDefinition,
     ProfileEffortMember,

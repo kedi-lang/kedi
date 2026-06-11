@@ -1,0 +1,545 @@
+###
+Pygame-powered Wordle module.
+
+The hidden word and real-word validation are handled by Kedi template blocks.
+Pygame owns the board rendering, keyboard handling, colors, summaries, and game loop.
+###
+
+> import: require
+
+```
+require(
+    ["pygame", "logfire"],
+    required_by="Wordle",
+)
+
+from collections import Counter
+import time
+
+import pygame
+import logfire
+
+logfire.configure(
+    send_to_logfire="if-token-present",
+    service_name="kedi-wordle",
+    console=False,
+    inspect_arguments=False,
+)
+
+WINDOW_WIDTH = 900
+WINDOW_HEIGHT = 760
+BOARD_ROWS = 6
+BOARD_COLS = 5
+CELL_SIZE = 72
+CELL_GAP = 10
+BOARD_LEFT = 70
+BOARD_TOP = 150
+SIDEBAR_LEFT = 520
+SIDEBAR_WIDTH = 310
+KEYBOARD_TOP = 610
+FPS = 60
+
+BACKGROUND = (18, 24, 31)
+PANEL = (28, 36, 46)
+PANEL_BORDER = (52, 64, 80)
+TEXT = (238, 243, 247)
+TEXT_MUTED = (156, 168, 182)
+ACCENT = (94, 181, 255)
+CELL_EMPTY = (48, 58, 72)
+CELL_OUTLINE = (81, 96, 116)
+STATE_COLORS = {
+    "miss": (63, 72, 82),
+    "present": (193, 148, 52),
+    "correct": (82, 141, 92),
+}
+KEYBOARD_ROWS = ("QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM")
+STATE_PRIORITY = {"miss": 0, "present": 1, "correct": 2}
+
+def _wordle_seed(theme: str, session_nonce: int, round_index: int, generation_attempt: int) -> int:
+    normalized_theme = (theme or "everyday objects").strip().lower()
+    today = time.strftime("%Y-%m-%d")
+    return sum(
+        ord(ch) for ch in f"{today}:{normalized_theme}:{session_nonce}:{round_index}:{generation_attempt}"
+    )
+
+
+def _normalize_word(value: str) -> str | None:
+    word = value.strip().lower()
+    if len(word) != BOARD_COLS:
+        return None
+    if not word.isascii() or not word.isalpha():
+        return None
+    return word
+
+
+def _compose_summary(outcome: str, answer: str, attempts_used: int) -> str:
+    answer_label = answer.upper()
+    if outcome == "win":
+        return f"Solved in {attempts_used}/6. The word was {answer_label}."
+    if outcome == "loss":
+        return f"No more tries. The word was {answer_label}."
+    return f"Round ended. The word was {answer_label}."
+
+
+def _score_guess(answer: str, guess: str) -> list[str]:
+    result = ["miss"] * len(guess)
+    remaining = Counter()
+    for idx, (guess_char, answer_char) in enumerate(zip(guess, answer)):
+        if guess_char == answer_char:
+            result[idx] = "correct"
+        else:
+            remaining[answer_char] += 1
+    for idx, guess_char in enumerate(guess):
+        if result[idx] == "correct":
+            continue
+        if remaining[guess_char] > 0:
+            result[idx] = "present"
+            remaining[guess_char] -= 1
+    return result
+
+
+def _keyboard_states(guesses: list[str], rows: list[list[str]]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for guess, row in zip(guesses, rows):
+        for letter, state in zip(guess.upper(), row):
+            previous = merged.get(letter)
+            if previous is None or STATE_PRIORITY[state] > STATE_PRIORITY[previous]:
+                merged[letter] = state
+    return merged
+
+
+def _wrap_text(text: str, font: pygame.font.Font, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        trial = f"{current} {word}"
+        if font.size(trial)[0] <= max_width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
+def _draw_text_block(
+    screen: pygame.Surface,
+    *,
+    text: str,
+    font: pygame.font.Font,
+    color: tuple[int, int, int],
+    x: int,
+    y: int,
+    max_width: int,
+    line_gap: int = 8,
+) -> int:
+    offset = y
+    for line in _wrap_text(text, font, max_width):
+        surface = font.render(line, True, color)
+        screen.blit(surface, (x, offset))
+        offset += surface.get_height() + line_gap
+    return offset
+
+
+def _draw_tile(
+    screen: pygame.Surface,
+    *,
+    rect: pygame.Rect,
+    letter: str,
+    state: str | None,
+    cell_font: pygame.font.Font,
+) -> None:
+    fill = STATE_COLORS[state] if state is not None else CELL_EMPTY
+    border = fill if state is not None else CELL_OUTLINE
+    pygame.draw.rect(screen, fill, rect, border_radius=8)
+    pygame.draw.rect(screen, border, rect, width=2, border_radius=8)
+    if letter:
+        letter_surface = cell_font.render(letter.upper(), True, TEXT)
+        screen.blit(letter_surface, letter_surface.get_rect(center=rect.center))
+
+
+def _draw_keyboard(
+    screen: pygame.Surface,
+    *,
+    fonts: dict[str, pygame.font.Font],
+    guesses: list[str],
+    states: list[list[str]],
+) -> None:
+    keyboard_states = _keyboard_states(guesses, states)
+    key_width = 36
+    key_height = 48
+    row_gap = 10
+    for row_index, row in enumerate(KEYBOARD_ROWS):
+        row_width = len(row) * key_width + (len(row) - 1) * 6
+        origin_x = (WINDOW_WIDTH - row_width) // 2
+        y = KEYBOARD_TOP + row_index * (key_height + row_gap)
+        for col_index, letter in enumerate(row):
+            x = origin_x + col_index * (key_width + 6)
+            rect = pygame.Rect(x, y, key_width, key_height)
+            state = keyboard_states.get(letter)
+            fill = STATE_COLORS[state] if state is not None else CELL_EMPTY
+            pygame.draw.rect(screen, fill, rect, border_radius=8)
+            pygame.draw.rect(screen, CELL_OUTLINE, rect, width=1, border_radius=8)
+            surface = fonts["keyboard"].render(letter, True, TEXT)
+            screen.blit(surface, surface.get_rect(center=rect.center))
+
+
+def _draw_wordle_screen(
+    screen: pygame.Surface,
+    *,
+    fonts: dict[str, pygame.font.Font],
+    setup,
+    guesses: list[str],
+    states: list[list[str]],
+    current_guess: str,
+    status_message: str,
+    clue_visible: bool,
+    finished: bool,
+) -> None:
+    screen.fill(BACKGROUND)
+
+    title = fonts["title"].render("Kedi Wordle", True, TEXT)
+    screen.blit(title, (BOARD_LEFT, 50))
+
+    subtitle = fonts["subtitle"].render(setup.theme_label, True, ACCENT)
+    screen.blit(subtitle, (BOARD_LEFT, 96))
+
+    sidebar = pygame.Rect(SIDEBAR_LEFT, 48, SIDEBAR_WIDTH, 500)
+    pygame.draw.rect(screen, PANEL, sidebar, border_radius=12)
+    pygame.draw.rect(screen, PANEL_BORDER, sidebar, width=2, border_radius=12)
+
+    intro_y = _draw_text_block(
+        screen,
+        text=setup.intro,
+        font=fonts["body"],
+        color=TEXT,
+        x=SIDEBAR_LEFT + 20,
+        y=82,
+        max_width=SIDEBAR_WIDTH - 40,
+    )
+
+    hint_label = fonts["label"].render("Clue", True, TEXT_MUTED)
+    screen.blit(hint_label, (SIDEBAR_LEFT + 20, intro_y + 20))
+    clue_text = setup.clue if clue_visible else "Press TAB to reveal the clue."
+    clue_y = _draw_text_block(
+        screen,
+        text=clue_text,
+        font=fonts["body"],
+        color=TEXT,
+        x=SIDEBAR_LEFT + 20,
+        y=intro_y + 52,
+        max_width=SIDEBAR_WIDTH - 40,
+    )
+
+    status_label = fonts["label"].render("Status", True, TEXT_MUTED)
+    screen.blit(status_label, (SIDEBAR_LEFT + 20, clue_y + 20))
+    _draw_text_block(
+        screen,
+        text=status_message,
+        font=fonts["body"],
+        color=TEXT if finished else ACCENT,
+        x=SIDEBAR_LEFT + 20,
+        y=clue_y + 52,
+        max_width=SIDEBAR_WIDTH - 40,
+    )
+
+    instructions = (
+        "Press R for a new word, or Esc / Enter to exit."
+        if finished
+        else "Type letters, Enter to submit, Backspace to edit, Tab for clue, Esc to exit."
+    )
+    _draw_text_block(
+        screen,
+        text=instructions,
+        font=fonts["small"],
+        color=TEXT_MUTED,
+        x=SIDEBAR_LEFT + 20,
+        y=470,
+        max_width=SIDEBAR_WIDTH - 40,
+        line_gap=6,
+    )
+
+    for row_index in range(BOARD_ROWS):
+        guess = guesses[row_index].upper() if row_index < len(guesses) else ""
+        row_states = states[row_index] if row_index < len(states) else []
+        if row_index == len(guesses) and not finished:
+            guess = current_guess
+        for col_index in range(BOARD_COLS):
+            x = BOARD_LEFT + col_index * (CELL_SIZE + CELL_GAP)
+            y = BOARD_TOP + row_index * (CELL_SIZE + CELL_GAP)
+            rect = pygame.Rect(x, y, CELL_SIZE, CELL_SIZE)
+            letter = guess[col_index] if col_index < len(guess) else ""
+            state = row_states[col_index] if col_index < len(row_states) else None
+            _draw_tile(screen, rect=rect, letter=letter, state=state, cell_font=fonts["cell"])
+
+    _draw_keyboard(screen, fonts=fonts, guesses=guesses, states=states)
+    pygame.display.flip()
+
+
+def _run_wordle_session(setup, validate_guess_proc) -> tuple[str, bool]:
+    pygame.init()
+    pygame.display.set_caption("Kedi Wordle")
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    clock = pygame.time.Clock()
+    fonts = {
+        "title": pygame.font.SysFont("Arial", 42, bold=True),
+        "subtitle": pygame.font.SysFont("Arial", 24, bold=True),
+        "label": pygame.font.SysFont("Arial", 16, bold=True),
+        "body": pygame.font.SysFont("Arial", 22),
+        "small": pygame.font.SysFont("Arial", 16),
+        "cell": pygame.font.SysFont("Arial", 34, bold=True),
+        "keyboard": pygame.font.SysFont("Arial", 20, bold=True),
+    }
+
+    guesses: list[str] = []
+    states: list[list[str]] = []
+    current_guess = ""
+    clue_visible = False
+    finished = False
+    status_message = "Find the hidden five-letter word in six tries."
+    summary: str | None = None
+
+    restart_requested = False
+
+    try:
+        with logfire.span("wordle.session", theme_label=setup.theme_label, answer=setup.answer):
+            running = True
+            while running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                        if summary is None:
+                            summary = _compose_summary("quit", setup.answer, len(guesses))
+                        continue
+
+                    if event.type != pygame.KEYDOWN:
+                        continue
+
+                    if event.key == pygame.K_TAB:
+                        clue_visible = not clue_visible
+                        continue
+
+                    if finished:
+                        if event.key == pygame.K_r:
+                            logfire.info("wordle.reset_requested", attempts_used=len(guesses))
+                            restart_requested = True
+                            running = False
+                            continue
+                        if event.key in (pygame.K_ESCAPE, pygame.K_RETURN):
+                            running = False
+                        continue
+
+                    if event.key == pygame.K_ESCAPE:
+                        finished = True
+                        summary = _compose_summary("quit", setup.answer, len(guesses))
+                        status_message = summary
+                        continue
+
+                    if event.key == pygame.K_BACKSPACE:
+                        current_guess = current_guess[:-1]
+                        continue
+
+                    if event.key == pygame.K_RETURN:
+                        candidate = current_guess.lower().strip()
+                        normalized_guess = _normalize_word(candidate)
+                        if normalized_guess is None:
+                            status_message = "Use exactly five English letters."
+                            continue
+                        if normalized_guess in guesses:
+                            status_message = "That guess is already on the board."
+                            continue
+
+                        logfire.info("wordle.guess_submitted", guess=normalized_guess, attempts_used=len(guesses))
+                        validation = validate_guess_proc(normalized_guess)
+                        is_valid = bool(validation.valid)
+
+                        if not is_valid:
+                            status_message = "Not in word list."
+                            logfire.info("wordle.guess_rejected", guess=normalized_guess)
+                            continue
+
+                        row_states = _score_guess(setup.answer, normalized_guess)
+                        guesses.append(normalized_guess)
+                        states.append(row_states)
+                        current_guess = ""
+
+                        if normalized_guess == setup.answer:
+                            finished = True
+                            summary = _compose_summary("win", setup.answer, len(guesses))
+                            status_message = summary
+                            logfire.info("wordle.round_won", attempts_used=len(guesses))
+                        elif len(guesses) >= BOARD_ROWS:
+                            finished = True
+                            summary = _compose_summary("loss", setup.answer, len(guesses))
+                            status_message = summary
+                            logfire.info("wordle.round_lost", answer=setup.answer)
+                        else:
+                            status_message = "Locked in."
+                        continue
+
+                    if event.unicode and event.unicode.isalpha() and len(current_guess) < BOARD_COLS:
+                        current_guess += event.unicode.upper()
+
+                _draw_wordle_screen(
+                    screen,
+                    fonts=fonts,
+                    setup=setup,
+                    guesses=guesses,
+                    states=states,
+                    current_guess=current_guess,
+                    status_message=status_message,
+                    clue_visible=clue_visible,
+                    finished=finished,
+                )
+                clock.tick(FPS)
+    finally:
+        pygame.quit()
+
+    if summary is None:
+        summary = _compose_summary("quit", setup.answer, len(guesses))
+    return summary, restart_requested
+```
+
+~WordleSetup(
+    answer: str,
+    theme_label: str,
+    clue: str,
+    intro: str
+)
+
+~GuessValidation(
+    valid: bool
+)
+
+> profile: wordle:
+    ###
+    Agent profile for the language-facing parts of the Wordle game.
+    ###
+    > effort: low
+    > system:
+        You are the language layer for a pygame Wordle game.
+        Keep outputs short, plain, and machine-friendly.
+        Hidden answers must be common lowercase English words with exactly five ASCII letters.
+        For validation, decide only whether the guessed word is a real common English word.
+
+> use: wordle
+
+@prepare_wordle_setup(theme: str, seed_hint: int, blocked_answers: str) -> WordleSetup:
+    ###
+    Produce the hidden answer and short UI copy for a Wordle round.
+    ###
+    >> Create a Wordle round about <theme>.
+    Deterministic seed hint: <`str(seed_hint)`>.
+    Do not reuse any of these previous answers from this session: <blocked_answers>
+    Requirements:
+    - answer must be a common lowercase English word with exactly five ASCII letters
+    - the answer should fit the theme but stay guessable
+    - theme_label should be 2 to 4 words
+    - clue should be subtle and short
+    - intro should be one sentence for the game sidebar
+    Return:
+    [answer: str]
+    [theme_label: str]
+    [clue: str]
+    [intro: str]
+    = `WordleSetup(answer=answer, theme_label=theme_label, clue=clue, intro=intro)`
+
+@validate_wordle_guess(guess: str) -> GuessValidation:
+    ###
+    Ask the language model only whether a guess is a real English word.
+    ###
+    >> Check whether this guessed word is a real, common English word.
+    Guessed word: <guess>
+    Rules:
+    - answer with the boolean field only
+    - true only if the guess is a real common English word
+    - false for gibberish, obscure jargon, abbreviations, symbols, or non-words
+    [valid: bool]
+    = `GuessValidation(valid=valid)`
+
+@play_wordle(theme: str) -> str:
+    ###
+    Launch the pygame Wordle UI for a themed round.
+
+    Args:
+        theme (str): Theme or topic for the hidden answer.
+
+    Returns:
+        str: Final summary text from the finished session.
+    ###
+    = ```
+    theme_name = theme.strip() or "everyday objects"
+    session_nonce = time.time_ns()
+    round_index = 0
+    used_answers: list[str] = []
+
+    while True:
+        blocked_answers = ", ".join(answer.upper() for answer in used_answers) or "NONE"
+        normalized_setup = None
+
+        for generation_attempt in range(8):
+            seed = _wordle_seed(theme_name, session_nonce, round_index, generation_attempt)
+            with logfire.span(
+                "wordle.prepare_setup",
+                theme=theme_name,
+                seed=seed,
+                round_index=round_index,
+                generation_attempt=generation_attempt,
+            ):
+                setup = prepare_wordle_setup(theme_name, seed, blocked_answers)
+
+            answer = setup.answer.strip().lower()
+            if len(answer) != BOARD_COLS or not answer.isalpha():
+                logfire.info("wordle.invalid_answer_shape", answer=setup.answer, seed=seed)
+                continue
+            if answer in used_answers:
+                logfire.info("wordle.duplicate_answer_rejected", answer=answer, seed=seed)
+                continue
+
+            theme_label = setup.theme_label.strip() or theme_name.title()
+            clue = setup.clue.strip() or f"A five-letter word related to {theme_name}."
+            intro = setup.intro.strip() or "Guess the hidden word in six tries."
+
+            normalized_setup = WordleSetup(
+                answer=answer,
+                theme_label=theme_label,
+                clue=clue,
+                intro=intro,
+            )
+            break
+
+        if normalized_setup is None:
+            raise ValueError(
+                "Wordle setup repeatedly produced invalid or duplicate answers; "
+                "expected a fresh lowercase five-letter word."
+            )
+
+        summary, restart_requested = _run_wordle_session(
+            normalized_setup,
+            validate_wordle_guess,
+        )
+        used_answers.append(normalized_setup.answer)
+        if not restart_requested:
+            return summary
+        round_index += 1
+    ```
+
+@play_default_wordle() -> str:
+    ###
+    Launch a default casual Wordle round.
+    ###
+    = ```
+    return play_wordle("everyday objects")
+    ```
+
+> export:
+    WordleSetup
+    GuessValidation
+    wordle
+    prepare_wordle_setup
+    validate_wordle_guess
+    play_wordle
+    play_default_wordle

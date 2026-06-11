@@ -1,0 +1,35 @@
+###
+Module for managing package requirements.
+###
+
+> import: errors
+
+```
+import importlib.util
+```
+
+@check_if_installed(package_name: str) -> bool:
+    = ```
+    spec = importlib.util.find_spec(package_name)
+    return spec is not None
+    ```
+
+@require(
+    package_names: Union[str, Sequence[str]],
+    required_by: Union[str, None] = `None`
+) -> `Literal[True]`:
+    = ```
+    not_installed = []
+    if isinstance(package_names, str):
+        package_names = [package_names]
+    for package_name in package_names:
+        if not check_if_installed(package_name):
+            not_installed.append(package_name)
+    if not_installed:
+        raise ModuleNotInstalledError(package_names=not_installed, required_by=required_by)
+    return True
+    ```
+
+> export:
+    require
+    check_if_installed

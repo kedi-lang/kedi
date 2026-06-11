@@ -10,8 +10,8 @@ from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
+from ..effort import pydantic_effort_value
 from ..agent_profile import AgentProfile
-from ..agent_profile.profile import pydantic_effort_value
 from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
