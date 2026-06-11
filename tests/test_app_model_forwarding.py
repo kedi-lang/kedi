@@ -4,8 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from kedi import app
 from kedi.lang.ast import (
     EvalDataset,
@@ -305,7 +303,6 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    import kedi.agent_adapter.adapters as adapters_module
     import kedi.optimization as optimization_module
     import kedi.optimization.services.dspy_config as dspy_config_module
 
@@ -365,7 +362,11 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
         "Unknown optimizer: unknown",
     )
 
-    monkeypatch.delattr(adapters_module, "DSPyAdapter")
+    class FailingDSPyAdapter:
+        def __init__(self, *, model: str) -> None:
+            raise ImportError("dspy unavailable")
+
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
     _patch_optimizer_services(monkeypatch)
     assert (
         "DSPy is required for dspy adapter"
@@ -428,17 +429,13 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     assert app.run_optimization_cli(str(source))[0] == 0
 
 
-def test_lazy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
+def test_dspy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
 
-    with pytest.raises(ImportError, match="DSPyAdapter is unavailable"):
-        monkeypatch.setattr(app, "_adapter_classes", lambda: (None, object))
-        app._build_runtime_adapter("dspy", None)
-
-    with pytest.raises(ImportError, match="PydanticAdapter is unavailable"):
-        monkeypatch.setattr(app, "_adapter_classes", lambda: (object, None))
-        app._build_runtime_adapter("pydantic", None)
+    class FailingDSPyAdapter:
+        def __init__(self, *, model: str) -> None:
+            raise ImportError("dspy unavailable")
 
     class FakeDSPyConfigurationService:
         def __init__(self, config: object) -> None:
@@ -453,23 +450,24 @@ def test_lazy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
     )
-    monkeypatch.setattr(app, "_adapter_classes", lambda: (None, object))
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
     assert (
         "DSPy is required for GEPA optimizer"
         in app.run_optimization_cli(str(source), optimizer="gepa")[1]
     )
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(app, "_adapter_classes", lambda: (object, None))
-    with pytest.raises(ImportError, match="PydanticAdapter is unavailable"):
-        app.run_optimization_cli(str(source), optimizer="mock")
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    assert (
+        "DSPy is required for dspy adapter"
+        in app.run_optimization_cli(str(source), optimizer="mock", adapter="dspy")[1]
+    )
 
 
 def test_run_optimization_cli_gepa_and_dspy_success_edges(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    import kedi.agent_adapter.adapters as adapters_module
     import kedi.optimization.services.dspy_config as dspy_config_module
 
     source = tmp_path / "prog.kedi"
@@ -507,7 +505,7 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
     monkeypatch.setattr(
         dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
     )
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setitem(
         __import__("sys").modules,
         "kedi.optimization.gepa",
@@ -519,7 +517,7 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
     assert "gepa prompt" in msg
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     code, msg = app.run_optimization_cli(
         str(source),
         optimizer="mock",

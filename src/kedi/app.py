@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from importlib import import_module
 from pathlib import Path
 from typing import Any, Tuple
 
+from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -14,33 +14,14 @@ from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
-PydanticAdapter: Any = None
-DSPyAdapter: Any = None
 
-
-def _adapter_classes() -> tuple[Any, Any]:
-    adapters = import_module(".agent_adapter.adapters", package=__package__)
-    dspy_adapter = (
-        DSPyAdapter if DSPyAdapter is not None else getattr(adapters, "DSPyAdapter", None)
-    )
-    pydantic_adapter = (
-        PydanticAdapter
-        if PydanticAdapter is not None
-        else getattr(adapters, "PydanticAdapter", None)
-    )
-    return dspy_adapter, pydantic_adapter
-
-
-def _build_runtime_adapter(adapter: str, model: str | None) -> Any:
+def _build_runtime_adapter(
+    adapter: str, model: str | None
+) -> DSPyAdapter | PydanticAdapter[Any, Any]:
     """Create the adapter instance used for eval/test/program execution."""
-    dspy_adapter, pydantic_adapter = _adapter_classes()
     if adapter == "dspy":
-        if dspy_adapter is None:
-            raise ImportError("DSPyAdapter is unavailable")
-        return dspy_adapter(model=model or "groq/qwen/qwen3-32b")
-    if pydantic_adapter is None:
-        raise ImportError("PydanticAdapter is unavailable")
-    return pydantic_adapter(model=model or "groq:qwen/qwen3-32b")
+        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
 
 
 CliArgs = AttrDict[str, ArgType]
@@ -169,11 +150,7 @@ def run_optimization_cli(
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            dspy_adapter, _ = _adapter_classes()
-            if dspy_adapter is None:
-                raise ImportError("DSPyAdapter is unavailable")
-
-            adapter_for_runtime = dspy_adapter(model=main_model)
+            adapter_for_runtime = DSPyAdapter(model=main_model)
         except ImportError:
             return (
                 1,
@@ -183,21 +160,14 @@ def run_optimization_cli(
         model = adapter_model or "groq:qwen/qwen3-32b"
         if adapter == "dspy":
             try:
-                dspy_adapter, _ = _adapter_classes()
-                if dspy_adapter is None:
-                    raise ImportError("DSPyAdapter is unavailable")
-
-                adapter_for_runtime = dspy_adapter(model=model)
+                adapter_for_runtime = DSPyAdapter(model=model)
             except ImportError:
                 return (
                     1,
                     "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
                 )
         else:
-            _, pydantic_adapter = _adapter_classes()
-            if pydantic_adapter is None:
-                raise ImportError("PydanticAdapter is unavailable")
-            adapter_for_runtime = pydantic_adapter(model=model)
+            adapter_for_runtime = PydanticAdapter(model=model)
 
     result_writer = OptimizationResultWriter(source_path)
 

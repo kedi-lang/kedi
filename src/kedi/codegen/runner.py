@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 from ..lang import parse_program
 from ..lang.ast import ProcedureDef
@@ -10,8 +10,7 @@ from ..source_loading import single_file_source_map
 from .interfaces import CodegenConfig
 from .manager import CodegenManager
 from .mock_agents import MockPassingAgent
-
-PydanticAIAgent: Any = None
+from .pydantic_ai_agent import PydanticAIAgent
 
 
 def _reconstruct_header(proc: ProcedureDef) -> str:
@@ -32,12 +31,7 @@ def _select_agent(kind: str, model: str | None):
     k = (kind or "pydantic_ai").lower()
     if k == "mock":
         return MockPassingAgent()
-
-    agent_cls = PydanticAIAgent
-    if agent_cls is None:
-        from .pydantic_ai_agent import PydanticAIAgent as agent_cls
-
-    return agent_cls(model=model)
+    return PydanticAIAgent(model=model)
 
 
 def run_codegen(

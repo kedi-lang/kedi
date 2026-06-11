@@ -4,7 +4,6 @@ import os
 import sys
 from io import StringIO
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 
 import pytest
@@ -574,21 +573,3 @@ def test_codegen_runner_selects_agents_reconstructs_headers_and_runs_auto_specs(
             2,
         ),
     ]
-
-
-def test_codegen_runner_lazy_imports_pydantic_agent(monkeypatch: pytest.MonkeyPatch) -> None:
-    from kedi.codegen import runner as runner_module
-
-    class FakePydanticAgent:
-        def __init__(self, model: str | None) -> None:
-            self.model = model
-
-    fake_module = ModuleType("kedi.codegen.pydantic_ai_agent")
-    setattr(fake_module, "PydanticAIAgent", FakePydanticAgent)
-    monkeypatch.setattr(runner_module, "PydanticAIAgent", None)
-    monkeypatch.setitem(sys.modules, "kedi.codegen.pydantic_ai_agent", fake_module)
-
-    selected = runner_module._select_agent("pydantic_ai", "model/name")
-
-    assert isinstance(selected, FakePydanticAgent)
-    assert selected.model == "model/name"
