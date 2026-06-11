@@ -90,10 +90,17 @@ configuration. Profiles are captured when a procedure is defined; later
 ````
 
 - `> model: name` — set the model for subsequent procedure captures (plain name or `` `expression` ``)
-- `> profile: name:` — define a reusable profile with one or more nested `> model:` members
-- `> use: name` — apply a profile by **profile name** (not the importing module name)
+- `> profile: name:` — define a reusable profile with nested `> model:` and/or `> use:` members
+- `> use: name` or `> use: \`name\`` — register a **procedure** as an agent tool when the name matches a procedure; otherwise merge a profile by **profile name** (not the importing module name)
+- Multiline `> use:` lists procedure tools explicitly:
 
-Profiles can be shared across files with `> export:` / `> import:` like procedures and types.
+````kedi
+> use:
+    web_browse
+    `web_fetch`
+````
+
+Profiles and tool scopes can be shared across files with `> export:` / `> import:` like procedures and types.
 
 ### Common Commands
 

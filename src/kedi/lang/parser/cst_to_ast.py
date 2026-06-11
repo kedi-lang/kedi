@@ -59,6 +59,7 @@ from ..ast import (
     ProcedureDef,
     ProfileDefStmt,
     ProfileModelEntry,
+    ProfileSystemEntry,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -69,6 +70,7 @@ from ..ast import (
     Segment,
     Span,
     Stmt,
+    SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
@@ -82,7 +84,7 @@ from ..ast import (
     TypePython,
     TypeRef,
     TypeUnion,
-    UseProfileStmt,
+    UseDirectiveStmt,
 )
 from .diagnostics import KediDiagnostic, KediParseError
 from .escapes import dedent_block, unescape_text_with_tracking
@@ -257,6 +259,10 @@ class _Walker:
                 prog.ordered_toplevel.append(proc)
             elif t == "model_directive":
                 stmt = self._walk_model_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "system_directive":
+                stmt = self._walk_system_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "profile_directive":
@@ -454,6 +460,8 @@ class _Walker:
     def _collect_tree_errors(self, node: Node) -> None:
         """Walk the CST and surface every ERROR / MISSING node as a diagnostic."""
         if node.has_error and (node.type == "ERROR" or node.is_missing):
+            if node.is_missing and node.type == "_newline":
+                return
             if node.is_missing:
                 msg = f"missing {node.type!r}"
             else:
@@ -608,6 +616,8 @@ class _Walker:
             return None
         if t == "model_directive":
             return self._walk_model_directive(node)
+        if t == "system_directive":
+            return self._walk_system_directive(node)
         if t == "use_directive":
             return self._walk_use_directive(node)
         if t == "profile_directive":
@@ -744,6 +754,41 @@ class _Walker:
             segments=self._walk_template_expr(expr_node),
             loc=self._span(expr_node),
         )
+
+    def _system_line_from_expr(self, expr_node: Node) -> TemplateLine:
+        segments: List[Segment] = []
+        for child in _named_children(expr_node):
+            if child.type == "system_angle_segment":
+                raw = _src_text(self.source, child)
+                inner = raw[1:-1] if raw.endswith(">") else raw[1:]
+                if raw == "<``>":
+                    segments.append(TextSegment(text="<``>", loc=self._span(child)))
+                elif inner.isidentifier():
+                    segments.append(InputSegment(name=inner, loc=self._span(child)))
+                elif len(inner) >= 2 and inner[0] == "`" and inner[-1] == "`":
+                    segments.append(
+                        PythonExprSegment(
+                            code=inner[1:-1].replace("\\`", "`"),
+                            loc=self._span(child),
+                        )
+                    )
+                else:
+                    self._error(
+                        child,
+                        "System instructions only support literal text, <name>, and <`python`> substitutions.",
+                        code="K-SYSTEM-SEGMENT",
+                    )
+                continue
+            if child.type == "text_segment":
+                segments.append(self._walk_segment(child))
+                continue
+            self._error(
+                child,
+                "System instructions only support literal text, <name>, and <`python`> substitutions.",
+                code="K-SYSTEM-SEGMENT",
+            )
+        self._strip_leading_template_indent(segments)
+        return TemplateLine(segments=segments, loc=self._span(expr_node))
 
     def _walk_template_block_stmt(self, node: Node) -> TemplateBlock:
         lines: List[TemplateLine] = []
@@ -908,6 +953,10 @@ class _Walker:
 
     def _walk_template_expr(self, node: Node) -> List[Segment]:
         segs = [self._walk_segment(c) for c in _named_children(node) if c.is_named]
+        self._strip_leading_template_indent(segs)
+        return segs
+
+    def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
         # interleave extras with a retried external-scan). The
@@ -937,7 +986,6 @@ class _Walker:
                     first.escaped_whitespace = {
                         i - shift for i in first.escaped_whitespace if i >= shift
                     }
-        return segs
 
     def _walk_segment(self, node: Node) -> Segment:
         t = node.type
@@ -1126,50 +1174,162 @@ class _Walker:
         plain = _src_text(self.source, value_node).strip()
         return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
 
-    def _walk_use_directive(self, node: Node) -> UseProfileStmt:
+    def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
+        head = _field(node, "head")
+        body = _field(node, "body")
+        lines: List[TemplateLine] = []
+        if head is not None:
+            lines.append(self._system_line_from_expr(head))
+        if body is not None:
+            for child in _named_children(body):
+                if child.type != "system_line":
+                    continue
+                expr_node = _field(child, "line")
+                if expr_node is not None:
+                    lines.append(self._system_line_from_expr(expr_node))
+        if lines:
+            plain = "\n".join(
+                "".join(seg.text for seg in line.segments if isinstance(seg, TextSegment)).strip()
+                for line in lines
+            ).strip()
+            return SystemDirectiveStmt(
+                plain_value=plain or None,
+                template_lines=lines,
+                loc=self._span(node),
+            )
+
+        value_node = _field(node, "value")
+        if value_node is None:
+            return SystemDirectiveStmt(loc=self._span(node))
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return SystemDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        return SystemDirectiveStmt(plain_value=plain, loc=self._span(node))
+
+    def _walk_use_directive(self, node: Node) -> UseDirectiveStmt:
+        body_node = _field(node, "body")
+        if body_node is not None:
+            tool_names = self._walk_use_tool_names(body_node)
+            return UseDirectiveStmt(tool_names=tool_names, loc=self._span(node))
         name_node = _field(node, "name")
         assert name_node is not None
-        return UseProfileStmt(
-            name=_identifier_name(self.source, name_node),
+        return UseDirectiveStmt(
+            target=_identifier_name(self.source, name_node),
             loc=self._span(node),
         )
+
+    def _walk_use_tool_names(self, body_node: Node) -> list[str]:
+        tool_names: list[str] = []
+        for child in _named_children(body_node):
+            if child.type == "use_tool_name":
+                name_node = _field(child, "name")
+                assert name_node is not None
+                tool_names.append(_identifier_name(self.source, name_node))
+            elif child.type == "use_tool_backtick":
+                name_node = _field(child, "name")
+                assert name_node is not None
+                tool_names.append(_identifier_name(self.source, name_node))
+        if not tool_names:
+            self._error(
+                body_node,
+                "Multiline '> use:' must list at least one tool",
+                code="K-USE-EMPTY",
+            )
+        return tool_names
 
     def _walk_profile_directive(self, node: Node) -> ProfileDefStmt:
         name_node = _field(node, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         members: list[ProfileModelEntry] = []
+        system_members: list[ProfileSystemEntry] = []
+        tool_names: list[str] = []
+        docstring: str | None = None
+        docstring_loc: Span | None = None
         body_node = _field(node, "body")
         if body_node is not None:
-            for child in _named_children(body_node):
-                if child.type != "model_directive":
-                    continue
-                value_node = _field(child, "value")
-                if value_node is None:
-                    continue
-                if value_node.type == "inline_python_expr":
-                    code_node = _field(value_node, "code")
-                    assert code_node is not None
-                    members.append(
-                        ProfileModelEntry(
-                            backtick_code=_src_text(self.source, code_node),
-                            loc=self._span(child),
+            body_children = _named_children(body_node)
+            if body_children and body_children[0].type == "block_comment":
+                comment = body_children[0]
+                docstring = _decode_block_comment_body(_src_text(self.source, comment))
+                docstring_loc = self._span(comment)
+            for child in body_children:
+                if child.type == "model_directive":
+                    value_node = _field(child, "value")
+                    if value_node is None:
+                        continue
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        members.append(
+                            ProfileModelEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
                         )
-                    )
-                else:
-                    members.append(
-                        ProfileModelEntry(
-                            plain_value=_src_text(self.source, value_node).strip(),
-                            loc=self._span(child),
+                    else:
+                        members.append(
+                            ProfileModelEntry(
+                                plain_value=_src_text(self.source, value_node).strip(),
+                                loc=self._span(child),
+                            )
                         )
-                    )
-        if not members:
+                elif child.type == "system_directive":
+                    system_stmt = self._walk_system_directive(child)
+                    if system_stmt.template_lines:
+                        system_members.append(
+                            ProfileSystemEntry(
+                                plain_value=system_stmt.plain_value,
+                                template_lines=system_stmt.template_lines,
+                                loc=self._span(child),
+                            )
+                        )
+                        continue
+                    value_node = _field(child, "value")
+                    if value_node is None:
+                        continue
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        system_members.append(
+                            ProfileSystemEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
+                        )
+                    else:
+                        system_members.append(
+                            ProfileSystemEntry(
+                                plain_value=_src_text(self.source, value_node).strip(),
+                                loc=self._span(child),
+                            )
+                        )
+                elif child.type == "use_directive":
+                    use_stmt = self._walk_use_directive(child)
+                    if use_stmt.tool_names:
+                        tool_names.extend(use_stmt.tool_names)
+                    elif use_stmt.name:
+                        tool_names.append(use_stmt.name)
+        if not members and not system_members and not tool_names:
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:' member",
+                f"Profile {name!r} must contain at least one '> model:', '> system:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
-        return ProfileDefStmt(name=name, model_members=members, loc=self._span(node))
+        return ProfileDefStmt(
+            name=name,
+            model_members=members,
+            system_members=system_members,
+            tool_names=tool_names,
+            docstring=docstring,
+            docstring_loc=docstring_loc,
+            loc=self._span(node),
+        )
 
     def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
         name_node = _field(node, "name")

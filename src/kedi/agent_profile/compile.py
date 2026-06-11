@@ -2,27 +2,42 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from kedi.lang.ast import ModelDirectiveStmt, ProcedureDef, UseProfileStmt
-
 from .profile import AgentProfile
-from .registry import ProfileDefinition, ProfileModelMember
+from .registry import ProfileDefinition, ProfileModelMember, ProfileSystemMember, ProfileToolMember
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
-    from kedi.lang.ast import ProfileDefStmt, ProfileModelEntry, Program
+    from kedi.lang.ast import (
+        ProfileDefStmt,
+        ProfileModelEntry,
+        ProfileSystemEntry,
+        Program,
+    )
 
 
 def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
-    members: list[ProfileModelMember] = []
+    members: list[ProfileModelMember | ProfileSystemMember | ProfileToolMember] = []
     for entry in stmt.model_members:
-        members.append(_entry_to_member(entry))
+        members.append(_model_entry_to_member(entry))
+    for entry in stmt.system_members:
+        members.append(_system_entry_to_member(entry))
+    if stmt.tool_names:
+        members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
     return ProfileDefinition(name=stmt.name, members=members)
 
 
-def _entry_to_member(entry: ProfileModelEntry) -> ProfileModelMember:
+def _model_entry_to_member(entry: ProfileModelEntry) -> ProfileModelMember:
     return ProfileModelMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
+    )
+
+
+def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
+    return ProfileSystemMember(
+        plain_value=entry.plain_value,
+        backtick_code=entry.backtick_code,
+        template_lines=tuple(entry.template_lines),
     )
 
 
@@ -50,16 +65,39 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
 
 
 def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
-    from .model import eval_model_directive, eval_use_profile
+    from kedi.lang.ast import (
+        ModelDirectiveStmt,
+        ProcedureDef,
+        SystemDirectiveStmt,
+        UseDirectiveStmt,
+    )
+
+    from .model import eval_model_directive, eval_system_directive
+    from .tools import eval_use_directive
+
+    if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
+        return
 
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
     active = AgentProfile.empty()
+    defined_procedures: set[str] = set(rt._procedures.keys())
 
     for item in prog.ordered_toplevel:
         if isinstance(item, ModelDirectiveStmt):
             active = active.merge(eval_model_directive(rt, item, env))
-        elif isinstance(item, UseProfileStmt):
-            active = active.merge(eval_use_profile(rt, item, registry, env))
+        elif isinstance(item, SystemDirectiveStmt):
+            active = active.merge(eval_system_directive(rt, item, env))
+        elif isinstance(item, UseDirectiveStmt):
+            active = active.merge(
+                eval_use_directive(
+                    rt,
+                    item,
+                    registry,
+                    env,
+                    available_procedures=defined_procedures,
+                )
+            )
         elif isinstance(item, ProcedureDef):
             item.captured_agent_profile = active.frozen_copy()
+            defined_procedures.add(item.name)

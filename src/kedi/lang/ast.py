@@ -246,20 +246,51 @@ class ModelDirectiveStmt(Stmt):
 
 
 @dataclass
-class UseProfileStmt(Stmt):
-    name: str = ""
+class SystemDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    template_lines: List[TemplateLine] = field(default_factory=list)
+
+
+@dataclass
+class UseDirectiveStmt(Stmt):
+    target: str = ""
+    tool_names: List[str] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return self.target
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.target = value
+
+
+UseProfileStmt = UseDirectiveStmt
 
 
 @dataclass
 class ProfileDefStmt(Stmt):
     name: str = ""
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
+    system_members: List["ProfileSystemEntry"] = field(default_factory=list)
+    tool_names: List[str] = field(default_factory=list)
+    docstring: Optional[str] = None
+    docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
 class ProfileModelEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileSystemEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    template_lines: List[TemplateLine] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

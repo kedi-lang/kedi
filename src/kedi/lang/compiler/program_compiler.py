@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
-from ...agent_profile.model import eval_model_directive, eval_use_profile
+from ...agent_profile.model import eval_model_directive, eval_system_directive
+from ...agent_profile.registry import ProfileDefinition
+from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ...module_registry import resolve_module_path
@@ -19,7 +21,8 @@ from ..ast import (
     ProfileDefStmt,
     Program,
     ReturnStmt,
-    UseProfileStmt,
+    SystemDirectiveStmt,
+    UseDirectiveStmt,
 )
 from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
@@ -36,12 +39,13 @@ def compile_program(
     *,
     adapter: AgentAdapter[Any] | None = None,
     executor: Executor | None = None,
+    runtime_globals: dict[str, Any] | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
     This is the main entry point for the compiler.
     """
-    compiler = ProgramCompiler(adapter, executor=executor)
+    compiler = ProgramCompiler(adapter, executor=executor, runtime_globals=runtime_globals)
     return compiler.compile(prog)
 
 
@@ -54,10 +58,13 @@ class ProgramCompiler:
         *,
         executor: Executor | None = None,
         module_stack: tuple[Path, ...] = (),
+        runtime_globals: dict[str, Any] | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
         self.rt = KediRuntime(adapter=adapter, executor=executor)
+        if runtime_globals:
+            self.rt.set_initial_globals(runtime_globals)
         self.proc_compiler = ProcedureCompiler(self.rt)
         self.executor = StatementExecutor(self.rt)
         self.stmt_compiler = StatementCompiler(self.rt)
@@ -168,8 +175,39 @@ class ProgramCompiler:
                 getattr(self.rt, "_type_env_stack")[0][name] = value
             elif kind == "profile":
                 cast(dict[str, Any], getattr(self.rt, "_profile_registry"))[name] = value
+                self._merge_profile_tool_dependencies(value, imported_rt)
             else:
                 self.rt._import_env[name] = value
+
+    def _merge_profile_tool_dependencies(
+        self,
+        profile: AgentProfile | ProfileDefinition,
+        imported_rt: KediRuntime,
+    ) -> None:
+        for tool_name in self._profile_tool_names(profile):
+            if tool_name in self.rt._procedures or tool_name in self.rt._import_env:
+                continue
+            if tool_name in imported_rt._procedures:
+                self.rt._procedures[tool_name] = self._wrap_imported_procedure(
+                    tool_name,
+                    imported_rt._procedures[tool_name],
+                    imported_rt,
+                )
+                continue
+            for env_name in ("_globals_env", "_prelude_env", "_import_env"):
+                env = getattr(imported_rt, env_name, None)
+                if isinstance(env, dict) and tool_name in env:
+                    self.rt._import_env[tool_name] = env[tool_name]
+                    break
+
+    def _profile_tool_names(self, profile: AgentProfile | ProfileDefinition) -> tuple[str, ...]:
+        if isinstance(profile, AgentProfile):
+            return profile.tools
+        names: list[str] = []
+        for member in profile.members:
+            if member.kind == "tools":
+                names.extend(member.tool_names)
+        return tuple(names)
 
     def _export_names(self, prog: Program, imported_rt: KediRuntime) -> list[str]:
         names: list[str] = []
@@ -308,9 +346,18 @@ class ProgramCompiler:
                     if isinstance(item, ModelDirectiveStmt):
                         active = active.merge(eval_model_directive(self.rt, item, kwargs))
                         continue
-                    if isinstance(item, UseProfileStmt):
+                    if isinstance(item, SystemDirectiveStmt):
+                        active = active.merge(eval_system_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, UseDirectiveStmt):
                         active = active.merge(
-                            eval_use_profile(self.rt, item, profile_registry, kwargs)
+                            eval_use_directive(
+                                self.rt,
+                                item,
+                                profile_registry,
+                                kwargs,
+                                available_procedures=set(self.rt._procedures.keys()),
+                            )
                         )
                         continue
                     if isinstance(item, ProfileDefStmt):

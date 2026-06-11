@@ -1,6 +1,6 @@
 import asyncio
 from contextlib import contextmanager
-from typing import Iterator, cast
+from typing import Any, Iterator, cast
 
 import dspy
 from dspy import LM
@@ -11,9 +11,28 @@ from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
 from ..agent_profile import AgentProfile
+from .tool_override import ToolScope
 from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
+
+_LOGFIRE_CONFIGURED = False
+
+
+def configure_logfire() -> None:
+    global _LOGFIRE_CONFIGURED
+    if _LOGFIRE_CONFIGURED:
+        return
+
+    import logfire
+
+    logfire.configure(
+        send_to_logfire="if-token-present",
+        service_name="kedi",
+        console=False,
+    )
+    logfire.instrument_pydantic_ai()
+    _LOGFIRE_CONFIGURED = True
 
 
 def make_repr(cls: type) -> str:
@@ -28,9 +47,21 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     def __init__(self, model: str | Model | None = None, **kwargs):
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
+        configure_logfire()
+        self._tool_scope = ToolScope()
         if isinstance(model, str):
             model = normalize_for_pydantic_ai(model) if model is not None else None
         super().__init__(model, **kwargs)
+
+    def tool_scope(self, tools=()):
+        return self._tool_scope.tool_scope(tools)
+
+    def register_tool(self, tool):
+        self._tool_scope.register_tool(tool)
+
+    @property
+    def scoped_tools(self):
+        return self._tool_scope.scoped_tools
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[OutputDataT]:
@@ -59,13 +90,19 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         assert output_schema or output_type, "Output spec must be provided."
         if output_schema:
             output_type = self.type_builder(output_schema)
-        return (
-            await self.run(
-                template,
-                output_type=output_type,
-                **kwargs,
-            )
-        ).output
+        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        toolsets = self._toolsets_for_run()
+        if toolsets is not None:
+            run_kwargs["toolsets"] = toolsets
+        return (await self.run(template, **cast(Any, run_kwargs))).output
+
+    def _toolsets_for_run(self):
+        scoped_tools = self.scoped_tools
+        if not scoped_tools:
+            return None
+        from pydantic_ai.toolsets import FunctionToolset
+
+        return [FunctionToolset(tools=scoped_tools)]
 
     def produce_sync(
         self,

@@ -1,0 +1,30 @@
+```
+from pydantic_monty import Monty
+```
+
+@execute_code(code: str, inputs: dict[str, Any]) -> Any:
+    ###
+    Executes the given code in a sandboxed environment with the provided inputs.
+
+    Args:
+        code (str): The code to execute.
+        inputs (dict[str, Any]): The inputs to provide to the code.
+
+    Returns:
+        Any: The result of executing the code.
+    ###
+    = ```
+    sandbox = Monty(code, inputs=inputs.keys())
+    result = sandbox.run(inputs=inputs)
+    return result
+    ```
+
+> profile: sandbox:
+    > system:
+        You are a sandboxed environment agent that executes Python code provided by the user.
+        The final expression of program will be evaluated and returned as the result.
+    > use:
+        execute_code
+
+> export:
+    sandbox

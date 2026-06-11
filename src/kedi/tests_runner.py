@@ -6,7 +6,6 @@ from typing import Any, List, Optional
 
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
-from .optimization.utils import normalize_metric_result
 from .source_loading import load_kedi_source_bundle
 
 
@@ -55,9 +54,7 @@ def _load_program_with_validations(
         source_path = str(p.resolve())
         source_map = loaded.source_map
     prog = parse_program(text, source_path=source_path, source_map=source_map)
-    rt = compile_program(prog, adapter=adapter)
-    if runtime_globals:
-        rt.set_initial_globals(runtime_globals)
+    rt = compile_program(prog, adapter=adapter, runtime_globals=runtime_globals)
     return rt
 
 
@@ -88,9 +85,7 @@ def run_tests(
     if source_path:
         try:
             program = load_program_with_optimized_prompts(source_path)
-            rt = compile_program(program, adapter=adapter)
-            if runtime_globals:
-                rt.set_initial_globals(runtime_globals)
+            rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
         except Exception:
             rt = _load_program_with_validations(
                 src_main,
@@ -133,6 +128,7 @@ def run_evals(
 ) -> List[EvalRunResult]:
     from pathlib import Path
 
+    from .optimization.utils import normalize_metric_result
     from .optimization.services.program_loader import load_program_with_optimized_prompts
 
     # Check if src_main is a file path or source code string
@@ -158,9 +154,7 @@ def run_evals(
             # Load with optimized prompts
             program = load_program_with_optimized_prompts(source_path)
             # Compile with optimized prompts
-            rt = compile_program(program, adapter=adapter)
-            if runtime_globals:
-                rt.set_initial_globals(runtime_globals)
+            rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
         except Exception:
             rt = _load_program_with_validations(
                 src_main,

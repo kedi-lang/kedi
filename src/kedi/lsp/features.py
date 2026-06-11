@@ -71,6 +71,7 @@ from ..lang.ast import (
     ModelDirectiveStmt,
     OptimizeSpan,
     ProfileDefStmt,
+    ProfileSystemEntry,
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
@@ -81,6 +82,7 @@ from ..lang.ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Span,
+    SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
     TestSuite,
@@ -91,7 +93,7 @@ from ..lang.ast import (
     TypeField,
     TypeRef,
     TypeUnion,
-    UseProfileStmt,
+    UseDirectiveStmt,
 )
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
@@ -275,6 +277,96 @@ def _program_line_text(
     return None
 
 
+def _line_start_byte(
+    prog: Program | ProgramWithValidation,
+    line_number: int,
+) -> Optional[int]:
+    if not prog.source_text:
+        return None
+    offset = 0
+    for index, line in enumerate(prog.source_text.splitlines(keepends=True), start=1):
+        if index == line_number:
+            return offset
+        offset += len(line.encode("utf-8"))
+    return None
+
+
+def _name_token_span_on_line(
+    prog: Program | ProgramWithValidation,
+    *,
+    line_number: int,
+    source_path: Optional[str],
+    name: str,
+    search_start: int = 0,
+) -> Optional[Span]:
+    line = _program_line_text(prog, line_number, source_path)
+    line_start = _line_start_byte(prog, line_number)
+    if line is None or line_start is None:
+        return None
+    for candidate in (f"`{name}`", name):
+        name_index = line.find(candidate, search_start)
+        if name_index < 0:
+            continue
+        start_col = name_index + 1
+        start_byte = line_start + len(line[:name_index].encode("utf-8"))
+        return Span(
+            start_byte=start_byte,
+            end_byte=start_byte + len(candidate.encode("utf-8")),
+            start_line=line_number,
+            start_col=start_col,
+            end_line=line_number,
+            end_col=start_col + len(candidate),
+            source_path=source_path,
+        )
+    return None
+
+
+def _use_tool_entry_spans(
+    prog: Program | ProgramWithValidation,
+    stmt: UseDirectiveStmt,
+) -> list[tuple[str, Span]]:
+    if stmt.loc is None or not stmt.tool_names:
+        return []
+    spans: list[tuple[str, Span]] = []
+    seen: set[tuple[str, int]] = set()
+    for line_number in range(stmt.loc.start_line, stmt.loc.end_line + 1):
+        for tool_name in stmt.tool_names:
+            name_span = _name_token_span_on_line(
+                prog,
+                line_number=line_number,
+                source_path=stmt.loc.source_path,
+                name=tool_name,
+            )
+            if name_span is None:
+                continue
+            key = (tool_name, name_span.start_line)
+            if key in seen:
+                continue
+            seen.add(key)
+            spans.append((tool_name, name_span))
+    return spans
+
+
+def _use_single_target_span(
+    prog: Program | ProgramWithValidation,
+    stmt: UseDirectiveStmt,
+) -> Optional[Span]:
+    if stmt.loc is None or not stmt.name:
+        return None
+    line = _program_line_text(prog, stmt.loc.start_line, stmt.loc.source_path)
+    if line is None:
+        return None
+    colon_index = line.find(":")
+    search_start = colon_index + 1 if colon_index >= 0 else 0
+    return _name_token_span_on_line(
+        prog,
+        line_number=stmt.loc.start_line,
+        source_path=stmt.loc.source_path,
+        name=stmt.name,
+        search_start=search_start,
+    )
+
+
 def _directive_name_span(
     prog: Program | ProgramWithValidation,
     loc: Span,
@@ -432,17 +524,47 @@ def _resolve_symbol_at(
             )
 
     for item in getattr(prog, "ordered_toplevel", None) or []:
-        if isinstance(item, UseProfileStmt) and item.loc is not None:
-            name_span = _directive_name_span(prog, item.loc, item.name)
-            if name_span is not None and _position_inside(pos, name_span):
-                profile_def = profile_defs.get(item.name)
-                return SymbolRef(
-                    kind="agent_profile",
-                    name=item.name,
-                    declaration_span=(profile_def.loc if profile_def is not None else None),
-                    scope_proc=None,
-                    cursor_span=name_span,
-                )
+        if isinstance(item, UseDirectiveStmt) and item.loc is not None:
+            if item.tool_names:
+                for tool_name, name_span in _use_tool_entry_spans(prog, item):
+                    if not _position_inside(pos, name_span):
+                        continue
+                    target = proc_by_name.get(tool_name)
+                    if target is not None:
+                        return SymbolRef(
+                            kind="agent_tool",
+                            name=tool_name,
+                            declaration_span=target.loc,
+                            scope_proc=None,
+                            cursor_span=name_span,
+                        )
+                    return SymbolRef(
+                        kind="agent_tool",
+                        name=tool_name,
+                        declaration_span=None,
+                        scope_proc=None,
+                        cursor_span=name_span,
+                    )
+            elif item.name:
+                name_span = _use_single_target_span(prog, item)
+                if name_span is not None and _position_inside(pos, name_span):
+                    if item.name in proc_by_name:
+                        target = proc_by_name[item.name]
+                        return SymbolRef(
+                            kind="agent_tool",
+                            name=item.name,
+                            declaration_span=target.loc,
+                            scope_proc=None,
+                            cursor_span=name_span,
+                        )
+                    profile_def = profile_defs.get(item.name)
+                    return SymbolRef(
+                        kind="agent_profile",
+                        name=item.name,
+                        declaration_span=(profile_def.loc if profile_def is not None else None),
+                        scope_proc=None,
+                        cursor_span=name_span,
+                    )
 
     export_name_hit = _exported_name_at_position(prog, pos)
     if export_name_hit is not None:
@@ -648,18 +770,48 @@ def _resolve_in_stmt(
         r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name)
         if r is not None:
             return r
-    if isinstance(stmt, UseProfileStmt) and stmt.loc is not None:
-        name_span = _directive_name_span(prog, stmt.loc, stmt.name)
-        if name_span is not None and _position_inside(pos, name_span):
-            imported_surface = imported_surface_for_program(prog)
-            profile_def = _merged_profile_defs(prog, imported_surface).get(stmt.name)
-            return SymbolRef(
-                kind="agent_profile",
-                name=stmt.name,
-                declaration_span=(profile_def.loc if profile_def is not None else None),
-                scope_proc=proc,
-                cursor_span=name_span,
-            )
+    if isinstance(stmt, UseDirectiveStmt) and stmt.loc is not None:
+        if stmt.tool_names:
+            for tool_name, name_span in _use_tool_entry_spans(prog, stmt):
+                if not _position_inside(pos, name_span):
+                    continue
+                target = proc_by_name.get(tool_name)
+                if target is not None:
+                    return SymbolRef(
+                        kind="agent_tool",
+                        name=tool_name,
+                        declaration_span=target.loc,
+                        scope_proc=proc,
+                        cursor_span=name_span,
+                    )
+                return SymbolRef(
+                    kind="agent_tool",
+                    name=tool_name,
+                    declaration_span=None,
+                    scope_proc=proc,
+                    cursor_span=name_span,
+                )
+        elif stmt.name:
+            name_span = _use_single_target_span(prog, stmt)
+            if name_span is not None and _position_inside(pos, name_span):
+                if stmt.name in proc_by_name:
+                    target = proc_by_name[stmt.name]
+                    return SymbolRef(
+                        kind="agent_tool",
+                        name=stmt.name,
+                        declaration_span=target.loc,
+                        scope_proc=proc,
+                        cursor_span=name_span,
+                    )
+                imported_surface = imported_surface_for_program(prog)
+                profile_def = _merged_profile_defs(prog, imported_surface).get(stmt.name)
+                return SymbolRef(
+                    kind="agent_profile",
+                    name=stmt.name,
+                    declaration_span=(profile_def.loc if profile_def is not None else None),
+                    scope_proc=proc,
+                    cursor_span=name_span,
+                )
     for seg in _segments_of(stmt):
         r = _resolve_in_segment(seg, pos, proc, proc_by_name, type_by_name, imported_values)
         if r is not None:
@@ -930,6 +1082,12 @@ def compute_hover(
             text = f"**Module** `{sym.name}`"
             if module_info.docstring:
                 text += f"\n\n{module_info.docstring}"
+    elif sym.kind == "agent_tool":
+        target = proc_by_name.get(sym.name)
+        if target is not None:
+            text = _agent_tool_markdown(sym.name, target)
+        else:
+            text = f"**Agent tool** `{sym.name}` — procedure not found in this module."
     elif sym.kind == "procedure":
         target = proc_by_name.get(sym.name)
         if target is not None:
@@ -1041,6 +1199,16 @@ def _docstring_hover(
             ),
             range=_span_to_range(proc.docstring_loc),
         )
+    for profile in getattr(prog, "profile_defs", {}).values():
+        if profile.docstring_loc is None or not _position_inside(pos, profile.docstring_loc):
+            continue
+        return lsp.Hover(
+            contents=lsp.MarkupContent(
+                kind=lsp.MarkupKind.Markdown,
+                value=_profile_signature_markdown(profile),
+            ),
+            range=_span_to_range(profile.docstring_loc),
+        )
     return None
 
 
@@ -1098,6 +1266,16 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, ProfileDefStmt):
             for member in node.model_members:
                 visit(member)
+            for member in node.system_members:
+                visit(member)
+            return
+        if isinstance(node, SystemDirectiveStmt):
+            for line in node.template_lines:
+                visit(line)
+            return
+        if isinstance(node, ProfileSystemEntry):
+            for line in node.template_lines:
+                visit(line)
             return
         if isinstance(node, ProcDefStmt) and node.proc is not None:
             visit(node.proc)
@@ -1218,11 +1396,12 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`> optimize: {node.name}:`** — GEPA / DSPy optimisation target."
     if isinstance(node, ModelDirectiveStmt):
         return _model_directive_markdown(node)
-    if isinstance(node, UseProfileStmt):
-        return (
-            f"**`> use: {node.name}`** — merge agent profile `{node.name}` into the "
-            "active block profile for subsequent statements."
-        )
+    if isinstance(node, SystemDirectiveStmt):
+        return _system_directive_markdown(node)
+    if isinstance(node, ProfileSystemEntry):
+        return _profile_system_entry_markdown(node)
+    if isinstance(node, UseDirectiveStmt):
+        return _use_directive_markdown(node)
     if isinstance(node, ProfileDefStmt):
         return _profile_signature_markdown(node)
     if isinstance(node, TextSegment):
@@ -1252,6 +1431,31 @@ def _describe_ast_node(node) -> Optional[str]:
     return None
 
 
+def _agent_tool_markdown(name: str, proc: ProcedureDef) -> str:
+    signature = _proc_signature_markdown(proc)
+    headline = signature.splitlines()[0]
+    return (
+        f"**Agent tool** `{name}` — exposes {headline} "
+        "to the active agent adapter for this block.\n\n"
+        f"{signature}"
+    )
+
+
+def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
+    if stmt.tool_names:
+        tools = ", ".join(f"`{name}`" for name in stmt.tool_names)
+        return (
+            f"**`> use:`** — register Kedi procedures as agent tools: {tools}.\n\n"
+            "Multiline form always lists tools. Inner `> use:` overrides outer tools "
+            "for the current indentation block."
+        )
+    return (
+        f"**`> use: {stmt.name}`** — when `{stmt.name}` names a procedure, register it "
+        f"as an agent tool; otherwise merge agent profile `{stmt.name}` into the active "
+        "block profile for subsequent statements."
+    )
+
+
 def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
     if stmt.backtick_code is not None:
         value = f"`{stmt.backtick_code}`"
@@ -1261,6 +1465,37 @@ def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
         f"**`> model:`** — set active agent model to {value} for subsequent "
         "statements in this indentation block."
     )
+
+
+def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
+    value = _system_value_preview(stmt)
+    return (
+        f"**`> system:`** — set active agent instructions to {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
+def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
+    value = _system_value_preview(entry)
+    return f"**`> system:`** — reusable agent profile instructions: {value}."
+
+
+def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:
+    if getattr(stmt, "template_lines", None):
+        parts: list[str] = []
+        for index, line in enumerate(stmt.template_lines):
+            if index:
+                parts.append("\\n")
+            for seg in line.segments:
+                if isinstance(seg, TextSegment):
+                    parts.append(seg.text)
+                elif isinstance(seg, InputSegment):
+                    parts.append(f"<{seg.name}>")
+        text = "".join(parts).strip()
+        return f"`{text}`" if text else "`<empty>`"
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
 
 
 def _missing_agent_profile_hover(name: str, imported_surface: ImportedSurface) -> str:
@@ -1284,6 +1519,8 @@ def _missing_agent_profile_hover(name: str, imported_surface: ImportedSurface) -
 
 
 def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
+    if profile.docstring:
+        return f"**Agent profile** `> profile: {profile.name}:`\n\n{profile.docstring}"
     model_parts: list[str] = []
     for member in profile.model_members:
         if member.backtick_code is not None:
@@ -1291,9 +1528,22 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         elif member.plain_value is not None:
             model_parts.append(f"`{member.plain_value}`")
     model_summary = ", ".join(model_parts) if model_parts else "(no model members)"
+    system_parts: list[str] = []
+    for member in profile.system_members:
+        value = _system_value_preview(member)
+        if value != "``":
+            system_parts.append(value)
+    system_summary = ", ".join(system_parts) if system_parts else "(no system members)"
+    tool_summary = (
+        ", ".join(f"`{name}`" for name in profile.tool_names)
+        if profile.tool_names
+        else "(no tool members)"
+    )
     return (
         f"**Agent profile** `> profile: {profile.name}:`\n\n"
         f"Reusable agent settings. `> model:` members: {model_summary}.\n\n"
+        f"`> system:` members: {system_summary}.\n\n"
+        f"`> use:` tool members: {tool_summary}.\n\n"
         "Profile body values are evaluated when `> use:` runs."
     )
 
@@ -1969,11 +2219,29 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
                     children=[],
                 )
             )
-        elif isinstance(stmt, UseProfileStmt) and stmt.loc is not None:
+        elif isinstance(stmt, SystemDirectiveStmt) and stmt.loc is not None:
+            value = _system_value_preview(stmt).strip("`")
             children.append(
                 lsp.DocumentSymbol(
-                    name=f"> use: {stmt.name}",
-                    detail="agent profile",
+                    name=f"> system: {value}",
+                    detail="agent instructions",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, UseDirectiveStmt) and stmt.loc is not None:
+            if stmt.tool_names:
+                use_label = "> use: " + ", ".join(stmt.tool_names)
+                use_detail = "agent tools"
+            else:
+                use_label = f"> use: {stmt.name}"
+                use_detail = "agent profile or tool"
+            children.append(
+                lsp.DocumentSymbol(
+                    name=use_label,
+                    detail=use_detail,
                     kind=lsp.SymbolKind.Event,
                     range=_span_to_range(stmt.loc),
                     selection_range=_span_to_range(stmt.loc),
@@ -1998,13 +2266,55 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
 
 def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
+    children: list[lsp.DocumentSymbol] = []
+    for member in profile.model_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> model: {value}",
+                detail="agent model override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.system_members:
+        if member.loc is None:
+            continue
+        value = _system_value_preview(member).strip("`")
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> system: {value}",
+                detail="agent instructions",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    if profile.tool_names and profile.loc is not None:
+        children.append(
+            lsp.DocumentSymbol(
+                name="> use: " + ", ".join(profile.tool_names),
+                detail="agent tools",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(profile.loc),
+                selection_range=_span_to_range(profile.loc),
+                children=[],
+            )
+        )
     return lsp.DocumentSymbol(
         name=f"> profile: {profile.name}",
         detail="agent profile",
         kind=lsp.SymbolKind.Interface,
         range=_span_to_range(profile.loc) if profile.loc else _empty_range(),
         selection_range=(_span_to_range(profile.loc) if profile.loc else _empty_range()),
-        children=[],
+        children=children,
     )
 
 

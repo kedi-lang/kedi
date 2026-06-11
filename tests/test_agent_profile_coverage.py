@@ -12,25 +12,32 @@ from kedi.agent_profile.compile import (
     build_capture_env,
     capture_procedure_profiles,
     effective_profile_registry,
+    profile_stmt_to_definition,
 )
 from kedi.agent_profile.model import (
     AgentProfileOverrideUnsupported,
     _member_to_patch,
     eval_model_value,
+    eval_system_value,
     eval_use_profile,
 )
 from kedi.agent_profile.profile import AgentProfile as AgentProfileType
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    InputSegment,
     ModelDirectiveStmt,
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
     ProfileModelEntry,
+    ProfileSystemEntry,
     Program,
+    PythonExprSegment,
     Span,
-    UseProfileStmt,
+    TemplateLine,
+    TextSegment,
+    UseDirectiveStmt,
 )
 from kedi.lang.compiler.statement_compiler import StatementExecutor
 from kedi.lang.parser.diagnostics import KediParseError
@@ -81,9 +88,18 @@ def test_eval_model_value_errors_and_backtick() -> None:
 
 def test_eval_use_profile_unknown_and_bad_member() -> None:
     rt = KediRuntime()
-    stmt = UseProfileStmt(name="missing")
+    stmt = UseDirectiveStmt(target="missing")
     with pytest.raises(Exception, match="Unknown profile"):
         eval_use_profile(rt, stmt, {}, {})
+
+    profile_stmt = parse_program("> profile: light:\n    > model: opus\n").profile_defs["light"]
+    merged = eval_use_profile(
+        rt,
+        UseDirectiveStmt(target="light"),
+        {"light": profile_stmt_to_definition(profile_stmt)},
+        {},
+    )
+    assert merged.model == "opus"
 
     with pytest.raises(Exception, match="Unknown profile member kind"):
         _member_to_patch(rt, cast(Any, SimpleNamespace(kind="other")), {})
@@ -260,7 +276,9 @@ def test_lsp_profile_helpers_and_hovers() -> None:
 
     use_src = "> profile: light:\n    > model: opus\n> use: light\n"
     use_prog = parse_program(use_src)
-    use_stmt = next(item for item in use_prog.ordered_toplevel if isinstance(item, UseProfileStmt))
+    use_stmt = next(
+        item for item in use_prog.ordered_toplevel if isinstance(item, UseDirectiveStmt)
+    )
     use_pos = position_at_line(2, 10)
     resolved = features._resolve_in_stmt(use_prog, use_stmt, use_pos, None, {}, {}, {})
     assert resolved is not None and resolved.kind == "agent_profile"
@@ -270,7 +288,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     )
 
     foo_use = parse_program("> use: foo\n").toplevel_body[0]
-    assert isinstance(foo_use, UseProfileStmt)
+    assert isinstance(foo_use, UseDirectiveStmt)
     assert foo_use.loc is not None
     assert features._directive_name_span(use_prog, foo_use.loc, "bar") is None
 
@@ -330,10 +348,41 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     )
     assert features._smallest_enclosing(profile_prog, position_at_line(0, 12)) is profile_node
 
-    use_hover = features._describe_ast_node(UseProfileStmt(name="light"))
+    use_hover = features._describe_ast_node(UseDirectiveStmt(target="light"))
     assert use_hover is not None and "> use:" in use_hover
     model_hover = features._describe_ast_node(ModelDirectiveStmt(backtick_code="models['x']"))
     assert model_hover is not None and "models['x']" in model_hover
+    assert (
+        eval_system_value(KediRuntime(), plain_value="Be concise.", backtick_code=None, env={})
+        == "Be concise."
+    )
+
+    profile_system_hover = features._describe_ast_node(
+        ProfileSystemEntry(
+            template_lines=[
+                TemplateLine(
+                    segments=[
+                        TextSegment(text="Use "),
+                        InputSegment(name="tone"),
+                    ]
+                ),
+                TemplateLine(
+                    segments=[
+                        PythonExprSegment(code="args.name"),
+                        TextSegment(text=" persona."),
+                    ]
+                ),
+            ]
+        )
+    )
+    assert profile_system_hover is not None
+    assert "Use <tone>\\n persona." in profile_system_hover
+    profile_system_backtick = features._describe_ast_node(
+        ProfileSystemEntry(backtick_code="instructions['short']")
+    )
+    assert profile_system_backtick is not None
+    assert "instructions['short']" in profile_system_backtick
+
     plain_only = ProfileDefStmt(
         name="plain",
         model_members=[ProfileModelEntry(plain_value="haiku", loc=member_span)],

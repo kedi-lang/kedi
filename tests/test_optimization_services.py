@@ -14,19 +14,19 @@ from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import EvalSuite, ProcedureDef
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import (
-    DSPyConfigurationService,
-    DSPyExampleFormatter,
-    DSPyModuleBuilder,
-    DSPyPromptExtractor,
-    DSPyScoreCalculator,
-    GEPAMetricWrapper,
     MetricFactory,
     OptimizationDataLoader,
     OptimizationResultWriter,
-    StructuredTypeHandler,
     TypeResolver,
 )
+from kedi.optimization.services.dspy_config import DSPyConfigurationService
+from kedi.optimization.services.dspy_example_formatter import DSPyExampleFormatter
+from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder
+from kedi.optimization.services.dspy_prompt_extractor import DSPyPromptExtractor
+from kedi.optimization.services.dspy_score_calculator import DSPyScoreCalculator
+from kedi.optimization.services.gepa_metric_wrapper import GEPAMetricWrapper
 from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
+from kedi.optimization.services.type_handler import StructuredTypeHandler
 from kedi.optimization.utils import extract_output_fields
 from tests.optimization_helpers import parse_validation_program
 

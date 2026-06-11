@@ -353,8 +353,49 @@ class KediRuntime:
                 f"Active adapter does not support model profile override (requested model={profile.model!r})"
             )
 
-        with override_ctx:
-            result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.utils import kedi_procedure_to_pydantic_tool
+        from .agent_profile import AgentToolOverrideUnsupported
+        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+
+        pydantic_tools = []
+        for tool_name in profile.tools:
+            proc = procedure_def_for_tool(self, tool_name)
+            if proc is not None:
+                pydantic_tools.append(kedi_procedure_to_pydantic_tool(self, proc))
+                continue
+
+            tool_fn = python_callable_for_tool(self, tool_name)
+            if tool_fn is None:
+                raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
+            from pydantic_ai.tools import Tool
+
+            pydantic_tools.append(Tool(tool_fn, name=tool_name))
+
+        tool_ctx = nullcontext()
+        if pydantic_tools:
+            if isinstance(self.adapter, SupportsToolRegistration):
+                tool_ctx = self.adapter.tool_scope()
+            else:
+                raise AgentToolOverrideUnsupported(
+                    f"Active adapter does not support tool registration (requested tools={profile.tools!r})"
+                )
+
+        with tool_ctx:
+            if pydantic_tools:
+                assert isinstance(self.adapter, SupportsToolRegistration)
+                for tool in pydantic_tools:
+                    self.adapter.register_tool(tool)
+            run_kwargs: dict[str, Any] = {}
+            if profile.system is not None:
+                run_kwargs["instructions"] = profile.system
+
+            with override_ctx:
+                result = self.adapter.produce_sync(
+                    template=question,
+                    output_schema=typed_fields,
+                    **run_kwargs,
+                )
 
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute

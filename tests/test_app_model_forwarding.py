@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from kedi import app
 from kedi.lang.ast import (
     EvalDataset,
@@ -305,7 +307,7 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
 ) -> None:
     import kedi.agent_adapter.adapters as adapters_module
     import kedi.optimization as optimization_module
-    import kedi.optimization.services as services_module
+    import kedi.optimization.services.dspy_config as dspy_config_module
 
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
@@ -379,7 +381,7 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
 
     _patch_optimizer_services(monkeypatch)
     monkeypatch.setattr(
-        services_module, "DSPyConfigurationService", RaisingDSPyConfigurationService
+        dspy_config_module, "DSPyConfigurationService", RaisingDSPyConfigurationService
     )
     assert (
         "DSPy is required for GEPA optimizer"
@@ -426,12 +428,49 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     assert app.run_optimization_cli(str(source))[0] == 0
 
 
+def test_lazy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "prog.kedi"
+    source.write_text("= ok\n", encoding="utf-8")
+
+    with pytest.raises(ImportError, match="DSPyAdapter is unavailable"):
+        monkeypatch.setattr(app, "_adapter_classes", lambda: (None, object))
+        app._build_runtime_adapter("dspy", None)
+
+    with pytest.raises(ImportError, match="PydanticAdapter is unavailable"):
+        monkeypatch.setattr(app, "_adapter_classes", lambda: (object, None))
+        app._build_runtime_adapter("pydantic", None)
+
+    class FakeDSPyConfigurationService:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        def configure_main_lm(self, model: str) -> None:
+            assert model == "openai/gpt-4o"
+
+    import kedi.optimization.services.dspy_config as dspy_config_module
+
+    _patch_optimizer_services(monkeypatch)
+    monkeypatch.setattr(
+        dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
+    )
+    monkeypatch.setattr(app, "_adapter_classes", lambda: (None, object))
+    assert (
+        "DSPy is required for GEPA optimizer"
+        in app.run_optimization_cli(str(source), optimizer="gepa")[1]
+    )
+
+    _patch_optimizer_services(monkeypatch)
+    monkeypatch.setattr(app, "_adapter_classes", lambda: (object, None))
+    with pytest.raises(ImportError, match="PydanticAdapter is unavailable"):
+        app.run_optimization_cli(str(source), optimizer="mock")
+
+
 def test_run_optimization_cli_gepa_and_dspy_success_edges(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
     import kedi.agent_adapter.adapters as adapters_module
-    import kedi.optimization.services as services_module
+    import kedi.optimization.services.dspy_config as dspy_config_module
 
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
@@ -465,7 +504,9 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
             return "gepa prompt", 0.75
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(services_module, "DSPyConfigurationService", FakeDSPyConfigurationService)
+    monkeypatch.setattr(
+        dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
+    )
     monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setitem(
         __import__("sys").modules,

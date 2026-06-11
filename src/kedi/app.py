@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -14,12 +14,33 @@ from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
+PydanticAdapter: Any = None
+DSPyAdapter: Any = None
 
-def _build_runtime_adapter(adapter: str, model: str | None) -> PydanticAdapter | DSPyAdapter:
+
+def _adapter_classes() -> tuple[Any, Any]:
+    adapters = import_module(".agent_adapter.adapters", package=__package__)
+    dspy_adapter = (
+        DSPyAdapter if DSPyAdapter is not None else getattr(adapters, "DSPyAdapter", None)
+    )
+    pydantic_adapter = (
+        PydanticAdapter
+        if PydanticAdapter is not None
+        else getattr(adapters, "PydanticAdapter", None)
+    )
+    return dspy_adapter, pydantic_adapter
+
+
+def _build_runtime_adapter(adapter: str, model: str | None) -> Any:
     """Create the adapter instance used for eval/test/program execution."""
+    dspy_adapter, pydantic_adapter = _adapter_classes()
     if adapter == "dspy":
-        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
-    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+        if dspy_adapter is None:
+            raise ImportError("DSPyAdapter is unavailable")
+        return dspy_adapter(model=model or "groq/qwen/qwen3-32b")
+    if pydantic_adapter is None:
+        raise ImportError("PydanticAdapter is unavailable")
+    return pydantic_adapter(model=model or "groq:qwen/qwen3-32b")
 
 
 CliArgs = AttrDict[str, ArgType]
@@ -89,7 +110,6 @@ def run_optimization_cli(
     from .optimization import get_optimizer
     from .optimization.config import OptimizerConfig
     from .optimization.services import (
-        DSPyConfigurationService,
         MetricFactory,
         OptimizationDataLoader,
         OptimizationResultWriter,
@@ -143,13 +163,17 @@ def run_optimization_cli(
     adapter_for_runtime = None
     if optimizer == "gepa":
         try:
+            from .optimization.services.dspy_config import DSPyConfigurationService
+
             dspy_config_service = DSPyConfigurationService(config)
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            from .agent_adapter.adapters import DSPyAdapter
+            dspy_adapter, _ = _adapter_classes()
+            if dspy_adapter is None:
+                raise ImportError("DSPyAdapter is unavailable")
 
-            adapter_for_runtime = DSPyAdapter(model=main_model)
+            adapter_for_runtime = dspy_adapter(model=main_model)
         except ImportError:
             return (
                 1,
@@ -159,16 +183,21 @@ def run_optimization_cli(
         model = adapter_model or "groq:qwen/qwen3-32b"
         if adapter == "dspy":
             try:
-                from .agent_adapter.adapters import DSPyAdapter
+                dspy_adapter, _ = _adapter_classes()
+                if dspy_adapter is None:
+                    raise ImportError("DSPyAdapter is unavailable")
 
-                adapter_for_runtime = DSPyAdapter(model=model)
+                adapter_for_runtime = dspy_adapter(model=model)
             except ImportError:
                 return (
                     1,
                     "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
                 )
         else:
-            adapter_for_runtime = PydanticAdapter(model=model)
+            _, pydantic_adapter = _adapter_classes()
+            if pydantic_adapter is None:
+                raise ImportError("PydanticAdapter is unavailable")
+            adapter_for_runtime = pydantic_adapter(model=model)
 
     result_writer = OptimizationResultWriter(source_path)
 
@@ -184,7 +213,11 @@ def run_optimization_cli(
         if prompt_loader.has_optimized_prompts():
             prompt_loader.inject_optimized_prompts(prog)
 
-    rt = compile_program(prog, adapter=adapter_for_runtime)
+    rt = compile_program(
+        prog,
+        adapter=adapter_for_runtime,
+        runtime_globals=_runtime_globals(runtime_args),
+    )
     _set_runtime_args(rt, runtime_args)
 
     # Initialize services
@@ -413,7 +446,7 @@ def run_program_cli(
     # Prefer offline execution when generated/native code fully covers the
     # program. Fall back to the configured adapter only if runtime actually
     # needs LLM-backed template expansion.
-    rt = compile_program(program, adapter=None)
+    rt = compile_program(program, adapter=None, runtime_globals=_runtime_globals(runtime_args))
     _set_runtime_args(rt, runtime_args)
     try:
         out = rt.run_main()
@@ -423,7 +456,11 @@ def run_program_cli(
             raise
 
     adapter_impl = _build_runtime_adapter(adapter, model)
-    rt = compile_program(program, adapter=adapter_impl)
+    rt = compile_program(
+        program,
+        adapter=adapter_impl,
+        runtime_globals=_runtime_globals(runtime_args),
+    )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))

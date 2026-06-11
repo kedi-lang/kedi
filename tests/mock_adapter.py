@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter.tool_override import ToolScope
 from kedi.agent_profile import AgentProfile
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
@@ -15,12 +16,25 @@ _PREV_WORD_RE = re.compile(r"last letter of (\S+)", re.IGNORECASE)
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     def __init__(self, *, default_model: str | None = None) -> None:
+        self._tool_scope = ToolScope()
         self.default_model_value = default_model
         self.last_effective_model: str | None = default_model
         self.model_calls: list[str | None] = []
+        self.instruction_calls: list[str | None] = []
+        self.tool_calls: list[tuple[str, ...]] = []
 
     def default_model(self) -> str | None:
         return self.default_model_value
+
+    def tool_scope(self, tools=()):
+        return self._tool_scope.tool_scope(tools)
+
+    def register_tool(self, tool):
+        self._tool_scope.register_tool(tool)
+
+    @property
+    def scoped_tools(self):
+        return self._tool_scope.scoped_tools
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
@@ -37,19 +51,21 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         *,
         template: str,
         output_schema: dict[str, ResolvedKediType],
-        **_: Any,
+        **kwargs: Any,
     ) -> AttrDict[str, Any]:
         # Simple async facade around the synchronous implementation
-        return self.produce_sync(template=template, output_schema=output_schema)
+        return self.produce_sync(template=template, output_schema=output_schema, **kwargs)
 
     def produce_sync(
         self,
         *,
         template: str,
         output_schema: dict[str, ResolvedKediType] | None = None,
-        **_: Any,
+        **kwargs: Any,
     ) -> AttrDict[str, Any]:
         self.model_calls.append(self.last_effective_model)
+        self.instruction_calls.append(kwargs.get("instructions"))
+        self.tool_calls.append(tuple(tool.name for tool in self.scoped_tools))
         keys: List[str] = []
         seen: set[str] = set()
         for match in _OUTPUT_KEY_RE.finditer(template):
@@ -100,6 +116,7 @@ class WordChainMockAdapter(MockAdapter):
                 previous = match.group(1).rstrip(".,;:")
                 chain_word = previous[-1] * 2
                 self.model_calls.append(self.last_effective_model)
+                self.instruction_calls.append(kwargs.get("instructions"))
                 return AttrDict({"word": chain_word})
         return super().produce_sync(
             template=template,

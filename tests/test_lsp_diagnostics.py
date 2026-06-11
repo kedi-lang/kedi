@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +20,12 @@ from kedi.lsp import features
 def test_diagnostics_empty_for_valid_program():
     src = "@p():\n  = ok\n"
     assert features.compute_diagnostics(src, "example.kedi") == []
+
+
+def test_diagnostics_accept_tools_fixture() -> None:
+    path = Path("tools.kedi").resolve()
+    src = path.read_text(encoding="utf-8")
+    assert features.compute_diagnostics(src, str(path)) == []
 
 
 def test_diagnostics_surfaces_parser_warnings(monkeypatch: pytest.MonkeyPatch) -> None:

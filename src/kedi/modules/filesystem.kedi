@@ -1,0 +1,265 @@
+```
+from pathlib import Path
+import shutil
+```
+
+@read_text_file(file_path: str) -> str:
+    ###
+    Read a UTF-8 text file.
+
+    Args:
+        file_path (str): Path to the file.
+
+    Returns:
+        str: File contents.
+    ###
+    = ```
+    return Path(file_path).read_text(encoding="utf-8")
+    ```
+
+@write_text_file(file_path: str, content: str) -> str:
+    ###
+    Write a complete UTF-8 text file, creating parent directories as needed.
+
+    Args:
+        file_path (str): Path to the file.
+        content (str): Complete file content.
+
+    Returns:
+        str: The written file path.
+    ###
+    = ```
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+    ```
+
+@apply_patch(patch: str) -> str:
+    ###
+    Apply a small patch to text files.
+
+    Supported operations:
+    - *** Add File: path
+    - *** Delete File: path
+    - *** Update File: path with @@ hunks containing context, -removed, and +added lines
+
+    Args:
+        patch (str): Patch text. *** Begin Patch / *** End Patch wrappers are accepted but optional.
+
+    Returns:
+        str: Summary of applied file operations.
+    ###
+    = ```
+    lines = patch.strip().splitlines()
+    if not lines:
+        raise ValueError("patch must not be empty")
+    if lines[0].strip() != "*** Begin Patch":
+        lines.insert(0, "*** Begin Patch")
+    if not any(line.strip() == "*** End Patch" for line in lines):
+        lines.append("*** End Patch")
+
+    def _is_header(line: str) -> bool:
+        return (
+            line.startswith("*** Add File: ")
+            or line.startswith("*** Delete File: ")
+            or line.startswith("*** Update File: ")
+            or line.strip() == "*** End Patch"
+        )
+
+    def _target(line: str) -> Path:
+        return Path(line.split(": ", 1)[1]).expanduser()
+
+    def _collect_hunk(start: int) -> tuple[int, list[str], list[str]]:
+        old: list[str] = []
+        new: list[str] = []
+        i = start
+        while i < len(lines) and not _is_header(lines[i]):
+            line = lines[i]
+            if line.startswith("@@"):
+                i += 1
+                continue
+            if line == "*** End of File":
+                i += 1
+                continue
+            if line.startswith("-"):
+                old.append(line[1:])
+            elif line.startswith("+"):
+                new.append(line[1:])
+            elif line.startswith(" "):
+                old.append(line[1:])
+                new.append(line[1:])
+            elif line == "":
+                old.append("")
+                new.append("")
+            else:
+                raise ValueError(f"invalid patch line: {line!r}")
+            i += 1
+        return i, old, new
+
+    applied: list[str] = []
+    i = 1
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "*** End Patch":
+            break
+        if line.startswith("*** Add File: "):
+            path = _target(line)
+            i += 1
+            content: list[str] = []
+            while i < len(lines) and not _is_header(lines[i]):
+                if not lines[i].startswith("+"):
+                    raise ValueError("add file lines must start with +")
+                content.append(lines[i][1:])
+                i += 1
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join(content) + ("\n" if content else ""), encoding="utf-8")
+            applied.append(f"added {path}")
+            continue
+        if line.startswith("*** Delete File: "):
+            path = _target(line)
+            path.unlink()
+            applied.append(f"deleted {path}")
+            i += 1
+            continue
+        if line.startswith("*** Update File: "):
+            path = _target(line)
+            text = path.read_text(encoding="utf-8")
+            i += 1
+            changed = False
+            while i < len(lines) and not _is_header(lines[i]):
+                if lines[i].startswith("@@"):
+                    i, old_lines, new_lines = _collect_hunk(i + 1)
+                    old = "\n".join(old_lines)
+                    new = "\n".join(new_lines)
+                    if old and old in text:
+                        text = text.replace(old, new, 1)
+                        changed = True
+                    elif not old:
+                        text += new
+                        changed = True
+                    else:
+                        raise ValueError(f"hunk not found in {path}")
+                else:
+                    raise ValueError("update file changes must start with @@")
+            path.write_text(text, encoding="utf-8")
+            applied.append(f"updated {path}" if changed else f"unchanged {path}")
+            continue
+        raise ValueError(f"unknown patch operation: {line!r}")
+
+    return "\n".join(applied)
+    ```
+
+@path_exists(path: str) -> bool:
+    ###
+    Check whether a file or directory exists.
+
+    Args:
+        path (str): Path to check.
+
+    Returns:
+        bool: True when the path exists.
+    ###
+    = ```
+    return Path(path).exists()
+    ```
+
+@list_directory(dir_path: str) -> list[str]:
+    ###
+    List direct children of a directory.
+
+    Args:
+        dir_path (str): Directory path.
+
+    Returns:
+        list[str]: Child names sorted alphabetically.
+    ###
+    = ```
+    return sorted(path.name for path in Path(dir_path).iterdir())
+    ```
+
+@create_directory(dir_path: str) -> str:
+    ###
+    Create a directory and any missing parent directories.
+
+    Args:
+        dir_path (str): Directory path.
+
+    Returns:
+        str: The created directory path.
+    ###
+    = ```
+    path = Path(dir_path)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+    ```
+
+@remove_file(file_path: str) -> str:
+    ###
+    Delete a file.
+
+    Args:
+        file_path (str): File path.
+
+    Returns:
+        str: The deleted file path.
+    ###
+    = ```
+    path = Path(file_path)
+    path.unlink()
+    return str(path)
+    ```
+
+@remove_directory(dir_path: str) -> str:
+    ###
+    Delete a directory tree.
+
+    Args:
+        dir_path (str): Directory path.
+
+    Returns:
+        str: The deleted directory path.
+    ###
+    = ```
+    path = Path(dir_path)
+    shutil.rmtree(path)
+    return str(path)
+    ```
+
+@get_file_info(path: str) -> dict:
+    ###
+    Return basic metadata for a file or directory.
+
+    Args:
+        path (str): Path to inspect.
+
+    Returns:
+        dict: Basic path metadata.
+    ###
+    = ```
+    p = Path(path)
+    stat = p.stat()
+    return {
+        "path": str(p),
+        "name": p.name,
+        "is_file": p.is_file(),
+        "is_dir": p.is_dir(),
+        "size": stat.st_size,
+        "modified_time": stat.st_mtime,
+    }
+    ```
+
+> profile: filesystem:
+    > use:
+        read_text_file
+        write_text_file
+        apply_patch
+        path_exists
+        list_directory
+        create_directory
+        remove_file
+        remove_directory
+        get_file_info
+
+> export:
+    filesystem
