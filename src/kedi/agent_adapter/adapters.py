@@ -11,10 +11,11 @@ from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
 from ..agent_profile import AgentProfile
-from .tool_override import ToolScope
+from ..agent_profile.profile import pydantic_effort_value
 from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
+from .tool_override import ToolScope
 
 _LOGFIRE_CONFIGURED = False
 
@@ -124,11 +125,23 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
-        if not profile.needs_model_override(self.default_model()):
+        override_kwargs: dict[str, Any] = {}
+        if profile.needs_model_override(self.default_model()):
+            assert profile.model is not None
+            override_kwargs["model"] = normalize_for_pydantic_ai(profile.model)
+        if profile.effort is not None:
+            override_kwargs["spec"] = {
+                "capabilities": [
+                    {
+                        "name": "Thinking",
+                        "arguments": {"effort": pydantic_effort_value(profile.effort)},
+                    }
+                ]
+            }
+        if not override_kwargs:
             yield
             return
-        assert profile.model is not None
-        with self.override(model=normalize_for_pydantic_ai(profile.model)):
+        with self.override(**override_kwargs):
             yield
 
 
@@ -209,17 +222,24 @@ class DSPyAdapter:
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
-        if not profile.needs_model_override(self.default_model()):
+        needs_model_override = profile.needs_model_override(self.default_model())
+        if not needs_model_override and profile.effort is None:
             yield
             return
-        assert profile.model is not None
+        model = self._lm_model
+        if needs_model_override:
+            assert profile.model is not None
+            model = normalize_for_litellm(profile.model)
+        lm_kwargs = dict(self._lm_extra_kwargs)
+        if profile.effort is not None:
+            lm_kwargs["reasoning_effort"] = profile.effort
         lm = LM(
-            model=normalize_for_litellm(profile.model),
+            model=model,
             provider=self._lm_provider,
             max_tokens=self._lm_max_tokens,
             temperature=self._lm_temperature,
             cache=False,
-            **self._lm_extra_kwargs,
+            **lm_kwargs,
         )
         with dspy.context(lm=lm):
             yield

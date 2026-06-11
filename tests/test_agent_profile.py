@@ -5,6 +5,7 @@ import pytest
 from kedi.agent_profile import AgentProfile
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    EffortDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
     ProfileDefStmt,
@@ -29,25 +30,30 @@ def _procedure_def(fn: object) -> ProcedureDef:
 def test_parse_model_profile_use_directives() -> None:
     src = """
 > model: haiku
+> effort: low
 > system: top-system
 > profile: light:
     > model: opus
+    > effort: high
     > system: Be concise.
 > use: light
 @foo():
     >> answer [x]
 """
     prog = parse_program(src)
-    assert len(prog.ordered_toplevel) == 5
+    assert len(prog.ordered_toplevel) == 6
     assert isinstance(prog.ordered_toplevel[0], ModelDirectiveStmt)
     assert prog.ordered_toplevel[0].plain_value == "haiku"
-    assert isinstance(prog.ordered_toplevel[1], SystemDirectiveStmt)
-    assert prog.ordered_toplevel[1].plain_value == "top-system"
-    assert isinstance(prog.ordered_toplevel[2], ProfileDefStmt)
-    assert prog.ordered_toplevel[2].name == "light"
-    assert prog.ordered_toplevel[2].system_members[0].plain_value == "Be concise."
-    assert isinstance(prog.ordered_toplevel[3], UseDirectiveStmt)
-    assert isinstance(prog.ordered_toplevel[4], ProcedureDef)
+    assert isinstance(prog.ordered_toplevel[1], EffortDirectiveStmt)
+    assert prog.ordered_toplevel[1].plain_value == "low"
+    assert isinstance(prog.ordered_toplevel[2], SystemDirectiveStmt)
+    assert prog.ordered_toplevel[2].plain_value == "top-system"
+    assert isinstance(prog.ordered_toplevel[3], ProfileDefStmt)
+    assert prog.ordered_toplevel[3].name == "light"
+    assert prog.ordered_toplevel[3].effort_members[0].plain_value == "high"
+    assert prog.ordered_toplevel[3].system_members[0].plain_value == "Be concise."
+    assert isinstance(prog.ordered_toplevel[4], UseDirectiveStmt)
+    assert isinstance(prog.ordered_toplevel[5], ProcedureDef)
 
 
 def test_profile_docstring_comes_from_first_block_comment_only() -> None:
@@ -123,6 +129,24 @@ def test_procedure_capture_uses_source_order_system() -> None:
     bar_def = _procedure_def(rt._procedures["bar"])
     assert foo_def.captured_agent_profile.system == "first-system"
     assert bar_def.captured_agent_profile.system == "second-system"
+
+
+def test_procedure_capture_uses_source_order_effort() -> None:
+    src = """
+> effort: low
+@foo():
+    >> value [x]
+> effort: high
+@bar():
+    >> value [x]
+"""
+    prog = parse_program(src)
+    adapter = _adapter()
+    rt = compile_program(prog, adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    bar_def = _procedure_def(rt._procedures["bar"])
+    assert foo_def.captured_agent_profile.effort == "low"
+    assert bar_def.captured_agent_profile.effort == "high"
 
 
 def test_runtime_globals_are_available_during_profile_capture() -> None:
@@ -271,10 +295,57 @@ def test_use_profile_applies_system_at_capture_time() -> None:
     assert adapter.instruction_calls == ["from-profile-system"]
 
 
+def test_use_profile_applies_effort_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > effort: max
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.effort == "max"
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.effort_calls == ["max"]
+
+
+def test_effort_applies_to_top_level_prompt() -> None:
+    src = """
+> effort: medium
+>> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.effort_calls == ["medium"]
+
+
+def test_backtick_effort_applies_in_profile_and_body() -> None:
+    src = """
+> effort: `"low"`
+> profile: dynamic:
+    > effort: `"medium"`
+> use: dynamic
+@foo():
+    > effort: `"high"`
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.effort == "medium"
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.effort_calls == ["high"]
+
+
 def test_agent_profile_merge() -> None:
-    base = AgentProfile(model="a", system="old")
-    merged = base.merge(AgentProfile(model="b", system="new"))
+    base = AgentProfile(model="a", effort="low", system="old")
+    merged = base.merge(AgentProfile(model="b", effort="high", system="new"))
     assert merged.model == "b"
+    assert merged.effort == "high"
     assert merged.system == "new"
     assert base.model == "a"
+    assert base.effort == "low"
     assert base.system == "old"

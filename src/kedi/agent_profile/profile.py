@@ -1,6 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Final, Literal, cast
+
+EffortValue = Literal["minimal", "low", "medium", "high", "xhigh", "max"]
+PydanticEffortValue = Literal["minimal", "low", "medium", "high", "xhigh"]
+
+EFFORT_VALUES: Final[frozenset[str]] = frozenset(
+    {"minimal", "low", "medium", "high", "xhigh", "max"}
+)
+
+
+def validate_effort(value: str, *, directive_name: str = "effort") -> EffortValue:
+    effort = value.strip()
+    if effort not in EFFORT_VALUES:
+        expected = ", ".join(sorted(EFFORT_VALUES))
+        raise ValueError(f"{directive_name} directive must be one of: {expected}")
+    return cast(EffortValue, effort)
+
+
+def pydantic_effort_value(value: EffortValue | str) -> PydanticEffortValue:
+    if value == "max":
+        return "xhigh"
+    return cast(PydanticEffortValue, value)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -8,6 +30,7 @@ class AgentProfile:
     """Runtime agent configuration merged incrementally by profile directives."""
 
     model: str | None = None
+    effort: EffortValue | None = None
     system: str | None = None
     tools: tuple[str, ...] = ()
 
@@ -19,6 +42,8 @@ class AgentProfile:
         updates: dict[str, object] = {}
         if other.model is not None:
             updates["model"] = other.model
+        if other.effort is not None:
+            updates["effort"] = other.effort
         if other.system is not None:
             updates["system"] = other.system
         if other.tools:
@@ -36,6 +61,9 @@ class AgentProfile:
         if adapter_default is None:
             return True
         return self.model != adapter_default
+
+    def needs_adapter_override(self, adapter_default: str | None) -> bool:
+        return self.effort is not None or self.needs_model_override(adapter_default)
 
 
 def _merge_tool_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:

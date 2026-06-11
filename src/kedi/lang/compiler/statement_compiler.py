@@ -7,12 +7,17 @@ from typing import Any, Callable, cast
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ...agent_profile import AgentProfile, block_agent_profile_scope
-from ...agent_profile.model import eval_model_directive, eval_system_directive
+from ...agent_profile.model import (
+    eval_effort_directive,
+    eval_model_directive,
+    eval_system_directive,
+)
 from ...agent_profile.tools import eval_use_directive
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
+    EffortDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
@@ -229,6 +234,9 @@ class StatementExecutor:
             for stmt in proc.body:
                 if isinstance(stmt, ModelDirectiveStmt):
                     active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, EffortDirectiveStmt):
+                    active = active.merge(eval_effort_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))

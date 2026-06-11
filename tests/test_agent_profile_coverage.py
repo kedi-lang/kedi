@@ -17,6 +17,7 @@ from kedi.agent_profile.compile import (
 from kedi.agent_profile.model import (
     AgentProfileOverrideUnsupported,
     _member_to_patch,
+    eval_effort_value,
     eval_model_value,
     eval_system_value,
     eval_use_profile,
@@ -25,11 +26,13 @@ from kedi.agent_profile.profile import AgentProfile as AgentProfileType
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    EffortDirectiveStmt,
     InputSegment,
     ModelDirectiveStmt,
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    ProfileEffortEntry,
     ProfileModelEntry,
     ProfileSystemEntry,
     Program,
@@ -50,6 +53,7 @@ def test_agent_profile_merge_and_override_flags() -> None:
     assert AgentProfileType.empty().merge(AgentProfileType()).model is None
     assert AgentProfileType(model="a").needs_model_override(None) is True
     assert AgentProfileType(model="a").needs_model_override("a") is False
+    assert AgentProfileType(effort="low").needs_adapter_override("a") is True
 
 
 def test_effective_profile_registry_and_capture_env() -> None:
@@ -202,11 +206,11 @@ def test_parse_profile_directive_edge_cases() -> None:
 
 
 def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    entered: list[str | None] = []
+    entered: list[dict[str, Any]] = []
 
     class FakeOverride:
-        def __init__(self, *, model: str) -> None:
-            entered.append(model)
+        def __init__(self, **kwargs: Any) -> None:
+            entered.append(kwargs)
 
         def __enter__(self) -> None:
             return None
@@ -226,16 +230,33 @@ def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> N
 
     with adapter.profile_override(AgentProfile(model="anthropic/claude")):
         pass
-    assert entered == ["anthropic:claude"]
+    assert entered == [{"model": "anthropic:claude"}]
+
+    with adapter.profile_override(AgentProfile(effort="max")):
+        pass
+    assert entered[-1] == {
+        "spec": {
+            "capabilities": [
+                {
+                    "name": "Thinking",
+                    "arguments": {"effort": "xhigh"},
+                }
+            ]
+        }
+    }
+
+    with adapter.profile_override(AgentProfile(effort="low")):
+        pass
+    assert entered[-1]["spec"]["capabilities"][0]["arguments"] == {"effort": "low"}
 
 
 def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    lm_calls: list[str] = []
+    lm_calls: list[dict[str, Any]] = []
     context_calls: list[Any] = []
 
     class FakeLM:
-        def __init__(self, **_: Any) -> None:
-            lm_calls.append("created")
+        def __init__(self, **kwargs: Any) -> None:
+            lm_calls.append(kwargs)
 
     class FakeContext:
         def __init__(self, *, lm: Any) -> None:
@@ -266,8 +287,13 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with adapter.profile_override(AgentProfile(model="openai/gpt-4o")):
         pass
-    assert lm_calls == ["created"]
+    assert lm_calls[-1]["model"] == "openai/gpt-4o"
     assert context_calls
+
+    with adapter.profile_override(AgentProfile(effort="max")):
+        pass
+    assert lm_calls[-1]["model"] == "openai:gpt-4o-mini"
+    assert lm_calls[-1]["reasoning_effort"] == "max"
 
 
 def test_lsp_profile_helpers_and_hovers() -> None:
@@ -332,8 +358,25 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     foo = next(symbol for symbol in symbols if symbol.name == "foo")
     assert any(child.name.startswith("> use:") for child in foo.children or ())
 
+    effort_symbols = features.compute_document_symbols(
+        "> profile: p:\n    > effort: high\n@foo():\n    > effort: low\n    >> x [y]\n",
+        "x.kedi",
+    )
+    profile_symbol = next(symbol for symbol in effort_symbols if symbol.name == "> profile: p")
+    assert any(child.name == "> effort: high" for child in profile_symbol.children or ())
+    foo_symbol = next(symbol for symbol in effort_symbols if symbol.name == "foo")
+    assert any(child.name == "> effort: low" for child in foo_symbol.children or ())
     profile_span = Span(0, 30, 1, 1, 1, 30)
     member_span = Span(4, 20, 2, 5, 2, 20)
+    skipped_effort_symbol = features._profile_def_symbol(
+        ProfileDefStmt(
+            name="skip",
+            effort_members=[ProfileEffortEntry(plain_value="low")],
+            loc=profile_span,
+        )
+    )
+    assert skipped_effort_symbol.children == []
+
     profile_node = ProfileDefStmt(
         name="p",
         model_members=[
@@ -352,6 +395,15 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     assert use_hover is not None and "> use:" in use_hover
     model_hover = features._describe_ast_node(ModelDirectiveStmt(backtick_code="models['x']"))
     assert model_hover is not None and "models['x']" in model_hover
+    effort_hover = features._describe_ast_node(EffortDirectiveStmt(plain_value="high"))
+    assert effort_hover is not None and "> effort:" in effort_hover
+    profile_effort_hover = features._describe_ast_node(
+        ProfileEffortEntry(backtick_code="efforts['careful']")
+    )
+    assert profile_effort_hover is not None and "efforts['careful']" in profile_effort_hover
+    assert eval_effort_value(KediRuntime(), plain_value="low", backtick_code=None, env={}) == "low"
+    with pytest.raises(ValueError):
+        eval_effort_value(KediRuntime(), plain_value="extreme", backtick_code=None, env={})
     assert (
         eval_system_value(KediRuntime(), plain_value="Be concise.", backtick_code=None, env={})
         == "Be concise."
@@ -386,9 +438,10 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     plain_only = ProfileDefStmt(
         name="plain",
         model_members=[ProfileModelEntry(plain_value="haiku", loc=member_span)],
+        effort_members=[ProfileEffortEntry(plain_value="medium", loc=member_span)],
     )
     profile_hover = features._describe_ast_node(plain_only)
-    assert profile_hover is not None and "haiku" in profile_hover
+    assert profile_hover is not None and "haiku" in profile_hover and "medium" in profile_hover
     backtick_only = ProfileDefStmt(
         name="dyn",
         model_members=[ProfileModelEntry(backtick_code="dyn", loc=member_span)],
@@ -399,5 +452,13 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         model_members=[ProfileModelEntry(loc=member_span)],
     )
     assert "(no model members)" in (features._describe_ast_node(sparse_member) or "")
+
+    proc_with_effort = ProcedureDef(
+        name="with_effort",
+        params=[],
+        body=[],
+        captured_agent_profile=AgentProfile(effort="high"),
+    )
+    assert "captured effort" in (features._describe_ast_node(proc_with_effort) or "")
 
     capture_procedure_profiles(KediRuntime(), Program())

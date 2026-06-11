@@ -623,29 +623,36 @@ Dataset items can follow two conventions:
 
 ## Agent Profiles and Tools
 
-Kedi routes LLM calls through agent adapters. Use `> model:`, `> system:`,
-`> profile:`, and `> use:` to choose models, set agent instructions, and expose
-Kedi procedures as agent tools.
+Kedi routes LLM calls through agent adapters. Use `> model:`, `> effort:`,
+`> system:`, `> profile:`, and `> use:` to choose models, set reasoning effort,
+set agent instructions, and expose Kedi procedures as agent tools.
 
 ### Model and profile directives
 
 ```kedi
 > model: groq:qwen/qwen3-32b
+> effort: low
 > system: Answer concisely and avoid extra narration.
 
 > profile: fast:
     > model: groq:qwen/qwen3-32b
+    > effort: minimal
     > system:
         Prefer short direct answers.
         Adapt examples for <audience>.
 > profile: quality:
     > model: openrouter/google/gemini-3-flash-preview
+    > effort: high
     > system: Be precise and cite the relevant tool output.
     > use: web_search
 ```
 
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``).
+- `> effort: level` — set active reasoning effort. Accepted values are
+  `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; plain values or
+  `` `expression` `` are allowed. Pydantic AI maps `max` to `xhigh`.
+  DSPy receives the value directly as `reasoning_effort`.
 - `> system: text` — set active agent instructions for subsequent procedure
   captures and prompt calls.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
@@ -654,7 +661,7 @@ Kedi procedures as agent tools.
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> model:`,
-  `> system:`, and/or `> use:` members.
+  `> effort:`, `> system:`, and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
@@ -757,7 +764,7 @@ The system will:
 3. Cache the implementation in `source.cache.kedi`
 
 Unknown `>` directives will raise a directive error. Valid directives include
-`auto`, `data`, `test_data`, `metric`, `optimize`, `model`, `profile`, `use`,
+`auto`, `data`, `test_data`, `metric`, `optimize`, `model`, `effort`, `profile`, `use`,
 `import`, and `export`.
 
 ## Complete Example with Explanations

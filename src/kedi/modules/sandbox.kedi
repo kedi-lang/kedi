@@ -20,6 +20,9 @@ from pydantic_monty import Monty
     ```
 
 > profile: sandbox:
+    ###
+    Sandbox profile to run Python code in a sandboxed environment.
+    ###
     > system:
         You are a sandboxed environment agent that executes Python code provided by the user.
         The final expression of program will be evaluated and returned as the result.
@@ -28,3 +31,4 @@ from pydantic_monty import Monty
 
 > export:
     sandbox
+    execute_code

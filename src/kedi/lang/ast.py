@@ -246,6 +246,12 @@ class ModelDirectiveStmt(Stmt):
 
 
 @dataclass
+class EffortDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -273,6 +279,7 @@ UseProfileStmt = UseDirectiveStmt
 class ProfileDefStmt(Stmt):
     name: str = ""
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
+    effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
@@ -281,6 +288,13 @@ class ProfileDefStmt(Stmt):
 
 @dataclass
 class ProfileModelEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileEffortEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)

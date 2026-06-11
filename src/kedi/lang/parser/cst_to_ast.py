@@ -48,6 +48,7 @@ from ..ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    EffortDirectiveStmt,
     InputSegment,
     LiteralArg,
     ModuleExport,
@@ -58,6 +59,7 @@ from ..ast import (
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    ProfileEffortEntry,
     ProfileModelEntry,
     ProfileSystemEntry,
     Program,
@@ -259,6 +261,10 @@ class _Walker:
                 prog.ordered_toplevel.append(proc)
             elif t == "model_directive":
                 stmt = self._walk_model_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "effort_directive":
+                stmt = self._walk_effort_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
@@ -616,6 +622,8 @@ class _Walker:
             return None
         if t == "model_directive":
             return self._walk_model_directive(node)
+        if t == "effort_directive":
+            return self._walk_effort_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "use_directive":
@@ -1174,6 +1182,19 @@ class _Walker:
         plain = _src_text(self.source, value_node).strip()
         return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
 
+    def _walk_effort_directive(self, node: Node) -> EffortDirectiveStmt:
+        value_node = _field(node, "value")
+        assert value_node is not None
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return EffortDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        return EffortDirectiveStmt(plain_value=plain, loc=self._span(node))
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -1247,6 +1268,7 @@ class _Walker:
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         members: list[ProfileModelEntry] = []
+        effort_members: list[ProfileEffortEntry] = []
         system_members: list[ProfileSystemEntry] = []
         tool_names: list[str] = []
         docstring: str | None = None
@@ -1275,6 +1297,25 @@ class _Walker:
                     else:
                         members.append(
                             ProfileModelEntry(
+                                plain_value=_src_text(self.source, value_node).strip(),
+                                loc=self._span(child),
+                            )
+                        )
+                elif child.type == "effort_directive":
+                    value_node = _field(child, "value")
+                    assert value_node is not None
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        effort_members.append(
+                            ProfileEffortEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
+                        )
+                    else:
+                        effort_members.append(
+                            ProfileEffortEntry(
                                 plain_value=_src_text(self.source, value_node).strip(),
                                 loc=self._span(child),
                             )
@@ -1315,15 +1356,16 @@ class _Walker:
                         tool_names.extend(use_stmt.tool_names)
                     elif use_stmt.name:
                         tool_names.append(use_stmt.name)
-        if not members and not system_members and not tool_names:
+        if not members and not effort_members and not system_members and not tool_names:
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:', '> system:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
             name=name,
             model_members=members,
+            effort_members=effort_members,
             system_members=system_members,
             tool_names=tool_names,
             docstring=docstring,

@@ -3,12 +3,19 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .profile import AgentProfile
-from .registry import ProfileDefinition, ProfileModelMember, ProfileSystemMember, ProfileToolMember
+from .registry import (
+    ProfileDefinition,
+    ProfileEffortMember,
+    ProfileModelMember,
+    ProfileSystemMember,
+    ProfileToolMember,
+)
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
         ProfileDefStmt,
+        ProfileEffortEntry,
         ProfileModelEntry,
         ProfileSystemEntry,
         Program,
@@ -16,9 +23,13 @@ if TYPE_CHECKING:
 
 
 def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
-    members: list[ProfileModelMember | ProfileSystemMember | ProfileToolMember] = []
+    members: list[
+        ProfileModelMember | ProfileEffortMember | ProfileSystemMember | ProfileToolMember
+    ] = []
     for entry in stmt.model_members:
         members.append(_model_entry_to_member(entry))
+    for entry in stmt.effort_members:
+        members.append(_effort_entry_to_member(entry))
     for entry in stmt.system_members:
         members.append(_system_entry_to_member(entry))
     if stmt.tool_names:
@@ -28,6 +39,13 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
 
 def _model_entry_to_member(entry: ProfileModelEntry) -> ProfileModelMember:
     return ProfileModelMember(
+        plain_value=entry.plain_value,
+        backtick_code=entry.backtick_code,
+    )
+
+
+def _effort_entry_to_member(entry: ProfileEffortEntry) -> ProfileEffortMember:
+    return ProfileEffortMember(
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
     )
@@ -66,13 +84,14 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
 
 def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     from kedi.lang.ast import (
+        EffortDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
         SystemDirectiveStmt,
         UseDirectiveStmt,
     )
 
-    from .model import eval_model_directive, eval_system_directive
+    from .model import eval_effort_directive, eval_model_directive, eval_system_directive
     from .tools import eval_use_directive
 
     if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
@@ -86,6 +105,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     for item in prog.ordered_toplevel:
         if isinstance(item, ModelDirectiveStmt):
             active = active.merge(eval_model_directive(rt, item, env))
+        elif isinstance(item, EffortDirectiveStmt):
+            active = active.merge(eval_effort_directive(rt, item, env))
         elif isinstance(item, SystemDirectiveStmt):
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, UseDirectiveStmt):

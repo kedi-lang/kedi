@@ -67,10 +67,12 @@ from ..lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    EffortDirectiveStmt,
     InputSegment,
     ModelDirectiveStmt,
     OptimizeSpan,
     ProfileDefStmt,
+    ProfileEffortEntry,
     ProfileSystemEntry,
     OutputSegment,
     ProcDefStmt,
@@ -1266,6 +1268,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, ProfileDefStmt):
             for member in node.model_members:
                 visit(member)
+            for member in node.effort_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             return
@@ -1396,8 +1400,12 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`> optimize: {node.name}:`** — GEPA / DSPy optimisation target."
     if isinstance(node, ModelDirectiveStmt):
         return _model_directive_markdown(node)
+    if isinstance(node, EffortDirectiveStmt):
+        return _effort_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
+    if isinstance(node, ProfileEffortEntry):
+        return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, UseDirectiveStmt):
@@ -1467,6 +1475,14 @@ def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
     )
 
 
+def _effort_directive_markdown(stmt: EffortDirectiveStmt) -> str:
+    value = _effort_value_preview(stmt)
+    return (
+        f"**`> effort:`** — set active model reasoning effort to {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
 def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     value = _system_value_preview(stmt)
     return (
@@ -1478,6 +1494,17 @@ def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return f"**`> system:`** — reusable agent profile instructions: {value}."
+
+
+def _profile_effort_entry_markdown(entry: ProfileEffortEntry) -> str:
+    value = _effort_value_preview(entry)
+    return f"**`> effort:`** — reusable agent profile reasoning effort: {value}."
+
+
+def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str:
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
 
 
 def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:
@@ -1528,6 +1555,10 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         elif member.plain_value is not None:
             model_parts.append(f"`{member.plain_value}`")
     model_summary = ", ".join(model_parts) if model_parts else "(no model members)"
+    effort_parts: list[str] = []
+    for member in profile.effort_members:
+        effort_parts.append(_effort_value_preview(member))
+    effort_summary = ", ".join(effort_parts) if effort_parts else "(no effort members)"
     system_parts: list[str] = []
     for member in profile.system_members:
         value = _system_value_preview(member)
@@ -1542,6 +1573,7 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
     return (
         f"**Agent profile** `> profile: {profile.name}:`\n\n"
         f"Reusable agent settings. `> model:` members: {model_summary}.\n\n"
+        f"`> effort:` members: {effort_summary}.\n\n"
         f"`> system:` members: {system_summary}.\n\n"
         f"`> use:` tool members: {tool_summary}.\n\n"
         "Profile body values are evaluated when `> use:` runs."
@@ -1566,6 +1598,8 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
         captured = proc.captured_agent_profile
         if getattr(captured, "model", None):
             desc = f"Kedi procedure (captured model: `{captured.model}`)."
+        elif getattr(captured, "effort", None):
+            desc = f"Kedi procedure (captured effort: `{captured.effort}`)."
     if proc.docstring:
         return f"{sig}\n\n{desc}\n\n{proc.docstring}"
     return f"{sig}\n\n{desc}"
@@ -2219,6 +2253,18 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
                     children=[],
                 )
             )
+        elif isinstance(stmt, EffortDirectiveStmt) and stmt.loc is not None:
+            value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> effort: {value}",
+                    detail="agent reasoning effort",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
         elif isinstance(stmt, SystemDirectiveStmt) and stmt.loc is not None:
             value = _system_value_preview(stmt).strip("`")
             children.append(
@@ -2277,6 +2323,22 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
             lsp.DocumentSymbol(
                 name=f"> model: {value}",
                 detail="agent model override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.effort_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> effort: {value}",
+                detail="agent reasoning effort",
                 kind=lsp.SymbolKind.Event,
                 range=_span_to_range(member.loc),
                 selection_range=_span_to_range(member.loc),

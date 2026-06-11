@@ -24,9 +24,11 @@ from tests.lsp_helpers import decode_semantic_tokens, hover_text_at, position_of
 def test_semantic_tokens_cover_agent_profile_directives() -> None:
     src = (
         "> model: haiku\n"
+        "> effort: low\n"
         "> system: Be concise.\n"
         "> profile: light:\n"
         "    > model: opus\n"
+        "    > effort: high\n"
         "    > system: Keep answers short.\n"
         "> use: light\n"
     )
@@ -42,18 +44,24 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 1 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 1 and token_type == string_type for line, _, _, token_type, _ in decoded)
     assert any(line == 2 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 2 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 2 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 3 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 3 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 5 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 5 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 5 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 7 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 7 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
 def test_hover_on_model_profile_and_use_directives() -> None:
     src = """
 > model: haiku
+> effort: low
 > system: Be concise.
 > system: Be <tone>.
 > profile: light:
     > model: opus
+    > effort: high
     > system: Keep answers short.
     > system:
         Prefer <tone> answers.
@@ -62,6 +70,7 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     >> answer [x]
 """
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
+    assert "> effort:" in hover_text_at(src, "profile.kedi", "effort", occurrence=1)
     assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
     assert "Input segment" in hover_text_at(src, "profile.kedi", "tone", occurrence=1)
     assert "Keep answers short." in hover_text_at(src, "profile.kedi", "Keep")
