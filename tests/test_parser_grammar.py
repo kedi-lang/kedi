@@ -784,8 +784,9 @@ def test_span_source_path_forwarded_to_all_nodes():
 
 
 def test_tools_fixture_parses_multiline_backtick_use() -> None:
-    src = Path("tools.kedi").read_text(encoding="utf-8")
-    prog = parse_program(src, source_path=str(Path("tools.kedi").resolve()))
+    path = Path("tests/files/tools.kedi").resolve()
+    src = path.read_text(encoding="utf-8")
+    prog = parse_program(src, source_path=str(path))
 
     multiline_uses = [
         stmt

@@ -1,0 +1,29 @@
+@web_search(query: str) -> list[dict]:
+    ###
+    Search the web for the given query.
+
+    Args:
+        query (str): The search query.
+
+    Returns:
+        list[dict]: The search results.
+    ###
+    = `[{"title": "Hello Kedi", "url": "https://kedi-lang.org"}]`
+
+@web_browse(url: str) -> str:
+    = `url`
+
+@web_fetch(url: str) -> str:
+    = `url`
+
+> use: web_search
+> use:
+    `web_browse`
+    `web_fetch`
+
+> profile: web_agent:
+    > model: opus
+    # > use: web_fetch
+    > use:
+        web_search
+        web_browse

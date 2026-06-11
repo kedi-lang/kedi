@@ -23,7 +23,7 @@ def test_diagnostics_empty_for_valid_program():
 
 
 def test_diagnostics_accept_tools_fixture() -> None:
-    path = Path("tools.kedi").resolve()
+    path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")
     assert features.compute_diagnostics(src, str(path)) == []
 
