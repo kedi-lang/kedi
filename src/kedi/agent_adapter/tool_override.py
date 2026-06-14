@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, Sequence, runtime_checkable
 
 if TYPE_CHECKING:
-    from kedi.core import KediRuntime
     from kedi.lang.ast import ProcedureDef
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    fn: Callable[..., Any]
+    name: str
+    description: str | None = None
+    json_schema: dict[str, Any] | None = None
+    return_schema: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    proc: ProcedureDef | None = None
 
 
 @runtime_checkable
 class SupportsToolRegistration(Protocol):
-    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
-        """Register a Kedi procedure as an adapter-native tool."""
-        ...
-
-    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
-        """Register a Python callable as an adapter-native tool."""
-        ...
-
-    def register_tool(self, tool: Any) -> None:
+    def register_tool(self, tool: ToolSpec) -> None:
         """Register one adapter-native tool for the active agent run scope."""
         ...
 

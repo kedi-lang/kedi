@@ -17,13 +17,10 @@ from ..agent_profile import AgentProfile
 from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
-from .tool_override import ToolScope
+from .tool_override import ToolScope, ToolSpec
 
 if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
-
-    from kedi.core import KediRuntime
-    from kedi.lang.ast import ProcedureDef
 
 _LOGFIRE_CONFIGURED = False
 
@@ -65,18 +62,21 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         return self._tool_scope.tool_scope(tools)
 
-    def register_tool(self, tool: Any) -> None:
-        self._tool_scope.register_tool(tool)
-
-    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
-        from .utils import kedi_procedure_to_pydantic_tool
-
-        self.register_tool(kedi_procedure_to_pydantic_tool(rt, proc))
-
-    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
+    def register_tool(self, tool: ToolSpec) -> None:
         from pydantic_ai.tools import Tool
 
-        self.register_tool(Tool(fn, name=name))
+        if tool.json_schema is None:
+            native_tool = Tool(tool.fn, name=tool.name)
+        else:
+            native_tool = Tool.from_schema(
+                function=tool.fn,
+                name=tool.name,
+                description=tool.description or "",
+                json_schema=tool.json_schema,
+                takes_ctx=False,
+            )
+        native_tool.metadata = tool.metadata
+        self._tool_scope.register_tool(native_tool)
 
     @property
     def scoped_tools(self) -> tuple[PydanticTool[Any], ...]:
@@ -193,18 +193,20 @@ class DSPyAdapter:
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         return self._tool_scope.tool_scope(tools)
 
-    def register_tool(self, tool: Any) -> None:
-        self._tool_scope.register_tool(tool)
+    def register_tool(self, tool: ToolSpec) -> None:
+        from .utils import dspy_sync_tool_function, dspy_tool_arg_desc, dspy_tool_args
 
-    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
-        from .utils import kedi_procedure_to_dspy_tool
-
-        self.register_tool(kedi_procedure_to_dspy_tool(rt, proc))
-
-    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
-        from .utils import dspy_sync_tool_function
-
-        self.register_tool(dspy.Tool(dspy_sync_tool_function(fn), name=name))
+        kwargs: dict[str, Any] = {
+            "func": dspy_sync_tool_function(tool.fn),
+            "name": tool.name,
+            "desc": tool.description,
+        }
+        if tool.json_schema is not None:
+            kwargs["args"] = dspy_tool_args(tool.json_schema)
+            arg_desc = dspy_tool_arg_desc(tool.json_schema)
+            if arg_desc:
+                kwargs["arg_desc"] = arg_desc
+        self._tool_scope.register_tool(dspy.Tool(**kwargs))
 
     @property
     def scoped_tools(self) -> tuple[Any, ...]:

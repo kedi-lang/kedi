@@ -1,7 +1,7 @@
 from typing import Any
 
 from .meta import AgentAdapter, T
-from .tool_override import SupportsToolRegistration
+from .tool_override import SupportsToolRegistration, ToolSpec
 
 
 def kedi_procedure_to_pydantic_tool(*args: Any, **kwargs: Any) -> Any:
@@ -20,6 +20,7 @@ __all__ = [
     "AgentAdapter",
     "SupportsToolRegistration",
     "T",
+    "ToolSpec",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
 ]

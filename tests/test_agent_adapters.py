@@ -12,7 +12,11 @@ from pydantic_ai.models.test import TestModel
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter, make_repr
 from kedi.agent_adapter.tool_override import ToolScope
-from kedi.agent_adapter.utils import dspy_sync_tool_function
+from kedi.agent_adapter.utils import (
+    dspy_sync_tool_function,
+    kedi_procedure_tool_spec,
+    python_callable_tool_spec,
+)
 from kedi.lang import compile_program, parse_program
 
 
@@ -162,7 +166,7 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         asyncio.run(adapter.produce("prompt", {}))
 
 
-def test_dspy_adapter_register_python_tool_wraps_async_callable() -> None:
+def test_dspy_adapter_register_tool_wraps_async_callable() -> None:
     async def lookup(query: str, limit: int = 3) -> str:
         """Lookup docs."""
         return f"{query}:{limit}"
@@ -170,7 +174,7 @@ def test_dspy_adapter_register_python_tool_wraps_async_callable() -> None:
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
 
-    adapter.register_python_tool("lookup", lookup)
+    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
 
     tool = adapter.scoped_tools[0]
     assert getattr(tool, "name") == "lookup"
@@ -183,7 +187,7 @@ def test_dspy_adapter_register_python_tool_wraps_async_callable() -> None:
     assert tool(query="kedi", limit=2) == "kedi:2"
 
 
-def test_dspy_adapter_register_python_tool_wraps_async_callable_instance() -> None:
+def test_dspy_adapter_register_tool_wraps_async_callable_instance() -> None:
     class WebFetchLocalTool:
         """Callable object doc should not replace __call__ metadata."""
 
@@ -194,7 +198,7 @@ def test_dspy_adapter_register_python_tool_wraps_async_callable_instance() -> No
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
 
-    adapter.register_python_tool("web_fetch", WebFetchLocalTool())
+    adapter.register_tool(python_callable_tool_spec("web_fetch", WebFetchLocalTool()))
 
     tool = adapter.scoped_tools[0]
     assert getattr(tool, "name") == "web_fetch"
@@ -207,7 +211,7 @@ def test_dspy_adapter_register_python_tool_wraps_async_callable_instance() -> No
     assert tool(url="https://example.com", timeout=2) == "https://example.com:2"
 
 
-def test_dspy_adapter_register_python_tool_wraps_sync_callable_idempotently() -> None:
+def test_dspy_adapter_register_tool_wraps_sync_callable_idempotently() -> None:
     def lookup(query: str) -> str:
         """Lookup docs."""
         return query.upper()
@@ -215,7 +219,7 @@ def test_dspy_adapter_register_python_tool_wraps_sync_callable_idempotently() ->
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
 
-    adapter.register_python_tool("lookup", lookup)
+    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
     tool = adapter.scoped_tools[0]
 
     assert tool(query="kedi") == "KEDI"
@@ -232,8 +236,8 @@ def test_pydantic_adapter_registers_kedi_and_python_tools() -> None:
     adapter = object.__new__(PydanticAdapter)
     adapter._tool_scope = ToolScope()
 
-    adapter.register_kedi_tool(rt, prog.procedures[0])
-    adapter.register_python_tool("lookup", lookup)
+    adapter.register_tool(kedi_procedure_tool_spec(rt, prog.procedures[0]))
+    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
 
     tools = adapter.scoped_tools
     assert [tool.name for tool in tools] == ["search", "lookup"]

@@ -5,7 +5,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from kedi.agent_adapter.tool_override import ToolScope
+from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
+from kedi.agent_adapter.utils import kedi_procedure_tool_spec
 from kedi.agent_profile.tools import eval_use_directive
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
@@ -195,9 +196,13 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
 """
 
     class LocAwareAdapter(MockAdapter):
-        def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
+        def register_tool(self, tool: ToolSpec) -> None:
+            proc = tool.proc
+            assert proc is not None
             assert proc.loc is not None
-            self.register_tool(SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}"))
+            self._tool_scope.register_tool(
+                SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}")
+            )
 
     adapter = LocAwareAdapter(default_model="default-model")
     rt = compile_program(parse_program(src), adapter=adapter)
@@ -355,6 +360,9 @@ def test_tool_use_with_adapter_without_tool_support_raises() -> None:
         async def produce(self, *_args: Any, **_kwargs: Any) -> SimpleNamespace:
             return SimpleNamespace(x="unreachable")
 
+        def produce_sync(self, *_args: Any, **_kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(x="unreachable")
+
     src = """
 @p():
     = ok
@@ -416,18 +424,26 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(monkeypatch: pytest.Mon
 
 
 def test_dspy_kedi_tool_resolves_custom_type_arg_schema() -> None:
-    from kedi.agent_adapter.utils import kedi_procedure_to_dspy_tool
+    from kedi.agent_adapter.adapters import DSPyAdapter
 
     src = """
 ~SearchRequest(queries: list[str], limit: int = `5`)
 
 @search_docs(request: SearchRequest) -> str:
+    ###
+    Search indexed sources.
+
+    :param request: Search request payload.
+    ###
     = `", ".join(request.queries[:request.limit])`
 """
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
 
-    tool = kedi_procedure_to_dspy_tool(rt, prog.procedures[0])
+    adapter.register_tool(kedi_procedure_tool_spec(rt, prog.procedures[0]))
+    tool = adapter.scoped_tools[0]
 
     assert tool.args == {
         "request": {
@@ -439,6 +455,7 @@ def test_dspy_kedi_tool_resolves_custom_type_arg_schema() -> None:
             "type": "object",
         }
     }
+    assert tool.arg_desc == {"request": "Search request payload."}
     assert tool(request={"queries": ["schema", "tools"], "limit": 1}) == "schema"
 
 
@@ -506,12 +523,12 @@ def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
     from unittest.mock import AsyncMock, patch
 
     from kedi.agent_adapter.adapters import PydanticAdapter
-    from kedi.agent_adapter.utils import kedi_procedure_to_pydantic_tool
+    from kedi.agent_adapter.utils import kedi_procedure_tool_spec
 
     src = "@search(query: str) -> str:\n  = <query>\n"
     prog = parse_program(src)
     rt = compile_program(prog, adapter=PydanticAdapter(model="test"))
-    tool = kedi_procedure_to_pydantic_tool(rt, prog.procedures[0])
+    tool = kedi_procedure_tool_spec(rt, prog.procedures[0])
     adapter = PydanticAdapter(model="test")
 
     fake_run = AsyncMock(return_value=type("R", (), {"output": "ok"})())

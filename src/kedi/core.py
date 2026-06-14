@@ -355,6 +355,7 @@ class KediRuntime:
             )
 
         from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
         from .agent_profile import AgentToolOverrideUnsupported
         from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
 
@@ -373,13 +374,13 @@ class KediRuntime:
                 for tool_name in profile.tools:
                     proc = procedure_def_for_tool(self, tool_name)
                     if proc is not None:
-                        self.adapter.register_kedi_tool(self, proc)
+                        self.adapter.register_tool(kedi_procedure_tool_spec(self, proc))
                         continue
 
                     tool_fn = python_callable_for_tool(self, tool_name)
                     if tool_fn is None:
                         raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
-                    self.adapter.register_python_tool(tool_name, tool_fn)
+                    self.adapter.register_tool(python_callable_tool_spec(tool_name, tool_fn))
             run_kwargs: dict[str, Any] = {}
             if profile.system is not None:
                 run_kwargs["instructions"] = profile.system

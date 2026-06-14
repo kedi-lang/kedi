@@ -19,8 +19,46 @@ from ..lang.procedure_schema import (
     procedure_return_json_schema,
     program_procedure_json_schemas,
 )
+from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
+
+
+def kedi_procedure_tool_spec(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    *,
+    local_env: dict[str, Any] | None = None,
+) -> ToolSpec:
+    """Build an adapter-neutral tool spec from a Kedi procedure."""
+    parsed_docstring = parse_procedure_docstring(proc.docstring)
+    json_schema = procedure_json_schema(rt, proc, local_env=local_env)
+    return_schema = procedure_return_json_schema(rt, proc, local_env=local_env)
+    tool_description = _build_tool_description(
+        rt,
+        proc,
+        parsed_docstring.description,
+        local_env=local_env,
+    )
+    return ToolSpec(
+        fn=_make_tool_function(rt, proc),
+        name=proc.name,
+        description=tool_description,
+        json_schema=json_schema,
+        return_schema=return_schema,
+        metadata=_tool_metadata(
+            proc,
+            json_schema,
+            return_schema,
+            description=tool_description,
+        ),
+        proc=proc,
+    )
+
+
+def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
+    """Build an adapter-neutral tool spec from a Python callable."""
+    return ToolSpec(fn=fn, name=name, description=_callable_description(fn))
 
 
 def kedi_procedure_to_pydantic_tool(
@@ -32,56 +70,19 @@ def kedi_procedure_to_pydantic_tool(
     args_validator: Any = None,
 ) -> Tool:
     """Build a ``pydantic_ai.Tool`` from a Kedi procedure."""
-    parsed_docstring = parse_procedure_docstring(proc.docstring)
-    json_schema = procedure_json_schema(rt, proc, local_env=local_env)
-    return_schema = procedure_return_json_schema(rt, proc, local_env=local_env)
-    tool_description = _build_tool_description(
-        rt,
-        proc,
-        parsed_docstring.description,
-        local_env=local_env,
-    )
+    spec = kedi_procedure_tool_spec(rt, proc, local_env=local_env)
+    assert spec.json_schema is not None
     tool = Tool.from_schema(
-        function=_make_tool_function(rt, proc),
-        name=proc.name,
-        description=tool_description,
-        json_schema=json_schema,
+        function=spec.fn,
+        name=spec.name,
+        description=spec.description or "",
+        json_schema=spec.json_schema,
         takes_ctx=False,
         sequential=sequential,
         args_validator=args_validator,
     )
-    tool.metadata = _tool_metadata(
-        proc,
-        json_schema,
-        return_schema,
-        description=tool_description,
-    )
+    tool.metadata = spec.metadata
     return tool
-
-
-def kedi_procedure_to_dspy_tool(
-    rt: KediRuntime,
-    proc: ProcedureDef,
-    *,
-    local_env: dict[str, Any] | None = None,
-) -> Any:
-    """Build a ``dspy.Tool`` from a Kedi procedure."""
-    import dspy
-
-    parsed_docstring = parse_procedure_docstring(proc.docstring)
-    json_schema = procedure_json_schema(rt, proc, local_env=local_env)
-    tool_description = _build_tool_description(
-        rt,
-        proc,
-        parsed_docstring.description,
-        local_env=local_env,
-    )
-    return dspy.Tool(
-        func=_make_tool_function(rt, proc),
-        name=proc.name,
-        desc=tool_description,
-        args=_dspy_tool_args(json_schema),
-    )
 
 
 def kedi_program_to_pydantic_tools(
@@ -149,6 +150,23 @@ def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
     return _sync_tool
 
 
+def dspy_tool_args(json_schema: dict[str, Any]) -> dict[str, Any]:
+    defs = json_schema.get("$defs", {})
+    return {
+        name: _resolve_dspy_arg_schema(schema, defs)
+        for name, schema in json_schema.get("properties", {}).items()
+    }
+
+
+def dspy_tool_arg_desc(json_schema: dict[str, Any]) -> dict[str, str]:
+    properties = json_schema.get("properties", {})
+    return {
+        name: description
+        for name, schema in properties.items()
+        if isinstance(schema, dict) and isinstance((description := schema.get("description")), str)
+    }
+
+
 def _make_tool_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., Any]:
     proc_fn = _get_or_compile_proc_function(rt, proc)
 
@@ -159,14 +177,6 @@ def _make_tool_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., An
     _tool_function.__name__ = proc.name
     _tool_function.__doc__ = getattr(proc_fn, "__doc__", None)
     return _tool_function
-
-
-def _dspy_tool_args(json_schema: dict[str, Any]) -> dict[str, Any]:
-    defs = json_schema.get("$defs", {})
-    return {
-        name: _resolve_dspy_arg_schema(schema, defs)
-        for name, schema in json_schema.get("properties", {}).items()
-    }
 
 
 def _resolve_dspy_arg_schema(
@@ -188,6 +198,12 @@ def _strip_json_schema_titles(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_json_schema_titles(item) for item in value]
     return value
+
+
+def _callable_description(fn: Callable[..., Any]) -> str | None:
+    if not (inspect.isfunction(fn) or inspect.ismethod(fn)) and hasattr(fn, "__call__"):
+        return inspect.getdoc(fn.__call__) or inspect.getdoc(fn)
+    return inspect.getdoc(fn)
 
 
 def _get_or_compile_proc_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., Any]:
