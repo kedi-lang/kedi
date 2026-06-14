@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -10,6 +11,9 @@ from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter, make_repr
+from kedi.agent_adapter.tool_override import ToolScope
+from kedi.agent_adapter.utils import dspy_sync_tool_function
+from kedi.lang import compile_program, parse_program
 
 
 class DirectOutput(BaseModel):
@@ -101,11 +105,11 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
     ]
     assert configure_calls and isinstance(configure_calls[0]["lm"], FakeLM)
 
-    signature = asyncio.run(DSPyAdapter.type_builder({"answer": int}))
+    signature = DSPyAdapter.type_builder({"answer": int})
     assert issubclass(signature, adapters_module.dspy.Signature)
 
     with pytest.raises(AssertionError, match="Output schema must be provided"):
-        asyncio.run(DSPyAdapter.type_builder({}))
+        DSPyAdapter.type_builder({})
 
 
 def test_dspy_adapter_produce_and_sync_use_predict(
@@ -126,7 +130,7 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         def __call__(self, **kwargs: Any) -> dict[str, Any]:
             return {"instructions": self.signature.instructions, **kwargs}
 
-    async def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
+    def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
         assert output_schema == {"answer": str}
         return FakeSignature()
 
@@ -156,3 +160,82 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     with pytest.raises(AssertionError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
+
+
+def test_dspy_adapter_register_python_tool_wraps_async_callable() -> None:
+    async def lookup(query: str, limit: int = 3) -> str:
+        """Lookup docs."""
+        return f"{query}:{limit}"
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+
+    adapter.register_python_tool("lookup", lookup)
+
+    tool = adapter.scoped_tools[0]
+    assert getattr(tool, "name") == "lookup"
+    assert getattr(tool, "desc") == "Lookup docs."
+    assert getattr(tool, "args") == {
+        "query": {"type": "string"},
+        "limit": {"default": 3, "type": "integer"},
+    }
+    assert inspect.signature(tool.func) == inspect.signature(lookup)
+    assert tool(query="kedi", limit=2) == "kedi:2"
+
+
+def test_dspy_adapter_register_python_tool_wraps_async_callable_instance() -> None:
+    class WebFetchLocalTool:
+        """Callable object doc should not replace __call__ metadata."""
+
+        async def __call__(self, url: str, timeout: int = 10) -> str:
+            """Fetch a URL."""
+            return f"{url}:{timeout}"
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+
+    adapter.register_python_tool("web_fetch", WebFetchLocalTool())
+
+    tool = adapter.scoped_tools[0]
+    assert getattr(tool, "name") == "web_fetch"
+    assert getattr(tool, "desc") == "Fetch a URL."
+    assert getattr(tool, "args") == {
+        "url": {"type": "string"},
+        "timeout": {"default": 10, "type": "integer"},
+    }
+    assert inspect.signature(tool.func) == inspect.signature(WebFetchLocalTool().__call__)
+    assert tool(url="https://example.com", timeout=2) == "https://example.com:2"
+
+
+def test_dspy_adapter_register_python_tool_wraps_sync_callable_idempotently() -> None:
+    def lookup(query: str) -> str:
+        """Lookup docs."""
+        return query.upper()
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+
+    adapter.register_python_tool("lookup", lookup)
+    tool = adapter.scoped_tools[0]
+
+    assert tool(query="kedi") == "KEDI"
+    assert dspy_sync_tool_function(tool.func) is tool.func
+
+
+def test_pydantic_adapter_registers_kedi_and_python_tools() -> None:
+    def lookup(query: str) -> str:
+        return query
+
+    src = "@search(query: str) -> str:\n  = <query>\n"
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+
+    adapter.register_kedi_tool(rt, prog.procedures[0])
+    adapter.register_python_tool("lookup", lookup)
+
+    tools = adapter.scoped_tools
+    assert [tool.name for tool in tools] == ["search", "lookup"]
+    assert tools[0].metadata is not None
+    assert tools[1].function is lookup

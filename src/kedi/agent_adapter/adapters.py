@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import asyncio
-from contextlib import contextmanager
-from typing import Any, Iterator, cast
+from contextlib import AbstractContextManager, contextmanager
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Sequence, cast
 
 import dspy
 from dspy import LM
@@ -16,6 +18,12 @@ from ..dynamic_models import build_dynamic_model
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
 from ..resolved_types import ResolvedKediType
 from .tool_override import ToolScope
+
+if TYPE_CHECKING:
+    from pydantic_ai.tools import Tool as PydanticTool
+
+    from kedi.core import KediRuntime
+    from kedi.lang.ast import ProcedureDef
 
 _LOGFIRE_CONFIGURED = False
 
@@ -46,7 +54,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     Adapter to use Pydantic AI agents.
     """
 
-    def __init__(self, model: str | Model | None = None, **kwargs):
+    def __init__(self, model: str | Model | None = None, **kwargs: Any) -> None:
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
         configure_logfire()
         self._tool_scope = ToolScope()
@@ -54,15 +62,25 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             model = normalize_for_pydantic_ai(model) if model is not None else None
         super().__init__(model, **kwargs)
 
-    def tool_scope(self, tools=()):
+    def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         return self._tool_scope.tool_scope(tools)
 
-    def register_tool(self, tool):
+    def register_tool(self, tool: Any) -> None:
         self._tool_scope.register_tool(tool)
 
+    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
+        from .utils import kedi_procedure_to_pydantic_tool
+
+        self.register_tool(kedi_procedure_to_pydantic_tool(rt, proc))
+
+    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
+        from pydantic_ai.tools import Tool
+
+        self.register_tool(Tool(fn, name=name))
+
     @property
-    def scoped_tools(self):
-        return self._tool_scope.scoped_tools
+    def scoped_tools(self) -> tuple[PydanticTool[Any], ...]:
+        return cast("tuple[PydanticTool[Any], ...]", self._tool_scope.scoped_tools)
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[OutputDataT]:
@@ -97,7 +115,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             run_kwargs["toolsets"] = toolsets
         return (await self.run(template, **cast(Any, run_kwargs))).output
 
-    def _toolsets_for_run(self):
+    def _toolsets_for_run(self) -> list[Any] | None:
         scoped_tools = self.scoped_tools
         if not scoped_tools:
             return None
@@ -160,6 +178,7 @@ class DSPyAdapter:
         self._lm_max_tokens = max_tokens
         self._lm_temperature = temperature
         self._lm_extra_kwargs = dict(kwargs)
+        self._tool_scope = ToolScope()
         dspy.settings.configure(
             lm=LM(
                 model=model,
@@ -171,10 +190,29 @@ class DSPyAdapter:
             )
         )
 
+    def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
+        return self._tool_scope.tool_scope(tools)
+
+    def register_tool(self, tool: Any) -> None:
+        self._tool_scope.register_tool(tool)
+
+    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
+        from .utils import kedi_procedure_to_dspy_tool
+
+        self.register_tool(kedi_procedure_to_dspy_tool(rt, proc))
+
+    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
+        from .utils import dspy_sync_tool_function
+
+        self.register_tool(dspy.Tool(dspy_sync_tool_function(fn), name=name))
+
+    @property
+    def scoped_tools(self) -> tuple[Any, ...]:
+        scope = getattr(self, "_tool_scope", None)
+        return () if scope is None else scope.scoped_tools
+
     @staticmethod
-    async def type_builder(
-        output_schema: dict[str, ResolvedKediType], **kwargs
-    ) -> type[dspy.Signature]:
+    def type_builder(output_schema: dict[str, ResolvedKediType], **kwargs) -> type[dspy.Signature]:
         """
         Type builder to create a dictionary schema from a given output type.
         Args:
@@ -199,12 +237,12 @@ class DSPyAdapter:
         """
         Adapter to use DSPy agents.
         """
-        assert output_schema, "Output spec must be provided."
-        kwargs.pop("user_prompt", None)
-        sig = await self.type_builder(output_schema)
-        instructions = kwargs.pop("instructions", None)
-        prediction = dspy.Predict(sig.with_instructions(instructions))
-        return prediction(**kwargs, user_prompt=template)
+        return await asyncio.to_thread(
+            self.produce_sync,
+            template,
+            output_schema,
+            **kwargs,
+        )
 
     def produce_sync(
         self,
@@ -215,7 +253,14 @@ class DSPyAdapter:
         """
         Synchronous version of produce method.
         """
-        return asyncio.run(self.produce(template, output_schema=output_schema, **kwargs))
+        assert output_schema, "Output spec must be provided."
+        kwargs.pop("user_prompt", None)
+        sig = self.type_builder(output_schema)
+        instructions = kwargs.pop("instructions", None)
+        sig = sig.with_instructions(instructions)
+        tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
+        prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+        return prediction(**kwargs, user_prompt=template)
 
     def default_model(self) -> str | None:
         return self._lm_model

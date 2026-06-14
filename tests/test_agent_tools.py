@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -194,15 +194,12 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
 >> outer [y]
 """
 
-    def _named_by_declaration_line(_rt: KediRuntime, proc: ProcedureDef) -> SimpleNamespace:
-        assert proc.loc is not None
-        return SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}")
+    class LocAwareAdapter(MockAdapter):
+        def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
+            assert proc.loc is not None
+            self.register_tool(SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}"))
 
-    monkeypatch.setattr(
-        "kedi.agent_adapter.utils.kedi_procedure_to_pydantic_tool",
-        _named_by_declaration_line,
-    )
-    adapter = _adapter()
+    adapter = LocAwareAdapter(default_model="default-model")
     rt = compile_program(parse_program(src), adapter=adapter)
 
     rt.run_main()
@@ -353,19 +350,147 @@ def test_unknown_tool_procedure_at_runtime_raises(monkeypatch: pytest.MonkeyPatc
         rt.run_main()
 
 
-def test_adapter_without_tool_support_raises() -> None:
-    from kedi.agent_adapter.adapters import DSPyAdapter
-    from kedi.agent_profile import AgentToolOverrideUnsupported
+def test_tool_use_with_adapter_without_tool_support_raises() -> None:
+    class NoToolAdapter:
+        async def produce(self, *_args: Any, **_kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(x="unreachable")
 
     src = """
-@tool_proc():
+@p():
     = ok
-> use: tool_proc
+> use: p
 >> value [x]
 """
-    rt = compile_program(parse_program(src), adapter=DSPyAdapter(model="openai/gpt-4o-mini"))
-    with pytest.raises(AgentToolOverrideUnsupported, match="does not support tool registration"):
+    rt = compile_program(parse_program(src), adapter=NoToolAdapter())
+    with pytest.raises(KediExecutionError, match="does not support tool registration"):
         rt.run_main()
+
+
+def test_dspy_adapter_registers_kedi_tool_and_uses_react(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kedi.agent_adapter.adapters import DSPyAdapter
+
+    src = """
+@tool_proc(query: str) -> str:
+    = <query>
+> use: tool_proc
+>> value [x]
+= <x>
+"""
+    seen_tools: list[Any] = []
+
+    class FakeSignature:
+        def __init__(self) -> None:
+            self.instructions: str | None = None
+
+        def with_instructions(self, instructions: str | None) -> "FakeSignature":
+            self.instructions = instructions
+            return self
+
+    class FakeReAct:
+        def __init__(self, signature: FakeSignature, tools: tuple[Any, ...]) -> None:
+            self.signature = signature
+            seen_tools.extend(tools)
+
+        def __call__(self, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(x=f"{kwargs['user_prompt']} ok")
+
+    def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
+        assert output_schema == {"x": str}
+        return FakeSignature()
+
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._tool_scope = ToolScope()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main().endswith(" ok")
+    assert len(seen_tools) == 1
+    tool = seen_tools[0]
+    assert getattr(tool, "name") == "tool_proc"
+    assert getattr(tool, "desc") == "Returns `str` instance."
+    assert getattr(tool, "args") == {"query": {"type": "string"}}
+    assert tool(query="hello") == "hello"
+
+
+def test_dspy_kedi_tool_resolves_custom_type_arg_schema() -> None:
+    from kedi.agent_adapter.utils import kedi_procedure_to_dspy_tool
+
+    src = """
+~SearchRequest(queries: list[str], limit: int = `5`)
+
+@search_docs(request: SearchRequest) -> str:
+    = `", ".join(request.queries[:request.limit])`
+"""
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+
+    tool = kedi_procedure_to_dspy_tool(rt, prog.procedures[0])
+
+    assert tool.args == {
+        "request": {
+            "properties": {
+                "queries": {"items": {"type": "string"}, "type": "array"},
+                "limit": {"default": 5, "type": "integer"},
+            },
+            "required": ["queries"],
+            "type": "object",
+        }
+    }
+    assert tool(request={"queries": ["schema", "tools"], "limit": 1}) == "schema"
+
+
+def test_dspy_adapter_kedi_tool_can_run_python_asyncio_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.agent_adapter.adapters import DSPyAdapter
+
+    src = """
+```
+import asyncio
+
+async def fetch(url: str) -> str:
+    return f"fetched:{url}"
+```
+
+@web_fetch(url: str) -> str:
+    = ```
+    import asyncio
+    return asyncio.run(fetch(url))
+    ```
+
+> use: web_fetch
+>> value [x]
+= <x>
+"""
+    seen_tools: list[Any] = []
+
+    class FakeSignature:
+        def with_instructions(self, instructions: str | None) -> "FakeSignature":
+            return self
+
+    class FakeReAct:
+        def __init__(self, signature: FakeSignature, tools: list[Any]) -> None:
+            seen_tools.extend(tools)
+
+        def __call__(self, **kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(x=seen_tools[0](url="https://example.com"))
+
+    def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
+        assert output_schema == {"x": str}
+        return FakeSignature()
+
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._tool_scope = ToolScope()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main() == "fetched:https://example.com"
 
 
 def test_procedure_def_for_tool_handles_missing_metadata() -> None:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import copy
 import inspect
-from typing import Any
+from functools import wraps
+from typing import Any, Callable
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
@@ -16,6 +19,8 @@ from ..lang.procedure_schema import (
     procedure_return_json_schema,
     program_procedure_json_schemas,
 )
+
+_DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
 
 
 def kedi_procedure_to_pydantic_tool(
@@ -52,6 +57,31 @@ def kedi_procedure_to_pydantic_tool(
         description=tool_description,
     )
     return tool
+
+
+def kedi_procedure_to_dspy_tool(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    *,
+    local_env: dict[str, Any] | None = None,
+) -> Any:
+    """Build a ``dspy.Tool`` from a Kedi procedure."""
+    import dspy
+
+    parsed_docstring = parse_procedure_docstring(proc.docstring)
+    json_schema = procedure_json_schema(rt, proc, local_env=local_env)
+    tool_description = _build_tool_description(
+        rt,
+        proc,
+        parsed_docstring.description,
+        local_env=local_env,
+    )
+    return dspy.Tool(
+        func=_make_tool_function(rt, proc),
+        name=proc.name,
+        desc=tool_description,
+        args=_dspy_tool_args(json_schema),
+    )
 
 
 def kedi_program_to_pydantic_tools(
@@ -103,9 +133,26 @@ def kedi_program_to_pydantic_tools(
     return tools
 
 
-def _make_tool_function(rt: KediRuntime, proc: ProcedureDef):
+def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Adapt a sync or async callable to DSPy's sync tool-call path."""
+    if getattr(fn, _DSPY_SYNC_TOOL_MARKER, False):
+        return fn
+
+    target = fn if inspect.isfunction(fn) or inspect.ismethod(fn) else fn.__call__
+
+    @wraps(target)
+    def _sync_tool(*args: Any, **kwargs: Any) -> Any:
+        result = target(*args, **kwargs)
+        return asyncio.run(result) if inspect.isawaitable(result) else result
+
+    setattr(_sync_tool, _DSPY_SYNC_TOOL_MARKER, True)
+    return _sync_tool
+
+
+def _make_tool_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., Any]:
     proc_fn = _get_or_compile_proc_function(rt, proc)
 
+    @wraps(proc_fn)
     def _tool_function(**kwargs: Any) -> Any:
         return _invoke_procedure_with_kwargs(rt, proc, proc_fn, kwargs)
 
@@ -114,7 +161,36 @@ def _make_tool_function(rt: KediRuntime, proc: ProcedureDef):
     return _tool_function
 
 
-def _get_or_compile_proc_function(rt: KediRuntime, proc: ProcedureDef):
+def _dspy_tool_args(json_schema: dict[str, Any]) -> dict[str, Any]:
+    defs = json_schema.get("$defs", {})
+    return {
+        name: _resolve_dspy_arg_schema(schema, defs)
+        for name, schema in json_schema.get("properties", {}).items()
+    }
+
+
+def _resolve_dspy_arg_schema(
+    schema: dict[str, Any],
+    defs: dict[str, Any],
+) -> dict[str, Any]:
+    resolved = copy.deepcopy(schema)
+    ref = resolved.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        resolved = copy.deepcopy(defs[ref.removeprefix("#/$defs/")])
+    return _strip_json_schema_titles(resolved)
+
+
+def _strip_json_schema_titles(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_json_schema_titles(item) for key, item in value.items() if key != "title"
+        }
+    if isinstance(value, list):
+        return [_strip_json_schema_titles(item) for item in value]
+    return value
+
+
+def _get_or_compile_proc_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., Any]:
     try:
         return rt._get_proc(proc.name)
     except KeyError:

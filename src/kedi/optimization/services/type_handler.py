@@ -94,7 +94,7 @@ class StructuredTypeHandler:
 
         # Use string signatures - DSPy handles type parsing automatically
         # Delegate to adapter for type information, then adapt to our inputs
-        signature = await DSPyAdapter.type_builder(
+        signature = DSPyAdapter.type_builder(
             output_schema,
             string=True,
         )

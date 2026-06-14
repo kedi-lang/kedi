@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
-from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List
+from contextlib import AbstractContextManager, contextmanager
+from types import SimpleNamespace
+from typing import Any, Callable, Dict, Iterator, List, Sequence
 
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.tool_override import ToolScope
 from kedi.agent_profile import AgentProfile
+from kedi.core import KediRuntime
+from kedi.lang.ast import ProcedureDef
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
@@ -28,14 +31,20 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     def default_model(self) -> str | None:
         return self.default_model_value
 
-    def tool_scope(self, tools=()):
+    def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         return self._tool_scope.tool_scope(tools)
 
-    def register_tool(self, tool):
+    def register_tool(self, tool: Any) -> None:
         self._tool_scope.register_tool(tool)
 
+    def register_kedi_tool(self, rt: KediRuntime, proc: ProcedureDef) -> None:
+        self.register_tool(SimpleNamespace(name=proc.name))
+
+    def register_python_tool(self, name: str, fn: Callable[..., Any]) -> None:
+        self.register_tool(SimpleNamespace(name=name))
+
     @property
-    def scoped_tools(self):
+    def scoped_tools(self) -> tuple[Any, ...]:
         return self._tool_scope.scoped_tools
 
     @contextmanager

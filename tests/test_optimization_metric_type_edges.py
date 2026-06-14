@@ -61,7 +61,7 @@ def test_type_handler_schema_and_signature_edges(
     with pytest.raises(ValueError, match="Output schema"):
         handler.create_dspy_signature_sync(["x"], [])
 
-    async def typed_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def typed_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema
         return "user_prompt -> generated: Custom"
 
@@ -75,14 +75,14 @@ def test_type_handler_schema_and_signature_edges(
         mp.setattr("kedi.lang.compiler.type_system.KediType.resolve", fail_resolve)
         assert handler.build_output_schema([("broken", "int")]) == {"broken": str}
 
-    async def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema
         return "generated"
 
     monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", no_arrow_builder)
     assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer: int"
 
-    async def object_builder(output_schema: dict[str, type], **_: Any) -> object:
+    def object_builder(output_schema: dict[str, type], **_: Any) -> object:
         assert output_schema
         return object()
 
@@ -91,7 +91,7 @@ def test_type_handler_schema_and_signature_edges(
 
     handler = StructuredTypeHandler(rt)
 
-    async def bare_output_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def bare_output_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"different": int}
         return "user_prompt -> other"
 
@@ -99,7 +99,7 @@ def test_type_handler_schema_and_signature_edges(
     monkeypatch.setattr(handler, "build_output_schema", lambda fields: {"different": int})
     assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer"
 
-    async def no_arrow_missing_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def no_arrow_missing_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"different": int}
         return "other"
 
@@ -108,7 +108,7 @@ def test_type_handler_schema_and_signature_edges(
 
     unknown_type = object()
 
-    async def matching_schema_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def matching_schema_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"other": cast(Any, unknown_type)}
         return "user_prompt -> other"
 
