@@ -20,10 +20,12 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         self.default_model_value = default_model
         self.last_effective_model: str | None = default_model
         self.last_effective_effort: str | None = None
+        self.last_effective_mcp_commands: tuple[str | None, ...] = ()
         self.model_calls: list[str | None] = []
         self.effort_calls: list[str | None] = []
         self.instruction_calls: list[str | None] = []
         self.tool_calls: list[tuple[str, ...]] = []
+        self.mcp_calls: list[tuple[str | None, ...]] = []
 
     def default_model(self) -> str | None:
         return self.default_model_value
@@ -42,15 +44,21 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         previous = self.last_effective_model
         previous_effort = self.last_effective_effort
+        previous_mcp = self.last_effective_mcp_commands
         if profile.model is not None:
             self.last_effective_model = profile.model
         if profile.effort is not None:
             self.last_effective_effort = profile.effort
+        if profile.mcp_servers:
+            self.last_effective_mcp_commands = tuple(
+                server.command for server in profile.mcp_servers
+            )
         try:
             yield
         finally:
             self.last_effective_model = previous
             self.last_effective_effort = previous_effort
+            self.last_effective_mcp_commands = previous_mcp
 
     async def produce(
         self,
@@ -73,6 +81,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         self.effort_calls.append(self.last_effective_effort)
         self.instruction_calls.append(kwargs.get("instructions"))
         self.tool_calls.append(tuple(tool.name for tool in self.scoped_tools))
+        self.mcp_calls.append(self.last_effective_mcp_commands)
         keys: List[str] = []
         seen: set[str] = set()
         for match in _OUTPUT_KEY_RE.finditer(template):

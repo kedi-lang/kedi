@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any, cast
 
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.model import eval_mcp_field_value
+from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     EffortDirectiveStmt,
+    McpDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
     ProfileDefStmt,
@@ -54,6 +58,153 @@ def test_parse_model_profile_use_directives() -> None:
     assert prog.ordered_toplevel[3].system_members[0].plain_value == "Be concise."
     assert isinstance(prog.ordered_toplevel[4], UseDirectiveStmt)
     assert isinstance(prog.ordered_toplevel[5], ProcedureDef)
+
+
+def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:
+    src = """
+> mcp:
+    command: vsh
+    args: `["run", "--mcp"]`
+
+> profile: filesystem:
+    > mcp:
+        command: fs-mcp
+
+@foo():
+    > mcp:
+        command: local-mcp
+    >> value [x]
+"""
+    prog = parse_program(src)
+
+    assert isinstance(prog.ordered_toplevel[0], McpDirectiveStmt)
+    assert prog.ordered_toplevel[0].fields[0].name == "command"
+    assert prog.ordered_toplevel[0].fields[0].plain_value == "vsh"
+    assert prog.ordered_toplevel[0].fields[1].backtick_code == '["run", "--mcp"]'
+
+    profile = prog.profile_defs["filesystem"]
+    assert profile.mcp_members[0].fields[0].plain_value == "fs-mcp"
+    assert isinstance(prog.procedures[0].body[0], McpDirectiveStmt)
+
+
+def test_mcp_profile_capture_uses_runtime_globals() -> None:
+    src = """
+> profile: dynamic:
+    > mcp:
+        command: `mcp_command`
+        args: `["serve"]`
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(
+        parse_program(src),
+        adapter=_adapter(),
+        runtime_globals={"mcp_command": "vsh"},
+    )
+
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert len(foo_def.captured_agent_profile.mcp_servers) == 1
+    server = foo_def.captured_agent_profile.mcp_servers[0]
+    assert server.transport == "stdio"
+    assert server.command == "vsh"
+    assert server.args == ("serve",)
+
+
+def test_mcp_inside_procedure_body_applies_to_following_prompt() -> None:
+    src = """
+@foo():
+    > mcp:
+        command: local-mcp
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    proc = _procedure_def(rt._procedures["foo"])
+
+    assert proc.captured_agent_profile.mcp_servers == ()
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.mcp_calls == [("local-mcp",)]
+
+
+def test_top_level_mcp_applies_to_following_prompt() -> None:
+    src = """
+> mcp:
+    command: top-mcp
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.mcp_calls == [("top-mcp",)]
+
+
+def test_top_level_mcp_is_captured_by_following_procedure() -> None:
+    src = """
+> mcp:
+    command: captured-mcp
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(parse_program(src), adapter=_adapter())
+    proc = _procedure_def(rt._procedures["foo"])
+    assert tuple(server.command for server in proc.captured_agent_profile.mcp_servers) == (
+        "captured-mcp",
+    )
+
+
+def test_mcp_field_without_value_evaluates_to_none() -> None:
+    from kedi.lang.ast import McpField
+
+    assert eval_mcp_field_value(cast(Any, None), McpField(name="env"), {}) is None
+
+
+def test_mcp_spec_validation() -> None:
+    stdio = mcp_spec_from_mapping({"command": "vsh", "args": None})
+    assert stdio == McpServerSpec(command="vsh")
+
+    http = mcp_spec_from_mapping(
+        {"transport": "http", "url": "http://localhost:8000", "headers": {"x": "y"}}
+    )
+    assert http.transport == "http"
+    assert http.url == "http://localhost:8000"
+    assert http.command is None
+
+    streamable_http = mcp_spec_from_mapping(
+        {"transport": "streamable-http", "url": "http://localhost:8000/mcp"}
+    )
+    assert streamable_http.transport == "http"
+    assert streamable_http.url == "http://localhost:8000/mcp"
+
+    sse = mcp_spec_from_mapping({"transport": "sse", "url": "http://localhost:8001"})
+    assert sse.transport == "sse"
+
+    with pytest.raises(ValueError, match="transport"):
+        mcp_spec_from_mapping({"transport": "websocket"})
+    with pytest.raises(ValueError, match="transport"):
+        mcp_spec_from_mapping({})
+    with pytest.raises(ValueError, match="requires command"):
+        mcp_spec_from_mapping({"transport": "stdio"})
+    with pytest.raises(ValueError, match="requires url"):
+        mcp_spec_from_mapping({"transport": "streamable-http"})
+    with pytest.raises(TypeError, match="args"):
+        mcp_spec_from_mapping({"command": "vsh", "args": "run"})
+    with pytest.raises(TypeError, match="args"):
+        mcp_spec_from_mapping({"command": "vsh", "args": [1]})
+    with pytest.raises(TypeError, match="env"):
+        mcp_spec_from_mapping({"command": "vsh", "env": []})
+    with pytest.raises(TypeError, match="env"):
+        mcp_spec_from_mapping({"command": "vsh", "env": {"x": 1}})
+    with pytest.raises(TypeError, match="headers"):
+        mcp_spec_from_mapping({"command": "vsh", "headers": []})
+    with pytest.raises(TypeError, match="command"):
+        mcp_spec_from_mapping({"command": 1})
+    with pytest.raises(TypeError, match="url"):
+        mcp_spec_from_mapping({"transport": "http", "url": 1})
+    broken = McpServerSpec(command="vsh")
+    object.__setattr__(broken, "transport", "bad")
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        broken.normalized()
 
 
 def test_profile_docstring_comes_from_first_block_comment_only() -> None:

@@ -624,8 +624,9 @@ Dataset items can follow two conventions:
 ## Agent Profiles and Tools
 
 Kedi routes LLM calls through agent adapters. Use `> model:`, `> effort:`,
-`> system:`, `> profile:`, and `> use:` to choose models, set reasoning effort,
-set agent instructions, and expose Kedi procedures as agent tools.
+`> system:`, `> mcp:`, `> profile:`, and `> use:` to choose models, set
+reasoning effort, set agent instructions, load MCP tools, and expose Kedi
+procedures as agent tools.
 
 ### Model and profile directives
 
@@ -644,6 +645,9 @@ set agent instructions, and expose Kedi procedures as agent tools.
     > model: openrouter/google/gemini-3-flash-preview
     > effort: high
     > system: Be precise and cite the relevant tool output.
+    > mcp:
+        command: vsh
+        args: `["run", "--mcp"]`
     > use: web_search
 ```
 
@@ -661,11 +665,38 @@ set agent instructions, and expose Kedi procedures as agent tools.
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> model:`,
-  `> effort:`, `> system:`, and/or `> use:` members.
+  `> effort:`, `> system:`, `> mcp:`, and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
 - Profiles merge when applied: later members override earlier ones of the same kind.
+
+### `> mcp:` semantics
+
+Use `> mcp:` to load tools from an MCP server for the active agent scope:
+
+```kedi
+> mcp:
+    transport: stdio
+    command: vsh
+    args: `["run", "--mcp"]`
+    env: `{}`
+```
+
+- `transport` must be `stdio`, `sse`, `http`, or `streamable-http`. If omitted
+  and `command` is present, Kedi treats the directive as `stdio`. `http` is an
+  alias for `streamable-http`; both use the same streamable HTTP transport.
+- `stdio` servers require `command`; `args` must evaluate to a list of strings
+  and `env` must evaluate to a string dictionary when present.
+- `http` / `streamable-http` and `sse` servers require `url`; `headers` must
+  evaluate to a string dictionary when present.
+- MCP directives follow the same scoping model as `> model:` and `> system:`:
+  top-level directives are captured by following procedures, profile members
+  are applied when the profile is used, and procedure-body directives affect
+  following prompt calls in that procedure.
+
+DSPy currently uses the stdio MCP path through `dspy.Tool.from_mcp_tool` and
+`ReAct.acall`.
 
 ### `> use:` semantics
 
@@ -764,8 +795,8 @@ The system will:
 3. Cache the implementation in `source.cache.kedi`
 
 Unknown `>` directives will raise a directive error. Valid directives include
-`auto`, `data`, `test_data`, `metric`, `optimize`, `model`, `effort`, `profile`, `use`,
-`import`, and `export`.
+`auto`, `data`, `test_data`, `metric`, `optimize`, `model`, `effort`, `system`, `mcp`,
+`profile`, `use`, `import`, and `export`.
 
 ## Complete Example with Explanations
 

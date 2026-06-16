@@ -54,12 +54,12 @@ tests:
 
 coverage:
 	@printf "$(BLUE)==>$(RESET) Running pytest with coverage...\n"
-	@$(UV) run --group dev pytest --cov=. -q
+	@$(UV) run --group dev pytest --cov=src/kedi -q
 	@printf "$(GREEN)✔ Coverage run complete.$(RESET)\n"
 
 check-coverage:
 	@printf "$(BLUE)==>$(RESET) Checking full test coverage...\n"
-	@$(UV) run --group dev pytest --record-mode=none --cov=. --cov-fail-under=100 -q
+	@$(UV) run --group dev pytest --record-mode=none --cov=src/kedi --cov-fail-under=100 -q
 	@printf "$(GREEN)✔ Coverage threshold satisfied.$(RESET)\n"
 
 check-matrix:

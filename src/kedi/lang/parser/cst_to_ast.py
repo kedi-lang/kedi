@@ -38,6 +38,7 @@ from typing import List, Optional, Union
 from tree_sitter import Node, Tree
 
 from ...effort import EFFORT_VALUES, is_valid_effort
+from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
@@ -52,6 +53,8 @@ from ..ast import (
     EffortDirectiveStmt,
     InputSegment,
     LiteralArg,
+    McpDirectiveStmt,
+    McpField,
     ModuleExport,
     ModelDirectiveStmt,
     ModuleImport,
@@ -61,6 +64,7 @@ from ..ast import (
     ProcedureDef,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileMcpEntry,
     ProfileModelEntry,
     ProfileSystemEntry,
     Program,
@@ -272,6 +276,10 @@ class _Walker:
                 stmt = self._walk_system_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "mcp_directive":
+                stmt = self._walk_mcp_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "profile_directive":
                 stmt = self._walk_profile_directive(child)
                 if stmt.name in prog.profile_defs:
@@ -374,6 +382,16 @@ class _Walker:
             node,
             f"effort directive must be one of: {expected}",
             code="K-EFFORT-VALUE",
+        )
+
+    def _validate_mcp_transport_plain_value(self, node: Node, value: str) -> None:
+        if is_valid_mcp_transport(value):
+            return
+        expected = ", ".join(sorted(MCP_TRANSPORT_VALUES))
+        self._error(
+            node,
+            f"MCP transport must be one of: {expected}",
+            code="K-MCP-TRANSPORT",
         )
 
     def _validate_block_comments(self) -> None:
@@ -637,6 +655,8 @@ class _Walker:
             return self._walk_effort_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
+        if t == "mcp_directive":
+            return self._walk_mcp_directive(node)
         if t == "use_directive":
             return self._walk_use_directive(node)
         if t == "profile_directive":
@@ -1244,6 +1264,37 @@ class _Walker:
         plain = _src_text(self.source, value_node).strip()
         return SystemDirectiveStmt(plain_value=plain, loc=self._span(node))
 
+    def _walk_mcp_directive(self, node: Node) -> McpDirectiveStmt:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[McpField] = []
+        for child in _named_children(body_node):
+            fields.append(self._walk_mcp_field(child))
+        return McpDirectiveStmt(fields=fields, loc=self._span(node))
+
+    def _walk_mcp_field(self, node: Node) -> McpField:
+        name_node = _field(node, "name")
+        value_node = _field(node, "value")
+        assert name_node is not None
+        assert value_node is not None
+        name = _identifier_name(self.source, name_node)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return McpField(
+                name=name,
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        if name == "transport":
+            self._validate_mcp_transport_plain_value(value_node, plain)
+        return McpField(
+            name=name,
+            plain_value=plain,
+            loc=self._span(node),
+        )
+
     def _walk_use_directive(self, node: Node) -> UseDirectiveStmt:
         body_node = _field(node, "body")
         if body_node is not None:
@@ -1282,6 +1333,7 @@ class _Walker:
         members: list[ProfileModelEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         system_members: list[ProfileSystemEntry] = []
+        mcp_members: list[ProfileMcpEntry] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -1370,10 +1422,21 @@ class _Walker:
                         tool_names.extend(use_stmt.tool_names)
                     elif use_stmt.name:
                         tool_names.append(use_stmt.name)
-        if not members and not effort_members and not system_members and not tool_names:
+                elif child.type == "mcp_directive":
+                    mcp_stmt = self._walk_mcp_directive(child)
+                    mcp_members.append(
+                        ProfileMcpEntry(fields=mcp_stmt.fields, loc=self._span(child))
+                    )
+        if (
+            not members
+            and not effort_members
+            and not system_members
+            and not mcp_members
+            and not tool_names
+        ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -1381,6 +1444,7 @@ class _Walker:
             model_members=members,
             effort_members=effort_members,
             system_members=system_members,
+            mcp_members=mcp_members,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

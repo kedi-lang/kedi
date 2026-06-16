@@ -30,6 +30,8 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
         "    > model: opus\n"
         "    > effort: high\n"
         "    > system: Keep answers short.\n"
+        "    > mcp:\n"
+        "        command: fs-mcp\n"
         "> use: light\n"
     )
     tokens = features.compute_semantic_tokens_full(src, "/tmp/profile.kedi")
@@ -49,8 +51,12 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 3 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 5 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 5 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
     assert any(line == 7 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 7 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 8 and token_type == property_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 8 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 9 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 9 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
 def test_hover_on_model_profile_and_use_directives() -> None:
@@ -63,10 +69,18 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     > model: opus
     > effort: high
     > system: Keep answers short.
+    > mcp:
+        command: profile-mcp
     > system:
         Prefer <tone> answers.
+> mcp:
+    transport: stdio
+    command: vsh
+    args: `["run", "--mcp"]`
 > use: light
 @foo():
+    > mcp:
+        command: local-mcp
     >> answer [x]
 """
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
@@ -74,7 +88,15 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
     assert "Input segment" in hover_text_at(src, "profile.kedi", "tone", occurrence=1)
     assert "Keep answers short." in hover_text_at(src, "profile.kedi", "Keep")
+    assert "reusable profile MCP" in hover_text_at(src, "profile.kedi", "mcp", occurrence=1)
+    assert "Command used" in hover_text_at(src, "profile.kedi", "profile-mcp")
     assert "Text segment" in hover_text_at(src, "profile.kedi", "Prefer")
+    assert "> mcp:" in hover_text_at(src, "profile.kedi", "mcp", occurrence=3)
+    assert "MCP field" in hover_text_at(src, "profile.kedi", "transport")
+    assert "stdio" in hover_text_at(src, "profile.kedi", "stdio")
+    assert "Command used" in hover_text_at(src, "profile.kedi", "vsh")
+    assert "String argument list" in hover_text_at(src, "profile.kedi", "args")
+    assert "local-mcp" in hover_text_at(src, "profile.kedi", "local-mcp")
     assert "haiku" in hover_text_at(src, "profile.kedi", "haiku")
     assert "Agent profile" in hover_text_at(src, "profile.kedi", "light", occurrence=1)
     assert "> use:" in hover_text_at(src, "profile.kedi", "light", occurrence=2)

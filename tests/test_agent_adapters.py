@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sys
+from dataclasses import dataclass
+from types import ModuleType
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -18,6 +21,8 @@ from kedi.agent_adapter.utils import (
     python_callable_tool_spec,
 )
 from kedi.lang import compile_program, parse_program
+from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.mcp import McpServerSpec
 
 
 class DirectOutput(BaseModel):
@@ -73,10 +78,139 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         "template", output_type=DirectOutput, metadata="ok"
     ) == DirectOutput(value="direct")
 
-    with pytest.raises(AssertionError, match="Output schema cannot be empty"):
+    with pytest.raises(ValueError, match="Output schema cannot be empty"):
         PydanticAdapter.type_builder({})
-    with pytest.raises(AssertionError, match="Output spec must be provided"):
+    with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("template"))
+
+
+def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pydantic_ai.mcp as pydantic_mcp
+
+    calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def fake_toolset(*args: Any, **kwargs: Any) -> str:
+        calls.append(("toolset", args, kwargs))
+        return f"toolset:{len(calls)}"
+
+    monkeypatch.setattr(pydantic_mcp, "MCPToolset", fake_toolset)
+
+    adapter = object.__new__(PydanticAdapter)
+    profile = AgentProfile(
+        mcp_servers=(
+            McpServerSpec(command="vsh", args=("run", "--mcp"), env={"A": "B"}),
+            McpServerSpec(transport="sse", url="http://localhost/sse", headers={"H": "V"}),
+            McpServerSpec(transport="http", url="http://localhost/mcp", headers={"H2": "V2"}),
+        )
+    )
+
+    assert adapter._mcp_toolsets_for_profile(profile) == [
+        "toolset:1",
+        "toolset:2",
+        "toolset:3",
+    ]
+    assert calls == [
+        (
+            "toolset",
+            (
+                {
+                    "mcpServers": {
+                        "kedi_mcp_0": {
+                            "command": "vsh",
+                            "args": ["run", "--mcp"],
+                            "env": {"A": "B"},
+                        }
+                    }
+                },
+            ),
+            {},
+        ),
+        (
+            "toolset",
+            (
+                {
+                    "mcpServers": {
+                        "kedi_mcp_1": {
+                            "url": "http://localhost/sse",
+                            "transport": "sse",
+                            "headers": {"H": "V"},
+                        }
+                    }
+                },
+            ),
+            {},
+        ),
+        ("toolset", ("http://localhost/mcp",), {"headers": {"H2": "V2"}}),
+    ]
+
+    assert adapter._mcp_toolsets_for_profile(
+        AgentProfile(
+            mcp_servers=(
+                McpServerSpec(command="vsh"),
+                McpServerSpec(transport="sse", url="http://localhost/sse"),
+            )
+        )
+    ) == ["toolset:4", "toolset:5"]
+    assert calls[-2:] == [
+        (
+            "toolset",
+            ({"mcpServers": {"kedi_mcp_0": {"command": "vsh", "args": []}}},),
+            {},
+        ),
+        (
+            "toolset",
+            ({"mcpServers": {"kedi_mcp_1": {"url": "http://localhost/sse", "transport": "sse"}}},),
+            {},
+        ),
+    ]
+
+    broken = SimpleNamespace(transport="other")
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        adapter._mcp_toolsets_for_profile(
+            cast(AgentProfile, SimpleNamespace(mcp_servers=(broken,)))
+        )
+
+    with pytest.raises(ValueError, match="stdio transport requires a command"):
+        adapter._mcp_toolsets_for_profile(AgentProfile(mcp_servers=(McpServerSpec(),)))
+    with pytest.raises(ValueError, match="sse transport requires a url"):
+        adapter._mcp_toolsets_for_profile(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="sse"),))
+        )
+    with pytest.raises(ValueError, match="http transport requires a url"):
+        adapter._mcp_toolsets_for_profile(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="http"),))
+        )
+
+
+def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:
+    adapter = object.__new__(PydanticAdapter)
+    adapter._profile_stack = []
+    adapter._model = "openai:gpt-4o-mini"
+
+    broken_profile = cast(
+        AgentProfile,
+        SimpleNamespace(
+            model=None,
+            effort=None,
+            needs_model_override=lambda _default: True,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="requires a model override"):
+        with adapter.profile_override(broken_profile):
+            pass
+
+
+def test_pydantic_adapter_includes_active_profile_mcp_toolsets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(PydanticAdapter, "_mcp_toolsets_for_profile", lambda *_: ["mcp-toolset"])
+
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),))]
+
+    assert adapter._toolsets_for_run() == ["mcp-toolset"]
 
 
 def test_dspy_adapter_configures_lm_and_builds_signature(
@@ -112,7 +246,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
     signature = DSPyAdapter.type_builder({"answer": int})
     assert issubclass(signature, adapters_module.dspy.Signature)
 
-    with pytest.raises(AssertionError, match="Output schema must be provided"):
+    with pytest.raises(ValueError, match="Output schema must be provided"):
         DSPyAdapter.type_builder({})
 
 
@@ -162,8 +296,164 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         "user_prompt": "prompt",
     }
 
-    with pytest.raises(AssertionError, match="Output spec must be provided"):
+    with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
+
+
+def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[Any] = []
+
+    @dataclass
+    class FakeStdioServerParameters:
+        command: str
+        args: list[str]
+        env: dict[str, str] | None
+
+    class FakeStdioClient:
+        def __init__(self, params: FakeStdioServerParameters) -> None:
+            self.params = params
+
+        async def __aenter__(self) -> tuple[str, str]:
+            events.append(("stdio", self.params))
+            return "read", "write"
+
+        async def __aexit__(self, *_: object) -> None:
+            events.append("stdio-closed")
+
+    class FakeClientSession:
+        def __init__(self, read: str, write: str) -> None:
+            self.read = read
+            self.write = write
+
+        async def __aenter__(self) -> "FakeClientSession":
+            events.append(("session", self.read, self.write))
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            events.append("session-closed")
+
+        async def initialize(self) -> None:
+            events.append("initialized")
+
+        async def list_tools(self) -> SimpleNamespace:
+            return SimpleNamespace(tools=[SimpleNamespace(name="remote_search")])
+
+    mcp_module = ModuleType("mcp")
+    setattr(mcp_module, "ClientSession", FakeClientSession)
+    setattr(mcp_module, "StdioServerParameters", FakeStdioServerParameters)
+    mcp_client_module = ModuleType("mcp.client")
+    mcp_stdio_module = ModuleType("mcp.client.stdio")
+    setattr(mcp_stdio_module, "stdio_client", FakeStdioClient)
+    monkeypatch.setitem(sys.modules, "mcp", mcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.client", mcp_client_module)
+    monkeypatch.setitem(sys.modules, "mcp.client.stdio", mcp_stdio_module)
+
+    class FakeTool:
+        @staticmethod
+        def from_mcp_tool(session: FakeClientSession, tool: SimpleNamespace) -> str:
+            assert isinstance(session, FakeClientSession)
+            return f"mcp:{tool.name}"
+
+    class FakeReAct:
+        def __init__(self, signature: object, tools: list[Any]) -> None:
+            self.signature = signature
+            self.tools = tools
+
+        async def acall(self, **kwargs: Any) -> dict[str, Any]:
+            return {"tools": self.tools, **kwargs}
+
+    monkeypatch.setattr(adapters_module.dspy, "Tool", FakeTool)
+    monkeypatch.setattr(adapters_module.dspy, "ReAct", FakeReAct)
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [
+        AgentProfile(
+            mcp_servers=(McpServerSpec(command="vsh", args=("run", "--mcp"), env={"A": "B"}),)
+        )
+    ]
+
+    result = asyncio.run(adapter._produce_with_mcp(object(), ["local"], "prompt", {"extra": 1}))
+
+    assert result == {"tools": ["local", "mcp:remote_search"], "extra": 1, "user_prompt": "prompt"}
+    assert events[0][0] == "stdio"
+    assert events[0][1] == FakeStdioServerParameters("vsh", ["run", "--mcp"], {"A": "B"})
+    assert events[1:] == [
+        ("session", "read", "write"),
+        "initialized",
+        "session-closed",
+        "stdio-closed",
+    ]
+
+
+def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_produce_with_mcp(
+        self: DSPyAdapter,
+        sig: object,
+        tools: list[Any],
+        template: str,
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {"sig": sig, "tools": tools, "template": template, "kwargs": kwargs}
+
+    class FakeSignature:
+        def with_instructions(self, instructions: str | None) -> str:
+            assert instructions is None
+            return "sig"
+
+    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(lambda _: FakeSignature()))
+    monkeypatch.setattr(DSPyAdapter, "_produce_with_mcp", fake_produce_with_mcp)
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),))]
+
+    result = adapter.produce_sync("prompt", {"answer": str}, user_prompt="ignored", extra=1)
+
+    assert result == {"sig": "sig", "tools": [], "template": "prompt", "kwargs": {"extra": 1}}
+
+
+def test_dspy_adapter_mcp_rejects_non_stdio() -> None:
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [
+        AgentProfile(mcp_servers=(McpServerSpec(transport="http", url="http://localhost"),))
+    ]
+
+    with pytest.raises(NotImplementedError, match="stdio"):
+        asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
+
+
+def test_dspy_adapter_mcp_rejects_missing_stdio_command() -> None:
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(),))]
+
+    with pytest.raises(ValueError, match="stdio transport requires a command"):
+        asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
+
+
+def test_dspy_adapter_profile_override_rejects_broken_model_profile() -> None:
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._profile_stack = []
+
+    broken_profile = cast(
+        AgentProfile,
+        SimpleNamespace(
+            model=None,
+            effort=None,
+            needs_model_override=lambda _default: True,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="requires a model override"):
+        with adapter.profile_override(broken_profile):
+            pass
 
 
 def test_dspy_adapter_register_tool_wraps_async_callable() -> None:

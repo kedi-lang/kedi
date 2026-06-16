@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from ..effort import EffortValue
+from .mcp import McpServerSpec
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -13,6 +14,7 @@ class AgentProfile:
     effort: EffortValue | None = None
     system: str | None = None
     tools: tuple[str, ...] = ()
+    mcp_servers: tuple[McpServerSpec, ...] = ()
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -28,6 +30,8 @@ class AgentProfile:
             updates["system"] = other.system
         if other.tools:
             updates["tools"] = _merge_tool_names(self.tools, other.tools)
+        if other.mcp_servers:
+            updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
         if not updates:
             return self
         return replace(self, **updates)
@@ -43,7 +47,11 @@ class AgentProfile:
         return self.model != adapter_default
 
     def needs_adapter_override(self, adapter_default: str | None) -> bool:
-        return self.effort is not None or self.needs_model_override(adapter_default)
+        return (
+            self.effort is not None
+            or bool(self.mcp_servers)
+            or self.needs_model_override(adapter_default)
+        )
 
 
 def _merge_tool_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:

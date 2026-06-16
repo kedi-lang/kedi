@@ -9,6 +9,7 @@ from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
 from ...agent_profile.model import (
     eval_effort_directive,
+    eval_mcp_directive,
     eval_model_directive,
     eval_system_directive,
 )
@@ -20,6 +21,7 @@ from ...module_registry import resolve_module_path
 from ...source_loading import load_kedi_source_bundle
 from ..ast import (
     EffortDirectiveStmt,
+    McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
     ProcedureDef,
@@ -356,6 +358,9 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, SystemDirectiveStmt):
                         active = active.merge(eval_system_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, McpDirectiveStmt):
+                        active = active.merge(eval_mcp_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, UseDirectiveStmt):
                         active = active.merge(

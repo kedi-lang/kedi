@@ -259,6 +259,19 @@ class SystemDirectiveStmt(Stmt):
 
 
 @dataclass
+class McpField:
+    name: str = ""
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class McpDirectiveStmt(Stmt):
+    fields: List[McpField] = field(default_factory=list)
+
+
+@dataclass
 class UseDirectiveStmt(Stmt):
     target: str = ""
     tool_names: List[str] = field(default_factory=list)
@@ -281,6 +294,7 @@ class ProfileDefStmt(Stmt):
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
+    mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
@@ -305,6 +319,12 @@ class ProfileSystemEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
     template_lines: List[TemplateLine] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileMcpEntry:
+    fields: List[McpField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

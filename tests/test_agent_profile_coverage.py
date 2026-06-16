@@ -28,11 +28,14 @@ from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     EffortDirectiveStmt,
     InputSegment,
+    McpDirectiveStmt,
+    McpField,
     ModelDirectiveStmt,
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileMcpEntry,
     ProfileModelEntry,
     ProfileSystemEntry,
     Program,
@@ -434,6 +437,17 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     )
     assert profile_system_backtick is not None
     assert "instructions['short']" in profile_system_backtick
+
+    profile_mcp_hover = features._describe_ast_node(
+        ProfileMcpEntry(fields=[McpField(name="env", backtick_code="env")])
+    )
+    assert profile_mcp_hover is not None and "reusable profile MCP" in profile_mcp_hover
+    mcp_directive_hover = features._describe_ast_node(
+        McpDirectiveStmt(fields=[McpField(name="headers", backtick_code="headers")])
+    )
+    assert mcp_directive_hover is not None and "> mcp:" in mcp_directive_hover
+    mcp_field_hover = features._describe_ast_node(McpField(name="url", plain_value="http://x"))
+    assert mcp_field_hover is not None and "HTTP/SSE MCP server URL" in mcp_field_hover
 
     plain_only = ProfileDefStmt(
         name="plain",

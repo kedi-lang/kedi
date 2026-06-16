@@ -9,6 +9,7 @@ from ...errors import KediTraceFrame
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.model import (
     eval_effort_directive,
+    eval_mcp_directive,
     eval_model_directive,
     eval_system_directive,
 )
@@ -18,6 +19,7 @@ from ..ast import (
     AssignStmt,
     BacktickLineStmt,
     EffortDirectiveStmt,
+    McpDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
@@ -240,6 +242,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, McpDirectiveStmt):
+                    active = active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, UseDirectiveStmt):
                     active = active.merge(

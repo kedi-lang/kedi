@@ -90,6 +90,24 @@ def test_diagnostics_report_invalid_profile_effort_value() -> None:
     assert diag.range.start.line == 1
 
 
+def test_diagnostics_report_invalid_mcp_transport_value() -> None:
+    src = "> mcp:\n    transport: websocket\n    url: http://localhost:8000\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-MCP-TRANSPORT"
+    assert "streamable-http" in diag.message
+    assert diag.range.start.line == 1
+    assert diag.range.start.character == 15
+
+
+def test_diagnostics_accept_streamable_http_mcp_transport() -> None:
+    src = "> mcp:\n    transport: streamable-http\n    url: http://localhost:8000/mcp\n"
+
+    assert features.compute_diagnostics(src, "example.kedi") == []
+
+
 def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")

@@ -69,10 +69,13 @@ from ..lang.ast import (
     EvalSuite,
     EffortDirectiveStmt,
     InputSegment,
+    McpDirectiveStmt,
+    McpField,
     ModelDirectiveStmt,
     OptimizeSpan,
     ProfileDefStmt,
     ProfileEffortEntry,
+    ProfileMcpEntry,
     ProfileSystemEntry,
     OutputSegment,
     ProcDefStmt,
@@ -1272,10 +1275,20 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.system_members:
                 visit(member)
+            for member in node.mcp_members:
+                visit(member)
             return
         if isinstance(node, SystemDirectiveStmt):
             for line in node.template_lines:
                 visit(line)
+            return
+        if isinstance(node, McpDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileMcpEntry):
+            for field in node.fields:
+                visit(field)
             return
         if isinstance(node, ProfileSystemEntry):
             for line in node.template_lines:
@@ -1404,10 +1417,16 @@ def _describe_ast_node(node) -> Optional[str]:
         return _effort_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
+    if isinstance(node, McpDirectiveStmt):
+        return _mcp_directive_markdown(node)
+    if isinstance(node, McpField):
+        return _mcp_field_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
+    if isinstance(node, ProfileMcpEntry):
+        return _profile_mcp_entry_markdown(node)
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)
     if isinstance(node, ProfileDefStmt):
@@ -1491,6 +1510,36 @@ def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     )
 
 
+def _mcp_directive_markdown(stmt: McpDirectiveStmt) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in stmt.fields) or "`<empty>`"
+    return (
+        f"**`> mcp:`** — load tools from an MCP server for the active agent scope. "
+        f"Configured fields: {fields}."
+    )
+
+
+def _mcp_field_markdown(field: McpField) -> str:
+    value = _mcp_field_value_preview(field)
+    descriptions = {
+        "transport": (
+            "MCP transport. Accepted values: `stdio`, `sse`, `http`, "
+            "or `streamable-http`; `http` is an alias for `streamable-http`."
+        ),
+        "command": "Command used to start a stdio MCP server.",
+        "args": "String argument list passed to the stdio MCP command.",
+        "env": "String environment dictionary passed to the stdio MCP process.",
+        "url": "HTTP/SSE MCP server URL.",
+        "headers": "String header dictionary sent to HTTP/SSE MCP servers.",
+    }
+    desc = descriptions.get(field.name, "MCP server configuration field.")
+    return f"**MCP field** `{field.name}` = {value} — {desc}"
+
+
+def _profile_mcp_entry_markdown(entry: ProfileMcpEntry) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
+    return f"**`> mcp:`** — reusable profile MCP server configuration. Fields: {fields}."
+
+
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return f"**`> system:`** — reusable agent profile instructions: {value}."
@@ -1523,6 +1572,12 @@ def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"
+
+
+def _mcp_field_value_preview(field: McpField) -> str:
+    if field.backtick_code is not None:
+        return f"`{field.backtick_code}`"
+    return f"`{field.plain_value or ''}`"
 
 
 def _missing_agent_profile_hover(name: str, imported_surface: ImportedSurface) -> str:

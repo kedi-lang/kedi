@@ -348,10 +348,11 @@ class KediRuntime:
         if isinstance(self.adapter, SupportsProfileOverride):
             if profile.needs_adapter_override(self.adapter.default_model()):
                 override_ctx = self.adapter.profile_override(profile)
-        elif profile.model is not None or profile.effort is not None:
+        elif profile.model is not None or profile.effort is not None or profile.mcp_servers:
             raise AgentProfileOverrideUnsupported(
                 "Active adapter does not support agent profile override "
-                f"(requested model={profile.model!r}, effort={profile.effort!r})"
+                f"(requested model={profile.model!r}, effort={profile.effort!r}, "
+                f"mcp_servers={profile.mcp_servers!r})"
             )
 
         from .agent_adapter.tool_override import SupportsToolRegistration

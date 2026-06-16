@@ -8,16 +8,20 @@ from .profile import AgentProfile
 from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
+    ProfileMcpMember,
     ProfileModelMember,
     ProfileSystemMember,
     ProfileToolMember,
 )
+from .mcp import McpServerSpec, mcp_spec_from_mapping
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
         EffortDirectiveStmt,
         ModelDirectiveStmt,
+        McpDirectiveStmt,
+        McpField,
         SystemDirectiveStmt,
         TemplateLine,
         UseDirectiveStmt,
@@ -135,9 +139,36 @@ def eval_system_directive(
     return AgentProfile(system=system)
 
 
+def eval_mcp_field_value(rt: KediRuntime, field: McpField, env: dict[str, Any]) -> Any:
+    if field.backtick_code is not None:
+        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+    if field.plain_value is not None:
+        return field.plain_value.strip()
+    return None
+
+
+def eval_mcp_fields(
+    rt: KediRuntime, fields: list[McpField] | tuple[McpField, ...], env: dict[str, Any]
+) -> McpServerSpec:
+    values = {field.name: eval_mcp_field_value(rt, field, env) for field in fields}
+    return mcp_spec_from_mapping(values)
+
+
+def eval_mcp_directive(
+    rt: KediRuntime,
+    stmt: McpDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return AgentProfile(mcp_servers=(eval_mcp_fields(rt, stmt.fields, env),))
+
+
 def _member_to_patch(
     rt: KediRuntime,
-    member: ProfileModelMember | ProfileEffortMember | ProfileSystemMember | ProfileToolMember,
+    member: ProfileModelMember
+    | ProfileEffortMember
+    | ProfileSystemMember
+    | ProfileToolMember
+    | ProfileMcpMember,
     env: dict[str, Any],
 ) -> AgentProfile:
     if member.kind == "model":
@@ -168,6 +199,8 @@ def _member_to_patch(
         return AgentProfile(system=system)
     if member.kind == "tools":
         return AgentProfile(tools=member.tool_names)
+    if member.kind == "mcp":
+        return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")
 
 
