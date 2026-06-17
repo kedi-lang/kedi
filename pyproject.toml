@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kedi"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Kedi Language"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -53,6 +53,9 @@ kedi-lsp = "kedi.lsp.server:main"
 
 [tool.hatch.build]
 include-package-data = true
+
+[tool.hatch.version]
+path = "src/kedi/_version.py"
 
 [tool.hatch.build.targets.sdist]
 include = [

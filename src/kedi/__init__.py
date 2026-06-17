@@ -1,3 +1,4 @@
+from ._version import __version__
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (
@@ -8,6 +9,7 @@ from .executors.debug import (
 )
 
 __all__ = [
+    "__version__",
     "KediRuntime",
     "Executor",
     "DefaultExecutor",

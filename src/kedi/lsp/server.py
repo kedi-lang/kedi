@@ -14,6 +14,7 @@ from urllib.parse import unquote, urlparse
 from lsprotocol import types as lsp
 from pygls.lsp.server import LanguageServer
 
+from .._version import __version__
 from . import features
 from .python_virtual import compute_python_virtual_document
 
@@ -28,7 +29,7 @@ def _uri_to_path(uri: str) -> Optional[str]:
 
 
 def make_server() -> LanguageServer:
-    server = LanguageServer(name="kedi-lsp", version="0.3.0")
+    server = LanguageServer(name="kedi-lsp", version=__version__)
 
     # ----- Document lifecycle: re-parse + publish diagnostics -----
 
