@@ -28,7 +28,10 @@ def test_resolved_type_helpers_cover_typing_aliases() -> None:
     assert resolved_type_name(str) == "str"
     assert resolved_type_name(list[str]) == "list"
     assert runtime_isinstance("x", str)
-    assert runtime_isinstance("x", list[str]) is True
+    # Generic args are validated fail-closed now: a str is not a list[str].
+    assert runtime_isinstance("x", list[str]) is False
+    assert runtime_isinstance(["x"], list[str]) is True
+    assert runtime_isinstance(["x"], list[int]) is False
 
 
 def test_smallest_enclosing_visits_toplevel_return() -> None:
@@ -38,6 +41,26 @@ def test_smallest_enclosing_visits_toplevel_return() -> None:
     prog = parse_program(src)
     pos = position_of(src, "<x>")
     assert features._smallest_enclosing(prog, pos) is not None
+
+
+def test_smallest_enclosing_visits_assign_stmt_expression() -> None:
+    from kedi.lang.parser import parse_program
+
+    src = "@p():\n  [x] = <y>\n\n= ok\n"
+    prog = parse_program(src)
+    pos = position_of(src, "y")
+    node = features._smallest_enclosing(prog, pos)
+    assert node is not None
+    assert getattr(node, "name", None) == "y"
+
+
+def test_call_arg_access_skips_duplicate_nested_segments() -> None:
+    from kedi.lang.ast import LiteralArg, TextSegment
+    from kedi.lang.call_arg_access import iter_call_arg_nested
+
+    segment = TextSegment(text="a")
+    arg = LiteralArg(value="", render_segments=[segment, segment])
+    assert list(iter_call_arg_nested(arg)) == [segment]
 
 
 def test_type_registry_skips_private_and_missing_names(

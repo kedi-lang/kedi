@@ -68,13 +68,12 @@ class ImportedSurface:
 
 
 def program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
-    loc = getattr(prog, "loc", None)
+    loc = prog.loc
     if loc is not None and loc.source_path:
         return Path(loc.source_path).resolve()
-    source_map = getattr(prog, "source_map", None)
-    documents = getattr(source_map, "documents", None)
-    if documents:
-        return Path(documents[0].path).resolve()
+    source_map = prog.source_map
+    if source_map is not None and source_map.documents:
+        return Path(source_map.documents[0].path).resolve()
     return None
 
 
@@ -130,7 +129,7 @@ def imported_surface_for_program(
     surface = ImportedSurface()
     root_path = program_path(prog)
     seen = {root_path} if root_path is not None else set()
-    _merge_imports(surface, list(getattr(prog, "imports", [])), source_path=root_path, seen=seen)
+    _merge_imports(surface, list(prog.imports), source_path=root_path, seen=seen)
     return surface
 
 
@@ -174,7 +173,7 @@ def load_imported_surface(
     nested_surface = ImportedSurface()
     _merge_imports(
         nested_surface,
-        list(getattr(prog, "imports", [])),
+        list(prog.imports),
         source_path=path,
         seen=next_seen,
     )
@@ -201,10 +200,10 @@ def load_imported_surface(
     combined_values = dict(nested_surface.values)
     combined_values.update(local_values)
     combined_profiles = dict(nested_surface.profiles)
-    combined_profiles.update(getattr(prog, "profile_defs", {}))
+    combined_profiles.update(prog.profile_defs)
 
     export_names: list[str] = []
-    for export in getattr(prog, "exports", []):
+    for export in prog.exports:
         if export.export_all:
             export_names.extend(
                 name

@@ -856,6 +856,21 @@ def _emit_return(
     _emit_segments(builder, cursor, stmt, scope, indent)
 
 
+def _stmt_segments(stmt: Stmt) -> list:
+    if isinstance(stmt, TemplateBlock):
+        segments: list = []
+        for line in stmt.lines:
+            segments.extend(line.segments)
+        return segments
+    if isinstance(stmt, TemplateLine):
+        return list(stmt.segments)
+    if isinstance(stmt, ReturnStmt):
+        return list(stmt.segments)
+    if isinstance(stmt, AssignStmt):
+        return list(stmt.expr)
+    return []
+
+
 def _emit_segments(
     builder: VirtualBuilder,
     cursor: RegionCursor,
@@ -863,9 +878,7 @@ def _emit_segments(
     scope: dict[str, ScopeName],
     indent: str,
 ) -> None:
-    for segment in list(getattr(stmt, "segments", []) or []) + list(
-        getattr(stmt, "expr", []) or []
-    ):
+    for segment in _stmt_segments(stmt):
         if isinstance(segment, OutputSegment):
             typ = _type_to_python(segment.type_expr, segment.type_annotation)
             line = builder.add(f"{indent}{segment.name}: {typ} = ...")
@@ -1169,17 +1182,17 @@ def _typing_import_lines(program: Any) -> list[str]:
     return lines
 
 
-def _iter_type_exprs(program: Any) -> Iterable[Optional[TypeExpr]]:
-    for typedef in getattr(program, "type_defs", ()):
+def _iter_type_exprs(program: ProgramWithValidation) -> Iterable[Optional[TypeExpr]]:
+    for typedef in program.type_defs:
         for field in typedef.fields:
             yield field.type_expr
-    for proc in getattr(program, "procedures", ()):
+    for proc in program.procedures:
         yield proc.return_type_expr
         for expr in (proc.param_type_exprs or {}).values():
             yield expr
         for stmt in proc.body:
             yield from _iter_stmt_type_exprs(stmt)
-    for stmt in getattr(program, "toplevel_body", ()):
+    for stmt in program.toplevel_body:
         yield from _iter_stmt_type_exprs(stmt)
 
 
@@ -1192,9 +1205,7 @@ def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
             yield expr
         for child in stmt.proc.body:
             yield from _iter_stmt_type_exprs(child)
-    for segment in list(getattr(stmt, "segments", []) or []) + list(
-        getattr(stmt, "expr", []) or []
-    ):
+    for segment in _stmt_segments(stmt):
         if isinstance(segment, OutputSegment):
             yield segment.type_expr
 

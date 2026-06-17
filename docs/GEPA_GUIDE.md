@@ -1,128 +1,26 @@
-# GEPA Optimizer Fixes and Debugging Guide
+# GEPA Optimizer Debugging Guide
 
-> Status: debugging/reference note. This document explains historical GEPA
-> integration fixes and diagnostic patterns; it is not the canonical language
-> guide. For current Kedi syntax, start with `docs/KEDI_DSL.md`.
+> Status: debugging/reference note. This document explains GEPA integration
+> behavior and diagnostic patterns; it is not the canonical language guide.
+> For current Kedi syntax, start with `docs/KEDI_DSL.md`.
 
 ## Table of Contents
 1. [Overview](#overview)
-2. [Critical Bugs Fixed](#critical-bugs-fixed)
-3. [Architecture Overview](#architecture-overview)
-4. [Key Components](#key-components)
-5. [Debugging Strategies](#debugging-strategies)
-6. [Common Issues and Solutions](#common-issues-and-solutions)
-7. [Testing Infrastructure](#testing-infrastructure)
+2. [Architecture Overview](#architecture-overview)
+3. [Key Components](#key-components)
+4. [Debugging Strategies](#debugging-strategies)
+5. [Common Issues and Solutions](#common-issues-and-solutions)
+6. [Testing Infrastructure](#testing-infrastructure)
 
 ---
 
 ## Overview
 
-This document describes the critical fixes applied to the Kedi GEPA (Generative Prompt Optimization with Adaptive Prompting) optimizer integration with DSPy. The primary issue was that **GEPA's reflected prompts were not being applied during evaluation**, preventing the optimizer from detecting improvements and converging to better solutions.
+This document covers debugging the Kedi GEPA (Generative Prompt Optimization with Adaptive Prompting) optimizer integration with DSPy.
 
-### Root Cause
+### Multi-Line Template Spans
 
-The fundamental bug stemmed from **incomplete handling of multi-line template spans**. When a Kedi optimize span contains multiple template lines (e.g., a header line and a line with output declarations), the system was only applying optimizations to the first line, leaving subsequent lines with original/stale values.
-
----
-
-## Critical Bugs Fixed
-
-### Bug #1: Output Override Not Applied to All Template Lines
-
-**Location**: `src/kedi/optimization/services/gepa_metric_wrapper.py`
-
-**Problem**: When DSPy GEPA generates predictions with optimized prompts, the metric wrapper extracts these outputs and injects them into the Kedi span to avoid re-running the LLM. However, the injection only targeted the first template line.
-
-**Impact**: For multi-line spans, the second line (which typically contains the actual LLM invocation) had no output override, causing it to call the LLM again with the original prompt instead of using DSPy's predictions.
-
-**Example Scenario**:
-```kedi
-> optimize: typed_span:
-  Provide values:                          # Line 1 (text only)
-  v=[v: int], w=[w: float]                 # Line 2 (has outputs, invokes LLM)
-```
-
-When DSPy generated `w=25` with an optimized prompt, the override was set on Line 1, but Line 2 (which actually invokes the LLM) had no override, so it would call the LLM again and get a different value.
-
-**Fix**:
-```python
-# BEFORE (gepa_metric_wrapper.py:199-208)
-def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
-    """Apply output override to span's template line."""
-    if not span or not outputs:
-        return None
-    if not hasattr(span, 'template_lines') or not span.template_lines:
-        return None
-    first_line = span.template_lines[0]
-    original = first_line.optimized_output_override
-    first_line.optimized_output_override = outputs
-    return first_line, original
-
-# AFTER
-def _apply_output_override(self, span: Any, outputs: dict[str, Any]) -> Any:
-    """Apply output override to ALL template lines in the span."""
-    if not span or not outputs:
-        return None
-    if not hasattr(span, 'template_lines') or not span.template_lines:
-        return None
-    
-    # Store original values for all lines and set override on all of them
-    # This is necessary because a span can have multiple template lines
-    originals = []
-    for line in span.template_lines:
-        originals.append((line, line.optimized_output_override))
-        line.optimized_output_override = outputs
-    
-    return originals
-```
-
-**Corresponding Restore Fix**:
-```python
-# BEFORE (gepa_metric_wrapper.py:210-215)
-def _restore_output_override(self, handle: Any) -> None:
-    """Restore original output override."""
-    if not handle:
-        return
-    line, original = handle
-    line.optimized_output_override = original
-
-# AFTER
-def _restore_output_override(self, handle: Any) -> None:
-    """Restore original output override for all lines."""
-    if not handle:
-        return
-    # Handle is now a list of (line, original) tuples
-    for line, original in handle:
-        line.optimized_output_override = original
-```
-
----
-
-### Bug #2: Optimized Prompt Not Applied to All Template Lines
-
-**Location**: `src/kedi/optimization/gepa.py`
-
-**Problem**: After GEPA compilation, the optimized prompt is extracted and injected into the span's template lines. However, this injection only targeted the first line.
-
-**Impact**: When calculating the final training score, the second line would use the original prompt instead of the optimized one, resulting in incorrect score calculations.
-
-**Fix**:
-```python
-# BEFORE (gepa.py:256-259)
-if optimized_prompt:
-    optimized_prompts[span.name] = optimized_prompt
-    if span.template_lines:
-        span.template_lines[0].optimized_prompt_prefix = optimized_prompt
-
-# AFTER (gepa.py:256-262)
-if optimized_prompt:
-    optimized_prompts[span.name] = optimized_prompt
-    if span.template_lines:
-        # Set optimized prompt on ALL template lines in the span
-        # This is necessary because a span can have multiple template lines
-        for line in span.template_lines:
-            line.optimized_prompt_prefix = optimized_prompt
-```
+Optimize spans may contain multiple template lines (for example, a header line and a line with output declarations). Output overrides and optimized prompts must be applied to **every** template line in the span, not only the first.
 
 ---
 
@@ -153,7 +51,7 @@ if optimized_prompt:
 │ 3. Metric Evaluation (Critical Path)                            │
 │    a. Extract inputs from DSPy Example                          │
 │    b. Extract outputs from DSPy Prediction                      │
-│    c. Inject outputs into ALL span template lines ← BUG FIX #1  │
+│    c. Inject outputs into ALL span template lines               │
 │    d. Extract current instructions from module                  │
 │    e. Apply instructions to span template lines                 │
 │    f. Call Kedi metric function                                 │
@@ -165,7 +63,7 @@ if optimized_prompt:
 ┌─────────────────────────────────────────────────────────────────┐
 │ 4. Post-Optimization                                            │
 │    - Extract optimized prompt from best module                  │
-│    - Inject prompt into ALL span template lines ← BUG FIX #2    │
+│    - Inject prompt into ALL span template lines                  │
 │    - Calculate final training score                             │
 │    - Save optimized prompts                                     │
 └─────────────────────────────────────────────────────────────────┘
@@ -593,7 +491,7 @@ if os.getenv("KEDI_DEBUG_GEPA"):
 2. Check if output override is applied to ALL template lines
 3. Verify that template line execution uses the override
 
-**Solution**: Ensure both Bug #1 and Bug #2 fixes are applied.
+**Solution**: Verify output override and optimized prompt are applied to every template line in the span.
 
 ---
 
@@ -629,7 +527,7 @@ for i, line in enumerate(span.template_lines):
     print(f"  Line {i}: {len(line.segments)} segments")
 ```
 
-**Solution**: Apply Bug #2 fix to iterate over ALL template lines.
+**Solution**: Confirm `gepa.py` sets `optimized_prompt_prefix` on every entry in `span.template_lines`.
 
 ---
 

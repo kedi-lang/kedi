@@ -14,15 +14,21 @@ from tests.optimization_helpers import parse_validation_program
 def test_pydantic_input_output():
     """Test optimizer with Pydantic model inputs and outputs."""
 
-    class Person(BaseModel):
-        name: str
-        age: int
-
-    class Result(BaseModel):
-        status: str
-        value: int
-
+    # Define the models in a prelude block so they are registered in the kedi
+    # runtime's type environment and the optimizer can resolve them.
     src = """
+```
+from pydantic import BaseModel
+
+class Person(BaseModel):
+    name: str
+    age: int
+
+class Result(BaseModel):
+    status: str
+    value: int
+```
+
 @process(person: Person) -> Result:
   > optimize: analyze:
     Analyze person: <person>
@@ -36,8 +42,26 @@ def test_pydantic_input_output():
     proc = prog.procedures[0]
     param_types = resolver.resolve_param_types(proc)
 
-    # Should resolve Person type
-    assert "person" in param_types or len(param_types) >= 0  # Type resolution may vary
+    # Should resolve the Person type from the prelude.
+    assert "person" in param_types
+    assert issubclass(param_types["person"], BaseModel)
+
+
+def test_unresolvable_param_type_raises():
+    """A written-but-unresolvable param annotation must fail loud."""
+    import pytest
+
+    src = """
+@process(person: MissingModel) -> str:
+  = ok
+"""
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+
+    resolver = TypeResolver(rt)
+    proc = prog.procedures[0]
+    with pytest.raises(TypeError, match="Unknown type annotation MissingModel"):
+        resolver.resolve_param_types(proc)
 
 
 def test_pydantic_in_dataset():

@@ -38,11 +38,10 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import Node
+from tree_sitter import Node, Tree
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
-from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod
@@ -63,23 +62,25 @@ from ..lang.ast import (
     AssignStmt,
     AutoSpec,
     BacktickLineStmt,
+    CallArg,
     CallSegment,
+    EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
-    EffortDirectiveStmt,
     InputSegment,
+    LiteralArg,  # noqa: F401
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
     OptimizeSpan,
+    OutputSegment,
+    ProcDefStmt,
+    ProcedureDef,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
     ProfileSystemEntry,
-    OutputSegment,
-    ProcDefStmt,
-    ProcedureDef,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -100,6 +101,7 @@ from ..lang.ast import (
     TypeUnion,
     UseDirectiveStmt,
 )
+from ..lang.call_arg_access import iter_call_arg_nested
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
@@ -142,7 +144,9 @@ except Exception:  # pragma: no cover - optional runtime dependency in degraded 
 def _build_lsp_type_registry() -> dict[str, str]:
     registry: dict[str, str] = {}
     for name in dir(_builtins):
-        value = getattr(_builtins, name, None)
+        if name.startswith("_"):
+            continue
+        value = vars(_builtins)[name]
         if isinstance(value, type) and not name.startswith("_"):
             registry[name] = "builtins"
     for module, origin in (
@@ -151,7 +155,7 @@ def _build_lsp_type_registry() -> dict[str, str]:
     ):
         if module is None:
             continue
-        for name in getattr(module, "__all__", ()):
+        for name in module.__all__:
             if not name.startswith("_") and hasattr(module, name):
                 registry.setdefault(name, origin)
     return registry
@@ -194,7 +198,13 @@ def _segments_of(stmt) -> list:
         for line in stmt.lines:
             segs.extend(line.segments)
         return segs
-    return list(getattr(stmt, "segments", []) or []) + list(getattr(stmt, "expr", []) or [])
+    if isinstance(stmt, TemplateLine):
+        return list(stmt.segments)
+    if isinstance(stmt, ReturnStmt):
+        return list(stmt.segments)
+    if isinstance(stmt, AssignStmt):
+        return list(stmt.expr)
+    return []
 
 
 # =====================================================================
@@ -248,7 +258,7 @@ def _merged_profile_defs(
     prog: Program | ProgramWithValidation,
     imported_surface: ImportedSurface,
 ) -> dict[str, ProfileDefStmt]:
-    merged = dict(getattr(prog, "profile_defs", {}))
+    merged = dict(prog.profile_defs)
     merged.update(imported_surface.profiles)
     return merged
 
@@ -274,9 +284,9 @@ def _program_line_text(
         lines = prog.source_text.splitlines()
         if 1 <= line_number <= len(lines):
             return lines[line_number - 1]
-    source_map = getattr(prog, "source_map", None)
+    source_map = prog.source_map
     if source_map is not None:
-        path = source_path or getattr(getattr(prog, "loc", None), "source_path", None)
+        path = source_path or (prog.loc.source_path if prog.loc is not None else None)
         if path:
             return source_map.get_line(path, line_number)
     return None
@@ -433,7 +443,7 @@ def _exported_name_at_position(
     prog: Program | ProgramWithValidation,
     pos: lsp.Position,
 ) -> Optional[tuple[str, Span]]:
-    for export in getattr(prog, "exports", []):
+    for export in prog.exports:
         if export.loc is None or not _position_inside(pos, export.loc):
             continue
         if pos.line + 1 <= export.loc.start_line:
@@ -467,7 +477,7 @@ def _missing_import_diagnostics(
     prog: Program | ProgramWithValidation,
 ) -> List[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
-    for module_import in getattr(prog, "imports", []):
+    for module_import in prog.imports:
         module_path = resolved_import_path(prog, module_import.module)
         if module_path is not None:
             continue
@@ -501,7 +511,7 @@ def _resolve_symbol_at(
     type_by_name.update(imported_surface.types)
     top_level_values = top_level_value_infos(prog)
 
-    for module_import in getattr(prog, "imports", []):
+    for module_import in prog.imports:
         name_span = _import_name_span(prog, module_import)
         if name_span is None or not _position_inside(pos, name_span):
             continue
@@ -528,7 +538,7 @@ def _resolve_symbol_at(
                 cursor_span=name_span,
             )
 
-    for item in getattr(prog, "ordered_toplevel", None) or []:
+    for item in prog.ordered_toplevel:
         if isinstance(item, UseDirectiveStmt) and item.loc is not None:
             if item.tool_names:
                 for tool_name, name_span in _use_tool_entry_spans(prog, item):
@@ -885,25 +895,8 @@ def _resolve_in_segment(
             )
         # Recurse into args.
 
-        for arg in seg.args or []:
-            for inner_seg_attr in (
-                "__call_segment__",
-                "__python_segment__",
-            ):
-                inner = getattr(arg, inner_seg_attr, None)
-                if inner is not None:
-                    r = _resolve_in_segment(
-                        inner,
-                        pos,
-                        proc,
-                        proc_by_name,
-                        type_by_name,
-                        imported_values,
-                    )
-                    if r is not None:
-                        return r
-            rendered = getattr(arg, "__render_segments__", None) or []
-            for inner in rendered:
+        for arg in seg.args:
+            for inner in iter_call_arg_nested(arg):
                 r = _resolve_in_segment(
                     inner,
                     pos,
@@ -1204,7 +1197,7 @@ def _docstring_hover(
             ),
             range=_span_to_range(proc.docstring_loc),
         )
-    for profile in getattr(prog, "profile_defs", {}).values():
+    for profile in prog.profile_defs.values():
         if profile.docstring_loc is None or not _position_inside(pos, profile.docstring_loc):
             continue
         return lsp.Hover(
@@ -1253,7 +1246,7 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         nonlocal best
         if node is None:
             return
-        loc = getattr(node, "loc", None)
+        loc = node.loc
         if loc is None or not _position_inside(pos, loc):
             return
         # Provisionally accept this node, then try children for a
@@ -1306,12 +1299,16 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for line in node.lines:
                 visit(line)
             return
-        if isinstance(node, (TemplateLine, ReturnStmt)):
-            for seg in getattr(node, "segments", []) or []:
+        if isinstance(node, TemplateLine):
+            for seg in node.segments:
+                visit(seg)
+            return
+        if isinstance(node, ReturnStmt):
+            for seg in node.segments:
                 visit(seg)
             return
         if isinstance(node, AssignStmt):
-            for seg in getattr(node, "expr", []) or []:
+            for seg in node.expr:
                 visit(seg)
             return
         # Type defs descend into fields
@@ -1321,39 +1318,41 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             return
         # Validation suites (only present on ProgramWithValidation)
         if isinstance(node, TestSuite):
-            for case in getattr(node, "cases", []) or []:
+            for case in node.cases:
                 visit(case)
             return
         if isinstance(node, EvalSuite):
-            for ds in getattr(node, "datasets", []) or []:
+            for ds in node.datasets.values():
                 visit(ds)
-            for ds in getattr(node, "test_datasets", []) or []:
+            for ds in node.test_datasets.values():
                 visit(ds)
-            for m in getattr(node, "metrics", []) or []:
+            for m in node.metrics:
                 visit(m)
             return
         # Segment containers: CallSegment may have nested args
         if isinstance(node, CallSegment):
-            for arg in getattr(node, "args", []) or []:
-                for inner in getattr(arg, "__render_segments__", []) or []:
+            for arg in node.args:
+                for inner in iter_call_arg_nested(arg):
                     visit(inner)
             return
 
-    if getattr(prog, "ordered_toplevel", None):
-        for item in prog.ordered_toplevel:
+    ordered_toplevel = prog.ordered_toplevel if hasattr(prog, "ordered_toplevel") else []
+    if ordered_toplevel:
+        for item in ordered_toplevel:
             visit(item)
     else:
-        for proc in prog.procedures or []:
+        for proc in prog.procedures if hasattr(prog, "procedures") else []:
             visit(proc)
-        for stmt in (
-            getattr(prog, "toplevel_body", None)
-            or getattr(prog, "top_level_statements", None)
-            or []
-        ):
+        toplevel_body = (
+            prog.toplevel_body
+            if hasattr(prog, "toplevel_body")
+            else getattr(prog, "top_level_statements", [])
+        )
+        for stmt in toplevel_body or []:
             visit(stmt)
-    for td in getattr(prog, "type_defs", []) or []:
+    for td in prog.type_defs if hasattr(prog, "type_defs") else []:
         visit(td)
-    toplevel_return = getattr(prog, "toplevel_return", None)
+    toplevel_return = prog.toplevel_return if hasattr(prog, "toplevel_return") else None
     if toplevel_return is not None:
         visit(toplevel_return)
     if isinstance(prog, ProgramWithValidation):
@@ -1557,7 +1556,7 @@ def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str
 
 
 def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:
-    if getattr(stmt, "template_lines", None):
+    if stmt.template_lines:
         parts: list[str] = []
         for index, line in enumerate(stmt.template_lines):
             if index:
@@ -1649,11 +1648,11 @@ def _proc_signature_markdown(proc: ProcedureDef) -> str:
             + ", ".join(s.name for s in proc.optimize_spans)
             + "."
         )
-    elif getattr(proc, "captured_agent_profile", None) is not None:
+    elif proc.captured_agent_profile is not None:
         captured = proc.captured_agent_profile
-        if getattr(captured, "model", None):
+        if captured.model is not None:
             desc = f"Kedi procedure (captured model: `{captured.model}`)."
-        elif getattr(captured, "effort", None):
+        elif captured.effort is not None:
             desc = f"Kedi procedure (captured effort: `{captured.effort}`)."
     if proc.docstring:
         return f"{sig}\n\n{desc}\n\n{proc.docstring}"
@@ -1846,38 +1845,30 @@ def _find_all_references(
     return uniq
 
 
+def _collect_literal_arg_refs(arg: CallArg, name: str, out: List[Span], collector) -> None:
+    for nested in iter_call_arg_nested(arg):
+        collector(nested, name, out)
+
+
 def _collect_call_refs(seg, name: str, out: List[Span]) -> None:
     if isinstance(seg, CallSegment):
         if seg.name == name and seg.loc is not None:
             out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
-        # Recurse args
-        for arg in seg.args or []:
-            for inner_attr in ("__call_segment__", "__python_segment__"):
-                inner = getattr(arg, inner_attr, None)
-                if inner is not None:
-                    _collect_call_refs(inner, name, out)
-            for inner in getattr(arg, "__render_segments__", None) or []:
-                _collect_call_refs(inner, name, out)
+        for arg in seg.args:
+            _collect_literal_arg_refs(arg, name, out, _collect_call_refs)
 
 
 def _collect_input_refs(seg, name: str, out: List[Span]) -> None:
     if isinstance(seg, InputSegment) and seg.name == name and seg.loc is not None:
         out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
     elif isinstance(seg, CallSegment):
-        for arg in seg.args or []:
-            for inner_attr in ("__call_segment__", "__python_segment__"):
-                inner = getattr(arg, inner_attr, None)
-                if inner is not None:
-                    _collect_input_refs(inner, name, out)
-            for inner in getattr(arg, "__render_segments__", None) or []:
-                _collect_input_refs(inner, name, out)
+        for arg in seg.args:
+            _collect_literal_arg_refs(arg, name, out, _collect_input_refs)
 
 
 def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
-    for attr in ("type_expr",):
-        v = getattr(stmt, attr, None)
-        if v is not None:
-            _collect_type_refs_in_expr(v, name, out)
+    if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.type_expr is not None:
+        _collect_type_refs_in_expr(stmt.type_expr, name, out)
     for seg in _segments_of(stmt):
         if isinstance(seg, OutputSegment) and seg.type_expr is not None:
             _collect_type_refs_in_expr(seg.type_expr, name, out)
@@ -2134,14 +2125,8 @@ def _innermost_call_in_segment(seg, pos: lsp.Position) -> Optional[CallSegment]:
     if isinstance(seg, CallSegment):
         # Recurse into nested calls first to find the innermost.
         deepest: Optional[CallSegment] = seg
-        for arg in seg.args or []:
-            for attr in ("__call_segment__", "__python_segment__"):
-                inner = getattr(arg, attr, None)
-                if inner is not None:
-                    r = _innermost_call_in_segment(inner, pos)
-                    if r is not None:
-                        deepest = r
-            for inner in getattr(arg, "__render_segments__", None) or []:
+        for arg in seg.args:
+            for inner in iter_call_arg_nested(arg):
                 r = _innermost_call_in_segment(inner, pos)
                 if r is not None:
                     deepest = r
@@ -2159,7 +2144,7 @@ def _active_param_index(call: CallSegment, pos: lsp.Position) -> int:
         return 0
     # Best effort: index of the arg whose span contains the cursor.
     for i, arg in enumerate(call.args):
-        loc = getattr(arg, "loc", None)
+        loc = arg.loc
         if loc is not None and _position_inside(pos, loc):
             return i
     # Past the end — last param.
@@ -2192,7 +2177,7 @@ def compute_inlay_hints(
                 for i, arg in enumerate(seg.args):
                     if i >= len(target.params):
                         break
-                    loc = getattr(arg, "loc", None)
+                    loc = arg.loc
                     if loc is None or not _in_range(loc, rng):
                         continue
                     out.append(
@@ -2206,12 +2191,8 @@ def compute_inlay_hints(
                             padding_left=False,
                         )
                     )
-            for arg in seg.args or []:
-                for attr in ("__call_segment__", "__python_segment__"):
-                    inner = getattr(arg, attr, None)
-                    if inner is not None:
-                        visit_segment(inner, enclosing_proc)
-                for inner in getattr(arg, "__render_segments__", None) or []:
+            for arg in seg.args:
+                for inner in iter_call_arg_nested(arg):
                     visit_segment(inner, enclosing_proc)
         elif isinstance(seg, OutputSegment):
             if seg.type_expr is None and seg.type_annotation is None and seg.loc is not None:
@@ -2264,7 +2245,7 @@ def compute_document_symbols(source: str, source_path: Optional[str]) -> List[ls
     symbols: List[lsp.DocumentSymbol] = []
     for td in prog.type_defs:
         symbols.append(_type_def_symbol(td))
-    for profile in getattr(prog, "profile_defs", {}).values():
+    for profile in prog.profile_defs.values():
         symbols.append(_profile_def_symbol(profile))
     for proc in prog.procedures:
         symbols.append(_proc_symbol(proc))

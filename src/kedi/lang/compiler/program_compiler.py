@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
@@ -29,6 +29,7 @@ from ..ast import (
     Program,
     ReturnStmt,
     SystemDirectiveStmt,
+    TemplateLine,
     UseDirectiveStmt,
 )
 from .evaluation import evaluate_python_inline, execute_python_block
@@ -79,10 +80,10 @@ class ProgramCompiler:
     def compile(self, prog: Program) -> KediRuntime:
         """Compile program and return configured runtime."""
         # Initialize type environment
-        setattr(self.rt, "_type_env_stack", [{}])
+        self.rt._type_env_stack = [{}]
         self.rt._program = prog
-        self.rt._source_map = getattr(prog, "source_map", None)
-        self.rt._source_text = getattr(prog, "source_text", None)
+        self.rt._source_map = prog.source_map
+        self.rt._source_text = prog.source_text
         current_path = self._program_path(prog)
         active_stack = self.module_stack
         if current_path is not None:
@@ -91,7 +92,7 @@ class ProgramCompiler:
                 raise RuntimeError(f"Cyclic Kedi import detected: {cycle}")
             active_stack = (*active_stack, current_path)
 
-        setattr(self.rt, "_profile_registry", {})
+        self.rt._profile_registry = {}
 
         self._compile_imports(prog, active_stack)
 
@@ -99,20 +100,18 @@ class ProgramCompiler:
         if prog.prelude is not None:
             self._setup_prelude(prog.prelude, prog.prelude_loc)
 
-        cast(dict[str, Any], getattr(self.rt, "_profile_registry")).update(
-            build_profile_registry(prog)
-        )
+        self.rt._profile_registry.update(build_profile_registry(prog))
         capture_procedure_profiles(self.rt, prog)
 
         # Register top-level types
-        type_env = getattr(self.rt, "_type_env_stack")[0]
+        type_env = self.rt._type_env_stack[0]
         for typedef in prog.type_defs:
             register_type(self.rt, typedef, type_env)
 
         # Register procedures (skip AI-prompted placeholders)
         for proc in prog.procedures:
             # Skip procedures with auto_spec or legacy ai_prompt
-            if proc.auto_spec or getattr(proc, "ai_prompt", None):
+            if proc.auto_spec or proc.ai_prompt:
                 continue
             fn = self.proc_compiler.compile_procedure(proc)
             self.rt.procedure(fn)
@@ -137,10 +136,12 @@ class ProgramCompiler:
             ):
                 module_path = self._resolve_import_path(prog, module_import)
                 imported_prog = self._load_imported_program(module_path)
+                # Share the importer's globals (immutable CLI ``args``) with the module.
                 imported_rt = ProgramCompiler(
                     self.adapter,
                     executor=self.rt.executor,
                     module_stack=active_stack,
+                    runtime_globals=dict(self.rt._initial_globals_env),
                 ).compile(imported_prog)
                 imported_rt.run_main()
                 self._merge_exports(module_path, imported_prog, imported_rt)
@@ -179,9 +180,9 @@ class ProgramCompiler:
             if kind == "procedure":
                 self.rt._procedures[name] = self._wrap_imported_procedure(name, value, imported_rt)
             elif kind == "type":
-                getattr(self.rt, "_type_env_stack")[0][name] = value
+                self.rt._type_env_stack[0][name] = value
             elif kind == "profile":
-                cast(dict[str, Any], getattr(self.rt, "_profile_registry"))[name] = value
+                self.rt._profile_registry[name] = value
                 self._merge_profile_tool_dependencies(value, imported_rt)
             else:
                 self.rt._import_env[name] = value
@@ -201,9 +202,12 @@ class ProgramCompiler:
                     imported_rt,
                 )
                 continue
-            for env_name in ("_globals_env", "_prelude_env", "_import_env"):
-                env = getattr(imported_rt, env_name, None)
-                if isinstance(env, dict) and tool_name in env:
+            for env in (
+                imported_rt._globals_env,
+                imported_rt._prelude_env,
+                imported_rt._import_env,
+            ):
+                if env is not None and tool_name in env:
                     self.rt._import_env[tool_name] = env[tool_name]
                     break
 
@@ -228,19 +232,14 @@ class ProgramCompiler:
         names: list[str] = []
         names.extend(name for name in rt._procedures if self._is_public_name(name))
 
-        stack = getattr(rt, "_type_env_stack", None)
-        if isinstance(stack, list):
-            for layer in cast(list[dict[str, Any]], stack):
-                names.extend(name for name in layer if self._is_public_name(name))
+        for layer in rt._type_env_stack or []:
+            names.extend(name for name in layer if self._is_public_name(name))
 
-        for env_name in ("_globals_env", "_prelude_env", "_import_env"):
-            env = getattr(rt, env_name, None)
-            if isinstance(env, dict):
+        for env in (rt._globals_env, rt._prelude_env, rt._import_env):
+            if env is not None:
                 names.extend(name for name in env if self._is_public_name(name))
 
-        profile_registry = getattr(rt, "_profile_registry", None)
-        if isinstance(profile_registry, dict):
-            names.extend(name for name in profile_registry if self._is_public_name(name))
+        names.extend(name for name in rt._profile_registry if self._is_public_name(name))
 
         return list(dict.fromkeys(names))
 
@@ -256,21 +255,16 @@ class ProgramCompiler:
         if name in imported_rt._procedures:
             return "procedure", imported_rt._procedures[name]
 
-        stack = getattr(imported_rt, "_type_env_stack", None)
-        if isinstance(stack, list):
-            for layer in reversed(stack):
-                if isinstance(layer, dict) and name in layer:
-                    typed_layer = cast(dict[str, Any], layer)
-                    return "type", typed_layer[name]
+        for layer in reversed(imported_rt._type_env_stack or []):
+            if name in layer:
+                return "type", layer[name]
 
-        for env_name in ("_globals_env", "_prelude_env", "_import_env"):
-            env = getattr(imported_rt, env_name, None)
-            if isinstance(env, dict) and name in env:
+        for env in (imported_rt._globals_env, imported_rt._prelude_env, imported_rt._import_env):
+            if env is not None and name in env:
                 return "value", env[name]
 
-        profile_registry = getattr(imported_rt, "_profile_registry", None)
-        if isinstance(profile_registry, dict) and name in profile_registry:
-            return "profile", profile_registry[name]
+        if name in imported_rt._profile_registry:
+            return "profile", imported_rt._profile_registry[name]
 
         raise RuntimeError(f"Kedi export {name!r} is not defined in {module_path}")
 
@@ -282,7 +276,7 @@ class ProgramCompiler:
     ) -> Any:
         import inspect
 
-        from ..procedure_introspection import get_procedure_metadata
+        from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 
         signature = inspect.signature(fn)
         params = list(signature.parameters)
@@ -302,41 +296,36 @@ class ProgramCompiler:
             setattr(
                 wrapper,
                 "__kedi_procedure_def__",
-                getattr(fn, "__kedi_procedure_def__", None),
+                get_procedure_def(fn),
             )
             wrapper.__doc__ = metadata.docstring
         return wrapper
 
     def _program_path(self, prog: Program) -> Path | None:
-        loc = getattr(prog, "loc", None)
+        loc = prog.loc
         if loc is not None and loc.source_path:
             return Path(loc.source_path).resolve()
-        source_map = getattr(prog, "source_map", None)
-        documents = getattr(source_map, "documents", None)
-        if documents:
-            return Path(documents[0].path).resolve()
+        source_map = prog.source_map
+        if source_map is not None and source_map.documents:
+            return Path(source_map.documents[0].path).resolve()
         return None
 
     def _setup_prelude(self, prelude_code: str, prelude_loc) -> None:
         """Execute prelude and store environment."""
         with self.rt.trace_frame(KediTraceFrame(kind="prelude", label="prelude", span=prelude_loc)):
-            setattr(
-                self.rt,
-                "_prelude_env",
-                self.rt.executor.execute_prelude(self.rt, prelude_code),
-            )
+            self.rt._prelude_env = self.rt.executor.execute_prelude(self.rt, prelude_code)
 
     def _setup_main(self, prog: Program) -> None:
         """Setup main entry point for top-level execution."""
         toplevel_sequence = prog.ordered_toplevel or list(prog.toplevel_body)
         toplevel_return = prog.toplevel_return
-        profile_registry = getattr(self.rt, "_profile_registry", {})
+        profile_registry = self.rt._profile_registry
 
         @self.rt.main
         def _main() -> Any:
             # Initialize top-level environment
             kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
-            setattr(self.rt, "_globals_env", kwargs)
+            self.rt._globals_env = kwargs
             active = AgentProfile.empty()
 
             # Execute top-level statements
@@ -375,6 +364,11 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, ProfileDefStmt):
                         continue
+                    if isinstance(item, TemplateLine):
+                        raise ValueError(
+                            "Top-level TemplateLine is not a valid program node; "
+                            "use '>>' for a top-level template prompt."
+                        )
                     with block_agent_profile_scope(active):
                         self.executor.execute_single_statement(item, kwargs, is_toplevel=True)
 
@@ -406,6 +400,6 @@ class ProgramCompiler:
 
         if isinstance(prog, ProgramWithValidation):
             if prog.tests:
-                setattr(self.rt, "_validation_tests", prog.tests)
+                self.rt._validation_tests = prog.tests
             if prog.evals:
-                setattr(self.rt, "_validation_evals", prog.evals)
+                self.rt._validation_evals = prog.evals

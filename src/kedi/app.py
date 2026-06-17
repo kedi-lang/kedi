@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Tuple
 
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from .agent_adapter.lazy import LazyAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -41,9 +42,10 @@ def run_tests_cli(
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    use_cache: bool = True,
     runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
-    ok, err = maybe_run_codegen(source, model=model)
+    ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
     if not ok:
         return 1, (err or "Code generation failed")
     kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
@@ -230,13 +232,13 @@ def run_optimization_cli(
         except Exception as e:
             return 1, str(e)
 
-        # Load test data using service
-        test_data_list = None
+        # Load test data using service. load_test_data returns None for an
+        # absent dataset and raises RuntimeError only on a real load failure,
+        # so let genuine failures surface instead of silently dropping data.
         try:
             test_data_list = data_loader.load_test_data(eval_suite, dataset_name)
-        except Exception:
-            # Test data not available - that's okay
-            pass
+        except Exception as e:
+            return 1, f"Test data load error for '{dataset_name}': {e}"
 
         # Note: Analytical metrics can have None expected outputs
         # The metric function will compute the expected value internally
@@ -330,7 +332,7 @@ def run_evals_cli(
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model, quiet=quiet)
+    ok, err = maybe_run_codegen(source, model=codegen_model, use_cache=use_cache, quiet=quiet)
     if not ok:
         return 1, (err or "Code generation failed")
 
@@ -366,9 +368,7 @@ def maybe_run_codegen(
             source_map=loaded.source_map,
         )
         # Check for auto_spec (new) or ai_prompt (legacy)
-        needs = any(
-            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
-        )
+        needs = any(p.auto_spec or p.ai_prompt for p in prog.procedures)
         if not needs:
             return True, None
 
@@ -413,23 +413,11 @@ def run_program_cli(
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
 
-    # Prefer offline execution when generated/native code fully covers the
-    # program. Fall back to the configured adapter only if runtime actually
-    # needs LLM-backed template expansion.
-    rt = compile_program(program, adapter=None, runtime_globals=_runtime_globals(runtime_args))
-    _set_runtime_args(rt, runtime_args)
-    try:
-        out = rt.run_main()
-        return 0, ("" if out is None else str(out))
-    except RuntimeError as e:
-        if str(e) != "No adapter provided to KediRuntime":
-            raise
-
-    adapter_impl = _build_runtime_adapter(adapter, model)
+    # Run once with a lazily-built adapter: offline programs never construct one (no
+    # API key needed), and top-level side effects fire exactly once.
+    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
     rt = compile_program(
-        program,
-        adapter=adapter_impl,
-        runtime_globals=_runtime_globals(runtime_args),
+        program, adapter=lazy_adapter, runtime_globals=_runtime_globals(runtime_args)
     )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()

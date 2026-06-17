@@ -102,8 +102,17 @@ def test_kedi_type_adapter_and_legacy_resolution_edges(
     assert KediType(None).resolve(rt, {}) is None
     assert KediType.from_node(TypeRef(name="int"), "str").resolve(rt, {}) is int
     assert KediType(None).get_adapter(rt, {}) is None
+    # get_adapter stays lenient (introspection-only); validate is strict.
     assert KediType("missing_name_for_type_resolution").get_adapter(rt, {}) is None
-    assert KediType("missing_name_for_type_resolution").validate(rt, {}, "value") == "value"
+    # No annotation -> validate returns the value unchanged.
+    assert KediType(None).validate(rt, {}, "value") == "value"
+    # Written-but-unresolvable annotation -> validate raises.
+    with pytest.raises(TypeError, match="Unknown type annotation"):
+        KediType("missing_name_for_type_resolution").validate(rt, {}, "value")
+    # resolve_required mirrors that distinction directly.
+    assert KediType(None).resolve_required(rt, {}) is None
+    with pytest.raises(TypeError, match="Unknown type annotation"):
+        KediType("missing_name_for_type_resolution").resolve_required(rt, {})
     assert KediType("`int`").resolve(rt, {}) is int
     assert KediType("`missing_name_for_type_resolution`").resolve(rt, {}) is None
     assert KediType("missing_name_for_type_resolution").resolve(rt, {}) is None
@@ -229,3 +238,9 @@ def test_literal_model_repr_default_and_native_assignment_helpers() -> None:
 
     assert detect_rhs_kind([]) == (False, False, False)
     pop_type_env(KediRuntime())
+
+    rt = KediRuntime()
+    rt._type_env_stack = None
+    pushed = type_system_module.push_type_env(rt)
+    assert pushed == {}
+    assert rt._type_env_stack == [pushed]

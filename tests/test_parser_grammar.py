@@ -1,4 +1,18 @@
-">> Tests for the tree-sitter-backed parser pipeline (Phase 6).\n\n>> These are NEW tests added during the refactor — they verify the parts\nof the public API that the pre-refactor parser did not expose:\n\n  - ``Span`` is populated on every AST node.\n  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /\n    ``TypeUnion`` / ``TypePython``), not just opaque strings.\n  - ``parse_program`` returns ``ProgramWithValidation`` whenever\n    ``@test:`` or ``@eval:`` blocks are present.\n  - ``KediParseError`` is a ``ValueError`` subclass and carries\n    ``KediDiagnostic`` records with source locations.\n\n>> The pre-existing ``test_kedi_lang_*`` suites still cover the\nsource-in / behavior-out side; this file complements them by asserting\non the structured AST shape itself.\n"
+"""Tests for the tree-sitter-backed parser pipeline.
+
+These tests verify structured AST shape and parser diagnostics:
+
+  - ``Span`` is populated on every AST node.
+  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /
+    ``TypeUnion`` / ``TypePython``), not just opaque strings.
+  - ``parse_program`` returns ``ProgramWithValidation`` whenever
+    ``@test:`` or ``@eval:`` blocks are present.
+  - ``KediParseError`` is a ``ValueError`` subclass and carries
+    ``KediDiagnostic`` records with source locations.
+
+The ``test_kedi_lang_*`` suites cover source-in / behavior-out;
+this file complements them by asserting on the structured AST itself.
+"""
 
 from __future__ import annotations
 
@@ -316,7 +330,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             ],
         )
     )
-    assert hasattr(render_arg, "__render_segments__")
+    assert render_arg.render_segments
     unknown_arg = _FakeNode("call_arg", children=[_FakeNode("unknown", start=0, end=4)], end=4)
     assert stmt_walker._walk_call_arg(unknown_arg).value == "stmt"
     inline_without_code = _FakeNode("inline_python_expr")

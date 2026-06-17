@@ -1,27 +1,20 @@
 """Kedi AST dataclasses.
 
-This module is the result of the Phase-6 tree-sitter refactor. Compared
-to the pre-refactor AST it gains:
+Provides typed dataclass nodes for parsed Kedi programs:
 
   - ``Span`` — byte and line/col extents of every source construct,
     populated by the CST→AST walker from tree-sitter node positions.
   - ``TypeExpr`` and friends (``TypeRef``, ``TypeApply``, ``TypeUnion``,
-    ``TypePython``) — a STRUCTURED representation of Kedi type
-    annotations. Previously every type annotation was a raw string
-    later ``eval``'d at runtime; now the grammar parses the annotation
-    structurally and the compiler dispatches on TypeExpr nodes.
+    ``TypePython``) — a structured representation of Kedi type
+    annotations parsed by the grammar and dispatched on by the compiler.
   - A ``loc`` field on every node that records its ``Span``.
-  - ``ProgramWithValidation`` is now what ``parse_program`` returns
-    whenever ``@test:`` or ``@eval:`` blocks are present (rather than
-    being unused dead code, with validation suites grafted onto a plain
-    ``Program`` via ``setattr``).
+  - ``ProgramWithValidation`` is what ``parse_program`` returns
+    whenever ``@test:`` or ``@eval:`` blocks are present.
 
 Backward compatibility: the legacy string fields (``type_annotation``,
 ``param_type_annotations``, ``return_type_annotation``) are retained on
-the relevant classes so existing compiler / codegen / optimizer code
-keeps working until those call sites migrate to ``type_expr`` in
-Phase 7. The CST→AST walker fills BOTH the legacy string field AND the
-new ``type_expr`` field for every annotation it observes.
+the relevant classes. The CST→AST walker fills both the legacy string
+field and the ``type_expr`` field for every annotation it observes.
 """
 
 from __future__ import annotations
@@ -135,6 +128,10 @@ class CallArg:
 @dataclass
 class LiteralArg(CallArg):
     value: str = ""
+    native_backtick: Optional[str] = field(default=None, repr=False, compare=False)
+    render_segments: List["Segment"] = field(default_factory=list, repr=False, compare=False)
+    call_segment: Optional["CallSegment"] = field(default=None, repr=False, compare=False)
+    python_segment: Optional["PythonExprSegment"] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -154,7 +151,7 @@ class OutputSegment(Segment):
     # Legacy string form (kept for code that reads the raw annotation
     # text — codegen, optimization, the in-progress KediType migration).
     type_annotation: Optional[str] = None
-    # New structured form populated by the Phase-6 CST→AST walker.
+    # Structured form populated by the CST→AST walker.
     type_expr: Optional[TypeExpr] = None
 
 

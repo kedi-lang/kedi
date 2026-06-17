@@ -14,7 +14,7 @@ import typing_extensions
 from pydantic import BaseModel
 
 from ...core import KediRuntime
-from ..procedure_introspection import get_procedure_metadata
+from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 
 
 def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
@@ -29,9 +29,8 @@ def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     except Exception:
         pass
 
-    for env_name in ("_globals_env", "_prelude_env", "_import_env"):
-        env = getattr(rt, env_name, None)
-        if isinstance(env, dict) and name in env:
+    for env in (rt._globals_env, rt._prelude_env, rt._import_env):
+        if env is not None and name in env:
             return env[name]
 
     raise KeyError(f"Unknown variable: {name}")
@@ -42,9 +41,8 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, An
     env: dict[str, Any] = {"__builtins__": builtins.__dict__}
 
     # Layer environments: imports -> prelude -> globals -> current -> local
-    for env_name in ("_import_env", "_prelude_env", "_globals_env"):
-        source = getattr(rt, env_name, None)
-        if isinstance(source, dict):
+    for source in (rt._import_env, rt._prelude_env, rt._globals_env):
+        if source is not None:
             env.update(source)
 
     try:
@@ -77,23 +75,20 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
 
     # Import common typing names
     for module in (typing, typing_extensions):
-        for name in getattr(module, "__all__", ()):
+        for name in module.__all__:
             if not name.startswith("_"):
                 try:
-                    env.setdefault(name, getattr(module, name))
-                except AttributeError:
+                    env.setdefault(name, vars(module)[name])
+                except KeyError:
                     continue
 
     # Layer type environments
-    stack = getattr(rt, "_type_env_stack", None)
-    if isinstance(stack, list):
-        for layer in stack:
-            env.update(layer)
+    for layer in rt._type_env_stack or []:
+        env.update(layer)
 
     # Add runtime environments
-    for env_name in ("_import_env", "_prelude_env", "_globals_env"):
-        source = getattr(rt, env_name, None)
-        if isinstance(source, dict):
+    for source in (rt._import_env, rt._prelude_env, rt._globals_env):
+        if source is not None:
             env.update(source)
 
     try:
@@ -111,12 +106,11 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
 
 def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any]) -> None:
     """Add type environment and handle Pydantic model coercion."""
-    stack = getattr(rt, "_type_env_stack", None)
-    if not isinstance(stack, list) or not stack:
+    if not rt._type_env_stack:
         return
 
     type_env: dict[str, Any] = {}
-    for layer in stack:
+    for layer in rt._type_env_stack:
         type_env.update(layer)
 
     env.update(type_env)
@@ -168,6 +162,9 @@ def _make_proc_wrapper(
     wrapper = namespace[metadata.name]
     wrapper.__doc__ = metadata.docstring
     setattr(wrapper, "__kedi_procedure_metadata__", metadata)
+    procedure_def = get_procedure_def(proc_fn)
+    if procedure_def is not None:
+        setattr(wrapper, "__kedi_procedure_def__", procedure_def)
     return wrapper
 
 

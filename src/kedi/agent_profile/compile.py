@@ -76,21 +76,17 @@ def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
 
 
 def effective_profile_registry(rt: KediRuntime) -> dict[str, ProfileDefinition]:
-    registry = getattr(rt, "_profile_registry", None)
-    if isinstance(registry, dict):
-        return registry
-    return {}
+    registry = rt._profile_registry
+    return registry if isinstance(registry, dict) else {}
 
 
 def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
     env: dict[str, Any] = {}
-    prelude_env = getattr(rt, "_prelude_env", None)
-    if isinstance(prelude_env, dict):
-        env.update(prelude_env)
-    env.update(getattr(rt, "_initial_globals_env", {}))
-    import_env = getattr(rt, "_import_env", None)
-    if isinstance(import_env, dict):
-        env.update(import_env)
+    if isinstance(rt._prelude_env, dict):
+        env.update(rt._prelude_env)
+    env.update(rt._initial_globals_env)
+    if isinstance(rt._import_env, dict):
+        env.update(rt._import_env)
     return env
 
 

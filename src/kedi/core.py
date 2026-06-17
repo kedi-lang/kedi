@@ -11,6 +11,7 @@ from .executors.base import DefaultExecutor, Executor
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
+    from kedi.lang.ast import EvalSuite, TestSuite
 
 # -----------------------------
 # Kedi runtime implementation
@@ -80,6 +81,11 @@ class KediRuntime:
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
+        self._type_env_stack: list[dict[str, Any]] = []
+        self._profile_registry: dict[str, Any] = {}
+        self._prelude_env: ValueEnv | None = None
+        self._validation_tests: list[TestSuite] = []
+        self._validation_evals: list[EvalSuite] = []
 
     # Expressions
     def i(self, key: str) -> InputExpr:
@@ -94,7 +100,9 @@ class KediRuntime:
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         # Allow re-registration for AI-generated procedures from cache
-        name = getattr(fn, "__name__", fn.__class__.__name__)
+        from kedi.lang.procedure_introspection import callable_display_name
+
+        name = callable_display_name(fn)
         if name in self._procedures:
             pass  # Silently replace
         self._procedures[name] = fn
@@ -161,15 +169,20 @@ class KediRuntime:
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
         import inspect
 
-        from .lang.procedure_introspection import get_procedure_metadata
+        from kedi.lang.procedure_introspection import (
+            callable_display_name,
+            get_procedure_def,
+            get_procedure_metadata,
+        )
 
         sig = inspect.signature(fn)
         bound = sig.bind_partial(*args)
         bound.apply_defaults()
         local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
         metadata = get_procedure_metadata(fn)
-        proc_span = getattr(getattr(fn, "__kedi_procedure_def__", None), "loc", None)
-        proc_name = metadata.name if metadata is not None else getattr(fn, "__name__", None)
+        procedure_def = get_procedure_def(fn)
+        proc_span = procedure_def.loc if procedure_def is not None else None
+        proc_name = metadata.name if metadata is not None else callable_display_name(fn)
         should_trace_procedure = not (fn is self._main and metadata is None)
 
         token = self._current_env.set(local_env)
@@ -257,9 +270,11 @@ class KediRuntime:
 
         self._python_origin_counter += 1
         origin_span = span
+        # Unique virtual filename per snippet so snippets sharing a .kedi file don't
+        # collide; the real source path lives on origin_span for rendering.
         filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
-        if span is not None and getattr(span, "source_path", None):
-            filename = span.source_path
+        if span is not None and span.source_path is not None:
+            origin_span = span
         elif (
             span is not None
             and self._source_map is not None
@@ -267,7 +282,6 @@ class KediRuntime:
         ):
             resolved = self._source_map.resolve_line(span.start_line)
             if resolved is not None:
-                filename = resolved.source_path
                 origin_span = replace(
                     span,
                     start_line=resolved.source_line,

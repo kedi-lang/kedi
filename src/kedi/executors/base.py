@@ -75,10 +75,8 @@ class DefaultExecutor:
             )
             return result
         except SyntaxError:
-            exec_filename = self._python_filename(rt, "inline", code)
-            exec_source = self._python_source(rt, code)
             try:
-                exec(compile(exec_source, exec_filename, "exec", dont_inherit=True), env, env)
+                self._run_wrapped_block(rt, "inline", code, local_env)
                 self._emit_debug(
                     "execution_completed",
                     "evaluate_inline",
@@ -118,22 +116,14 @@ class DefaultExecutor:
             code=code,
             local_env=local_env,
         )
-        env = self._build_python_env(rt, local_env)
-        params = ", ".join(local_env.keys())
-        wrapper_src = f"def __kedi_block__({params}):\n" + "\n".join(
-            "    " + line for line in code.splitlines()
-        )
-        filename = self._python_filename(
-            rt,
-            "block",
-            code,
-            wrapper_line_offset=1,
-            kedi_line_offset=1,
-        )
-        compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=1)
         try:
-            exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
-            result = env["__kedi_block__"](**local_env)
+            result = self._run_wrapped_block(
+                rt,
+                "block",
+                code,
+                local_env,
+                kedi_line_offset=1,
+            )
             self._emit_debug(
                 "execution_completed",
                 "execute_block",
@@ -327,7 +317,7 @@ class DefaultExecutor:
             return 0
         if span.source_path is not None:
             return max(0, span.start_line + kedi_line_offset - 1)
-        source_map = getattr(rt, "_source_map", None)
+        source_map = rt._source_map
         if source_map is None or not hasattr(source_map, "resolve_line"):
             return 0
         resolved = source_map.resolve_line(span.start_line)
@@ -339,6 +329,52 @@ class DefaultExecutor:
         from ..lang.compiler.environment import build_python_env
 
         return build_python_env(rt, local_env)
+
+    def _run_wrapped_block(
+        self,
+        rt: KediRuntime,
+        kind: str,
+        code: str,
+        local_env: dict[str, Any],
+        *,
+        kedi_line_offset: int = 0,
+    ) -> Any:
+        """Run ``code`` as a block: existing Kedi vars are ``nonlocal`` (mutations
+        sync back), new Python names stay local."""
+        env = self._build_python_env(rt, local_env)
+        names = list(local_env.keys())
+        params = ", ".join(names)
+        header = [
+            f"def __kedi_wrapper__({params}):",
+            "    def __kedi_block__():",
+        ]
+        if names:  # empty ``nonlocal`` is a SyntaxError
+            header.append(f"        nonlocal {params}")
+        body = ["        " + line for line in code.splitlines()]
+        # Return existing names only (their mutated values); new locals don't leak.
+        updated_map = "{" + ", ".join(f"{name!r}: {name}" for name in names) + "}"
+        wrapper_src = "\n".join(
+            header
+            + body
+            + [
+                "        pass",  # guarantees a non-empty block body
+                "    __kedi_ret__ = __kedi_block__()",
+                f"    return (__kedi_ret__, {updated_map})",
+            ]
+        )
+        filename = self._python_filename(
+            rt,
+            kind,
+            code,
+            wrapper_line_offset=len(header),
+            kedi_line_offset=kedi_line_offset,
+        )
+        # Pad so traceback line numbers stay aligned with the Kedi source line.
+        compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
+        exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
+        result, updated = env["__kedi_wrapper__"](**{name: local_env[name] for name in names})
+        self._sync_existing_variables(rt, local_env, updated)
+        return result
 
     def _sync_existing_variables(
         self,

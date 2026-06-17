@@ -2,10 +2,7 @@
 
 This module is the bridge between the tree-sitter parser (which produces
 a concrete syntax tree of opaque ``tree_sitter.Node`` objects) and the
-existing Kedi AST defined in :mod:`kedi.lang.ast`. It is the
-Phase-6 replacement for the entire pre-refactor parser package
-(``preprocessing.py``, ``program_parser.py``, ``segment_parser.py``,
-``statement_parser.py``, ``block_parser.py``).
+Kedi AST defined in :mod:`kedi.lang.ast`.
 
 Design notes:
 
@@ -23,8 +20,7 @@ Design notes:
     backward compatibility with read sites that still use the legacy
     ``setattr``-based access pattern (``getattr(prog,
     "_validation_evals", [])``), the same lists are also exposed as
-    ``_validation_tests`` and ``_validation_evals`` attributes. The
-    Phase-7 migration removes those aliases.
+    ``_validation_tests`` and ``_validation_evals`` attributes.
 
 The walker is implemented as a single class with one ``_walk_<rule>``
 method per relevant CST node type, plus a small dispatcher
@@ -340,8 +336,7 @@ class _Walker:
                 self._error(child, f"unexpected top-level node {t!r}")
 
         # ProgramWithValidation back-compat: expose the lists via the
-        # legacy `_validation_*` attribute names too. Phase 7 removes
-        # this aliasing once consumers migrate to `.tests` / `.evals`.
+        # legacy `_validation_*` attribute names too.
         if isinstance(prog, ProgramWithValidation):
             setattr(prog, "_validation_tests", prog.tests)
             setattr(prog, "_validation_evals", prog.evals)
@@ -397,8 +392,7 @@ class _Walker:
     def _validate_block_comments(self) -> None:
         r"""Enforce legacy `###` block-comment invariants.
 
-        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``
-        in the pre-refactor parser):
+        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``):
 
           - A line that is exactly ``###`` (after stripping horizontal
             whitespace) toggles block-comment mode.
@@ -998,12 +992,11 @@ class _Walker:
     def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
-        # interleave extras with a retried external-scan). The
-        # pre-refactor parser, by contrast, stripped the body indent
-        # before parsing — so its TextSegments did not carry that
-        # indentation. We restore parity here by lstripping the
-        # leading WS off the FIRST segment of each template_expr ONLY
-        # when it's a plain TextSegment. Internal-segment whitespace
+        # interleave extras with a retried external-scan). Template body
+        # lines therefore carry that leading whitespace in TextSegments;
+        # lstripping the leading WS off the FIRST segment of each
+        # template_expr restores the expected shape when it's a plain
+        # TextSegment. Internal-segment whitespace
         # (the gap between an `<input>` and the text that follows it)
         # is preserved.
         if segs and isinstance(segs[0], TextSegment):
@@ -1085,17 +1078,15 @@ class _Walker:
         return CallSegment(name=name, args=args, loc=self._span(node))
 
     def _walk_call_arg(self, node: Node) -> CallArg:
-        r"""Build a CallArg matching the legacy runtime expectations.
+        r"""Build a call argument with explicit payload fields.
 
-        The runtime (``compiler/evaluation._evaluate_arg``) checks for
-        these duck-typed attributes on a ``LiteralArg``:
+        A literal argument can carry one of these payloads:
 
-          - ``__native_backtick__``: arg passes a native Python value
+          - ``native_backtick``: arg passes a native Python value
             (from a bare backtick `` `expr` ``).
-          - ``__python_segment__``: arg is a single ``<\`...\`>`` segment.
-          - ``__call_segment__``: arg is a single ``<func(...)>`` segment.
-          - ``__render_segments__``: arg is a mini-template; render its
-            segments to a string at call time.
+          - ``python_segment``: arg is a single ``<\`...\`>`` segment.
+          - ``call_segment``: arg is a single ``<func(...)>`` segment.
+          - ``render_segments``: arg is a mini-template rendered to a string.
         """
         children = _named_children(node)
         if not children:
@@ -1104,23 +1095,32 @@ class _Walker:
         first = children[0]
         if first.type == "inline_python_expr":
             code = self._walk_inline_python_expr(first)
-            lit = LiteralArg(value="__NATIVE_BACKTICK__", loc=self._span(node))
-            setattr(lit, "__native_backtick__", code)
+            lit = LiteralArg(
+                value="__NATIVE_BACKTICK__", loc=self._span(node), native_backtick=code
+            )
             return lit
 
         if first.type == "template_arg":
             segs = [self._walk_segment_in_call(c) for c in _named_children(first)]
-            lit = LiteralArg(value="__RENDER__", loc=self._span(node))
             if len(segs) == 1:
                 only = segs[0]
                 if isinstance(only, PythonExprSegment):
-                    setattr(lit, "__python_segment__", only)
-                    return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        python_segment=only,
+                    )
                 if isinstance(only, CallSegment):
-                    setattr(lit, "__call_segment__", only)
-                    return lit
-            setattr(lit, "__render_segments__", segs)
-            return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        call_segment=only,
+                    )
+            return LiteralArg(
+                value="__RENDER__",
+                loc=self._span(node),
+                render_segments=segs,
+            )
 
         # Unknown shape — make a best-effort literal.
         lit = LiteralArg(value=_src_text(self.source, node), loc=self._span(node))

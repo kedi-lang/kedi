@@ -79,7 +79,10 @@ def test_traceback_uses_source_map_path_when_span_has_no_path(tmp_path: Path) ->
         last_filename = trace.tb_frame.f_code.co_filename
         trace = trace.tb_next
 
-    assert last_filename == str(srcp.resolve())
+    # each embedded Python snippet gets a UNIQUE virtual co_filename for
+    # traceback identity; the real source path is preserved on the python trace span
+    # (used for rendering), not on the raw Python frame.
+    assert last_filename is not None and last_filename.startswith("<kedi-python:")
     assert err.python_traces[-1].span is not None
     assert err.python_traces[-1].span.source_path == str(srcp.resolve())
     assert err.python_traces[-1].kedi_lineno == 2

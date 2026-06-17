@@ -6,7 +6,8 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ...core import KediRuntime
-from ..ast import ProcDefStmt, ProcedureDef
+from ...errors import KediTypeExecutionError
+from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import ScopedDict, build_python_env
 from .statement_compiler import StatementExecutor
@@ -73,11 +74,10 @@ class ProcedureCompiler:
 
         # Inject imported and top-level values.
         current_env = self.rt._current_env.get()
-        for env_name in ("_import_env", "_globals_env"):
-            source_env = getattr(self.rt, env_name, None)
-            if not isinstance(source_env, dict):
+        for env in (self.rt._import_env, self.rt._globals_env):
+            if not isinstance(env, dict):
                 continue
-            for k, v in source_env.items():
+            for k, v in env.items():
                 kwargs.setdefault(k, v)
                 if isinstance(current_env, dict):
                     current_env.setdefault(k, v)
@@ -86,9 +86,6 @@ class ProcedureCompiler:
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
-        if not (proc.param_type_annotations or proc.param_type_exprs):
-            return
-
         param_exprs = proc.param_type_exprs or {}
         param_strs = proc.param_type_annotations or {}
 
@@ -99,19 +96,21 @@ class ProcedureCompiler:
             )
 
             if param_name not in kwargs:
-                raise TypeError(f"Missing parameter: {param_name}")
+                raise KediTypeExecutionError(f"Missing parameter: {param_name}")
 
             provided = kwargs[param_name]
 
-            # Strict validation for parameters using TypeAdapter
-            if not kedi_type.is_none():
-                try:
-                    validated = kedi_type.validate(
-                        self.rt, None, provided, allow_str_coercion=False
-                    )
-                except Exception:
-                    raise TypeError(f"Parameter '{param_name}' does not match annotated type")
-                kwargs[param_name] = validated
+            # Untyped params are str: a str arg passes, a native non-str raises.
+            if kedi_type.is_none():
+                kedi_type = KediType(TypeRef(name="str"))
+
+            try:
+                validated = kedi_type.validate(self.rt, None, provided)
+            except Exception:
+                raise KediTypeExecutionError(
+                    f"Parameter '{param_name}' does not match annotated type"
+                )
+            kwargs[param_name] = validated
 
     def _enforce_return_type(
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
@@ -120,17 +119,19 @@ class ProcedureCompiler:
         kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
 
         if kedi_type.is_none():
-            # Default to str: non-string native returns are illegal
+            # Untyped return is str; a non-string native return is illegal.
             if last_return is not None and not isinstance(last_return, str):
-                raise TypeError("Return value must be str; annotate function to return non-string")
+                raise KediTypeExecutionError(
+                    "Return value must be str; annotate function to return non-string"
+                )
             return "" if last_return is None else str(last_return)
 
-        # Annotated return: strict validate and return validated value
+        # Raise a precise "Unknown type annotation X" before validating the value.
+        kedi_type.resolve_required(self.rt, env)
         try:
-            # Do not allow string literal coercion for returns
-            return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+            return kedi_type.validate(self.rt, env, last_return)
         except Exception:
-            raise TypeError("Return value does not match annotated type")
+            raise KediTypeExecutionError("Return value does not match annotated type")
 
     @contextmanager
     def _nested_procedure_scope(self, proc: ProcedureDef, closure_env: dict):

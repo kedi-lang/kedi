@@ -60,11 +60,11 @@ def run_codegen(
     success_all = True
     for proc in procs:
         # Check for new auto_spec first, fall back to legacy ai_prompt
-        auto_spec = getattr(proc, "auto_spec", None)
+        auto_spec = proc.auto_spec
         if auto_spec:
             prompt = auto_spec.prompt
         else:
-            prompt = getattr(proc, "ai_prompt", None)
+            prompt = proc.ai_prompt
 
         if not prompt:
             continue

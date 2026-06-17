@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine, TypeVar, cast
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
@@ -22,6 +24,26 @@ from ..lang.procedure_schema import (
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
+
+_T = TypeVar("_T")
+
+
+def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run ``coro`` to completion from sync code, even inside a running loop.
+
+    When no event loop is running this is just :func:`asyncio.run`. When called
+    from within a running loop (``asyncio.run`` would raise there) the coroutine
+    is executed on its own loop in a dedicated worker thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Copy the caller's context so a dspy.context(lm=...) override reaches the worker.
+    ctx = contextvars.copy_context()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().
+        return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, coro)).result())
 
 
 def kedi_procedure_tool_spec(
@@ -144,7 +166,9 @@ def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(target)
     def _sync_tool(*args: Any, **kwargs: Any) -> Any:
         result = target(*args, **kwargs)
-        return asyncio.run(result) if inspect.isawaitable(result) else result
+        if inspect.isawaitable(result):
+            return run_sync(cast(Coroutine[Any, Any, Any], result))
+        return result
 
     setattr(_sync_tool, _DSPY_SYNC_TOOL_MARKER, True)
     return _sync_tool
@@ -268,9 +292,7 @@ def _coerce_tool_arguments(
             if isinstance(resolved, type) and issubclass(resolved, BaseModel):
                 kwargs[param_name] = coerce_model_value(resolved, provided)
             else:
-                kwargs[param_name] = kedi_type.validate(
-                    rt, None, provided, allow_str_coercion=False
-                )
+                kwargs[param_name] = kedi_type.validate(rt, None, provided)
         except Exception as exc:
             raise TypeError(f"Parameter '{param_name}' does not match annotated type") from exc
 

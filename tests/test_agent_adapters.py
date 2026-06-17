@@ -276,6 +276,8 @@ def test_dspy_adapter_produce_and_sync_use_predict(
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = None
+    adapter._profile_stack = []
     result = asyncio.run(
         adapter.produce(
             "prompt",
@@ -475,6 +477,18 @@ def test_dspy_adapter_register_tool_wraps_async_callable() -> None:
     }
     assert inspect.signature(tool.func) == inspect.signature(lookup)
     assert tool(query="kedi", limit=2) == "kedi:2"
+
+
+def test_dspy_sync_tool_function_awaits_inside_running_loop() -> None:
+    async def lookup(query: str) -> str:
+        return query.upper()
+
+    wrapped = dspy_sync_tool_function(lookup)
+
+    async def outer() -> str:
+        return wrapped("kedi")
+
+    assert asyncio.run(outer()) == "KEDI"
 
 
 def test_dspy_adapter_register_tool_wraps_async_callable_instance() -> None:

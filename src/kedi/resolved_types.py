@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import GenericAlias, UnionType
 from typing import TypeAlias, cast
 
+from pydantic import TypeAdapter
+
 ResolvedKediType: TypeAlias = type | GenericAlias | UnionType
 
 
@@ -21,9 +23,16 @@ def as_resolved_kedi_type(value: object) -> ResolvedKediType | None:
 
 
 def runtime_isinstance(value: object, expected: ResolvedKediType) -> bool:
-    if isinstance(expected, type):
+    # Bare class -> isinstance. A parameterized generic (e.g. list[str]) can also
+    # pass isinstance(.., type) on CPython, so route it to the strict check below.
+    if isinstance(expected, type) and not isinstance(expected, GenericAlias):
         return isinstance(value, expected)
-    return True
+    # Validate generic args strictly; fail closed on mistyped/uncoercible values.
+    try:
+        TypeAdapter(expected).validate_python(value, strict=True)
+        return True
+    except Exception:
+        return False
 
 
 def resolved_type_name(value: ResolvedKediType) -> str:

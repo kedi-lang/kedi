@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
+from contextlib import (
+    AbstractContextManager,
+    AsyncExitStack,
+    contextmanager,
+    nullcontext,
+)
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Sequence, cast
 
 import dspy
@@ -163,7 +168,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         Synchronous version of produce method.
         """
-        return asyncio.run(
+        from .utils import run_sync
+
+        return run_sync(
             self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
         )
 
@@ -203,6 +210,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
 
 class DSPyAdapter:
+    # Class-level defaults so the LM config is readable via native attribute access
+    # even on adapters built without __init__ (e.g. test doubles).
+    _lm_provider: dspy.Provider | None = None
+    _lm_max_tokens: int = 4000
+    _lm_temperature: float = 1.0
+
     def __init__(
         self,
         model: str,
@@ -219,15 +232,19 @@ class DSPyAdapter:
         self._lm_extra_kwargs = dict(kwargs)
         self._tool_scope = ToolScope()
         self._profile_stack: list[AgentProfile] = []
-        dspy.settings.configure(
-            lm=LM(
-                model=model,
-                provider=provider,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                cache=False,
-                **kwargs,
-            )
+        # Keep a one-time baseline configure so plain (no-profile) produce has a
+        # global LM; per-call correctness comes from the ``dspy.context`` wrap in
+        # ``produce_sync`` / ``profile_override`` (innermost context wins).
+        dspy.settings.configure(lm=self._default_lm())
+
+    def _default_lm(self) -> LM:
+        return LM(
+            model=self._lm_model,
+            provider=self._lm_provider,
+            max_tokens=self._lm_max_tokens,
+            temperature=self._lm_temperature,
+            cache=False,
+            **self._lm_extra_kwargs,
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -303,15 +320,32 @@ class DSPyAdapter:
         """
         if not output_schema:
             raise ValueError("Output spec must be provided.")
+        from .utils import run_sync
+
         kwargs.pop("user_prompt", None)
         sig = self.type_builder(output_schema)
         instructions = kwargs.pop("instructions", None)
         sig = sig.with_instructions(instructions)
         tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
-        if self.active_profile.mcp_servers:
-            return asyncio.run(self._produce_with_mcp(sig, tools, template, kwargs))
-        prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
-        return prediction(**kwargs, user_prompt=template)
+        with self._produce_lm_context():
+            if self.active_profile.mcp_servers:
+                return run_sync(self._produce_with_mcp(sig, tools, template, kwargs))
+            prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+            return prediction(**kwargs, user_prompt=template)
+
+    def _produce_lm_context(self) -> AbstractContextManager[Any]:
+        """Make the active LM authoritative for one produce call.
+
+        ``profile_override`` already wraps nested calls in ``dspy.context(lm=...)``;
+        the innermost context wins, so we only apply the adapter default when no
+        profile override is on the stack. The baseline ``dspy.settings.configure``
+        from ``__init__`` remains the fallback for first-run safety.
+        """
+        if self._profile_stack:
+            return nullcontext()
+        if self._lm_model is None:
+            return nullcontext()
+        return dspy.context(lm=self._default_lm())
 
     async def _produce_with_mcp(
         self,

@@ -36,21 +36,26 @@ def eval_use_directive(
 
 
 def procedure_def_for_tool(rt: KediRuntime, name: str) -> ProcedureDef | None:
+    from kedi.lang.procedure_introspection import get_procedure_def
+
     try:
         fn = rt._get_proc(name)
     except KeyError:
         return None
-    proc = getattr(fn, "__kedi_procedure_def__", None)
-    if proc is None:
-        return None
+    proc = get_procedure_def(fn)
     return proc
 
 
 def python_callable_for_tool(rt: KediRuntime, name: str) -> Callable[..., Any] | None:
-    for env_name in ("_import_env", "_prelude_env", "_globals_env", "_initial_globals_env"):
-        env = getattr(rt, env_name, None)
-        if isinstance(env, dict):
-            value = env.get(name)
-            if callable(value):
-                return value
+    for env in (
+        rt._import_env,
+        rt._prelude_env,
+        rt._globals_env,
+        rt._initial_globals_env,
+    ):
+        if not isinstance(env, dict):
+            continue
+        value = env.get(name)
+        if callable(value):
+            return value
     return None
