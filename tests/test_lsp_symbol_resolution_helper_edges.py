@@ -6,21 +6,21 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from lsprotocol import types as lsp
 
+from kedi.lang.ast import ProcedureDef, TypeApply, TypeRef, TypeUnion
 from kedi.lsp import features
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line
 
 
 @pytest.fixture
-def resolution_pos() -> object:
+def resolution_pos() -> lsp.Position:
     return position_at_line(line=0, character=4)
 
 
 @pytest.fixture
-def person_type_ref(tmp_path: Path) -> object:
-    from kedi.lang.ast import TypeRef
-
+def person_type_ref(tmp_path: Path) -> TypeRef:
     return TypeRef(
         name="Person",
         loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=7),
@@ -28,9 +28,7 @@ def person_type_ref(tmp_path: Path) -> object:
 
 
 @pytest.fixture
-def list_person_apply(tmp_path: Path, person_type_ref: object) -> object:
-    from kedi.lang.ast import TypeApply
-
+def list_person_apply(tmp_path: Path, person_type_ref: TypeRef) -> TypeApply:
     return TypeApply(
         name="list",
         args=[person_type_ref],
@@ -39,9 +37,7 @@ def list_person_apply(tmp_path: Path, person_type_ref: object) -> object:
 
 
 @pytest.fixture
-def list_person_union(tmp_path: Path, list_person_apply: object) -> object:
-    from kedi.lang.ast import TypeRef, TypeUnion
-
+def list_person_union(tmp_path: Path, list_person_apply: TypeApply) -> TypeUnion:
     return TypeUnion(
         left=list_person_apply,
         right=TypeRef(name="str", loc=make_edge_span(tmp_path)),
@@ -50,9 +46,7 @@ def list_person_union(tmp_path: Path, list_person_apply: object) -> object:
 
 
 @pytest.fixture
-def sample_proc(tmp_path: Path) -> object:
-    from kedi.lang.ast import ProcedureDef
-
+def sample_proc(tmp_path: Path) -> ProcedureDef:
     return ProcedureDef(
         name="p",
         params=["x"],
@@ -101,7 +95,9 @@ def test_collect_call_and_input_refs_follow_nested_args(tmp_path: Path) -> None:
     inputs: list[Span] = []
     features._collect_input_refs(
         CallSegment(
-            name="outer", args=[nested_input_arg, rendered_input_arg], loc=make_edge_span(tmp_path)
+            name="outer",
+            args=[nested_input_arg, rendered_input_arg],
+            loc=make_edge_span(tmp_path),
         ),
         "needle",
         inputs,
@@ -111,9 +107,9 @@ def test_collect_call_and_input_refs_follow_nested_args(tmp_path: Path) -> None:
 
 def test_collect_type_refs_in_expr_stmt_and_type_def(
     tmp_path: Path,
-    person_type_ref: object,
-    list_person_apply: object,
-    list_person_union: object,
+    person_type_ref: TypeRef,
+    list_person_apply: TypeApply,
+    list_person_union: TypeUnion,
 ) -> None:
     from kedi.lang.ast import OutputSegment, Span, TypeDef, TypeField
 
@@ -153,8 +149,8 @@ def test_find_local_declaration_in_procedure_body(tmp_path: Path) -> None:
 
 def test_resolve_in_procedure_uses_param_decls(
     tmp_path: Path,
-    sample_proc: object,
-    resolution_pos: object,
+    sample_proc: ProcedureDef,
+    resolution_pos: lsp.Position,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert (
@@ -168,13 +164,18 @@ def test_resolve_in_procedure_uses_param_decls(
             ("x", make_edge_span(tmp_path)),
         ],
     )
-    assert features._resolve_in_procedure(sample_proc, resolution_pos, {}, {}, {}) is not None
+    from kedi.lang.ast import Program
+
+    assert (
+        features._resolve_in_procedure(Program(), sample_proc, resolution_pos, {}, {}, {})
+        is not None
+    )
 
 
 def test_resolve_in_type_expr_and_stmt(
     tmp_path: Path,
-    person_type_ref: object,
-    resolution_pos: object,
+    person_type_ref: TypeRef,
+    resolution_pos: lsp.Position,
 ) -> None:
     from kedi.lang.ast import AssignBlockStmt, OutputSegment, TypeApply, TypeDef, TypeRef, TypeUnion
 
@@ -199,8 +200,11 @@ def test_resolve_in_type_expr_and_stmt(
         )
         is not None
     )
+    from kedi.lang.ast import Program
+
     assert (
         features._resolve_in_stmt(
+            Program(),
             AssignBlockStmt(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
             resolution_pos,
             None,
@@ -229,7 +233,12 @@ def test_resolve_in_type_def_field(tmp_path: Path) -> None:
     field_ref = features._resolve_in_type_def(
         TypeDef(
             "Person",
-            [TypeField("name", loc=make_edge_span(tmp_path, line=1, start_col=9, end_col=13))],
+            [
+                TypeField(
+                    "name",
+                    loc=make_edge_span(tmp_path, line=1, start_col=9, end_col=13),
+                )
+            ],
             loc=make_edge_span(tmp_path),
         ),
         position_at_line(line=0, character=8),
@@ -240,7 +249,12 @@ def test_resolve_in_type_def_field(tmp_path: Path) -> None:
         features._resolve_in_type_def(
             TypeDef(
                 "Person",
-                [TypeField("name", loc=make_edge_span(tmp_path, line=1, start_col=9, end_col=13))],
+                [
+                    TypeField(
+                        "name",
+                        loc=make_edge_span(tmp_path, line=1, start_col=9, end_col=13),
+                    )
+                ],
                 loc=make_edge_span(tmp_path),
             ),
             position_at_line(line=0, character=20),
@@ -252,7 +266,7 @@ def test_resolve_in_type_def_field(tmp_path: Path) -> None:
 
 def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     tmp_path: Path,
-    resolution_pos: object,
+    resolution_pos: lsp.Position,
 ) -> None:
     from kedi.lang.ast import AssignBlockStmt, TypeApply, TypeRef, TypeUnion
 
@@ -260,10 +274,12 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
         features._resolve_in_type_expr(
             TypeUnion(
                 left=TypeRef(
-                    name="Nope", loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=24)
+                    name="Nope",
+                    loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=24),
                 ),
                 right=TypeRef(
-                    name="Other", loc=make_edge_span(tmp_path, line=1, start_col=30, end_col=35)
+                    name="Other",
+                    loc=make_edge_span(tmp_path, line=1, start_col=30, end_col=35),
                 ),
                 loc=make_edge_span(tmp_path),
             ),
@@ -278,7 +294,8 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
                 name="list",
                 args=[
                     TypeRef(
-                        name="Other", loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25)
+                        name="Other",
+                        loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25),
                     )
                 ],
                 loc=make_edge_span(tmp_path),
@@ -288,12 +305,16 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
         )
         is None
     )
+    from kedi.lang.ast import Program
+
     assert (
         features._resolve_in_stmt(
+            Program(),
             AssignBlockStmt(
                 name="x",
                 type_expr=TypeRef(
-                    name="Other", loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25)
+                    name="Other",
+                    loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25),
                 ),
                 loc=make_edge_span(tmp_path),
             ),
@@ -312,7 +333,9 @@ def test_resolve_in_segment_nested_inputs(tmp_path: Path) -> None:
 
     resolve_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
-        resolve_arg, "__call_segment__", InputSegment(name="resolved", loc=make_edge_span(tmp_path))
+        resolve_arg,
+        "__call_segment__",
+        InputSegment(name="resolved", loc=make_edge_span(tmp_path)),
     )
     resolved = features._resolve_in_segment(
         CallSegment(name="outer", args=[resolve_arg], loc=make_edge_span(tmp_path)),
@@ -350,7 +373,12 @@ def test_resolve_in_segment_nested_inputs(tmp_path: Path) -> None:
     setattr(
         missing_render_arg,
         "__render_segments__",
-        [InputSegment(name="miss", loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25))],
+        [
+            InputSegment(
+                name="miss",
+                loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25),
+            )
+        ],
     )
     assert (
         features._resolve_in_segment(
@@ -372,7 +400,8 @@ def test_resolve_in_segment_nested_inputs(tmp_path: Path) -> None:
             OutputSegment(
                 name="x",
                 type_expr=TypeRef(
-                    name="Other", loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25)
+                    name="Other",
+                    loc=make_edge_span(tmp_path, line=1, start_col=20, end_col=25),
                 ),
                 loc=make_edge_span(tmp_path),
             ),
@@ -386,7 +415,9 @@ def test_resolve_in_segment_nested_inputs(tmp_path: Path) -> None:
     )
 
 
-def test_smallest_enclosing_validation_program(tmp_path: Path, resolution_pos: object) -> None:
+def test_smallest_enclosing_validation_program(
+    tmp_path: Path, resolution_pos: lsp.Position
+) -> None:
     from kedi.lang.ast import (
         AssignStmt,
         AutoSpec,
@@ -497,7 +528,7 @@ def test_smallest_enclosing_validation_program(tmp_path: Path, resolution_pos: o
 
 def test_find_all_references_for_procedures_and_types(
     tmp_path: Path,
-    person_type_ref: object,
+    person_type_ref: TypeRef,
 ) -> None:
     from kedi.lang.ast import (
         AssignStmt,
@@ -527,7 +558,11 @@ def test_find_all_references_for_procedures_and_types(
                 name="typed",
                 params=["x"],
                 body=[
-                    AssignStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path))
+                    AssignStmt(
+                        name="v",
+                        type_expr=person_type_ref,
+                        loc=make_edge_span(tmp_path),
+                    )
                 ],
                 param_type_exprs={"x": person_type_ref, "skip": None},
                 return_type_expr=person_type_ref,

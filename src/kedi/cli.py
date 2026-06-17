@@ -15,7 +15,9 @@ from kedi.app import (
 )
 from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
+from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
+from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
 
 dotenv.load_dotenv()
@@ -130,6 +132,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     is_flag=True,
     help="Suppress progress output from codegen and GEPA optimization",
 )
+@click.option("--parse", "parse_only", is_flag=True, help="Parse the source without compiling")
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -153,7 +156,14 @@ def main(
     optimizer_fresh: bool = False,
     no_cache: bool = False,
     quiet: bool = False,
+    parse_only: bool = False,
 ):
+    if source == "parse":
+        if not ctx.args:
+            raise click.UsageError("Missing argument 'SOURCE'.")
+        source = ctx.args[0]
+        parse_only = True
+        ctx.args = ctx.args[1:]
     try:
         with open(source, "r", encoding="utf-8") as f:
             f.read()
@@ -162,6 +172,16 @@ def main(
         ctx.exit(1)
     runtime_args = parse_args(ctx.args)
     try:
+        if parse_only:
+            source_path = Path(source).resolve()
+            bundle = load_kedi_source_bundle(source_path)
+            parse_program(
+                bundle.text,
+                source_path=str(source_path),
+                source_map=bundle.source_map,
+            )
+            return 0
+
         # Run optimization if requested (independent of eval flag)
         if optimize:
             code, msg = run_optimization_cli(
@@ -192,12 +212,17 @@ def main(
         if test or do_eval:
             # Run validations
             if test:
-                code, out = run_tests_cli(
-                    source,
-                    adapter=adapter,
-                    model=adapter_model,
-                    runtime_args=runtime_args,
-                )
+                try:
+                    code, out = run_tests_cli(
+                        source,
+                        adapter=adapter,
+                        model=adapter_model,
+                        use_cache=not no_cache,
+                        runtime_args=runtime_args,
+                    )
+                finally:
+                    if no_cache:
+                        Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 click.echo(out)
                 if code != 0:
                     ctx.exit(code)
@@ -205,19 +230,25 @@ def main(
             else:
                 # Optimization is handled above by run_optimization_cli when --optimize is set.
                 # Do not pass optimize=True here or GEPA would run twice with default budget/model.
-                code, out = run_evals_cli(
-                    source,
-                    adapter=adapter,
-                    adapter_model=adapter_model,
-                    codegen_model=codegen_model,
-                    optimizer=optimizer,
-                    optimizer_model=optimizer_model,
-                    reflection_model=(optimizer_reflection_model if optimizer == "gepa" else None),
-                    optimize=False,
-                    use_cache=not no_cache,
-                    runtime_args=runtime_args,
-                    quiet=quiet,
-                )
+                try:
+                    code, out = run_evals_cli(
+                        source,
+                        adapter=adapter,
+                        adapter_model=adapter_model,
+                        codegen_model=codegen_model,
+                        optimizer=optimizer,
+                        optimizer_model=optimizer_model,
+                        reflection_model=(
+                            optimizer_reflection_model if optimizer == "gepa" else None
+                        ),
+                        optimize=False,
+                        use_cache=not no_cache,
+                        runtime_args=runtime_args,
+                        quiet=quiet,
+                    )
+                finally:
+                    if no_cache:
+                        Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 if out:
                     if code != 0:
                         click.echo(out, err=True)

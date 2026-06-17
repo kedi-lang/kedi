@@ -1,9 +1,26 @@
+from typing import Any
+
 from .meta import AgentAdapter, T
-from .utils import kedi_procedure_to_pydantic_tool, kedi_program_to_pydantic_tools
+from .tool_override import SupportsToolRegistration, ToolSpec
+
+
+def kedi_procedure_to_pydantic_tool(*args: Any, **kwargs: Any) -> Any:
+    from .utils import kedi_procedure_to_pydantic_tool as build_tool
+
+    return build_tool(*args, **kwargs)
+
+
+def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
+    from .utils import kedi_program_to_pydantic_tools as build_tools
+
+    return build_tools(*args, **kwargs)
+
 
 __all__ = [
     "AgentAdapter",
+    "SupportsToolRegistration",
     "T",
+    "ToolSpec",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
 ]

@@ -147,6 +147,151 @@ def test_unexported_procedure_is_not_imported(tmp_path: Path) -> None:
         rt.run_main()
 
 
+def test_import_exposes_exported_agent_profile(tmp_path: Path) -> None:
+    (tmp_path / "models.kedi").write_text(
+        "> profile: advanced:\n    > model: opus\n\n> export:\n  advanced\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: models\n\n> use: advanced\n@ask():\n    >> answer [x]\n\n= <ask()>\n",
+        encoding="utf-8",
+    )
+
+    adapter = MockAdapter(default_model="default-model")
+    rt = _compile_file(main, adapter=adapter)
+    rt.run_main()
+
+    assert adapter.model_calls == ["opus"]
+    assert rt._profile_registry["advanced"].members[0].plain_value == "opus"
+
+
+def test_star_export_includes_agent_profiles(tmp_path: Path) -> None:
+    (tmp_path / "models.kedi").write_text(
+        "> profile: advanced:\n"
+        "    > model: opus\n"
+        "> profile: _hidden:\n"
+        "    > model: secret\n"
+        "\n"
+        "> export: *\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: models\n\n> use: advanced\n@ask():\n    >> answer [x]\n\n= <ask()>\n",
+        encoding="utf-8",
+    )
+
+    adapter = MockAdapter(default_model="default-model")
+    rt = _compile_file(main, adapter=adapter)
+    rt.run_main()
+
+    assert adapter.model_calls == ["opus"]
+    assert "advanced" in rt._profile_registry
+    assert "_hidden" not in rt._profile_registry
+
+
+def test_internal_filesystem_module_exports_profile_and_tools(tmp_path: Path) -> None:
+    data_file = tmp_path / "data.txt"
+    data_file.write_text("hello filesystem", encoding="utf-8")
+
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        f"> import: filesystem\n\n= <read_text_file(`{str(data_file)!r}`)>\n",
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == "hello filesystem"
+    assert "filesystem" in rt._profile_registry
+    assert "read_text_file" in rt._procedures
+
+
+def test_internal_filesystem_apply_patch_tool_updates_file(tmp_path: Path) -> None:
+    data_file = tmp_path / "data.txt"
+    data_file.write_text("hello\nold value\nbye\n", encoding="utf-8")
+    patch = (
+        "*** Begin Patch\n"
+        f"*** Update File: {data_file}\n"
+        "@@\n"
+        " hello\n"
+        "-old value\n"
+        "+new value\n"
+        " bye\n"
+        "*** End Patch\n"
+    )
+
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        f"> import: filesystem\n\n= <apply_patch(`{patch!r}`)>\n",
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == f"updated {data_file}"
+    assert data_file.read_text(encoding="utf-8") == "hello\nnew value\nbye\n"
+
+
+def test_internal_filesystem_apply_patch_accepts_wrapperless_patch(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / "data.txt"
+    data_file.write_text(
+        "from .constants import *\nfrom .vfx import Projectile\n", encoding="utf-8"
+    )
+    patch = (
+        f"*** Update File: {data_file}\n"
+        "@@ hunks @@\n"
+        "+import random\n"
+        " from .constants import *\n"
+        " from .vfx import Projectile\n"
+    )
+
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        f"> import: filesystem\n\n= <apply_patch(`{patch!r}`)>\n",
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == f"updated {data_file}"
+    assert data_file.read_text(encoding="utf-8") == (
+        "import random\nfrom .constants import *\nfrom .vfx import Projectile\n"
+    )
+
+
+def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: filesystem\n\n"
+        "> use: filesystem\n\n"
+        ">> Read pyproject.toml and provide [content]\n\n"
+        "= <content>\n",
+        encoding="utf-8",
+    )
+
+    adapter = MockAdapter(default_model="mock")
+    rt = _compile_file(main, adapter=adapter)
+
+    assert rt.run_main() == "content-value"
+    assert adapter.tool_calls == [
+        (
+            "read_text_file",
+            "write_text_file",
+            "apply_patch",
+            "path_exists",
+            "list_directory",
+            "create_directory",
+            "remove_file",
+            "remove_directory",
+            "get_file_info",
+        )
+    ]
+
+
 def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:
     (tmp_path / "profiles.kedi").write_text(
         "> export:\n  missing\n",

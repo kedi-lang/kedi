@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +20,12 @@ from kedi.lsp import features
 def test_diagnostics_empty_for_valid_program():
     src = "@p():\n  = ok\n"
     assert features.compute_diagnostics(src, "example.kedi") == []
+
+
+def test_diagnostics_accept_tools_fixture() -> None:
+    path = Path("tests/files/tools.kedi").resolve()
+    src = path.read_text(encoding="utf-8")
+    assert features.compute_diagnostics(src, str(path)) == []
 
 
 def test_diagnostics_surfaces_parser_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,6 +67,56 @@ def test_diagnostics_reports_legacy_optimize_empty_message():
     src = "@p():\n  > optimize: empty:\n\n  = done\n"
     diags = features.compute_diagnostics(src, "example.kedi")
     assert any("must have an indented block" in d.message for d in diags)
+
+
+def test_diagnostics_report_invalid_top_level_effort_value() -> None:
+    diags = features.compute_diagnostics("> effort: extreme\n", "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-EFFORT-VALUE"
+    assert "must be one of" in diag.message
+    assert diag.range.start.line == 0
+
+
+def test_diagnostics_report_invalid_profile_effort_value() -> None:
+    src = "> profile: strict:\n    > effort: extreme\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-EFFORT-VALUE"
+    assert "must be one of" in diag.message
+    assert diag.range.start.line == 1
+
+
+def test_diagnostics_report_invalid_mcp_transport_value() -> None:
+    src = "> mcp:\n    transport: websocket\n    url: http://localhost:8000\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-MCP-TRANSPORT"
+    assert "streamable-http" in diag.message
+    assert diag.range.start.line == 1
+    assert diag.range.start.character == 15
+
+
+def test_diagnostics_accept_streamable_http_mcp_transport() -> None:
+    src = "> mcp:\n    transport: streamable-http\n    url: http://localhost:8000/mcp\n"
+
+    assert features.compute_diagnostics(src, "example.kedi") == []
+
+
+def test_diagnostics_report_invalid_model_setting_key() -> None:
+    src = "> settings:\n    imaginary: true\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-SETTING-KEY"
+    assert "model setting must be one of" in diag.message
+    assert diag.range.start.line == 1
 
 
 def test_diagnostics_accept_module_import_export_syntax(tmp_path):

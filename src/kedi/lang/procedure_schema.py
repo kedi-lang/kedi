@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Iterable, cast
+from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from ..core import KediRuntime
 from ..dynamic_models import build_dynamic_model
-from .ast import ProcedureDef, Program, ProgramWithValidation
+from .ast import ProcDefStmt, ProcedureDef, Program, ProgramWithValidation
 from .compiler.environment import build_type_env
 from .compiler.type_system import KediType
 from .docstrings import parse_procedure_docstring
@@ -36,14 +36,11 @@ def procedure_json_schema(
         default_value = rt.executor.evaluate_type_expression(rt, default_expr, default_env)
         field_defs[param_name] = (param_type, copy.deepcopy(default_value))
 
-    model = cast(
-        type[BaseModel],
-        build_dynamic_model(
-            f"_{proc.name}Parameters",
-            BaseModel,
-            field_defs,
-            __config__=ConfigDict(extra="forbid", title=proc.name),
-        ),
+    model = build_dynamic_model(
+        f"_{proc.name}Parameters",
+        BaseModel,
+        field_defs,
+        __config__=ConfigDict(extra="forbid", title=proc.name),
     )
     schema = _strip_introspection_descriptions(model.model_json_schema())
     schema["description"] = build_procedure_description(
@@ -141,9 +138,8 @@ def _all_procedures(
         if not include_nested:
             return
         for stmt in proc.body:
-            nested = getattr(stmt, "proc", None)
-            if nested is not None:
-                visit(nested)
+            if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+                visit(stmt.proc)
 
     for proc in procedures:
         visit(proc)

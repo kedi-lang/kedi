@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
+from ...agent_profile import AgentProfile, block_agent_profile_scope
+from ...agent_profile.model import (
+    eval_effort_directive,
+    eval_mcp_directive,
+    eval_model_directive,
+    eval_settings_directive,
+    eval_system_directive,
+)
+from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
+    EffortDirectiveStmt,
+    McpDirectiveStmt,
+    ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
     ReturnBlockStmt,
     ReturnStmt,
+    SettingsDirectiveStmt,
     Stmt,
+    SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
+    UseDirectiveStmt,
 )
 from ..parser.escapes import preserve_escaped_whitespace
 from .evaluation import (
@@ -29,6 +44,8 @@ from .evaluation import (
     render_expression,
 )
 from .type_system import KediType, assign_value_from_native, detect_rhs_kind
+
+_NO_RETURN = object()
 
 
 class StatementCompiler:
@@ -124,6 +141,8 @@ class StatementCompiler:
                     )
                 elif is_call:
                     value = native
+                    if not kedi_type.is_none():
+                        value = kedi_type.validate(self.rt, closure_env, value)
                 else:
                     value = rendered
                     if not kedi_type.is_none():
@@ -197,10 +216,9 @@ class StatementExecutor:
         self.rt = rt
         self.compiler = StatementCompiler(rt)
 
-    def execute(self, proc: Any, closure_env: dict[str, Any]) -> Any:
+    def execute(self, proc: ProcedureDef, closure_env: dict[str, Any]) -> Any:
         """Execute procedure body statements and return the last return value."""
-        from ..ast import ProcDefStmt, TypeDefStmt
-        from .type_system import pop_type_env, push_type_env, register_type
+        from .type_system import pop_type_env, push_type_env
 
         last_return: Any = None
         type_scope = push_type_env(self.rt)
@@ -210,67 +228,55 @@ class StatementExecutor:
         new_proc_names: list[str] = []
 
         # Inherit parent type environment
-        parent_stack = getattr(self.rt, "_type_env_stack", None)
-        if isinstance(parent_stack, list) and len(parent_stack) >= 2:
+        parent_stack = self.rt._type_env_stack
+        if len(parent_stack) >= 2:
             type_scope.update(parent_stack[-2])
+
+        captured = proc.captured_agent_profile
+        active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        profile_registry = self.rt._profile_registry
 
         try:
             for stmt in proc.body:
-                if isinstance(stmt, TemplateBlock):
-                    self.compiler.compile_template_block(stmt)(**closure_env)
-                    self._sync_env(closure_env)
-
-                elif isinstance(stmt, TemplateLine):
-                    self.compiler.compile_template_line(stmt)(**closure_env)
-                    self._sync_env(closure_env)
-
-                elif isinstance(stmt, TypeDefStmt):
-                    if stmt.typedef is not None:
-                        register_type(self.rt, stmt.typedef, type_scope, closure_env)
-
-                elif isinstance(stmt, ProcDefStmt):
-                    # Register nested procedure dynamically with current closure
-                    from .procedure_compiler import ProcedureCompiler
-
-                    child = cast(ProcedureDef, stmt.proc)
-                    child.lexical_env = dict(closure_env)
-                    proc_compiler = ProcedureCompiler(self.rt)
-                    fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
-
-                    # Save existing procedure if present, track new ones
-                    procs = self.rt._procedures
-                    if child.name in procs and child.name not in saved_procs:
-                        saved_procs[child.name] = procs[child.name]
-                    elif child.name not in procs:
-                        new_proc_names.append(child.name)
-                    procs[child.name] = fn_nested
-
-                elif isinstance(stmt, PythonBlock):
-                    self.compiler.execute_python_block(stmt, closure_env)
-
-                elif isinstance(stmt, BacktickLineStmt):
-                    self.compiler.execute_backtick_line(stmt, closure_env)
-
-                elif isinstance(stmt, AssignBlockStmt):
-                    self.compiler.execute_assignment_block(stmt, closure_env)
-
-                elif isinstance(stmt, AssignStmt):
-                    self.compiler.execute_assignment(stmt, closure_env)
-
-                elif isinstance(stmt, ReturnStmt):
-                    # For typed procedures, preserve native value if resolvable; otherwise render to string
-                    if getattr(proc, "return_type_annotation", None):
-                        native, rendered = evaluate_assignment_rhs(
-                            self.rt, stmt.segments, closure_env
+                if isinstance(stmt, ModelDirectiveStmt):
+                    active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, EffortDirectiveStmt):
+                    active = active.merge(eval_effort_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, SystemDirectiveStmt):
+                    active = active.merge(eval_system_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, McpDirectiveStmt):
+                    active = active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, SettingsDirectiveStmt):
+                    active = active.merge(eval_settings_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, UseDirectiveStmt):
+                    active = active.merge(
+                        eval_use_directive(
+                            self.rt,
+                            stmt,
+                            profile_registry,
+                            closure_env,
+                            available_procedures=set(self.rt._procedures.keys()),
                         )
-                        last_return = (
-                            native if native is not None else preserve_escaped_whitespace(rendered)
-                        )
-                    else:
-                        last_return = self.compiler.compile_return(stmt)(**closure_env)
+                    )
+                    continue
 
-                elif isinstance(stmt, ReturnBlockStmt):
-                    last_return = self.compiler.compile_return_block(stmt, closure_env)
+                with block_agent_profile_scope(active):
+                    result = self._execute_body_statement(
+                        stmt,
+                        proc,
+                        closure_env,
+                        type_scope,
+                        saved_procs,
+                        new_proc_names,
+                        active,
+                    )
+                    if result is not _NO_RETURN:
+                        last_return = result
 
         finally:
             pop_type_env(self.rt)
@@ -284,6 +290,82 @@ class StatementExecutor:
                 procs[name] = old_fn
 
         return last_return
+
+    def _execute_body_statement(
+        self,
+        stmt: Stmt,
+        proc: Any,
+        closure_env: dict[str, Any],
+        type_scope: dict[str, Any],
+        saved_procs: dict[str, Any],
+        new_proc_names: list[str],
+        active: AgentProfile,
+    ) -> Any:
+        from ..ast import ProcDefStmt, TypeDefStmt
+        from .procedure_compiler import ProcedureCompiler
+        from .type_system import register_type
+
+        if isinstance(stmt, TemplateBlock):
+            self.compiler.compile_template_block(stmt)(**closure_env)
+            self._sync_env(closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TemplateLine):
+            self.compiler.compile_template_line(stmt)(**closure_env)
+            self._sync_env(closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TypeDefStmt):
+            if stmt.typedef is not None:
+                register_type(self.rt, stmt.typedef, type_scope, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            child = stmt.proc
+            child.captured_agent_profile = active.frozen_copy()
+            child.lexical_env = dict(closure_env)
+            proc_compiler = ProcedureCompiler(self.rt)
+            fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
+
+            procs = self.rt._procedures
+            if child.name in procs and child.name not in saved_procs:
+                saved_procs[child.name] = procs[child.name]
+            elif child.name not in procs:
+                new_proc_names.append(child.name)
+            procs[child.name] = fn_nested
+            return _NO_RETURN
+
+        if isinstance(stmt, PythonBlock):
+            self.compiler.execute_python_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, BacktickLineStmt):
+            self.compiler.execute_backtick_line(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignBlockStmt):
+            self.compiler.execute_assignment_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignStmt):
+            self.compiler.execute_assignment(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, ReturnStmt):
+            # Gate on the structured type too (not just the legacy string) so
+            # structured-only typed returns take the enforced native path.
+            return_kedi_type = KediType.from_node(
+                proc.return_type_expr, proc.return_type_annotation
+            )
+            if not return_kedi_type.is_none():
+                native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
+                return native if native is not None else preserve_escaped_whitespace(rendered)
+            return self.compiler.compile_return(stmt)(**closure_env)
+
+        if isinstance(stmt, ReturnBlockStmt):
+            return self.compiler.compile_return_block(stmt, closure_env)
+
+        return _NO_RETURN
 
     def execute_single_statement(
         self, stmt: Stmt, env: dict[str, Any], is_toplevel: bool = False

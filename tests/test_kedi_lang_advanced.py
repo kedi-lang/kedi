@@ -472,7 +472,12 @@ def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
 
 
 def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
-    ">> A raw backtick mid-template is now a parse error (was: literal text).\n\n    >> Tree-sitter refactor (Phase-6): the new grammar treats `` ` `` as a\n    segment delimiter consistently. The pre-refactor parser accepted\n    `[x] = \\`1+1\\` and more <s>` and rendered it as the literal\n    string ``\\`1+1\\` and more ok`` — a quirky special case where\n    backticks inside a template body became literal text only when\n    additional content followed. Users who want a literal backtick\n    must now escape it (``\\\\\\``) or wrap an inline-Python segment\n    in angle brackets (``<\\`expr\\`>``); we reject the old form.\n"
+    """A raw backtick mid-template is a parse error.
+
+    The grammar treats `` ` `` as a segment delimiter consistently.
+    Users who want a literal backtick must escape it (``\\```) or wrap
+    an inline-Python segment in angle brackets (``<`expr`>``).
+    """
     import pytest
 
     src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import types
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -9,6 +11,14 @@ from .ast import ProcedureDef
 from .type_render import procedure_param_type_to_python, procedure_return_type_to_python
 
 _PROCEDURE_METADATA_ATTR = "__kedi_procedure_metadata__"
+
+
+def callable_display_name(fn: Callable[..., Any]) -> str:
+    target = inspect.unwrap(fn)
+    if isinstance(target, types.FunctionType):
+        return target.__name__
+    qualname = type(target).__qualname__
+    return qualname if qualname else type(target).__name__
 
 
 @dataclass(frozen=True)
@@ -96,6 +106,11 @@ def attach_procedure_metadata(
     setattr(fn, "__kedi_procedure_def__", proc)
     fn.__doc__ = proc.docstring
     return fn
+
+
+def get_procedure_def(fn: Callable[..., Any]) -> ProcedureDef | None:
+    proc = getattr(fn, "__kedi_procedure_def__", None)
+    return proc if isinstance(proc, ProcedureDef) else None
 
 
 def get_procedure_metadata(fn: Callable[..., Any]) -> ProcedurePythonMetadata | None:

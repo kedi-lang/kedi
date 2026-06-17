@@ -6,6 +6,7 @@ import pytest
 
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    AssignStmt,
     InputSegment,
     OutputSegment,
     Span,
@@ -18,7 +19,8 @@ from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp import features
 from kedi.lsp.features import compute_diagnostics, compute_hover, compute_semantic_tokens_full
 from kedi.lsp.python_virtual import compute_python_virtual_document
-from tests.lsp_helpers import decode_semantic_tokens, hover_at, position_of
+from kedi.resolved_types import ResolvedKediType
+from tests.lsp_helpers import decode_semantic_tokens, hover_at, hover_value, position_of
 from tests.mock_adapter import MockAdapter
 
 
@@ -85,7 +87,11 @@ def test_template_block_single_agent_run() -> None:
 
     class CountingAdapter(MockAdapter):
         def produce_sync(
-            self, *, template: str, output_schema: dict[str, type] | None = None, **_: Any
+            self,
+            *,
+            template: str,
+            output_schema: dict[str, ResolvedKediType] | None = None,
+            **_: Any,
         ) -> Any:
             calls.append(template)
             return super().produce_sync(template=template, output_schema=output_schema)
@@ -145,11 +151,10 @@ def test_template_block_hover_and_diagnostics() -> None:
     src = ">> What's the [capital] of Turkey?\nWhat's the [population: int] of <capital>?\n"
     hover = compute_hover(src, None, position_of(src, ">>"))
     assert hover is not None
-    assert "Template block" in hover.contents.value
+    assert "Template block" in hover_value(hover)
 
     capital_hover = hover_at(src, "/tmp/example.kedi", "capital", occurrence=1)
-    assert capital_hover is not None
-    assert "Output" in capital_hover.contents.value
+    assert "Output" in hover_value(capital_hover)
 
 
 def test_template_block_disambiguates_assign_stmt() -> None:
@@ -158,7 +163,9 @@ def test_template_block_disambiguates_assign_stmt() -> None:
     proc = prog.procedures[0]
     assert isinstance(proc.body[0], TemplateBlock)
     assert len(proc.body[0].lines) == 1
-    assert proc.body[1].name == "y"  # type: ignore[attr-defined]
+    assign = proc.body[1]
+    assert isinstance(assign, AssignStmt)
+    assert assign.name == "y"
 
 
 def test_top_level_template_block_executes() -> None:

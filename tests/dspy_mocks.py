@@ -10,6 +10,7 @@ import pytest
 from dspy import BaseLM
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
 # =========
@@ -133,7 +134,7 @@ class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **_: Any,
     ) -> AttrDict[str, Any]:
         return self.produce_sync(template=template, output_schema=output_schema)
@@ -142,7 +143,7 @@ class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type] | None = None,
+        output_schema: dict[str, ResolvedKediType] | None = None,
         **_: Any,
     ) -> AttrDict[str, Any]:
         ival, fval = sample_from_range(template, prefer_midpoint=self.prefer_midpoint)

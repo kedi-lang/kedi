@@ -1,0 +1,122 @@
+```
+import logfire
+
+logfire.configure(send_to_logfire="if-token-present")
+logfire.instrument_pydantic_ai()
+
+models = {
+    "flash": "openrouter:google/gemini-3-flash-preview",
+    "lite": "openrouter:google/gemini-3.1-flash-lite-preview",
+}
+```
+
+> profile: flash:
+    > model: openrouter:google/gemini-3-flash-preview
+
+> profile: lite:
+    > model: openrouter:google/gemini-3.1-flash-lite-preview
+
+# 3) Adapter default — no > model / > use yet
+@baseline_adapter_default():
+    >> Scope 3-adapter-default. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+> model: openrouter:google/gemini-3.1-flash-lite-preview
+
+@baseline_toplevel_lite():
+    >> Scope 3-toplevel-lite-capture. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+# 1) Source-order > model: capture
+> model: openrouter:google/gemini-3-flash-preview
+
+@captured_early():
+    >> Scope 1-capture-early-flash. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+> model: openrouter:google/gemini-3.1-flash-lite-preview
+
+@captured_late():
+    >> Scope 1-capture-late-lite. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+# 2) > use: profile at capture time
+> use: flash
+
+@captured_use_flash():
+    >> Scope 2-capture-use-flash. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+# 4) Body > model: — capture lite, switch to flash inside body
+> model: openrouter:google/gemini-3.1-flash-lite-preview
+
+@body_model_switch():
+    >> Scope 4-body-before-model. Reply ONLY google/gemini model id. [before: str]
+    > model: openrouter:google/gemini-3-flash-preview
+    >> Scope 4-body-after-model. Reply ONLY google/gemini model id. [after: str]
+    = `f"{before} | {after}"`
+
+# 5) Body > use: — capture lite, switch to flash inside body
+@body_use_switch():
+    >> Scope 5-body-before-use. Reply ONLY google/gemini model id. [before: str]
+    > use: flash
+    >> Scope 5-body-after-use. Reply ONLY google/gemini model id. [after: str]
+    = `f"{before} | {after}"`
+
+# 6) Nested procedure under active flash profile
+> use: flash
+
+@outer_nested():
+    @inner_nested():
+        >> Scope 6-inner-nested-flash. Reply ONLY google/gemini model id. [model_id: str]
+        = <model_id>
+    = <inner_nested()>
+
+# 7) Call site must not override captured procedure (main context lite)
+> use: lite
+
+[captured_early_call: str] = <captured_early()>
+>> Scope 7-call-site-lite-context. Reply ONLY google/gemini model id. [call_site: str]
+
+# 8) Toplevel > use: lite (already active; capture check)
+
+@after_toplevel_use_lite():
+    >> Scope 8-toplevel-use-lite. Reply ONLY google/gemini model id. [model_id: str]
+    = <model_id>
+
+= `
+return "\\n".join(
+        [
+            "=== agent profile scope report ===",
+            f"expected_flash: {models['flash']}",
+            f"expected_lite: {models['lite']}",
+            "",
+            "--- 3 adapter / toplevel model ---",
+            f"adapter default: {baseline_adapter_default()}",
+            f"toplevel lite capture: {baseline_toplevel_lite()}",
+            "",
+            "--- 1 source-order capture ---",
+            f"early flash: {captured_early()}",
+            f"late lite: {captured_late()}",
+            "",
+            "--- 2 use profile ---",
+            f"use flash: {captured_use_flash()}",
+            "",
+            "--- 4 body > model ---",
+            f"switch: {body_model_switch()}",
+            "",
+            "--- 5 body > use ---",
+            f"switch: {body_use_switch()}",
+            "",
+            "--- 6 nested ---",
+            f"inner: {outer_nested()}",
+            "",
+            "--- 7 call site vs capture ---",
+            f"captured_early from lite main: {captured_early_call}",
+            f"main probe: {call_site}",
+            "",
+            "--- 8 toplevel use lite ---",
+            f"after use lite: {after_toplevel_use_lite()}",
+        ]
+)
+`

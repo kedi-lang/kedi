@@ -68,7 +68,21 @@ Tests and coverage:
 
 - `make tests`: run the full test suite with `pytest`
 - `make coverage`: run tests with coverage reporting
-- `make check-coverage`: enforce 100% coverage
+- `make check-coverage`: enforce 100% coverage (HTTP cassettes replay with `--record-mode=none`)
+
+LLM integration tests in `tests/test_kedi_suite.py` use [cassetter](https://pypi.org/project/cassetter/).
+CI replays committed cassettes under `tests/cassettes/` without network access. To refresh
+them after changing `tests/files/*.kedi`:
+
+```bash
+export GROQ_API_KEY=...   # real key required when cassettes are missing
+rm -rf tests/cassettes/test_kedi_suite   # optional: force a fresh record
+uv run pytest tests/test_kedi_suite.py::test_kedi_program_scoping -xvs
+```
+
+Cassette redaction lives in `tests/cassette_redaction.py` (headers, response IDs, rate limits,
+client fingerprint, and `recorded_at` normalization). Review that module before widening what gets
+committed.
 
 Higher-cost validation:
 

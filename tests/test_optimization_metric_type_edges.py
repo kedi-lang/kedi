@@ -6,9 +6,7 @@ from typing import Any, cast
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import (
-    ProcedureDef,
-)
+from kedi.lang.ast import ProcedureDef
 from kedi.optimization.services import type_handler as type_handler_module
 from kedi.optimization.services.metric_factory import MetricFactory
 from kedi.optimization.services.type_handler import StructuredTypeHandler
@@ -52,18 +50,20 @@ def test_type_handler_schema_and_signature_edges(
             ("plain", None),
             ("count", "int"),
             ("items", "list[int]"),
-            ("missing", "MissingType"),
         ]
     )
     assert schema["plain"] is str
     assert schema["count"] is int
     assert getattr(schema["items"], "__origin__", None) is list
-    assert schema["missing"] is str
+
+    # A written-but-unresolvable annotation fails loud.
+    with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
+        handler.build_output_schema([("missing", "MissingType")])
 
     with pytest.raises(ValueError, match="Output schema"):
         handler.create_dspy_signature_sync(["x"], [])
 
-    async def typed_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def typed_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema
         return "user_prompt -> generated: Custom"
 
@@ -75,16 +75,17 @@ def test_type_handler_schema_and_signature_edges(
 
     with monkeypatch.context() as mp:
         mp.setattr("kedi.lang.compiler.type_system.KediType.resolve", fail_resolve)
-        assert handler.build_output_schema([("broken", "int")]) == {"broken": str}
+        with pytest.raises(RuntimeError, match="bad type"):
+            handler.build_output_schema([("broken", "int")])
 
-    async def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema
         return "generated"
 
     monkeypatch.setattr(type_handler_module.DSPyAdapter, "type_builder", no_arrow_builder)
     assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer: int"
 
-    async def object_builder(output_schema: dict[str, type], **_: Any) -> object:
+    def object_builder(output_schema: dict[str, type], **_: Any) -> object:
         assert output_schema
         return object()
 
@@ -93,7 +94,7 @@ def test_type_handler_schema_and_signature_edges(
 
     handler = StructuredTypeHandler(rt)
 
-    async def bare_output_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def bare_output_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"different": int}
         return "user_prompt -> other"
 
@@ -101,7 +102,7 @@ def test_type_handler_schema_and_signature_edges(
     monkeypatch.setattr(handler, "build_output_schema", lambda fields: {"different": int})
     assert handler.create_dspy_signature_sync(["x"], [("answer", "int")]) == "x -> answer"
 
-    async def no_arrow_missing_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def no_arrow_missing_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"different": int}
         return "other"
 
@@ -110,7 +111,7 @@ def test_type_handler_schema_and_signature_edges(
 
     unknown_type = object()
 
-    async def matching_schema_builder(output_schema: dict[str, type], **_: Any) -> str:
+    def matching_schema_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema == {"other": cast(Any, unknown_type)}
         return "user_prompt -> other"
 

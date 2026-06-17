@@ -4,9 +4,10 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, Callable, Tuple
+from typing import Any, Tuple
 
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from .agent_adapter.lazy import LazyAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -15,30 +16,13 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 
-class _LazyRuntimeAdapter:
-    """Instantiate the real adapter only when runtime actually uses it."""
-
-    def __init__(self, factory: Callable[[], Any]) -> None:
-        self._factory = factory
-        self._inner: Any | None = None
-
-    def _get_inner(self) -> Any:
-        if self._inner is None:
-            self._inner = self._factory()
-        return self._inner
-
-    async def produce(self, *args, **kwargs):
-        return await self._get_inner().produce(*args, **kwargs)
-
-    def produce_sync(self, *args, **kwargs):
-        return self._get_inner().produce_sync(*args, **kwargs)
-
-
-def _build_runtime_adapter(adapter: str, model: str | None):
+def _build_runtime_adapter(
+    adapter: str, model: str | None
+) -> DSPyAdapter | PydanticAdapter[Any, Any]:
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "dspy":
-        return _LazyRuntimeAdapter(lambda: DSPyAdapter(model=model or "groq/qwen/qwen3-32b"))
-    return _LazyRuntimeAdapter(lambda: PydanticAdapter(model=model or "groq:qwen/qwen3-32b"))
+        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
 
 
 CliArgs = AttrDict[str, ArgType]
@@ -58,9 +42,10 @@ def run_tests_cli(
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    use_cache: bool = True,
     runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
-    ok, err = maybe_run_codegen(source, model=model)
+    ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
     if not ok:
         return 1, (err or "Code generation failed")
     kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
@@ -108,7 +93,6 @@ def run_optimization_cli(
     from .optimization import get_optimizer
     from .optimization.config import OptimizerConfig
     from .optimization.services import (
-        DSPyConfigurationService,
         MetricFactory,
         OptimizationDataLoader,
         OptimizationResultWriter,
@@ -162,12 +146,12 @@ def run_optimization_cli(
     adapter_for_runtime = None
     if optimizer == "gepa":
         try:
+            from .optimization.services.dspy_config import DSPyConfigurationService
+
             dspy_config_service = DSPyConfigurationService(config)
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            from .agent_adapter.adapters import DSPyAdapter
-
             adapter_for_runtime = DSPyAdapter(model=main_model)
         except ImportError:
             return (
@@ -178,8 +162,6 @@ def run_optimization_cli(
         model = adapter_model or "groq:qwen/qwen3-32b"
         if adapter == "dspy":
             try:
-                from .agent_adapter.adapters import DSPyAdapter
-
                 adapter_for_runtime = DSPyAdapter(model=model)
             except ImportError:
                 return (
@@ -203,7 +185,11 @@ def run_optimization_cli(
         if prompt_loader.has_optimized_prompts():
             prompt_loader.inject_optimized_prompts(prog)
 
-    rt = compile_program(prog, adapter=adapter_for_runtime)
+    rt = compile_program(
+        prog,
+        adapter=adapter_for_runtime,
+        runtime_globals=_runtime_globals(runtime_args),
+    )
     _set_runtime_args(rt, runtime_args)
 
     # Initialize services
@@ -246,13 +232,13 @@ def run_optimization_cli(
         except Exception as e:
             return 1, str(e)
 
-        # Load test data using service
-        test_data_list = None
+        # Load test data using service. load_test_data returns None for an
+        # absent dataset and raises RuntimeError only on a real load failure,
+        # so let genuine failures surface instead of silently dropping data.
         try:
             test_data_list = data_loader.load_test_data(eval_suite, dataset_name)
-        except Exception:
-            # Test data not available - that's okay
-            pass
+        except Exception as e:
+            return 1, f"Test data load error for '{dataset_name}': {e}"
 
         # Note: Analytical metrics can have None expected outputs
         # The metric function will compute the expected value internally
@@ -346,7 +332,7 @@ def run_evals_cli(
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model, quiet=quiet)
+    ok, err = maybe_run_codegen(source, model=codegen_model, use_cache=use_cache, quiet=quiet)
     if not ok:
         return 1, (err or "Code generation failed")
 
@@ -382,9 +368,7 @@ def maybe_run_codegen(
             source_map=loaded.source_map,
         )
         # Check for auto_spec (new) or ai_prompt (legacy)
-        needs = any(
-            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
-        )
+        needs = any(p.auto_spec or p.ai_prompt for p in prog.procedures)
         if not needs:
             return True, None
 
@@ -429,20 +413,12 @@ def run_program_cli(
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
 
-    # Prefer offline execution when generated/native code fully covers the
-    # program. Fall back to the configured adapter only if runtime actually
-    # needs LLM-backed template expansion.
-    rt = compile_program(program, adapter=None)
-    _set_runtime_args(rt, runtime_args)
-    try:
-        out = rt.run_main()
-        return 0, ("" if out is None else str(out))
-    except RuntimeError as e:
-        if str(e) != "No adapter provided to KediRuntime":
-            raise
-
-    adapter_impl = _build_runtime_adapter(adapter, model)
-    rt = compile_program(program, adapter=adapter_impl)
+    # Run once with a lazily-built adapter: offline programs never construct one (no
+    # API key needed), and top-level side effects fire exactly once.
+    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
+    rt = compile_program(
+        program, adapter=lazy_adapter, runtime_globals=_runtime_globals(runtime_args)
+    )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))

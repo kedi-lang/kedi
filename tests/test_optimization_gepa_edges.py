@@ -8,10 +8,7 @@ import dspy
 import pytest
 
 from kedi.core import KediRuntime
-from kedi.lang.ast import (
-    OptimizeSpan,
-    OutputSegment,
-)
+from kedi.lang.ast import OptimizeSpan, OutputSegment
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services.gepa_metric_wrapper import GEPAMetricWrapper
@@ -296,7 +293,9 @@ def test_gepa_optimizer_fake_compile_paths(tmp_path: Path, monkeypatch: pytest.M
         extract_prompts=lambda module, spans: {}
     )
     monkeypatch.setattr(
-        gepa_session_module, "normalize_optimized_prompt_prefix", lambda span, prompt: None
+        gepa_session_module,
+        "normalize_optimized_prompt_prefix",
+        lambda span, prompt: None,
     )
     with pytest.warns(UserWarning, match="No optimized prompt"):
         prompts, score = optimizer.optimize_procedure(

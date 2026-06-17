@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
@@ -10,6 +11,7 @@ from .executors.base import DefaultExecutor, Executor
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
+    from kedi.lang.ast import EvalSuite, TestSuite
 
 # -----------------------------
 # Kedi runtime implementation
@@ -79,6 +81,11 @@ class KediRuntime:
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
+        self._type_env_stack: list[dict[str, Any]] = []
+        self._profile_registry: dict[str, Any] = {}
+        self._prelude_env: ValueEnv | None = None
+        self._validation_tests: list[TestSuite] = []
+        self._validation_evals: list[EvalSuite] = []
 
     # Expressions
     def i(self, key: str) -> InputExpr:
@@ -93,7 +100,9 @@ class KediRuntime:
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         # Allow re-registration for AI-generated procedures from cache
-        name = getattr(fn, "__name__", fn.__class__.__name__)
+        from kedi.lang.procedure_introspection import callable_display_name
+
+        name = callable_display_name(fn)
         if name in self._procedures:
             pass  # Silently replace
         self._procedures[name] = fn
@@ -160,15 +169,20 @@ class KediRuntime:
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
         import inspect
 
-        from .lang.procedure_introspection import get_procedure_metadata
+        from kedi.lang.procedure_introspection import (
+            callable_display_name,
+            get_procedure_def,
+            get_procedure_metadata,
+        )
 
         sig = inspect.signature(fn)
         bound = sig.bind_partial(*args)
         bound.apply_defaults()
         local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
         metadata = get_procedure_metadata(fn)
-        proc_span = getattr(getattr(fn, "__kedi_procedure_def__", None), "loc", None)
-        proc_name = metadata.name if metadata is not None else getattr(fn, "__name__", None)
+        procedure_def = get_procedure_def(fn)
+        proc_span = procedure_def.loc if procedure_def is not None else None
+        proc_name = metadata.name if metadata is not None else callable_display_name(fn)
         should_trace_procedure = not (fn is self._main and metadata is None)
 
         token = self._current_env.set(local_env)
@@ -198,6 +212,7 @@ class KediRuntime:
 
     @contextmanager
     def trace_frame(self, frame: KediTraceFrame):
+        __tracebackhide__ = True
         frame = self._hydrate_frame(frame)
         stack = self._trace_stack.get()
         token = self._trace_stack.set(stack + (frame,))
@@ -206,7 +221,9 @@ class KediRuntime:
         except KediExecutionError:
             raise
         except Exception as exc:
-            raise self.build_execution_error(exc) from exc
+            kedi_exc = self.build_execution_error(exc)
+            traceback = self._last_python_origin_traceback(exc) or exc.__traceback__
+            raise kedi_exc.with_traceback(traceback) from None
         finally:
             self._trace_stack.reset(token)
 
@@ -221,27 +238,70 @@ class KediRuntime:
             source_map=self._source_map,
         )
 
+    def _last_python_origin_traceback(self, exc: BaseException) -> TracebackType | None:
+        tb = exc.__traceback__
+        last = None
+        while tb is not None:
+            if tb.tb_frame.f_code.co_filename in self._python_origins:
+                last = tb
+            tb = tb.tb_next
+        if last is None:
+            return None
+        return TracebackType(
+            None,
+            last.tb_frame,
+            last.tb_lasti,
+            last.tb_lineno,
+        )
+
     def register_python_origin(
         self,
         *,
         kind: str,
         code: str,
         span: Any,
+        compile_line_offset: int = 0,
         wrapper_line_offset: int = 0,
         kedi_line_offset: int = 0,
         procedure_name: str | None = None,
+        traceback_code: str | None = None,
     ) -> str:
+        import linecache
+
         self._python_origin_counter += 1
+        origin_span = span
+        # Unique virtual filename per snippet so snippets sharing a .kedi file don't
+        # collide; the real source path lives on origin_span for rendering.
         filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        if span is not None and span.source_path is not None:
+            origin_span = span
+        elif (
+            span is not None
+            and self._source_map is not None
+            and hasattr(self._source_map, "resolve_line")
+        ):
+            resolved = self._source_map.resolve_line(span.start_line)
+            if resolved is not None:
+                origin_span = replace(
+                    span,
+                    start_line=resolved.source_line,
+                    end_line=resolved.source_line + max(0, span.end_line - span.start_line),
+                    source_path=resolved.source_path,
+                    source_id=resolved.source_id,
+                )
         self._python_origins[filename] = KediPythonOrigin(
             filename=filename,
             kind=kind,
             code=code,
-            span=span,
+            span=origin_span,
+            compile_line_offset=compile_line_offset,
             wrapper_line_offset=wrapper_line_offset,
             kedi_line_offset=kedi_line_offset,
             procedure_name=procedure_name,
         )
+        cache_text = "\n" * compile_line_offset + (traceback_code or code)
+        lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
+        linecache.cache[filename] = (len(code), None, lines, filename)
         return filename
 
     def _hydrate_frame(self, frame: KediTraceFrame) -> KediTraceFrame:
@@ -294,7 +354,63 @@ class KediRuntime:
         if self.adapter is None:
             raise RuntimeError("No adapter provided to KediRuntime")
 
-        result = self.adapter.produce_sync(template=question, output_schema=typed_fields)
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile import AgentProfileOverrideUnsupported, current_block_agent_profile
+
+        profile = current_block_agent_profile()
+        override_ctx = nullcontext()
+        if isinstance(self.adapter, SupportsProfileOverride):
+            if profile.needs_adapter_override(self.adapter.default_model()):
+                override_ctx = self.adapter.profile_override(profile)
+        elif (
+            profile.model is not None
+            or profile.effort is not None
+            or profile.mcp_servers
+            or profile.settings
+        ):
+            raise AgentProfileOverrideUnsupported(
+                "Active adapter does not support agent profile override "
+                f"(requested model={profile.model!r}, effort={profile.effort!r}, "
+                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
+            )
+
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+        from .agent_profile import AgentToolOverrideUnsupported
+        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+
+        tool_ctx = nullcontext()
+        if profile.tools:
+            if isinstance(self.adapter, SupportsToolRegistration):
+                tool_ctx = self.adapter.tool_scope()
+            else:
+                raise AgentToolOverrideUnsupported(
+                    f"Active adapter does not support tool registration (requested tools={profile.tools!r})"
+                )
+
+        with tool_ctx:
+            if profile.tools:
+                assert isinstance(self.adapter, SupportsToolRegistration)
+                for tool_name in profile.tools:
+                    proc = procedure_def_for_tool(self, tool_name)
+                    if proc is not None:
+                        self.adapter.register_tool(kedi_procedure_tool_spec(self, proc))
+                        continue
+
+                    tool_fn = python_callable_for_tool(self, tool_name)
+                    if tool_fn is None:
+                        raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
+                    self.adapter.register_tool(python_callable_tool_spec(tool_name, tool_fn))
+            run_kwargs: dict[str, Any] = {}
+            if profile.system is not None:
+                run_kwargs["instructions"] = profile.system
+
+            with override_ctx:
+                result = self.adapter.produce_sync(
+                    template=question,
+                    output_schema=typed_fields,
+                    **run_kwargs,
+                )
 
         for key in required:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute

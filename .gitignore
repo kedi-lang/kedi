@@ -233,3 +233,6 @@ tmp
 /*.kedi
 kedi-docs/
 docs/*_PLAN.md
+
+# Optimizer
+kedi-optimizer

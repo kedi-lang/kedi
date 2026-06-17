@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import dspy
 
 from ...dynamic_models import build_dynamic_model
@@ -126,8 +124,7 @@ class DSPyModuleBuilder:
                 # Fallback to str if no type annotation
                 field_definitions[field] = (str, dspy.OutputField())
 
-        model = build_dynamic_model("_ProcedureSignature", dspy.Signature, field_definitions)
-        return cast(type[dspy.Signature], model)
+        return build_dynamic_model("_ProcedureSignature", dspy.Signature, field_definitions)
 
     def _resolve_type_annotation(
         self, type_anno: str, param_types: dict[str, ResolvedKediType]
@@ -143,10 +140,8 @@ class DSPyModuleBuilder:
         """
         from ...lang.compiler.type_system import KediType
 
-        try:
-            resolved_type = KediType(type_anno).resolve(self.type_handler.runtime, None)
-            return resolved_type if resolved_type is not None else str
-        except Exception:
-            # If resolution fails, fall back to str
-            # This ensures we don't break on unknown types
-            return str
+        # An annotation is present here (the caller only resolves typed fields);
+        # a written-but-unresolvable annotation raises rather than silently
+        # falling back to str.
+        resolved_type = KediType(type_anno).resolve_required(self.type_handler.runtime, None)
+        return resolved_type if resolved_type is not None else str

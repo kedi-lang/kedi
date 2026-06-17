@@ -11,11 +11,13 @@ from tests.lsp_helpers import position_of
 
 
 def test_server_can_be_constructed():
+    import kedi
     from kedi.lsp.server import make_server
 
     server = make_server()
     assert server is not None
     assert server.name == "kedi-lsp"
+    assert server.version == kedi.__version__
 
 
 def test_server_custom_requests_prefer_request_text():

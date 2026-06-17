@@ -1,8 +1,23 @@
-">> Tests for the tree-sitter-backed parser pipeline (Phase 6).\n\n>> These are NEW tests added during the refactor — they verify the parts\nof the public API that the pre-refactor parser did not expose:\n\n  - ``Span`` is populated on every AST node.\n  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /\n    ``TypeUnion`` / ``TypePython``), not just opaque strings.\n  - ``parse_program`` returns ``ProgramWithValidation`` whenever\n    ``@test:`` or ``@eval:`` blocks are present.\n  - ``KediParseError`` is a ``ValueError`` subclass and carries\n    ``KediDiagnostic`` records with source locations.\n\n>> The pre-existing ``test_kedi_lang_*`` suites still cover the\nsource-in / behavior-out side; this file complements them by asserting\non the structured AST shape itself.\n"
+"""Tests for the tree-sitter-backed parser pipeline.
+
+These tests verify structured AST shape and parser diagnostics:
+
+  - ``Span`` is populated on every AST node.
+  - Structured ``TypeExpr`` is produced (``TypeRef`` / ``TypeApply`` /
+    ``TypeUnion`` / ``TypePython``), not just opaque strings.
+  - ``parse_program`` returns ``ProgramWithValidation`` whenever
+    ``@test:`` or ``@eval:`` blocks are present.
+  - ``KediParseError`` is a ``ValueError`` subclass and carries
+    ``KediDiagnostic`` records with source locations.
+
+The ``test_kedi_lang_*`` suites cover source-in / behavior-out;
+this file complements them by asserting on the structured AST itself.
+"""
 
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -22,11 +37,15 @@ from kedi.lang import (
 )
 from kedi.lang.ast import (
     AssignStmt,
+    InputSegment,
     OutputSegment,
+    PythonExprSegment,
     ReturnBlockStmt,
     ReturnStmt,
+    SystemDirectiveStmt,
     TemplateBlock,
     TextSegment,
+    UseDirectiveStmt,
 )
 
 cst_module = importlib.import_module("kedi.lang.parser.cst_to_ast")
@@ -116,6 +135,9 @@ def test_cst_walker_defensive_edges(monkeypatch):
     missing = _FakeNode("identifier", has_error=True, is_missing=True)
     error_walker = _fake_walker()
     error_walker._collect_tree_errors(missing)
+    assert error_walker.diagnostics[-1].message == "missing 'identifier'"
+    missing_newline = _FakeNode("_newline", has_error=True, is_missing=True)
+    error_walker._collect_tree_errors(missing_newline)
     assert error_walker.diagnostics[-1].message == "missing 'identifier'"
 
     export_walker = _fake_walker(b"> export:\n  name\n")
@@ -308,7 +330,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             ],
         )
     )
-    assert hasattr(render_arg, "__render_segments__")
+    assert render_arg.render_segments
     unknown_arg = _FakeNode("call_arg", children=[_FakeNode("unknown", start=0, end=4)], end=4)
     assert stmt_walker._walk_call_arg(unknown_arg).value == "stmt"
     inline_without_code = _FakeNode("inline_python_expr")
@@ -350,6 +372,266 @@ def test_cst_walker_defensive_edges(monkeypatch):
         opt_proc,
     )
     assert noisy_opt.template_lines == []
+
+    backtick_model = stmt_walker._walk_model_directive(
+        _FakeNode(
+            "model_directive",
+            fields={
+                "value": _FakeNode(
+                    "inline_python_expr",
+                    fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                )
+            },
+        )
+    )
+    assert backtick_model.backtick_code == "stmt"
+    backtick_system = stmt_walker._walk_system_directive(
+        _FakeNode(
+            "system_directive",
+            fields={
+                "value": _FakeNode(
+                    "inline_python_expr",
+                    fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                )
+            },
+        )
+    )
+    assert backtick_system.backtick_code == "stmt"
+    noisy_system = stmt_walker._walk_system_directive(
+        _FakeNode(
+            "system_directive",
+            fields={
+                "body": _FakeNode(
+                    "body",
+                    children=[
+                        _FakeNode("line_comment"),
+                        _FakeNode("system_line"),
+                    ],
+                )
+            },
+        )
+    )
+    assert noisy_system.template_lines == []
+    stmt_walker._system_line_from_expr(
+        _FakeNode("template_expr", children=[_FakeNode("unknown_segment")])
+    )
+    assert any(d.code == "K-SYSTEM-SEGMENT" for d in stmt_walker.diagnostics)
+
+    profile_body = _FakeNode(
+        "body",
+        children=[
+            _FakeNode("line_comment"),
+            _FakeNode(
+                "model_directive",
+                fields={
+                    "value": _FakeNode(
+                        "inline_python_expr",
+                        fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                    )
+                },
+            ),
+            _FakeNode(
+                "model_directive",
+                fields={"value": _FakeNode("identifier", start=0, end=4)},
+            ),
+            _FakeNode(
+                "system_directive",
+                fields={"value": _FakeNode("identifier", start=0, end=4)},
+            ),
+            _FakeNode(
+                "system_directive",
+                fields={
+                    "value": _FakeNode(
+                        "inline_python_expr",
+                        fields={"code": _FakeNode("python_inline_body", start=0, end=4)},
+                    )
+                },
+            ),
+            _FakeNode(
+                "system_directive",
+                fields={},
+            ),
+            _FakeNode(
+                "model_directive",
+                fields={},
+            ),
+        ],
+    )
+    profile = stmt_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": profile_body,
+            },
+        )
+    )
+    assert profile.model_members[0].backtick_code == "stmt"
+    assert profile.model_members[1].plain_value == "stmt"
+    assert profile.system_members[0].plain_value == "stmt"
+    assert profile.system_members[1].backtick_code == "stmt"
+
+    profile_with_tool_use = stmt_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": _FakeNode(
+                    "body",
+                    children=[
+                        _FakeNode(
+                            "use_directive",
+                            fields={"name": _FakeNode("identifier", start=0, end=4)},
+                        ),
+                    ],
+                ),
+            },
+        )
+    )
+    assert profile_with_tool_use.tool_names == ["stmt"]
+
+    profile_with_multiline_tool_use = stmt_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": _FakeNode(
+                    "body",
+                    children=[
+                        _FakeNode(
+                            "use_directive",
+                            fields={
+                                "body": _FakeNode(
+                                    "body",
+                                    children=[
+                                        _FakeNode(
+                                            "use_tool_name",
+                                            fields={
+                                                "name": _FakeNode("identifier", start=0, end=4)
+                                            },
+                                        ),
+                                    ],
+                                )
+                            },
+                        ),
+                    ],
+                ),
+            },
+        )
+    )
+    assert profile_with_multiline_tool_use.tool_names == ["stmt"]
+
+    profile_with_both_use_forms = stmt_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": _FakeNode(
+                    "body",
+                    children=[
+                        _FakeNode(
+                            "use_directive",
+                            fields={"name": _FakeNode("identifier", start=0, end=4)},
+                        ),
+                        _FakeNode(
+                            "use_directive",
+                            fields={
+                                "body": _FakeNode(
+                                    "body",
+                                    children=[
+                                        _FakeNode(
+                                            "use_tool_name",
+                                            fields={
+                                                "name": _FakeNode("identifier", start=0, end=4)
+                                            },
+                                        ),
+                                    ],
+                                )
+                            },
+                        ),
+                    ],
+                ),
+            },
+        )
+    )
+    assert profile_with_both_use_forms.tool_names == ["stmt", "stmt"]
+
+    empty_name_use_walker = _fake_walker(b"stmt")
+    calls = 0
+
+    def _fake_walk_use(_node: _FakeNode) -> UseDirectiveStmt:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return UseDirectiveStmt(target="", tool_names=[])
+        return UseDirectiveStmt(target="tool")
+
+    empty_name_use_walker._walk_use_directive = _fake_walk_use  # type: ignore[method-assign]
+    profile_with_empty_use = empty_name_use_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={
+                "name": _FakeNode("identifier", start=0, end=4),
+                "body": _FakeNode(
+                    "body",
+                    children=[
+                        _FakeNode("use_directive"),
+                        _FakeNode("use_directive"),
+                    ],
+                ),
+            },
+        )
+    )
+    assert profile_with_empty_use.tool_names == ["tool"]
+
+    use_body_with_noise = stmt_walker._walk_use_tool_names(
+        _FakeNode(
+            "body",
+            children=[
+                _FakeNode("line_comment"),
+                _FakeNode(
+                    "use_tool_name",
+                    fields={"name": _FakeNode("identifier", start=0, end=4)},
+                ),
+            ],
+        )
+    )
+    assert use_body_with_noise == ["stmt"]
+
+    empty_use_walker = _fake_walker()
+    empty_use_walker._walk_use_tool_names(_FakeNode("body", children=[]))
+    assert any(d.code == "K-USE-EMPTY" for d in empty_use_walker.diagnostics)
+
+    mixed_use_walker = _fake_walker(b"alpha\n`beta`")
+    tool_names = mixed_use_walker._walk_use_tool_names(
+        _FakeNode(
+            "body",
+            children=[
+                _FakeNode(
+                    "use_tool_name",
+                    fields={"name": _FakeNode("identifier", start=0, end=5)},
+                ),
+                _FakeNode(
+                    "use_tool_backtick",
+                    fields={"name": _FakeNode("identifier", start=7, end=11)},
+                ),
+            ],
+        )
+    )
+    assert tool_names == ["alpha", "beta"]
+
+    empty_profile_walker = _fake_walker(b"name")
+    empty_profile_walker._walk_profile_directive(
+        _FakeNode(
+            "profile_directive",
+            fields={"name": _FakeNode("identifier", start=0, end=4)},
+        )
+    )
+    assert any(d.code == "K-PROFILE-EMPTY" for d in empty_profile_walker.diagnostics)
+
+    nested_proc = cst_module.ProcedureDef("proc", [])
+    assert stmt_walker._walk_stmt(_FakeNode("profile_directive"), nested_proc) is None
+    assert any(d.code == "K-PROFILE-SCOPE" for d in stmt_walker.diagnostics)
 
     validation_walker = _fake_walker(b"test")
     assert validation_walker._walk_validation_block(_FakeNode("validation_block")) is None
@@ -513,6 +795,53 @@ def test_span_source_path_forwarded_to_all_nodes():
     assert proc.loc.source_path == "/tmp/example.kedi"
     assert proc.body[0].loc is not None
     assert proc.body[0].loc.source_path == "/tmp/example.kedi"
+
+
+def test_tools_fixture_parses_multiline_backtick_use() -> None:
+    path = Path("tests/files/tools.kedi").resolve()
+    src = path.read_text(encoding="utf-8")
+    prog = parse_program(src, source_path=str(path))
+
+    multiline_uses = [
+        stmt
+        for stmt in prog.ordered_toplevel
+        if isinstance(stmt, UseDirectiveStmt) and stmt.tool_names
+    ]
+
+    assert multiline_uses
+    assert multiline_uses[0].tool_names == ["web_browse", "web_fetch"]
+
+
+def test_system_directive_accepts_text_and_input_segments_only() -> None:
+    prog = parse_program(
+        "> system:\n    You are <style>.\n    Your name is <`args.name`>.\n    Use <``> fences.\n"
+    )
+    stmt = prog.ordered_toplevel[0]
+    assert isinstance(stmt, SystemDirectiveStmt)
+    assert len(stmt.template_lines) == 3
+    first_line = stmt.template_lines[0]
+    second_line = stmt.template_lines[1]
+    third_line = stmt.template_lines[2]
+    assert isinstance(first_line.segments[0], TextSegment)
+    assert isinstance(first_line.segments[1], InputSegment)
+    assert any(
+        isinstance(seg, PythonExprSegment) and seg.code == "args.name"
+        for seg in second_line.segments
+    )
+    assert any(isinstance(seg, TextSegment) and seg.text == "<``>" for seg in third_line.segments)
+    assert stmt.plain_value == "You are .\nYour name is .\nUse <``> fences."
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "> system: fill [answer]\n",
+        "> system: call <tool()>\n",
+    ],
+)
+def test_system_directive_rejects_llm_output_and_calls(src: str) -> None:
+    with pytest.raises(KediParseError):
+        parse_program(src)
 
 
 # ---------------------------------------------------------------------

@@ -1,18 +1,13 @@
 """Type system for the Kedi compiler.
 
-Phase-7 refactor: ``KediType`` is now driven by structured ``TypeExpr``
-nodes produced by the tree-sitter CST→AST walker. The pre-refactor
-parser stored every type annotation as a raw string and ``eval``'d it
-at compile time across four different paths; with structured types we
-dispatch on ``TypeRef`` / ``TypeApply`` / ``TypeUnion``, and ``eval``
-survives only inside the explicit ``TypePython`` (backtick) escape
-hatch.
+``KediType`` is driven by structured ``TypeExpr`` nodes produced by the
+CST→AST walker. It dispatches on ``TypeRef`` / ``TypeApply`` /
+``TypeUnion``, and ``eval`` survives only inside the explicit
+``TypePython`` (backtick) escape hatch.
 
 Backward-compat: ``KediType`` still accepts a raw string for callers
-that have not yet migrated to the structured representation; in that
-mode it falls back to the legacy ``eval``-based resolution. Phase 8
-removes that path once every compiler / codegen / optimizer call site
-constructs ``KediType`` from a ``TypeExpr``.
+that pass legacy annotations; in that mode it falls back to
+``eval``-based resolution.
 """
 
 from __future__ import annotations
@@ -20,11 +15,13 @@ from __future__ import annotations
 import copy
 import json
 import shlex
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
-from pydantic import BaseModel, Field, TypeAdapter, create_model
+from pydantic import BaseModel, Field, TypeAdapter
 
 from ...core import KediRuntime
+from ...dynamic_models import build_dynamic_model
+from ...errors import KediTypeExecutionError
 from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
 from ..type_introspection import make_type_init
 from .environment import build_type_env
@@ -52,6 +49,11 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
 def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
+        # ``None`` in a type position means ``NoneType`` (e.g. ``Union[str, None]``,
+        # ``str | None``). Resolving it to the *value* ``None`` would collide with the
+        # "unresolvable" sentinel and make any Optional-style annotation look unresolved.
+        if expr.name == "None":
+            return type(None)
         return _lookup_name(rt, expr.name, type_env)
 
     if isinstance(expr, TypeApply):
@@ -109,6 +111,24 @@ def _is_valid_type(obj: Any) -> bool:
     )
 
 
+def _build_type_adapter(resolved: Any) -> TypeAdapter:
+    """Build a strict ``TypeAdapter`` for a resolved Python type.
+
+    BaseModels, dataclasses and ``TypedDict``s carry their own config, so
+    pydantic rejects a ``config`` argument for them; build those without one.
+    Everything else gets a strict, ``arbitrary_types_allowed`` adapter.
+    """
+    import dataclasses
+
+    if (
+        (isinstance(resolved, type) and issubclass(resolved, BaseModel))
+        or dataclasses.is_dataclass(resolved)
+        or hasattr(resolved, "__required_keys__")
+    ):
+        return TypeAdapter(resolved)
+    return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+
+
 # ---------------------------------------------------------------------
 # KediType
 # ---------------------------------------------------------------------
@@ -117,11 +137,10 @@ def _is_valid_type(obj: Any) -> bool:
 class KediType:
     """A type annotation, either structured (``TypeExpr``) or legacy string.
 
-    The structured form is preferred — Phase-7 call sites construct
-    ``KediType`` from the AST's ``type_expr`` field whenever available.
-    The legacy string path remains so unmigrated callers
-    (codegen, optimizer utilities, hand-built AST in tests) still
-    work; it routes through ``eval`` like the pre-refactor parser.
+    Prefer constructing from the AST's ``type_expr`` field when available.
+    The legacy string path remains for unmigrated callers (codegen,
+    optimizer utilities, hand-built AST in tests) and routes through
+    ``eval``.
     """
 
     def __init__(self, source: Union[TypeExpr, str, None]):
@@ -145,8 +164,7 @@ class KediType:
         """Build a ``KediType`` from a pair of AST fields.
 
         Prefers the structured ``type_expr``; falls back to
-        ``type_annotation`` so consumers that haven't migrated still
-        work end-to-end during the Phase-7→8 transition.
+        ``type_annotation`` when the structured form is absent.
         """
         if type_expr is not None:
             return cls(type_expr)
@@ -165,16 +183,29 @@ class KediType:
             return self._legacy_resolve(rt, env)
         return None
 
+    def resolve_required(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
+        """``None`` only when no annotation was written; a written-but-unresolvable
+        annotation raises instead of silently degrading to ``str``."""
+        if self.is_none():
+            return None
+        resolved = self.resolve(rt, env)
+        if resolved is None:
+            raise KediTypeExecutionError(f"Unknown type annotation {self!s}")
+        return resolved
+
     def get_adapter(
         self, rt: KediRuntime, env: dict[str, Any] | None = None
     ) -> Optional[TypeAdapter]:
+        """Lenient adapter build for introspection-only callers (returns ``None`` on a
+        typo so editor hovers don't crash); runtime validation uses strict ``validate``.
+        """
         if self.is_none():
             return None
         resolved = self.resolve(rt, env)
         if resolved is None:
             return None
         try:
-            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+            return _build_type_adapter(resolved)
         except Exception:
             return None
 
@@ -183,12 +214,16 @@ class KediType:
         rt: KediRuntime,
         env: dict[str, Any] | None,
         value: Any,
-        *,
-        allow_str_coercion: bool = False,
     ) -> Any:
-        adapter = self.get_adapter(rt, env)
-        if adapter is None:
+        resolved = self.resolve_required(rt, env)
+        if resolved is None:
             return value
+        try:
+            adapter = _build_type_adapter(resolved)
+        except Exception as exc:  # pragma: no cover - defensive; TypeAdapter is permissive
+            raise KediTypeExecutionError(
+                f"Cannot build validator for type {self!s}: {exc}"
+            ) from exc
         return adapter.validate_python(value)
 
     def __repr__(self) -> str:
@@ -204,7 +239,7 @@ class KediType:
     # ---- legacy fallback ----
 
     def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
-        """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
+        """Resolve a raw annotation string via ``eval``."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
             return None
@@ -244,7 +279,7 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
 
 
 # ---------------------------------------------------------------------
-# Helpers below this point are unchanged from the pre-refactor module.
+# Helpers
 # ---------------------------------------------------------------------
 
 
@@ -317,11 +352,7 @@ def register_type(
                 _pydantic_default(default_value),
             )
 
-    new_model = create_model(
-        typedef.name,
-        __base__=cast(Any, BaseModel),
-        **cast(Any, field_defs),
-    )
+    new_model = build_dynamic_model(typedef.name, BaseModel, field_defs)
     init_namespace = build_type_env(rt, local_env or {})
     init_namespace[typedef.name] = new_model
     setattr(
@@ -374,18 +405,30 @@ def assign_value_from_native(
         if kedi_type.is_none():
             if isinstance(native, str):
                 return native
-            raise TypeError("Native non-string assignment requires explicit type annotation")
-        if isinstance(native, str):
-            try_typ = kedi_type.resolve(rt, env)
-            if try_typ is not None and try_typ is not str:
-                raise TypeError("Annotation type mismatch: got str value")
+            raise KediTypeExecutionError(
+                "Native non-string assignment requires explicit type annotation"
+            )
+        # Resolve up front so a bare unknown type name raises "Unknown type annotation X"
+        # rather than silently bypassing validation (backtick type exprs keep the
+        # generic mismatch diagnostic via the except below).
+        try:
+            resolved = kedi_type.resolve(rt, env)
+        except Exception:
+            resolved = None
+        else:
+            if resolved is None:
+                raise KediTypeExecutionError(f"Unknown type annotation {kedi_type!s}")
+        if isinstance(native, str) and resolved is not None and resolved is not str:
+            raise KediTypeExecutionError("Annotation type mismatch: got str value")
         try:
             return kedi_type.validate(rt, env, native)
         except Exception:
-            raise TypeError("Native assignment value does not match annotated type")
+            raise KediTypeExecutionError("Native assignment value does not match annotated type")
     else:
         if not kedi_type.is_none():
-            raise TypeError("Angle-inline pure python cannot have a non-str annotation")
+            raise KediTypeExecutionError(
+                "Angle-inline pure python cannot have a non-str annotation"
+            )
         return str(native)
 
 
@@ -426,7 +469,7 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
     except ValueError:
         return None
     data: dict[str, Any] = {}
-    fields = getattr(model, "model_fields", {})
+    fields = model.model_fields
     for token in tokens:
         if "=" not in token:
             return None
@@ -434,22 +477,19 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         if name not in fields:
             return None
         field = fields[name]
-        annotation = getattr(field, "annotation", str) or str
+        annotation = field.annotation or str
         data[name] = _convert_basic_literal(raw, annotation)
     return data
 
 
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:
-    stack = getattr(rt, "_type_env_stack", None)
-    if stack is None:
-        stack = []
-        setattr(rt, "_type_env_stack", stack)
+    if rt._type_env_stack is None:
+        rt._type_env_stack = []
     new_env: dict[str, Any] = {}
-    stack.append(new_env)
+    rt._type_env_stack.append(new_env)
     return new_env
 
 
 def pop_type_env(rt: KediRuntime) -> None:
-    stack = getattr(rt, "_type_env_stack", None)
-    if isinstance(stack, list) and stack:
-        stack.pop()
+    if rt._type_env_stack:
+        rt._type_env_stack.pop()

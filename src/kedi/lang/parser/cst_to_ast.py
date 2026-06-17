@@ -2,10 +2,7 @@
 
 This module is the bridge between the tree-sitter parser (which produces
 a concrete syntax tree of opaque ``tree_sitter.Node`` objects) and the
-existing Kedi AST defined in :mod:`kedi.lang.ast`. It is the
-Phase-6 replacement for the entire pre-refactor parser package
-(``preprocessing.py``, ``program_parser.py``, ``segment_parser.py``,
-``statement_parser.py``, ``block_parser.py``).
+Kedi AST defined in :mod:`kedi.lang.ast`.
 
 Design notes:
 
@@ -23,8 +20,7 @@ Design notes:
     backward compatibility with read sites that still use the legacy
     ``setattr``-based access pattern (``getattr(prog,
     "_validation_evals", [])``), the same lists are also exposed as
-    ``_validation_tests`` and ``_validation_evals`` attributes. The
-    Phase-7 migration removes those aliases.
+    ``_validation_tests`` and ``_validation_evals`` attributes.
 
 The walker is implemented as a single class with one ``_walk_<rule>``
 method per relevant CST node type, plus a small dispatcher
@@ -37,6 +33,9 @@ from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
+from ...agent_profile.settings import MODEL_SETTING_KEYS, is_valid_model_setting_key
+from ...effort import EFFORT_VALUES, is_valid_effort
+from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
@@ -45,17 +44,27 @@ from ..ast import (
     BacktickLineStmt,
     CallArg,
     CallSegment,
+    EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
     InputSegment,
     LiteralArg,
+    McpDirectiveStmt,
+    McpField,
+    ModelDirectiveStmt,
     ModuleExport,
     ModuleImport,
     OptimizeSpan,
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
+    ProfileDefStmt,
+    ProfileEffortEntry,
+    ProfileMcpEntry,
+    ProfileModelEntry,
+    ProfileSettingsEntry,
+    ProfileSystemEntry,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -64,8 +73,11 @@ from ..ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
+    SettingsDirectiveStmt,
+    SettingsField,
     Span,
     Stmt,
+    SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
@@ -79,6 +91,7 @@ from ..ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    UseDirectiveStmt,
 )
 from .diagnostics import KediDiagnostic, KediParseError
 from .escapes import dedent_block, unescape_text_with_tracking
@@ -244,9 +257,48 @@ class _Walker:
                     prog.prelude_loc = self._span(child)
                     prelude_consumed = True
                 else:
-                    prog.toplevel_body.append(self._walk_python_block(child))
+                    stmt = self._walk_python_block(child)
+                    prog.toplevel_body.append(stmt)
+                    prog.ordered_toplevel.append(stmt)
             elif t == "procedure_def":
-                prog.procedures.append(self._walk_procedure_def(child))
+                proc = self._walk_procedure_def(child)
+                prog.procedures.append(proc)
+                prog.ordered_toplevel.append(proc)
+            elif t == "model_directive":
+                stmt = self._walk_model_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "effort_directive":
+                stmt = self._walk_effort_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "system_directive":
+                stmt = self._walk_system_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "mcp_directive":
+                stmt = self._walk_mcp_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "settings_directive":
+                stmt = self._walk_settings_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "profile_directive":
+                stmt = self._walk_profile_directive(child)
+                if stmt.name in prog.profile_defs:
+                    self._error(
+                        child,
+                        f"Duplicate profile definition: {stmt.name!r}",
+                        code="K-PROFILE-DUP",
+                    )
+                else:
+                    prog.profile_defs[stmt.name] = stmt
+                prog.ordered_toplevel.append(stmt)
+            elif t == "use_directive":
+                stmt = self._walk_use_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "type_def":
                 prog.type_defs.append(self._walk_type_def(child))
             elif t == "module_import":
@@ -261,19 +313,29 @@ class _Walker:
                 elif isinstance(suite, EvalSuite):
                     prog.evals.append(suite)
             elif t == "assign_stmt":
-                prog.toplevel_body.append(self._walk_assign_stmt(child))
+                stmt = self._walk_assign_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "assign_block_stmt":
-                prog.toplevel_body.append(self._walk_assign_block_stmt(child))
+                stmt = self._walk_assign_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "return_stmt":
                 prog.toplevel_return = self._walk_return_stmt(child)
             elif t == "return_block_stmt":
                 prog.toplevel_return = self._walk_return_block_stmt(child)
             elif t == "backtick_line_stmt":
-                prog.toplevel_body.append(self._walk_backtick_line_stmt(child))
+                stmt = self._walk_backtick_line_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "template_block_stmt":
-                prog.toplevel_body.append(self._walk_template_block_stmt(child))
+                stmt = self._walk_template_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "template_line":
-                prog.toplevel_body.append(self._walk_template_line(child, deprecated=True))
+                stmt = self._walk_template_line(child, deprecated=True)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t in ("block_comment", "line_comment"):
                 # Extras — not part of the AST. Already handled by
                 # tree-sitter; we skip them here.
@@ -284,8 +346,7 @@ class _Walker:
                 self._error(child, f"unexpected top-level node {t!r}")
 
         # ProgramWithValidation back-compat: expose the lists via the
-        # legacy `_validation_*` attribute names too. Phase 7 removes
-        # this aliasing once consumers migrate to `.tests` / `.evals`.
+        # legacy `_validation_*` attribute names too.
         if isinstance(prog, ProgramWithValidation):
             setattr(prog, "_validation_tests", prog.tests)
             setattr(prog, "_validation_evals", prog.evals)
@@ -318,11 +379,40 @@ class _Walker:
             )
         )
 
+    def _validate_effort_plain_value(self, node: Node, value: str) -> None:
+        if is_valid_effort(value):
+            return
+        expected = ", ".join(sorted(EFFORT_VALUES))
+        self._error(
+            node,
+            f"effort directive must be one of: {expected}",
+            code="K-EFFORT-VALUE",
+        )
+
+    def _validate_mcp_transport_plain_value(self, node: Node, value: str) -> None:
+        if is_valid_mcp_transport(value):
+            return
+        expected = ", ".join(sorted(MCP_TRANSPORT_VALUES))
+        self._error(
+            node,
+            f"MCP transport must be one of: {expected}",
+            code="K-MCP-TRANSPORT",
+        )
+
+    def _validate_setting_key(self, node: Node, name: str) -> None:
+        if is_valid_model_setting_key(name):
+            return
+        expected = ", ".join(sorted(MODEL_SETTING_KEYS))
+        self._error(
+            node,
+            f"model setting must be one of: {expected}",
+            code="K-SETTING-KEY",
+        )
+
     def _validate_block_comments(self) -> None:
         r"""Enforce legacy `###` block-comment invariants.
 
-        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``
-        in the pre-refactor parser):
+        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``):
 
           - A line that is exactly ``###`` (after stripping horizontal
             whitespace) toggles block-comment mode.
@@ -419,6 +509,8 @@ class _Walker:
     def _collect_tree_errors(self, node: Node) -> None:
         """Walk the CST and surface every ERROR / MISSING node as a diagnostic."""
         if node.has_error and (node.type == "ERROR" or node.is_missing):
+            if node.is_missing and node.type == "_newline":
+                return
             if node.is_missing:
                 msg = f"missing {node.type!r}"
             else:
@@ -571,6 +663,21 @@ class _Walker:
             span = self._walk_optimize_directive(node, proc)
             proc.optimize_spans.append(span)
             return None
+        if t == "model_directive":
+            return self._walk_model_directive(node)
+        if t == "effort_directive":
+            return self._walk_effort_directive(node)
+        if t == "system_directive":
+            return self._walk_system_directive(node)
+        if t == "mcp_directive":
+            return self._walk_mcp_directive(node)
+        if t == "settings_directive":
+            return self._walk_settings_directive(node)
+        if t == "use_directive":
+            return self._walk_use_directive(node)
+        if t == "profile_directive":
+            self._error(node, "'> profile:' is only valid at top level", code="K-PROFILE-SCOPE")
+            return None
         if t == "assign_stmt":
             return self._walk_assign_stmt(node)
         if t == "assign_block_stmt":
@@ -702,6 +809,41 @@ class _Walker:
             segments=self._walk_template_expr(expr_node),
             loc=self._span(expr_node),
         )
+
+    def _system_line_from_expr(self, expr_node: Node) -> TemplateLine:
+        segments: List[Segment] = []
+        for child in _named_children(expr_node):
+            if child.type == "system_angle_segment":
+                raw = _src_text(self.source, child)
+                inner = raw[1:-1] if raw.endswith(">") else raw[1:]
+                if raw == "<``>":
+                    segments.append(TextSegment(text="<``>", loc=self._span(child)))
+                elif inner.isidentifier():
+                    segments.append(InputSegment(name=inner, loc=self._span(child)))
+                elif len(inner) >= 2 and inner[0] == "`" and inner[-1] == "`":
+                    segments.append(
+                        PythonExprSegment(
+                            code=inner[1:-1].replace("\\`", "`"),
+                            loc=self._span(child),
+                        )
+                    )
+                else:
+                    self._error(
+                        child,
+                        "System instructions only support literal text, <name>, and <`python`> substitutions.",
+                        code="K-SYSTEM-SEGMENT",
+                    )
+                continue
+            if child.type == "text_segment":
+                segments.append(self._walk_segment(child))
+                continue
+            self._error(
+                child,
+                "System instructions only support literal text, <name>, and <`python`> substitutions.",
+                code="K-SYSTEM-SEGMENT",
+            )
+        self._strip_leading_template_indent(segments)
+        return TemplateLine(segments=segments, loc=self._span(expr_node))
 
     def _walk_template_block_stmt(self, node: Node) -> TemplateBlock:
         lines: List[TemplateLine] = []
@@ -866,14 +1008,17 @@ class _Walker:
 
     def _walk_template_expr(self, node: Node) -> List[Segment]:
         segs = [self._walk_segment(c) for c in _named_children(node) if c.is_named]
+        self._strip_leading_template_indent(segs)
+        return segs
+
+    def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
-        # interleave extras with a retried external-scan). The
-        # pre-refactor parser, by contrast, stripped the body indent
-        # before parsing — so its TextSegments did not carry that
-        # indentation. We restore parity here by lstripping the
-        # leading WS off the FIRST segment of each template_expr ONLY
-        # when it's a plain TextSegment. Internal-segment whitespace
+        # interleave extras with a retried external-scan). Template body
+        # lines therefore carry that leading whitespace in TextSegments;
+        # lstripping the leading WS off the FIRST segment of each
+        # template_expr restores the expected shape when it's a plain
+        # TextSegment. Internal-segment whitespace
         # (the gap between an `<input>` and the text that follows it)
         # is preserved.
         if segs and isinstance(segs[0], TextSegment):
@@ -895,7 +1040,6 @@ class _Walker:
                     first.escaped_whitespace = {
                         i - shift for i in first.escaped_whitespace if i >= shift
                     }
-        return segs
 
     def _walk_segment(self, node: Node) -> Segment:
         t = node.type
@@ -956,17 +1100,15 @@ class _Walker:
         return CallSegment(name=name, args=args, loc=self._span(node))
 
     def _walk_call_arg(self, node: Node) -> CallArg:
-        r"""Build a CallArg matching the legacy runtime expectations.
+        r"""Build a call argument with explicit payload fields.
 
-        The runtime (``compiler/evaluation._evaluate_arg``) checks for
-        these duck-typed attributes on a ``LiteralArg``:
+        A literal argument can carry one of these payloads:
 
-          - ``__native_backtick__``: arg passes a native Python value
+          - ``native_backtick``: arg passes a native Python value
             (from a bare backtick `` `expr` ``).
-          - ``__python_segment__``: arg is a single ``<\`...\`>`` segment.
-          - ``__call_segment__``: arg is a single ``<func(...)>`` segment.
-          - ``__render_segments__``: arg is a mini-template; render its
-            segments to a string at call time.
+          - ``python_segment``: arg is a single ``<\`...\`>`` segment.
+          - ``call_segment``: arg is a single ``<func(...)>`` segment.
+          - ``render_segments``: arg is a mini-template rendered to a string.
         """
         children = _named_children(node)
         if not children:
@@ -975,23 +1117,32 @@ class _Walker:
         first = children[0]
         if first.type == "inline_python_expr":
             code = self._walk_inline_python_expr(first)
-            lit = LiteralArg(value="__NATIVE_BACKTICK__", loc=self._span(node))
-            setattr(lit, "__native_backtick__", code)
+            lit = LiteralArg(
+                value="__NATIVE_BACKTICK__", loc=self._span(node), native_backtick=code
+            )
             return lit
 
         if first.type == "template_arg":
             segs = [self._walk_segment_in_call(c) for c in _named_children(first)]
-            lit = LiteralArg(value="__RENDER__", loc=self._span(node))
             if len(segs) == 1:
                 only = segs[0]
                 if isinstance(only, PythonExprSegment):
-                    setattr(lit, "__python_segment__", only)
-                    return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        python_segment=only,
+                    )
                 if isinstance(only, CallSegment):
-                    setattr(lit, "__call_segment__", only)
-                    return lit
-            setattr(lit, "__render_segments__", segs)
-            return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        call_segment=only,
+                    )
+            return LiteralArg(
+                value="__RENDER__",
+                loc=self._span(node),
+                render_segments=segs,
+            )
 
         # Unknown shape — make a best-effort literal.
         lit = LiteralArg(value=_src_text(self.source, node), loc=self._span(node))
@@ -1070,6 +1221,297 @@ class _Walker:
         dedented = dedent_block(prompt_lines)
         prompt = "\n".join(dedented).strip("\n")
         return AutoSpec(prompt=prompt, loc=self._span(node))
+
+    def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
+        value_node = _field(node, "value")
+        assert value_node is not None
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return ModelDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
+
+    def _walk_effort_directive(self, node: Node) -> EffortDirectiveStmt:
+        value_node = _field(node, "value")
+        assert value_node is not None
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return EffortDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        self._validate_effort_plain_value(value_node, plain)
+        return EffortDirectiveStmt(plain_value=plain, loc=self._span(node))
+
+    def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
+        head = _field(node, "head")
+        body = _field(node, "body")
+        lines: List[TemplateLine] = []
+        if head is not None:
+            lines.append(self._system_line_from_expr(head))
+        if body is not None:
+            for child in _named_children(body):
+                if child.type != "system_line":
+                    continue
+                expr_node = _field(child, "line")
+                if expr_node is not None:
+                    lines.append(self._system_line_from_expr(expr_node))
+        if lines:
+            plain = "\n".join(
+                "".join(seg.text for seg in line.segments if isinstance(seg, TextSegment)).strip()
+                for line in lines
+            ).strip()
+            return SystemDirectiveStmt(
+                plain_value=plain or None,
+                template_lines=lines,
+                loc=self._span(node),
+            )
+
+        value_node = _field(node, "value")
+        if value_node is None:
+            return SystemDirectiveStmt(loc=self._span(node))
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return SystemDirectiveStmt(
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        return SystemDirectiveStmt(plain_value=plain, loc=self._span(node))
+
+    def _walk_mcp_directive(self, node: Node) -> McpDirectiveStmt:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[McpField] = []
+        for child in _named_children(body_node):
+            fields.append(self._walk_mcp_field(child))
+        return McpDirectiveStmt(fields=fields, loc=self._span(node))
+
+    def _walk_mcp_field(self, node: Node) -> McpField:
+        name_node = _field(node, "name")
+        value_node = _field(node, "value")
+        assert name_node is not None
+        assert value_node is not None
+        name = _identifier_name(self.source, name_node)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return McpField(
+                name=name,
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain = _src_text(self.source, value_node).strip()
+        if name == "transport":
+            self._validate_mcp_transport_plain_value(value_node, plain)
+        return McpField(
+            name=name,
+            plain_value=plain,
+            loc=self._span(node),
+        )
+
+    def _walk_settings_directive(self, node: Node) -> SettingsDirectiveStmt:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[SettingsField] = []
+        for child in _named_children(body_node):
+            fields.append(self._walk_settings_field(child))
+        return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
+
+    def _walk_settings_field(self, node: Node) -> SettingsField:
+        name_node = _field(node, "name")
+        value_node = _field(node, "value")
+        assert name_node is not None
+        assert value_node is not None
+        name = _identifier_name(self.source, name_node)
+        self._validate_setting_key(name_node, name)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return SettingsField(
+                name=name,
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        return SettingsField(
+            name=name,
+            plain_value=_src_text(self.source, value_node).strip(),
+            loc=self._span(node),
+        )
+
+    def _walk_use_directive(self, node: Node) -> UseDirectiveStmt:
+        body_node = _field(node, "body")
+        if body_node is not None:
+            tool_names = self._walk_use_tool_names(body_node)
+            return UseDirectiveStmt(tool_names=tool_names, loc=self._span(node))
+        name_node = _field(node, "name")
+        assert name_node is not None
+        return UseDirectiveStmt(
+            target=_identifier_name(self.source, name_node),
+            loc=self._span(node),
+        )
+
+    def _walk_use_tool_names(self, body_node: Node) -> list[str]:
+        tool_names: list[str] = []
+        for child in _named_children(body_node):
+            if child.type == "use_tool_name":
+                name_node = _field(child, "name")
+                assert name_node is not None
+                tool_names.append(_identifier_name(self.source, name_node))
+            elif child.type == "use_tool_backtick":
+                name_node = _field(child, "name")
+                assert name_node is not None
+                tool_names.append(_identifier_name(self.source, name_node))
+        if not tool_names:
+            self._error(
+                body_node,
+                "Multiline '> use:' must list at least one tool",
+                code="K-USE-EMPTY",
+            )
+        return tool_names
+
+    def _walk_profile_directive(self, node: Node) -> ProfileDefStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        members: list[ProfileModelEntry] = []
+        effort_members: list[ProfileEffortEntry] = []
+        system_members: list[ProfileSystemEntry] = []
+        mcp_members: list[ProfileMcpEntry] = []
+        settings_members: list[ProfileSettingsEntry] = []
+        tool_names: list[str] = []
+        docstring: str | None = None
+        docstring_loc: Span | None = None
+        body_node = _field(node, "body")
+        if body_node is not None:
+            body_children = _named_children(body_node)
+            if body_children and body_children[0].type == "block_comment":
+                comment = body_children[0]
+                docstring = _decode_block_comment_body(_src_text(self.source, comment))
+                docstring_loc = self._span(comment)
+            for child in body_children:
+                if child.type == "model_directive":
+                    value_node = _field(child, "value")
+                    if value_node is None:
+                        continue
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        members.append(
+                            ProfileModelEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
+                        )
+                    else:
+                        members.append(
+                            ProfileModelEntry(
+                                plain_value=_src_text(self.source, value_node).strip(),
+                                loc=self._span(child),
+                            )
+                        )
+                elif child.type == "effort_directive":
+                    value_node = _field(child, "value")
+                    assert value_node is not None
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        effort_members.append(
+                            ProfileEffortEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
+                        )
+                    else:
+                        plain = _src_text(self.source, value_node).strip()
+                        self._validate_effort_plain_value(value_node, plain)
+                        effort_members.append(
+                            ProfileEffortEntry(
+                                plain_value=plain,
+                                loc=self._span(child),
+                            )
+                        )
+                elif child.type == "system_directive":
+                    system_stmt = self._walk_system_directive(child)
+                    if system_stmt.template_lines:
+                        system_members.append(
+                            ProfileSystemEntry(
+                                plain_value=system_stmt.plain_value,
+                                template_lines=system_stmt.template_lines,
+                                loc=self._span(child),
+                            )
+                        )
+                        continue
+                    value_node = _field(child, "value")
+                    if value_node is None:
+                        continue
+                    if value_node.type == "inline_python_expr":
+                        code_node = _field(value_node, "code")
+                        assert code_node is not None
+                        system_members.append(
+                            ProfileSystemEntry(
+                                backtick_code=_src_text(self.source, code_node),
+                                loc=self._span(child),
+                            )
+                        )
+                    else:
+                        system_members.append(
+                            ProfileSystemEntry(
+                                plain_value=_src_text(self.source, value_node).strip(),
+                                loc=self._span(child),
+                            )
+                        )
+                elif child.type == "use_directive":
+                    use_stmt = self._walk_use_directive(child)
+                    if use_stmt.tool_names:
+                        tool_names.extend(use_stmt.tool_names)
+                    elif use_stmt.name:
+                        tool_names.append(use_stmt.name)
+                elif child.type == "mcp_directive":
+                    mcp_stmt = self._walk_mcp_directive(child)
+                    mcp_members.append(
+                        ProfileMcpEntry(fields=mcp_stmt.fields, loc=self._span(child))
+                    )
+                elif child.type == "settings_directive":
+                    settings_stmt = self._walk_settings_directive(child)
+                    settings_members.append(
+                        ProfileSettingsEntry(
+                            fields=settings_stmt.fields,
+                            loc=self._span(child),
+                        )
+                    )
+        if (
+            not members
+            and not effort_members
+            and not system_members
+            and not mcp_members
+            and not settings_members
+            and not tool_names
+        ):
+            self._error(
+                node,
+                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                code="K-PROFILE-EMPTY",
+            )
+        return ProfileDefStmt(
+            name=name,
+            model_members=members,
+            effort_members=effort_members,
+            system_members=system_members,
+            mcp_members=mcp_members,
+            settings_members=settings_members,
+            tool_names=tool_names,
+            docstring=docstring,
+            docstring_loc=docstring_loc,
+            loc=self._span(node),
+        )
 
     def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
         name_node = _field(node, "name")

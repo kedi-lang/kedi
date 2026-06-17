@@ -108,7 +108,10 @@ CASES: List[tuple[str, str]] = [
         "alpha, beta, gamma",
     ),
     ("@pair(a,b):\n  = <a>|<b>\n\n= <pair(foo,bar)>\n", "foo|bar"),
-    ("@q(c):\n  >> <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n", "r-value"),
+    (
+        "@q(c):\n  >> <c> yields [r]\n  now we use <r>\n  = <r>\n\n= <q(city)>\n",
+        "r-value",
+    ),
     (
         "@chain(s):\n  >> make [x] from <s>\n  then make [y] from <x>\n  = <y>\n\n= <chain(seed)>\n",
         "y-value",
@@ -625,12 +628,14 @@ def test_typed_output_in_return_context(monkeypatch: Any) -> None:
     assert out.isdigit()
 
 
-def test_invalid_type_name_falls_back_to_str(monkeypatch: Any) -> None:
-    out = _run(
-        monkeypatch,
-        ("@p():\n  >> value [x: NotARealType]\n  = <x>\n\n= <p()>\n"),
-    )
-    assert isinstance(out, str)
+def test_invalid_output_type_name_raises(monkeypatch: Any) -> None:
+    # a written-but-unresolvable output annotation must raise instead
+    # of silently degrading to ``str``.
+    with pytest.raises(Exception, match="Unknown type annotation NotARealType"):
+        _run(
+            monkeypatch,
+            ("@p():\n  >> value [x: NotARealType]\n  = <x>\n\n= <p()>\n"),
+        )
 
 
 @pytest.mark.parametrize(

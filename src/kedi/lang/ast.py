@@ -1,27 +1,20 @@
 """Kedi AST dataclasses.
 
-This module is the result of the Phase-6 tree-sitter refactor. Compared
-to the pre-refactor AST it gains:
+Provides typed dataclass nodes for parsed Kedi programs:
 
   - ``Span`` — byte and line/col extents of every source construct,
     populated by the CST→AST walker from tree-sitter node positions.
   - ``TypeExpr`` and friends (``TypeRef``, ``TypeApply``, ``TypeUnion``,
-    ``TypePython``) — a STRUCTURED representation of Kedi type
-    annotations. Previously every type annotation was a raw string
-    later ``eval``'d at runtime; now the grammar parses the annotation
-    structurally and the compiler dispatches on TypeExpr nodes.
+    ``TypePython``) — a structured representation of Kedi type
+    annotations parsed by the grammar and dispatched on by the compiler.
   - A ``loc`` field on every node that records its ``Span``.
-  - ``ProgramWithValidation`` is now what ``parse_program`` returns
-    whenever ``@test:`` or ``@eval:`` blocks are present (rather than
-    being unused dead code, with validation suites grafted onto a plain
-    ``Program`` via ``setattr``).
+  - ``ProgramWithValidation`` is what ``parse_program`` returns
+    whenever ``@test:`` or ``@eval:`` blocks are present.
 
 Backward compatibility: the legacy string fields (``type_annotation``,
 ``param_type_annotations``, ``return_type_annotation``) are retained on
-the relevant classes so existing compiler / codegen / optimizer code
-keeps working until those call sites migrate to ``type_expr`` in
-Phase 7. The CST→AST walker fills BOTH the legacy string field AND the
-new ``type_expr`` field for every annotation it observes.
+the relevant classes. The CST→AST walker fills both the legacy string
+field and the ``type_expr`` field for every annotation it observes.
 """
 
 from __future__ import annotations
@@ -135,6 +128,10 @@ class CallArg:
 @dataclass
 class LiteralArg(CallArg):
     value: str = ""
+    native_backtick: Optional[str] = field(default=None, repr=False, compare=False)
+    render_segments: List["Segment"] = field(default_factory=list, repr=False, compare=False)
+    call_segment: Optional["CallSegment"] = field(default=None, repr=False, compare=False)
+    python_segment: Optional["PythonExprSegment"] = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -154,7 +151,7 @@ class OutputSegment(Segment):
     # Legacy string form (kept for code that reads the raw annotation
     # text — codegen, optimization, the in-progress KediType migration).
     type_annotation: Optional[str] = None
-    # New structured form populated by the Phase-6 CST→AST walker.
+    # Structured form populated by the CST→AST walker.
     type_expr: Optional[TypeExpr] = None
 
 
@@ -240,6 +237,115 @@ class AssignStmt(Stmt):
 
 
 @dataclass
+class ModelDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
+class EffortDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
+class SystemDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    template_lines: List[TemplateLine] = field(default_factory=list)
+
+
+@dataclass
+class McpField:
+    name: str = ""
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class McpDirectiveStmt(Stmt):
+    fields: List[McpField] = field(default_factory=list)
+
+
+@dataclass
+class SettingsField:
+    name: str = ""
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class SettingsDirectiveStmt(Stmt):
+    fields: List[SettingsField] = field(default_factory=list)
+
+
+@dataclass
+class UseDirectiveStmt(Stmt):
+    target: str = ""
+    tool_names: List[str] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        return self.target
+
+    @name.setter
+    def name(self, value: str) -> None:
+        self.target = value
+
+
+UseProfileStmt = UseDirectiveStmt
+
+
+@dataclass
+class ProfileDefStmt(Stmt):
+    name: str = ""
+    model_members: List["ProfileModelEntry"] = field(default_factory=list)
+    effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
+    system_members: List["ProfileSystemEntry"] = field(default_factory=list)
+    mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
+    settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
+    tool_names: List[str] = field(default_factory=list)
+    docstring: Optional[str] = None
+    docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileModelEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileEffortEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileSystemEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    template_lines: List[TemplateLine] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileMcpEntry:
+    fields: List[McpField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileSettingsEntry:
+    fields: List[SettingsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class TypeField:
     name: str
     type_annotation: Optional[str] = None
@@ -287,6 +393,7 @@ class ProcedureDef:
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None
     optimize_spans: List[OptimizeSpan] = field(default_factory=list)
+    captured_agent_profile: Any = field(default=None, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
@@ -323,6 +430,8 @@ class Program:
     prelude: Optional[str] = None
     prelude_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     type_defs: List[TypeDef] = field(default_factory=list)
+    profile_defs: dict[str, "ProfileDefStmt"] = field(default_factory=dict)
+    ordered_toplevel: List[Union["ProcedureDef", Stmt]] = field(default_factory=list)
     source_text: Optional[str] = field(default=None, repr=False, compare=False)
     source_map: Any = field(default=None, repr=False, compare=False)
     parser_warnings: List[KediDiagnostic] = field(default_factory=list, repr=False, compare=False)

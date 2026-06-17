@@ -1,0 +1,723 @@
+from __future__ import annotations
+
+from typing import Any, cast
+
+import pytest
+
+from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
+from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
+from kedi.agent_profile.settings import parse_plain_setting_value
+from kedi.core import KediRuntime
+from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import (
+    EffortDirectiveStmt,
+    McpDirectiveStmt,
+    ModelDirectiveStmt,
+    ProcedureDef,
+    ProfileDefStmt,
+    SettingsDirectiveStmt,
+    SettingsField,
+    SystemDirectiveStmt,
+    UseDirectiveStmt,
+)
+from kedi.lang.parser.diagnostics import KediParseError
+from kedi.utils import AttrDict
+from tests.mock_adapter import MockAdapter
+
+
+def _adapter() -> MockAdapter:
+    return MockAdapter(default_model="default-model")
+
+
+def _procedure_def(fn: object) -> ProcedureDef:
+    proc = getattr(fn, "__kedi_procedure_def__", None)
+    assert isinstance(proc, ProcedureDef)
+    return proc
+
+
+def test_parse_model_profile_use_directives() -> None:
+    src = """
+> model: haiku
+> effort: low
+> system: top-system
+> profile: light:
+    > model: opus
+    > effort: high
+    > system: Be concise.
+> use: light
+@foo():
+    >> answer [x]
+"""
+    prog = parse_program(src)
+    assert len(prog.ordered_toplevel) == 6
+    assert isinstance(prog.ordered_toplevel[0], ModelDirectiveStmt)
+    assert prog.ordered_toplevel[0].plain_value == "haiku"
+    assert isinstance(prog.ordered_toplevel[1], EffortDirectiveStmt)
+    assert prog.ordered_toplevel[1].plain_value == "low"
+    assert isinstance(prog.ordered_toplevel[2], SystemDirectiveStmt)
+    assert prog.ordered_toplevel[2].plain_value == "top-system"
+    assert isinstance(prog.ordered_toplevel[3], ProfileDefStmt)
+    assert prog.ordered_toplevel[3].name == "light"
+    assert prog.ordered_toplevel[3].effort_members[0].plain_value == "high"
+    assert prog.ordered_toplevel[3].system_members[0].plain_value == "Be concise."
+    assert isinstance(prog.ordered_toplevel[4], UseDirectiveStmt)
+    assert isinstance(prog.ordered_toplevel[5], ProcedureDef)
+
+
+def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:
+    src = """
+> mcp:
+    command: vsh
+    args: `["run", "--mcp"]`
+
+> profile: filesystem:
+    > mcp:
+        command: fs-mcp
+
+@foo():
+    > mcp:
+        command: local-mcp
+    >> value [x]
+"""
+    prog = parse_program(src)
+
+    assert isinstance(prog.ordered_toplevel[0], McpDirectiveStmt)
+    assert prog.ordered_toplevel[0].fields[0].name == "command"
+    assert prog.ordered_toplevel[0].fields[0].plain_value == "vsh"
+    assert prog.ordered_toplevel[0].fields[1].backtick_code == '["run", "--mcp"]'
+
+    profile = prog.profile_defs["filesystem"]
+    assert profile.mcp_members[0].fields[0].plain_value == "fs-mcp"
+    assert isinstance(prog.procedures[0].body[0], McpDirectiveStmt)
+
+
+def test_parse_settings_directives_top_level_profile_and_procedure() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+    max_tokens: 128
+    stop_sequences: `["END"]`
+
+> profile: precise:
+    > settings:
+        parallel_tool_calls: false
+
+@foo():
+    > settings:
+        num_retries: 1
+    >> value [x]
+"""
+    prog = parse_program(src)
+
+    assert isinstance(prog.ordered_toplevel[0], SettingsDirectiveStmt)
+    assert [(field.name, field.plain_value) for field in prog.ordered_toplevel[0].fields] == [
+        ("temperature", "0.2"),
+        ("max_tokens", "128"),
+        ("stop_sequences", None),
+    ]
+    assert prog.ordered_toplevel[0].fields[2].backtick_code == '["END"]'
+    profile = prog.profile_defs["precise"]
+    assert profile.settings_members[0].fields[0].name == "parallel_tool_calls"
+    assert profile.settings_members[0].fields[0].plain_value == "false"
+    assert isinstance(prog.procedures[0].body[0], SettingsDirectiveStmt)
+    assert prog.procedures[0].body[0].fields[0].name == "num_retries"
+
+
+def test_mcp_profile_capture_uses_runtime_globals() -> None:
+    src = """
+> profile: dynamic:
+    > mcp:
+        command: `mcp_command`
+        args: `["serve"]`
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(
+        parse_program(src),
+        adapter=_adapter(),
+        runtime_globals={"mcp_command": "vsh"},
+    )
+
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert len(foo_def.captured_agent_profile.mcp_servers) == 1
+    server = foo_def.captured_agent_profile.mcp_servers[0]
+    assert server.transport == "stdio"
+    assert server.command == "vsh"
+    assert server.args == ("serve",)
+
+
+def test_mcp_fields_support_plain_and_inline_python_strings() -> None:
+    src = """
+> mcp:
+    transport: `transport_name`
+    command: `command_name`
+    args: `["serve"]`
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(
+        parse_program(src),
+        adapter=_adapter(),
+        runtime_globals={
+            "transport_name": "stdio",
+            "command_name": "uvx",
+        },
+    )
+
+    proc = _procedure_def(rt._procedures["foo"])
+    server = proc.captured_agent_profile.mcp_servers[0]
+    assert server.transport == "stdio"
+    assert server.command == "uvx"
+    assert server.args == ("serve",)
+
+
+def test_mcp_inside_procedure_body_applies_to_following_prompt() -> None:
+    src = """
+@foo():
+    > mcp:
+        command: local-mcp
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    proc = _procedure_def(rt._procedures["foo"])
+
+    assert proc.captured_agent_profile.mcp_servers == ()
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.mcp_calls == [("local-mcp",)]
+
+
+def test_top_level_mcp_applies_to_following_prompt() -> None:
+    src = """
+> mcp:
+    command: top-mcp
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.mcp_calls == [("top-mcp",)]
+
+
+def test_top_level_mcp_is_captured_by_following_procedure() -> None:
+    src = """
+> mcp:
+    command: captured-mcp
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(parse_program(src), adapter=_adapter())
+    proc = _procedure_def(rt._procedures["foo"])
+    assert tuple(server.command for server in proc.captured_agent_profile.mcp_servers) == (
+        "captured-mcp",
+    )
+
+
+def test_mcp_field_without_value_evaluates_to_none() -> None:
+    from kedi.lang.ast import McpField
+
+    assert eval_mcp_field_value(cast(Any, None), McpField(name="env"), {}) is None
+
+
+def test_settings_field_value_and_plain_scalar_parsing() -> None:
+    rt = KediRuntime()
+
+    assert parse_plain_setting_value("true") is True
+    assert parse_plain_setting_value("null") is None
+    assert parse_plain_setting_value("'literal'") == "literal"
+    assert parse_plain_setting_value("plain-value") == "plain-value"
+    assert (
+        eval_settings_field_value(
+            rt,
+            SettingsField(name="temperature", backtick_code="answer / 100"),
+            {"answer": 42},
+        )
+        == 0.42
+    )
+    assert eval_settings_field_value(cast(Any, None), SettingsField(name="temperature"), {}) is None
+
+
+def test_settings_inline_python_supports_non_string_values() -> None:
+    src = """
+> settings:
+    parallel_tool_calls: `False`
+    stop_sequences: `["END", "DONE"]`
+    extra_body: `{"mode": "json"}`
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    rt.run_main()
+
+    assert adapter.settings_calls == [
+        {
+            "parallel_tool_calls": False,
+            "stop_sequences": ["END", "DONE"],
+            "extra_body": {"mode": "json"},
+        }
+    ]
+
+
+def test_settings_support_plain_and_inline_python_strings() -> None:
+    src = """
+> settings:
+    tool_choice: required
+    service_tier: `"flex"`
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    rt.run_main()
+
+    assert adapter.settings_calls == [
+        {
+            "tool_choice": "required",
+            "service_tier": "flex",
+        }
+    ]
+
+
+def test_mcp_spec_validation() -> None:
+    stdio = mcp_spec_from_mapping({"command": "vsh", "args": None})
+    assert stdio == McpServerSpec(command="vsh")
+
+    http = mcp_spec_from_mapping(
+        {"transport": "http", "url": "http://localhost:8000", "headers": {"x": "y"}}
+    )
+    assert http.transport == "http"
+    assert http.url == "http://localhost:8000"
+    assert http.command is None
+
+    streamable_http = mcp_spec_from_mapping(
+        {"transport": "streamable-http", "url": "http://localhost:8000/mcp"}
+    )
+    assert streamable_http.transport == "http"
+    assert streamable_http.url == "http://localhost:8000/mcp"
+
+    sse = mcp_spec_from_mapping({"transport": "sse", "url": "http://localhost:8001"})
+    assert sse.transport == "sse"
+
+    with pytest.raises(ValueError, match="transport"):
+        mcp_spec_from_mapping({"transport": "websocket"})
+    with pytest.raises(ValueError, match="transport"):
+        mcp_spec_from_mapping({})
+    with pytest.raises(ValueError, match="requires command"):
+        mcp_spec_from_mapping({"transport": "stdio"})
+    with pytest.raises(ValueError, match="requires url"):
+        mcp_spec_from_mapping({"transport": "streamable-http"})
+    with pytest.raises(TypeError, match="args"):
+        mcp_spec_from_mapping({"command": "vsh", "args": "run"})
+    with pytest.raises(TypeError, match="args"):
+        mcp_spec_from_mapping({"command": "vsh", "args": [1]})
+    with pytest.raises(TypeError, match="env"):
+        mcp_spec_from_mapping({"command": "vsh", "env": []})
+    with pytest.raises(TypeError, match="env"):
+        mcp_spec_from_mapping({"command": "vsh", "env": {"x": 1}})
+    with pytest.raises(TypeError, match="headers"):
+        mcp_spec_from_mapping({"command": "vsh", "headers": []})
+    with pytest.raises(TypeError, match="command"):
+        mcp_spec_from_mapping({"command": 1})
+    with pytest.raises(TypeError, match="url"):
+        mcp_spec_from_mapping({"transport": "http", "url": 1})
+    broken = McpServerSpec(command="vsh")
+    object.__setattr__(broken, "transport", "bad")
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        broken.normalized()
+
+
+def test_profile_docstring_comes_from_first_block_comment_only() -> None:
+    src = """
+> profile: documented:
+    ###
+    Use this profile for short answers.
+    ###
+    > model: opus
+
+> profile: ordinary_comment:
+    > model: haiku
+    ###
+    This is a normal comment, not metadata.
+    ###
+"""
+    prog = parse_program(src)
+
+    documented = prog.profile_defs["documented"]
+    assert documented.docstring == "Use this profile for short answers."
+    assert documented.docstring_loc is not None
+    assert documented.model_members[0].plain_value == "opus"
+
+    ordinary = prog.profile_defs["ordinary_comment"]
+    assert ordinary.docstring is None
+    assert ordinary.docstring_loc is None
+    assert ordinary.model_members[0].plain_value == "haiku"
+
+
+def test_profile_definition_top_level_only() -> None:
+    src = """
+@outer():
+    > profile: inner:
+        > model: opus
+"""
+    with pytest.raises(KediParseError):
+        parse_program(src)
+
+
+def test_procedure_capture_uses_source_order_model() -> None:
+    src = """
+> model: gpt-captured
+@foo():
+    >> value [x]
+> model: gpt-later
+@bar():
+    >> value [x]
+"""
+    prog = parse_program(src)
+    adapter = _adapter()
+    rt = compile_program(prog, adapter=adapter)
+    foo = rt._procedures["foo"]
+    bar = rt._procedures["bar"]
+    foo_def = _procedure_def(foo)
+    bar_def = _procedure_def(bar)
+    assert foo_def.captured_agent_profile.model == "gpt-captured"
+    assert bar_def.captured_agent_profile.model == "gpt-later"
+
+
+def test_procedure_capture_uses_source_order_system() -> None:
+    src = """
+> system: first-system
+@foo():
+    >> value [x]
+> system: second-system
+@bar():
+    >> value [x]
+"""
+    prog = parse_program(src)
+    adapter = _adapter()
+    rt = compile_program(prog, adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    bar_def = _procedure_def(rt._procedures["bar"])
+    assert foo_def.captured_agent_profile.system == "first-system"
+    assert bar_def.captured_agent_profile.system == "second-system"
+
+
+def test_procedure_capture_uses_source_order_effort() -> None:
+    src = """
+> effort: low
+@foo():
+    >> value [x]
+> effort: high
+@bar():
+    >> value [x]
+"""
+    prog = parse_program(src)
+    adapter = _adapter()
+    rt = compile_program(prog, adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    bar_def = _procedure_def(rt._procedures["bar"])
+    assert foo_def.captured_agent_profile.effort == "low"
+    assert bar_def.captured_agent_profile.effort == "high"
+
+
+def test_procedure_capture_uses_source_order_settings() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+@foo():
+    >> value [x]
+> settings:
+    max_tokens: 128
+@bar():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    bar_def = _procedure_def(rt._procedures["bar"])
+    assert foo_def.captured_agent_profile.settings == {"temperature": 0.2}
+    assert bar_def.captured_agent_profile.settings == {
+        "temperature": 0.2,
+        "max_tokens": 128,
+    }
+
+
+def test_runtime_globals_are_available_during_profile_capture() -> None:
+    src = """
+> profile: personalized:
+    > system:
+        Address the user as <`args.name or "Guest"`>.
+
+> use: personalized
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(
+        parse_program(src),
+        adapter=_adapter(),
+        runtime_globals={"args": AttrDict({"name": "Ada"}, default=None)},
+    )
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.system == "Address the user as Ada."
+
+
+def test_call_site_model_does_not_override_captured_procedure_profile() -> None:
+    src = """
+> model: proc-model
+@foo():
+    >> value [x]
+
+> model: call-site-model
+= `foo()`
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.model_calls == ["proc-model"]
+    assert adapter.instruction_calls == [None]
+
+
+def test_block_state_model_within_procedure_body() -> None:
+    src = """
+@foo():
+    >> first [x]
+    > model: inner-model
+    >> second [y]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.model_calls == ["default-model", "inner-model"]
+
+
+def test_block_state_system_within_procedure_body() -> None:
+    src = """
+@foo():
+    >> first [x]
+    > system: Answer tersely.
+    >> second [y]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.instruction_calls == [None, "Answer tersely."]
+
+
+def test_block_state_system_renders_multiline_substitutions() -> None:
+    src = """
+@foo(style):
+    > system:
+        You are <style>.
+        Keep it short.
+    >> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt._invoke_procedure(rt._procedures["foo"], ["direct"])
+    assert adapter.instruction_calls == ["You are direct.\nKeep it short."]
+
+
+def test_top_level_system_applies_to_following_prompt() -> None:
+    src = """
+> system: Top-level instructions.
+>> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.instruction_calls == ["Top-level instructions."]
+
+
+def test_top_level_system_renders_multiline_substitutions() -> None:
+    src = """
+[style: str] = `"concise"`
+> system:
+    You are <style>.
+    No extra text.
+>> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.instruction_calls == ["You are concise.\nNo extra text."]
+
+
+def test_top_level_system_renders_inline_python_substitution() -> None:
+    src = """
+```
+from types import SimpleNamespace
+args = SimpleNamespace(name="Mert")
+```
+> system:
+    Your name is <`args.name`>.
+>> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.instruction_calls == ["Your name is Mert."]
+
+
+def test_use_profile_applies_model_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > model: from-profile
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.model == "from-profile"
+
+
+def test_use_profile_applies_system_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > system: from-profile-system
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.system == "from-profile-system"
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.instruction_calls == ["from-profile-system"]
+
+
+def test_use_profile_applies_effort_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > effort: max
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.effort == "max"
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.effort_calls == ["max"]
+
+
+def test_use_profile_applies_settings_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > settings:
+        temperature: 0.3
+        parallel_tool_calls: false
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.settings == {
+        "temperature": 0.3,
+        "parallel_tool_calls": False,
+    }
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.settings_calls == [{"temperature": 0.3, "parallel_tool_calls": False}]
+
+
+def test_effort_applies_to_top_level_prompt() -> None:
+    src = """
+> effort: medium
+>> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.effort_calls == ["medium"]
+
+
+def test_settings_applies_to_top_level_prompt_and_procedure_body() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+>> first [x]
+
+@foo():
+    > settings:
+        max_tokens: 10
+    >> second [y]
+
+= <foo()>
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.settings_calls == [
+        {"temperature": 0.2},
+        {"temperature": 0.2, "max_tokens": 10},
+    ]
+
+
+def test_backtick_effort_applies_in_profile_and_body() -> None:
+    src = """
+> effort: `"low"`
+> profile: dynamic:
+    > effort: `"medium"`
+> use: dynamic
+@foo():
+    > effort: `"high"`
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.effort == "medium"
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.effort_calls == ["high"]
+
+
+def test_invalid_plain_effort_rejected_at_top_level() -> None:
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program("> effort: extreme\n")
+
+    assert any(diag.code == "K-EFFORT-VALUE" for diag in exc_info.value.diagnostics)
+
+
+def test_invalid_plain_effort_rejected_inside_profile() -> None:
+    src = """
+> profile: strict:
+    > effort: extreme
+"""
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program(src)
+
+    assert any(diag.code == "K-EFFORT-VALUE" for diag in exc_info.value.diagnostics)
+
+
+def test_invalid_model_setting_key_rejected() -> None:
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program("> settings:\n    imaginary: 1\n")
+
+    assert any(diag.code == "K-SETTING-KEY" for diag in exc_info.value.diagnostics)
+
+
+def test_agent_profile_merge() -> None:
+    base = AgentProfile(model="a", effort="low", system="old", settings={"temperature": 0.2})
+    merged = base.merge(
+        AgentProfile(
+            model="b",
+            effort="high",
+            system="new",
+            settings={"max_tokens": 100, "temperature": 0.5},
+        )
+    )
+    assert merged.model == "b"
+    assert merged.effort == "high"
+    assert merged.system == "new"
+    assert merged.settings == {"temperature": 0.5, "max_tokens": 100}
+    assert base.model == "a"
+    assert base.effort == "low"
+    assert base.system == "old"
+    assert base.settings == {"temperature": 0.2}

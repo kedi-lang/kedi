@@ -38,7 +38,7 @@ def test_codegen_cache_paths(tmp_path: Path) -> None:
     cache = mgr.cache_path_for(src)
     assert cache.name.endswith(".cache.kedi")
     assert not mgr.is_cached(src, "foo")
-    mgr.write_cache(src, "", "@foo():\n  = ok\n")
+    mgr.write_cache(src, "foo", "", "@foo():\n  = ok\n")
     assert mgr.is_cached(src, "foo")
     assert not CodegenManager(MockPassingAgent(), use_cache=False).is_cached(src, "foo")
 
@@ -168,7 +168,7 @@ def test_codegen_manager_context_and_cache_parsing(tmp_path: Path) -> None:
     assert len(context.procedure_definitions) == 1
     assert context.procedure_definitions[0].startswith("def helper(name: str) -> str:")
 
-    mgr.write_cache(src, "", "@cached():\n  = ok\n")
+    mgr.write_cache(src, "cached", "", "@cached():\n  = ok\n")
     merged = mgr.parse_with_cache(src)
     assert {proc.name for proc in merged.procedures} == {
         "helper",
@@ -177,15 +177,25 @@ def test_codegen_manager_context_and_cache_parsing(tmp_path: Path) -> None:
     }
 
 
-def test_codegen_cleanup_failed_cache_removes_existing_cache(tmp_path: Path) -> None:
+def test_codegen_cleanup_failed_cache_removes_failed_block(tmp_path: Path) -> None:
     src = tmp_path / "source.kedi"
     src.write_text("@ok() -> str:\n  = ok\n", encoding="utf-8")
     cache = src.with_suffix(".cache.kedi")
-    cache.write_text("stale", encoding="utf-8")
     mgr = CodegenManager(MockPassingAgent())
 
-    mgr.cleanup_failed_cache(src)
+    # Two procedures cached; cleaning up the failed one preserves the other.
+    mgr.write_cache(src, "keep", "", "@keep():\n  = ok\n")
+    mgr.write_cache(src, "drop", "", "@drop():\n  = bad\n")
 
+    mgr.cleanup_failed_cache(src, "drop")
+
+    assert cache.exists()
+    text = cache.read_text(encoding="utf-8")
+    assert "@keep()" in text
+    assert "@drop()" not in text
+
+    # Removing the last remaining block deletes the file entirely.
+    mgr.cleanup_failed_cache(src, "keep")
     assert not cache.exists()
 
 
@@ -252,7 +262,7 @@ def test_codegen_orchestrator_cached_and_failure_paths(
     src = tmp_path / "orchestrate.kedi"
     src.write_text("@", encoding="utf-8")
     cached = CodegenManager(MockPassingAgent())
-    cached.write_cache(src, "", "@f():\n  = ok\n")
+    cached.write_cache(src, "f", "", "@f():\n  = ok\n")
     assert cached.orchestrate_generation(src, "@f():", "prompt", "spec")
     cached.cache_path_for(src).unlink()
 

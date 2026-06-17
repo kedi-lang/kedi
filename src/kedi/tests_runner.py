@@ -6,7 +6,6 @@ from typing import Any, List, Optional
 
 from .lang import compile_program, parse_program
 from .lang.ast import EvalSuite, TestSuite
-from .optimization.utils import normalize_metric_result
 from .source_loading import load_kedi_source_bundle
 
 
@@ -55,9 +54,7 @@ def _load_program_with_validations(
         source_path = str(p.resolve())
         source_map = loaded.source_map
     prog = parse_program(text, source_path=source_path, source_map=source_map)
-    rt = compile_program(prog, adapter=adapter)
-    if runtime_globals:
-        rt.set_initial_globals(runtime_globals)
+    rt = compile_program(prog, adapter=adapter, runtime_globals=runtime_globals)
     return rt
 
 
@@ -84,26 +81,20 @@ def run_tests(
             except (OSError, ValueError):
                 pass
 
-    # Load program with optimized prompts if available (only for file paths)
+    # Load program with optimized prompts if available (only for file paths).
+    # load_program_with_optimized_prompts returns the BASE program when no
+    # .optimized.json exists, so genuine load/compile errors fail loud here
+    # rather than silently falling back to an unoptimized run.
     if source_path:
-        try:
-            program = load_program_with_optimized_prompts(source_path)
-            rt = compile_program(program, adapter=adapter)
-            if runtime_globals:
-                rt.set_initial_globals(runtime_globals)
-        except Exception:
-            rt = _load_program_with_validations(
-                src_main,
-                adapter=adapter,
-                runtime_globals=runtime_globals,
-            )
+        program = load_program_with_optimized_prompts(source_path)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
     else:
         rt = _load_program_with_validations(
             src_main,
             adapter=adapter,
             runtime_globals=runtime_globals,
         )
-    suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
+    suites: List[TestSuite] = rt._validation_tests
     results: List[TestRunResult] = []
     for suite in suites:
         case_results: List[TestCaseResult] = []
@@ -134,6 +125,7 @@ def run_evals(
     from pathlib import Path
 
     from .optimization.services.program_loader import load_program_with_optimized_prompts
+    from .optimization.utils import normalize_metric_result
 
     # Check if src_main is a file path or source code string
     # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path
@@ -152,28 +144,22 @@ def run_evals(
                 # Path resolution failed - likely source code, not a path
                 pass
 
-    # Load program with optimized prompts if available (only for file paths)
+    # Load program with optimized prompts if available (only for file paths).
+    # load_program_with_optimized_prompts returns the BASE program when no
+    # .optimized.json exists, so genuine load/compile errors fail loud here
+    # rather than silently falling back to an unoptimized run.
     if source_path:
-        try:
-            # Load with optimized prompts
-            program = load_program_with_optimized_prompts(source_path)
-            # Compile with optimized prompts
-            rt = compile_program(program, adapter=adapter)
-            if runtime_globals:
-                rt.set_initial_globals(runtime_globals)
-        except Exception:
-            rt = _load_program_with_validations(
-                src_main,
-                adapter=adapter,
-                runtime_globals=runtime_globals,
-            )
+        # Load with optimized prompts
+        program = load_program_with_optimized_prompts(source_path)
+        # Compile with optimized prompts (fail loud — no silent base-program fallback)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
     else:
         rt = _load_program_with_validations(
             src_main,
             adapter=adapter,
             runtime_globals=runtime_globals,
         )
-    suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
+    suites: List[EvalSuite] = rt._validation_evals
     results: List[EvalRunResult] = []
 
     for suite in suites:

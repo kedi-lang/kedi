@@ -41,6 +41,26 @@ def test_module_surface_returns_empty_surface_for_invalid_module(tmp_path) -> No
     assert "get_profile" in surface.procedures
 
 
+def test_module_surface_exports_agent_profiles(tmp_path: Path) -> None:
+    exported_module = tmp_path / "models.kedi"
+    exported_module.write_text(
+        "> profile: advanced:\n"
+        "    > model: opus\n"
+        "> profile: _hidden:\n"
+        "    > model: secret\n"
+        "\n"
+        "> export:\n"
+        "  advanced\n",
+        encoding="utf-8",
+    )
+
+    surface = module_surface.load_imported_surface(exported_module, set(), "models")
+
+    assert "advanced" in surface.profiles
+    assert surface.profiles["advanced"].name == "advanced"
+    assert "_hidden" not in surface.profiles
+
+
 def test_module_surface_program_path_and_value_helpers(tmp_path) -> None:
     assert module_surface.program_path(Program(source_map=SimpleNamespace(documents=[]))) is None
 

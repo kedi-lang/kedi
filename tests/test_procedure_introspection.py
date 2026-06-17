@@ -128,3 +128,41 @@ def test_type_class_source_omits_new_stub() -> None:
         "        __kedi_model_init__(self, user=user, salary=salary)\n"
     )
     assert salary == 100000
+
+
+def test_python_interop_wrapper_preserves_procedure_metadata() -> None:
+    from kedi.lang.procedure_introspection import get_procedure_def, get_procedure_metadata
+
+    src = (
+        "@kedi_proc(x: str) -> str:\n"
+        "  = <x>\n\n"
+        "[wrapped: object] = ```\n"
+        "return kedi_proc\n"
+        "```\n"
+        "= ok\n"
+    )
+    rt = _runtime(src)
+    assert rt.run_main() == "ok"
+
+    wrapped = rt._globals_env["wrapped"]
+    metadata = get_procedure_metadata(wrapped)
+    proc = get_procedure_def(wrapped)
+
+    assert metadata is not None
+    assert metadata.name == "kedi_proc"
+    assert proc is not None
+    assert proc.name == "kedi_proc"
+
+
+def test_callable_display_name_for_non_function_callables() -> None:
+    from kedi.lang.procedure_introspection import callable_display_name
+
+    class Host:
+        def __call__(self) -> None:
+            return None
+
+    assert callable_display_name(Host()).endswith("Host")
+
+    anon_type = type("Anon", (), {"__call__": lambda self: None})
+    anon_type.__qualname__ = ""
+    assert callable_display_name(anon_type()) == "Anon"

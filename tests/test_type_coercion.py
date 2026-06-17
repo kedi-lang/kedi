@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from kedi.agent_adapter import AgentAdapter
 from kedi.lang import compile_program, parse_program
+from kedi.resolved_types import ResolvedKediType
 
 
 class PersonModel(BaseModel):
@@ -37,7 +38,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type],
+        output_schema: dict[str, ResolvedKediType],
         **_: Any,
     ) -> Any:
         return self.produce_sync(template=template, output_schema=output_schema)
@@ -46,7 +47,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
         self,
         *,
         template: str,
-        output_schema: Dict[str, type] | None = None,
+        output_schema: dict[str, ResolvedKediType] | None = None,
         **_: Any,
     ) -> Any:
         # Extract keys from template
@@ -76,11 +77,17 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
 class EmptyMockAdapter(AgentAdapter[Any]):
     """Mock adapter that returns empty object to trigger missing key errors."""
 
-    async def produce(self, *, template: str, output_schema: Dict[str, type], **_: Any) -> Any:
+    async def produce(
+        self, *, template: str, output_schema: dict[str, ResolvedKediType], **_: Any
+    ) -> Any:
         return self.produce_sync(template=template, output_schema=output_schema)
 
     def produce_sync(
-        self, *, template: str, output_schema: Dict[str, type] | None = None, **_: Any
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, ResolvedKediType] | None = None,
+        **_: Any,
     ) -> Any:
         # Return empty object to trigger missing key error
         class EmptyResult:

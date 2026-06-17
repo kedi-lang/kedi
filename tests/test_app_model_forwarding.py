@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -97,22 +96,7 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
     assert seen["run_adapter"] is sentinel
 
 
-def test_lazy_runtime_adapter_and_builder_paths(monkeypatch: Any) -> None:
-    made: list[str] = []
-
-    class FakeInner:
-        async def produce(self, *args: Any, **kwargs: Any) -> str:
-            return "async result"
-
-        def produce_sync(self, *args: Any, **kwargs: Any) -> str:
-            return "sync result"
-
-    lazy = app._LazyRuntimeAdapter(lambda: made.append("created") or FakeInner())
-    assert lazy.produce_sync() == "sync result"
-    assert asyncio.run(lazy.produce()) == "async result"
-    assert lazy.produce_sync() == "sync result"
-    assert made == ["created"]
-
+def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
     seen: list[tuple[str, str]] = []
 
     class FakeDSPyAdapter:
@@ -132,8 +116,8 @@ def test_lazy_runtime_adapter_and_builder_paths(monkeypatch: Any) -> None:
     monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
 
-    app._build_runtime_adapter("dspy", None).produce_sync()
-    app._build_runtime_adapter("pydantic", None).produce_sync()
+    app._build_runtime_adapter("dspy", None)
+    app._build_runtime_adapter("pydantic", None)
 
     assert seen == [
         ("dspy", "groq/qwen/qwen3-32b"),
@@ -179,7 +163,7 @@ def _patch_optimizer_services(
     *,
     program: ProgramWithValidation | None = None,
     train_error: Exception | None = None,
-    test_error: Exception | None = RuntimeError("no test data"),
+    test_error: Exception | None = None,
     optimizer_error: Exception | None = None,
     optimized: Any = "better prompt",
 ) -> dict[str, Any]:
@@ -319,9 +303,8 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    import kedi.agent_adapter.adapters as adapters_module
     import kedi.optimization as optimization_module
-    import kedi.optimization.services as services_module
+    import kedi.optimization.services.dspy_config as dspy_config_module
 
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
@@ -379,7 +362,11 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
         "Unknown optimizer: unknown",
     )
 
-    monkeypatch.delattr(adapters_module, "DSPyAdapter")
+    class FailingDSPyAdapter:
+        def __init__(self, *, model: str) -> None:
+            raise ImportError("dspy unavailable")
+
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
     _patch_optimizer_services(monkeypatch)
     assert (
         "DSPy is required for dspy adapter"
@@ -395,7 +382,7 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
 
     _patch_optimizer_services(monkeypatch)
     monkeypatch.setattr(
-        services_module, "DSPyConfigurationService", RaisingDSPyConfigurationService
+        dspy_config_module, "DSPyConfigurationService", RaisingDSPyConfigurationService
     )
     assert (
         "DSPy is required for GEPA optimizer"
@@ -442,12 +429,46 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
     assert app.run_optimization_cli(str(source))[0] == 0
 
 
+def test_dspy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "prog.kedi"
+    source.write_text("= ok\n", encoding="utf-8")
+
+    class FailingDSPyAdapter:
+        def __init__(self, *, model: str) -> None:
+            raise ImportError("dspy unavailable")
+
+    class FakeDSPyConfigurationService:
+        def __init__(self, config: object) -> None:
+            self.config = config
+
+        def configure_main_lm(self, model: str) -> None:
+            assert model == "openai/gpt-4o"
+
+    import kedi.optimization.services.dspy_config as dspy_config_module
+
+    _patch_optimizer_services(monkeypatch)
+    monkeypatch.setattr(
+        dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
+    )
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    assert (
+        "DSPy is required for GEPA optimizer"
+        in app.run_optimization_cli(str(source), optimizer="gepa")[1]
+    )
+
+    _patch_optimizer_services(monkeypatch)
+    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    assert (
+        "DSPy is required for dspy adapter"
+        in app.run_optimization_cli(str(source), optimizer="mock", adapter="dspy")[1]
+    )
+
+
 def test_run_optimization_cli_gepa_and_dspy_success_edges(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    import kedi.agent_adapter.adapters as adapters_module
-    import kedi.optimization.services as services_module
+    import kedi.optimization.services.dspy_config as dspy_config_module
 
     source = tmp_path / "prog.kedi"
     source.write_text("= ok\n", encoding="utf-8")
@@ -481,8 +502,10 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
             return "gepa prompt", 0.75
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(services_module, "DSPyConfigurationService", FakeDSPyConfigurationService)
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(
+        dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
+    )
+    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setitem(
         __import__("sys").modules,
         "kedi.optimization.gepa",
@@ -494,7 +517,7 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
     assert "gepa prompt" in msg
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     code, msg = app.run_optimization_cli(
         str(source),
         optimizer="mock",
@@ -596,9 +619,9 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
                 raise value
             return value
 
+    # run_program_cli runs the program exactly once with a lazily-built adapter.
     runtimes = [
         FakeRuntime([None]),
-        FakeRuntime([RuntimeError("No adapter provided to KediRuntime")]),
         FakeRuntime(["with adapter"]),
     ]
     monkeypatch.setattr(
@@ -617,10 +640,10 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
     )
 
     monkeypatch.setenv("KEDI_DEBUG_OPTIMIZED", "0")
-    runtimes = [FakeRuntime([RuntimeError("different")])]
+    runtimes = [FakeRuntime([RuntimeError("boom")])]
     try:
         app.run_program_cli(str(source), adapter="pydantic", model=None)
     except RuntimeError as exc:
-        assert str(exc) == "different"
+        assert str(exc) == "boom"
     else:
-        raise AssertionError("unexpected RuntimeError should be re-raised")
+        raise AssertionError("run_main errors should propagate")

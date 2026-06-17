@@ -30,7 +30,9 @@ def test_type_expr_to_str_covers_ref_apply_union_and_fallback(tmp_path: Path) ->
 
     type_ref = TypeRef(name="Person", loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=7))
     type_apply = TypeApply(
-        name="list", args=[type_ref], loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=13)
+        name="list",
+        args=[type_ref],
+        loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=13),
     )
     type_union = TypeUnion(
         left=type_apply,
