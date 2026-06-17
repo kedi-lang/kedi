@@ -41,9 +41,10 @@ def run_tests_cli(
     *,
     adapter: str = "pydantic",
     model: str | None = None,
+    use_cache: bool = True,
     runtime_args: CliArgs | None = None,
 ) -> Tuple[int, str]:
-    ok, err = maybe_run_codegen(source, model=model)
+    ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
     if not ok:
         return 1, (err or "Code generation failed")
     kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
@@ -230,13 +231,13 @@ def run_optimization_cli(
         except Exception as e:
             return 1, str(e)
 
-        # Load test data using service
-        test_data_list = None
+        # Load test data using service. load_test_data returns None for an
+        # absent dataset and raises RuntimeError only on a real load failure,
+        # so let genuine failures surface instead of silently dropping data.
         try:
             test_data_list = data_loader.load_test_data(eval_suite, dataset_name)
-        except Exception:
-            # Test data not available - that's okay
-            pass
+        except Exception as e:
+            return 1, f"Test data load error for '{dataset_name}': {e}"
 
         # Note: Analytical metrics can have None expected outputs
         # The metric function will compute the expected value internally
@@ -330,7 +331,7 @@ def run_evals_cli(
             return code, msg
 
     # Run codegen AFTER optimizer (if optimizer ran, DSPy is already configured with optimizer model)
-    ok, err = maybe_run_codegen(source, model=codegen_model, quiet=quiet)
+    ok, err = maybe_run_codegen(source, model=codegen_model, use_cache=use_cache, quiet=quiet)
     if not ok:
         return 1, (err or "Code generation failed")
 

@@ -351,9 +351,12 @@ def test_prompt_loader_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     loader = OptimizedPromptLoader(source)
 
     assert loader.load_optimized_prompts() == {}
+    # Invalid optimized JSON must fail loud, not silently degrade to {} (BUG-014).
     loader.optimized_path.write_text("{bad json", encoding="utf-8")
-    assert loader.load_optimized_prompts() == {}
-    loader.inject_optimized_prompts(Program(procedures=[ProcedureDef("p", [])]))
+    with pytest.raises(ValueError, match="Invalid optimized prompt file"):
+        loader.load_optimized_prompts()
+    with pytest.raises(ValueError, match="Invalid optimized prompt file"):
+        loader.inject_optimized_prompts(Program(procedures=[ProcedureDef("p", [])]))
 
     loader.optimized_path.write_text('{"other": {"s": "optimized"}}', encoding="utf-8")
     program = Program(procedures=[ProcedureDef("p", [])])

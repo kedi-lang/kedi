@@ -192,12 +192,17 @@ def main(
         if test or do_eval:
             # Run validations
             if test:
-                code, out = run_tests_cli(
-                    source,
-                    adapter=adapter,
-                    model=adapter_model,
-                    runtime_args=runtime_args,
-                )
+                try:
+                    code, out = run_tests_cli(
+                        source,
+                        adapter=adapter,
+                        model=adapter_model,
+                        use_cache=not no_cache,
+                        runtime_args=runtime_args,
+                    )
+                finally:
+                    if no_cache:
+                        Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 click.echo(out)
                 if code != 0:
                     ctx.exit(code)
@@ -205,19 +210,25 @@ def main(
             else:
                 # Optimization is handled above by run_optimization_cli when --optimize is set.
                 # Do not pass optimize=True here or GEPA would run twice with default budget/model.
-                code, out = run_evals_cli(
-                    source,
-                    adapter=adapter,
-                    adapter_model=adapter_model,
-                    codegen_model=codegen_model,
-                    optimizer=optimizer,
-                    optimizer_model=optimizer_model,
-                    reflection_model=(optimizer_reflection_model if optimizer == "gepa" else None),
-                    optimize=False,
-                    use_cache=not no_cache,
-                    runtime_args=runtime_args,
-                    quiet=quiet,
-                )
+                try:
+                    code, out = run_evals_cli(
+                        source,
+                        adapter=adapter,
+                        adapter_model=adapter_model,
+                        codegen_model=codegen_model,
+                        optimizer=optimizer,
+                        optimizer_model=optimizer_model,
+                        reflection_model=(
+                            optimizer_reflection_model if optimizer == "gepa" else None
+                        ),
+                        optimize=False,
+                        use_cache=not no_cache,
+                        runtime_args=runtime_args,
+                        quiet=quiet,
+                    )
+                finally:
+                    if no_cache:
+                        Path(source).with_suffix(".cache.kedi").unlink(missing_ok=True)
                 if out:
                     if code != 0:
                         click.echo(out, err=True)
