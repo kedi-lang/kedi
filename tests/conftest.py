@@ -59,9 +59,12 @@ def _normalize_on_cassette_save(
 
 
 @pytest.fixture(autouse=True)
-def _cassette_groq_api_key(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Groq provider rejects empty keys before HTTP; cassettes supply responses."""
-    if request.node.get_closest_marker("vcr") is None:
-        return
-    if not os.environ.get("GROQ_API_KEY"):
-        monkeypatch.setenv("GROQ_API_KEY", "cassette")
+def _placeholder_llm_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Providers validate credentials when an adapter/client is constructed, before
+    any HTTP. Tests drive the actual calls with mocks or cassettes, so supply
+    placeholder keys when none are set. Real keys (present when recording cassettes)
+    are left untouched.
+    """
+    for var in ("OPENAI_API_KEY", "GROQ_API_KEY"):
+        if not os.environ.get(var):
+            monkeypatch.setenv(var, "test-placeholder")
