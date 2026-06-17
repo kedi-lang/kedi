@@ -32,7 +32,9 @@ def test_imported_procedure_sees_importer_runtime_globals(tmp_path: Path) -> Non
     assert rt.run_main() == "Ada"
 
 
-def test_imported_procedure_called_directly_sees_runtime_globals(tmp_path: Path) -> None:
+def test_imported_procedure_called_directly_sees_runtime_globals(
+    tmp_path: Path,
+) -> None:
     """The propagated globals must be visible even when the wrapped imported
     procedure is invoked directly (not just through ``run_main``)."""
     (tmp_path / "lib.kedi").write_text(

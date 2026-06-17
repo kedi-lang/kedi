@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from lsprotocol import types as lsp
 
 from kedi.lang import parse_program

@@ -99,7 +99,10 @@ def test_optimizer_resolvers_fail_loud_on_unknown_type() -> None:
 
     proc = parse_program("@p(a: int, b) -> str:\n  = ok\n").procedures[0]
     assert resolver.resolve_param_types(proc) == {"a": int}
-    assert resolver.resolve_output_types([("x", None), ("y", "int")]) == {"x": str, "y": int}
+    assert resolver.resolve_output_types([("x", None), ("y", "int")]) == {
+        "x": str,
+        "y": int,
+    }
 
     bad = parse_program("@p(a: MissingType) -> str:\n  = ok\n").procedures[0]
     with pytest.raises(TypeError, match="Unknown type annotation MissingType"):

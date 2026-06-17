@@ -10,13 +10,13 @@ import pytest
 from click.testing import CliRunner
 
 import kedi.cli as cli
+from kedi.agent_adapter.utils import run_sync
 from kedi.cli import main as cli_main
 from kedi.codegen.manager import CodegenManager
 from kedi.lang.compiler import compile_program
 from kedi.lang.parser import parse_program
 from kedi.optimization.services.prompt_loader import OptimizedPromptLoader
 from kedi.resolved_types import resolved_type_name, runtime_isinstance
-from kedi.agent_adapter.utils import run_sync
 
 
 def test_resolved_type_name_on_union() -> None:

@@ -4,9 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from kedi.lang.ast import McpField
-    from kedi.lang.ast import SettingsField
-    from kedi.lang.ast import TemplateLine
+    from kedi.lang.ast import McpField, SettingsField, TemplateLine
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -234,7 +234,9 @@ def test_internal_filesystem_apply_patch_tool_updates_file(tmp_path: Path) -> No
     assert data_file.read_text(encoding="utf-8") == "hello\nnew value\nbye\n"
 
 
-def test_internal_filesystem_apply_patch_accepts_wrapperless_patch(tmp_path: Path) -> None:
+def test_internal_filesystem_apply_patch_accepts_wrapperless_patch(
+    tmp_path: Path,
+) -> None:
     data_file = tmp_path / "data.txt"
     data_file.write_text(
         "from .constants import *\nfrom .vfx import Projectile\n", encoding="utf-8"

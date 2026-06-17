@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
     AgentToolOverrideUnsupported,
@@ -10,8 +11,6 @@ from .model import (
     eval_system_directive,
     eval_use_profile,
 )
-from .mcp import McpServerSpec, McpTransport
-from .tools import eval_use_directive, procedure_def_for_tool
 from .profile import AgentProfile
 from .registry import (
     ProfileDefinition,
@@ -32,6 +31,7 @@ from .settings import (
     pydantic_model_settings,
 )
 from .stack import block_agent_profile_scope, current_block_agent_profile
+from .tools import eval_use_directive, procedure_def_for_tool
 
 __all__ = [
     "AgentProfile",

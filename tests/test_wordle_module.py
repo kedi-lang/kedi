@@ -306,4 +306,9 @@ def test_play_wordle_retries_when_model_repeats_the_same_answer() -> None:
     result = rt._invoke_procedure(rt._procedures["play_wordle"], ["space"])
 
     assert result == "Round ended. The word was SLATE."
-    assert adapter.model_calls == ["mock-model", "mock-model", "mock-model", "mock-model"]
+    assert adapter.model_calls == [
+        "mock-model",
+        "mock-model",
+        "mock-model",
+        "mock-model",
+    ]

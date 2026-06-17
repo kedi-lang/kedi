@@ -4,8 +4,7 @@ import asyncio
 import inspect
 import sys
 from dataclasses import dataclass
-from types import ModuleType
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -20,9 +19,9 @@ from kedi.agent_adapter.utils import (
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
-from kedi.lang import compile_program, parse_program
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.lang import compile_program, parse_program
 
 
 class DirectOutput(BaseModel):
@@ -171,7 +170,16 @@ def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -
         ),
         (
             "toolset",
-            ({"mcpServers": {"kedi_mcp_1": {"url": "http://localhost/sse", "transport": "sse"}}},),
+            (
+                {
+                    "mcpServers": {
+                        "kedi_mcp_1": {
+                            "url": "http://localhost/sse",
+                            "transport": "sse",
+                        }
+                    }
+                },
+            ),
             {},
         ),
     ]
@@ -473,7 +481,11 @@ def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
 
     result = asyncio.run(adapter._produce_with_mcp(object(), ["local"], "prompt", {"extra": 1}))
 
-    assert result == {"tools": ["local", "mcp:remote_search"], "extra": 1, "user_prompt": "prompt"}
+    assert result == {
+        "tools": ["local", "mcp:remote_search"],
+        "extra": 1,
+        "user_prompt": "prompt",
+    }
     assert events[0][0] == "stdio"
     assert events[0][1] == FakeStdioServerParameters("vsh", ["run", "--mcp"], {"A": "B"})
     assert events[1:] == [
@@ -510,7 +522,12 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
 
     result = adapter.produce_sync("prompt", {"answer": str}, user_prompt="ignored", extra=1)
 
-    assert result == {"sig": "sig", "tools": [], "template": "prompt", "kwargs": {"extra": 1}}
+    assert result == {
+        "sig": "sig",
+        "tools": [],
+        "template": "prompt",
+        "kwargs": {"extra": 1},
+    }
 
 
 def test_dspy_adapter_mcp_rejects_non_stdio() -> None:

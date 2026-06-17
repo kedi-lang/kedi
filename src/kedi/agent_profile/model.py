@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentProfile
 from .registry import (
     ProfileDefinition,
@@ -14,19 +15,18 @@ from .registry import (
     ProfileSystemMember,
     ProfileToolMember,
 )
-from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .settings import parse_plain_setting_value
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
         EffortDirectiveStmt,
-        ModelDirectiveStmt,
         McpDirectiveStmt,
         McpField,
-        SystemDirectiveStmt,
+        ModelDirectiveStmt,
         SettingsDirectiveStmt,
         SettingsField,
+        SystemDirectiveStmt,
         TemplateLine,
         UseDirectiveStmt,
     )
@@ -175,7 +175,9 @@ def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[s
 
 
 def eval_settings_fields(
-    rt: KediRuntime, fields: list[SettingsField] | tuple[SettingsField, ...], env: dict[str, Any]
+    rt: KediRuntime,
+    fields: list[SettingsField] | tuple[SettingsField, ...],
+    env: dict[str, Any],
 ) -> dict[str, Any]:
     return {field.name: eval_settings_field_value(rt, field, env) for field in fields}
 
@@ -190,12 +192,14 @@ def eval_settings_directive(
 
 def _member_to_patch(
     rt: KediRuntime,
-    member: ProfileModelMember
-    | ProfileEffortMember
-    | ProfileSystemMember
-    | ProfileToolMember
-    | ProfileMcpMember
-    | ProfileSettingsMember,
+    member: (
+        ProfileModelMember
+        | ProfileEffortMember
+        | ProfileSystemMember
+        | ProfileToolMember
+        | ProfileMcpMember
+        | ProfileSettingsMember
+    ),
     env: dict[str, Any],
 ) -> AgentProfile:
     if member.kind == "model":

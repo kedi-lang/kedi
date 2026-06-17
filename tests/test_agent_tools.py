@@ -341,7 +341,9 @@ def test_empty_use_directive_raises() -> None:
         eval_use_directive(KediRuntime(), UseDirectiveStmt(), {}, {}, available_procedures=set())
 
 
-def test_unknown_tool_procedure_at_runtime_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_tool_procedure_at_runtime_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     src = """
 @p():
     = ok
@@ -374,7 +376,9 @@ def test_tool_use_with_adapter_without_tool_support_raises() -> None:
         rt.run_main()
 
 
-def test_dspy_adapter_registers_kedi_tool_and_uses_react(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dspy_adapter_registers_kedi_tool_and_uses_react(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from kedi.agent_adapter.adapters import DSPyAdapter
 
     src = """

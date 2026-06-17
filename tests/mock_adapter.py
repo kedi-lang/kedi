@@ -53,7 +53,10 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         if profile.effort is not None:
             self.last_effective_effort = profile.effort
         if profile.settings:
-            self.last_effective_settings = {**self.last_effective_settings, **profile.settings}
+            self.last_effective_settings = {
+                **self.last_effective_settings,
+                **profile.settings,
+            }
         if profile.mcp_servers:
             self.last_effective_mcp_commands = tuple(
                 server.command for server in profile.mcp_servers

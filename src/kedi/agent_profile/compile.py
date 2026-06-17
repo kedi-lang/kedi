@@ -104,8 +104,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         EffortDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
-        SettingsDirectiveStmt,
         ProcedureDef,
+        SettingsDirectiveStmt,
         SystemDirectiveStmt,
         UseDirectiveStmt,
     )

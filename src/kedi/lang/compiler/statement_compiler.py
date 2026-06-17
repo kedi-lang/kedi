@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from ...core import KediRuntime
-from ...errors import KediTraceFrame
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.model import (
     eval_effort_directive,
@@ -15,6 +13,8 @@ from ...agent_profile.model import (
     eval_system_directive,
 )
 from ...agent_profile.tools import eval_use_directive
+from ...core import KediRuntime
+from ...errors import KediTraceFrame
 from ..ast import (
     AssignBlockStmt,
     AssignStmt,

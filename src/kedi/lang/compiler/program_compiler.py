@@ -261,7 +261,11 @@ class ProgramCompiler:
             if name in layer:
                 return "type", layer[name]
 
-        for env in (imported_rt._globals_env, imported_rt._prelude_env, imported_rt._import_env):
+        for env in (
+            imported_rt._globals_env,
+            imported_rt._prelude_env,
+            imported_rt._import_env,
+        ):
             if env is not None and name in env:
                 return "value", env[name]
 

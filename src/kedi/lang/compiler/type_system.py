@@ -197,7 +197,8 @@ class KediType:
         self, rt: KediRuntime, env: dict[str, Any] | None = None
     ) -> Optional[TypeAdapter]:
         """Lenient adapter build for introspection-only callers (returns ``None`` on a
-        typo so editor hovers don't crash); runtime validation uses strict ``validate``."""
+        typo so editor hovers don't crash); runtime validation uses strict ``validate``.
+        """
         if self.is_none():
             return None
         resolved = self.resolve(rt, env)

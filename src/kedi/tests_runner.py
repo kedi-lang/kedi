@@ -124,8 +124,8 @@ def run_evals(
 ) -> List[EvalRunResult]:
     from pathlib import Path
 
-    from .optimization.utils import normalize_metric_result
     from .optimization.services.program_loader import load_program_with_optimized_prompts
+    from .optimization.utils import normalize_metric_result
 
     # Check if src_main is a file path or source code string
     # Heuristic: if it looks like source code (has newlines or @ symbols), it's not a path

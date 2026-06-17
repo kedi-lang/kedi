@@ -33,9 +33,9 @@ from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
+from ...agent_profile.settings import MODEL_SETTING_KEYS, is_valid_model_setting_key
 from ...effort import EFFORT_VALUES, is_valid_effort
 from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
-from ...agent_profile.settings import MODEL_SETTING_KEYS, is_valid_model_setting_key
 from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
@@ -44,16 +44,16 @@ from ..ast import (
     BacktickLineStmt,
     CallArg,
     CallSegment,
+    EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
-    EffortDirectiveStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
     McpField,
-    ModuleExport,
     ModelDirectiveStmt,
+    ModuleExport,
     ModuleImport,
     OptimizeSpan,
     OutputSegment,
@@ -73,10 +73,10 @@ from ..ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
-    Span,
-    Stmt,
     SettingsDirectiveStmt,
     SettingsField,
+    Span,
+    Stmt,
     SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
@@ -288,7 +288,9 @@ class _Walker:
                 stmt = self._walk_profile_directive(child)
                 if stmt.name in prog.profile_defs:
                     self._error(
-                        child, f"Duplicate profile definition: {stmt.name!r}", code="K-PROFILE-DUP"
+                        child,
+                        f"Duplicate profile definition: {stmt.name!r}",
+                        code="K-PROFILE-DUP",
                     )
                 else:
                     prog.profile_defs[stmt.name] = stmt

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import pytest
 from typing import Any, cast
 
+import pytest
+
 from kedi.agent_profile import AgentProfile
-from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
+from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
 from kedi.agent_profile.settings import parse_plain_setting_value
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program

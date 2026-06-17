@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from kedi.agent_profile import AgentProfile

@@ -112,7 +112,9 @@ def test_executor_falls_back_to_source_map_for_pathless_span(tmp_path: Path) -> 
     assert err.python_traces[-1].kedi_lineno == 2
 
 
-def test_executor_keeps_virtual_filename_when_source_map_cannot_resolve(tmp_path: Path) -> None:
+def test_executor_keeps_virtual_filename_when_source_map_cannot_resolve(
+    tmp_path: Path,
+) -> None:
     srcp = tmp_path / "sample.kedi"
     srcp.write_text("= ok\n", encoding="utf-8")
     rt = compile_program(parse_program("= ok"))

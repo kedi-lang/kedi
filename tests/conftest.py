@@ -5,9 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from cassetter._types import CassetteConfig
-
 from cassetter.cassette import Cassette
 
 from tests.cassette_redaction import (
