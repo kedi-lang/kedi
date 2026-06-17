@@ -377,7 +377,10 @@ class DefaultExecutor:
             wrapper_line_offset=len(header),
             kedi_line_offset=kedi_line_offset,
         )
-        exec(compile(wrapper_src, filename, "exec", dont_inherit=True), env, env)
+        # Pad the compiled source so traceback line numbers stay aligned with the
+        # Kedi source line (``to_trace`` subtracts compile_line_offset + wrapper_line_offset).
+        compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
+        exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         result, updated = env["__kedi_wrapper__"](**{name: local_env[name] for name in names})
         self._sync_existing_variables(rt, local_env, updated)
         return result
