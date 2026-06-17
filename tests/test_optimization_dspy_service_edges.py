@@ -202,11 +202,14 @@ def test_module_builder_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     signature = builder._create_signature(["x"], [("answer", None)], {})
     assert "answer" in signature.model_fields
 
+    # BUG-023: a written-but-unresolvable annotation must raise, not silently
+    # downgrade to ``str``.
     monkeypatch.setattr(
         "kedi.lang.compiler.type_system.KediType.resolve",
         lambda self, runtime, env: None,
     )
-    assert builder._resolve_type_annotation("Missing", {}) is str
+    with pytest.raises(TypeError, match="Unknown type annotation Missing"):
+        builder._resolve_type_annotation("Missing", {})
 
     def fail_resolve(self: Any, runtime: Any, env: Any) -> object:
         raise RuntimeError("boom")
@@ -215,7 +218,8 @@ def test_module_builder_edges(monkeypatch: pytest.MonkeyPatch) -> None:
         "kedi.lang.compiler.type_system.KediType.resolve",
         fail_resolve,
     )
-    assert builder._resolve_type_annotation("Missing", {}) is str
+    with pytest.raises(RuntimeError, match="boom"):
+        builder._resolve_type_annotation("Missing", {})
 
 
 def test_prompt_extractor_edges() -> None:

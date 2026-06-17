@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ...core import KediRuntime
-from ..ast import ProcDefStmt, ProcedureDef
+from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import ScopedDict, build_python_env
 from .statement_compiler import StatementExecutor
@@ -86,9 +86,6 @@ class ProcedureCompiler:
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
-        if not (proc.param_type_annotations or proc.param_type_exprs):
-            return
-
         param_exprs = proc.param_type_exprs or {}
         param_strs = proc.param_type_annotations or {}
 
@@ -103,15 +100,17 @@ class ProcedureCompiler:
 
             provided = kwargs[param_name]
 
+            # Untyped params default to ``str``: a str argument passes as-is, a
+            # native non-str (e.g. ``show(`1`)``) raises — no implicit coercion.
+            if kedi_type.is_none():
+                kedi_type = KediType(TypeRef(name="str"))
+
             # Strict validation for parameters using TypeAdapter
-            if not kedi_type.is_none():
-                try:
-                    validated = kedi_type.validate(
-                        self.rt, None, provided, allow_str_coercion=False
-                    )
-                except Exception:
-                    raise TypeError(f"Parameter '{param_name}' does not match annotated type")
-                kwargs[param_name] = validated
+            try:
+                validated = kedi_type.validate(self.rt, None, provided, allow_str_coercion=False)
+            except Exception:
+                raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+            kwargs[param_name] = validated
 
     def _enforce_return_type(
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
@@ -125,10 +124,16 @@ class ProcedureCompiler:
                 raise TypeError("Return value must be str; annotate function to return non-string")
             return "" if last_return is None else str(last_return)
 
+        # Annotated return: a written-but-unresolvable annotation raises a precise
+        # "Unknown type annotation X" error rather than the generic mismatch below.
+        kedi_type.resolve_required(self.rt, env)
+
         # Annotated return: strict validate and return validated value
         try:
             # Do not allow string literal coercion for returns
             return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+        except TypeError:
+            raise
         except Exception:
             raise TypeError("Return value does not match annotated type")
 

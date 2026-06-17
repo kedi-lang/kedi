@@ -48,18 +48,16 @@ class TypeResolver:
         for param_name in procedure.params:
             type_anno = procedure.param_type_annotations.get(param_name)
             if not type_anno:
+                # No annotation -> omit (untyped params carry no type constraint).
                 continue
 
-            try:
-                resolved_type = KediType(type_anno).resolve(self.runtime, {})
-
-                stored_type = as_resolved_kedi_type(resolved_type)
-                if stored_type is not None:
-                    param_types[param_name] = stored_type
-            except Exception:
-                # Type resolution failed - skip this parameter
-                # Optimizer will skip type validation for unresolvable types
-                pass
+            # A written-but-unresolvable annotation raises instead of being
+            # silently omitted, so optimizer signatures cannot diverge from
+            # the source program (BUG-023).
+            resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
+            stored_type = as_resolved_kedi_type(resolved_type)
+            if stored_type is not None:
+                param_types[param_name] = stored_type
 
         return param_types
 
@@ -87,17 +85,11 @@ class TypeResolver:
                 output_types[field_name] = str
                 continue
 
-            try:
-                resolved_type = KediType(type_anno).resolve(self.runtime, {})
-
-                stored_type = as_resolved_kedi_type(resolved_type)
-                if stored_type is not None:
-                    output_types[field_name] = stored_type
-                else:
-                    # Fallback to str if type resolution fails
-                    output_types[field_name] = str
-            except Exception:
-                # Type resolution failed - default to str
-                output_types[field_name] = str
+            # A written-but-unresolvable annotation raises instead of silently
+            # downgrading to str, so optimizer signatures cannot diverge from
+            # the source program (BUG-023).
+            resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
+            stored_type = as_resolved_kedi_type(resolved_type)
+            output_types[field_name] = stored_type if stored_type is not None else str
 
         return output_types

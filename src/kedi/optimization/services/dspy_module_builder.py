@@ -140,10 +140,8 @@ class DSPyModuleBuilder:
         """
         from ...lang.compiler.type_system import KediType
 
-        try:
-            resolved_type = KediType(type_anno).resolve(self.type_handler.runtime, None)
-            return resolved_type if resolved_type is not None else str
-        except Exception:
-            # If resolution fails, fall back to str
-            # This ensures we don't break on unknown types
-            return str
+        # An annotation is present here (the caller only resolves typed fields);
+        # a written-but-unresolvable annotation raises rather than silently
+        # falling back to str (BUG-023).
+        resolved_type = KediType(type_anno).resolve_required(self.type_handler.runtime, None)
+        return resolved_type if resolved_type is not None else str
