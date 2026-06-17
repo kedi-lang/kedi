@@ -11,7 +11,7 @@ def _tool(name: str) -> SimpleNamespace:
 
 
 def test_tool_scope_is_context_local_across_concurrent_tasks() -> None:
-    """BUG-021: overlapping tool scopes on one ToolScope must stay disjoint."""
+    """overlapping tool scopes on one ToolScope must stay disjoint."""
     scope = ToolScope()
     ready = asyncio.Event()
 

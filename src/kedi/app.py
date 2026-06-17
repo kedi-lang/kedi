@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Tuple
 
 from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
-from .agent_adapter.lazy import LazyAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -415,16 +414,19 @@ def run_program_cli(
     # Load program with optimized prompts injected
     program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
 
-    # Run exactly once with a lazily-built adapter: programs fully covered by
-    # generated/native code never construct an adapter (no API key required), while
-    # programs that actually invoke an LLM template build it on first use. This avoids
-    # the previous offline-then-retry pattern that re-executed top-level side effects
-    # (BUG-007).
-    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
+    # Prefer offline execution; fall back to the adapter only if a template needs it.
+    rt = compile_program(program, adapter=None, runtime_globals=_runtime_globals(runtime_args))
+    _set_runtime_args(rt, runtime_args)
+    try:
+        out = rt.run_main()
+        return 0, ("" if out is None else str(out))
+    except RuntimeError as e:
+        if str(e) != "No adapter provided to KediRuntime":
+            raise
+
+    adapter_impl = _build_runtime_adapter(adapter, model)
     rt = compile_program(
-        program,
-        adapter=lazy_adapter,
-        runtime_globals=_runtime_globals(runtime_args),
+        program, adapter=adapter_impl, runtime_globals=_runtime_globals(runtime_args)
     )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()

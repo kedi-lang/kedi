@@ -339,27 +339,19 @@ class DefaultExecutor:
         *,
         kedi_line_offset: int = 0,
     ) -> Any:
-        """Execute ``code`` as a statement block with Kedi-var ``nonlocal`` scoping.
-
-        Kedi vars are passed in as enclosing-scope locals so the inner block can
-        mutate existing names (via ``nonlocal``) while new Python names stay local
-        and never leak back into Kedi. Mutations to existing names are synced into
-        ``local_env`` and the runtime env on return.
-        """
+        """Run ``code`` as a block: existing Kedi vars are ``nonlocal`` (mutations
+        sync back), new Python names stay local."""
         env = self._build_python_env(rt, local_env)
         names = list(local_env.keys())
         params = ", ".join(names)
-        # Header lines preceding the user code; the inner ``nonlocal`` is emitted
-        # only when there is at least one name (empty ``nonlocal`` is a SyntaxError).
         header = [
             f"def __kedi_wrapper__({params}):",
             "    def __kedi_block__():",
         ]
-        if names:
+        if names:  # empty ``nonlocal`` is a SyntaxError
             header.append(f"        nonlocal {params}")
         body = ["        " + line for line in code.splitlines()]
-        # Map existing names back to their (possibly mutated) values; new Python
-        # names created inside ``__kedi_block__`` are not included and never leak.
+        # Return existing names only (their mutated values); new locals don't leak.
         updated_map = "{" + ", ".join(f"{name!r}: {name}" for name in names) + "}"
         wrapper_src = "\n".join(
             header
@@ -377,8 +369,7 @@ class DefaultExecutor:
             wrapper_line_offset=len(header),
             kedi_line_offset=kedi_line_offset,
         )
-        # Pad the compiled source so traceback line numbers stay aligned with the
-        # Kedi source line (``to_trace`` subtracts compile_line_offset + wrapper_line_offset).
+        # Pad so traceback line numbers stay aligned with the Kedi source line.
         compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
         exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         result, updated = env["__kedi_wrapper__"](**{name: local_env[name] for name in names})

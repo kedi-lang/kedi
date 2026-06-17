@@ -39,12 +39,10 @@ def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
-    # Carry the caller's context into the worker thread so context-local state
-    # (e.g. a ``dspy.context(lm=...)`` profile override) is visible to ``coro``;
-    # ThreadPoolExecutor does not copy contextvars on its own.
+    # Copy the caller's context so a dspy.context(lm=...) override reaches the worker.
     ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        # cast: Context.run's own TypeVar doesn't unify with run_sync's via submit().
+        # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().
         return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, coro)).result())
 
 

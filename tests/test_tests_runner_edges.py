@@ -49,7 +49,7 @@ def test_run_tests_file_path_block_inline_failure_and_optimized_load_failures(
         lambda _: (_ for _ in ()).throw(RuntimeError("optimized load failed")),
     )
 
-    # No silent fallback: optimized load/compile errors must surface (BUG-013/024).
+    # No silent fallback: optimized load/compile errors must surface.
     with pytest.raises(RuntimeError, match="optimized load failed"):
         run_tests(str(source), adapter=None)
 
@@ -102,7 +102,7 @@ def test_run_evals_file_path_metric_shapes_and_optimized_load_failures(
         lambda _: (_ for _ in ()).throw(RuntimeError("optimized load failed")),
     )
 
-    # No silent fallback: optimized load/compile errors must surface (BUG-013/024).
+    # No silent fallback: optimized load/compile errors must surface.
     with pytest.raises(RuntimeError, match="optimized load failed"):
         run_evals(str(source), adapter=None)
 

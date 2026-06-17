@@ -257,10 +257,8 @@ class KediRuntime:
 
         self._python_origin_counter += 1
         origin_span = span
-        # Always key the origin by a UNIQUE virtual filename so multiple embedded
-        # Python snippets in the same .kedi file don't overwrite each other's origin /
-        # linecache entry (BUG-010). The real source path + line metadata are carried
-        # on ``origin_span`` (read by KediPythonOrigin.to_trace for rendering).
+        # Unique virtual filename per snippet so snippets sharing a .kedi file don't
+        # collide; the real source path lives on origin_span for rendering.
         filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
         if span is not None and getattr(span, "source_path", None):
             origin_span = span

@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 
 from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
+from ...errors import KediTypeExecutionError
 from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
 from ..type_introspection import make_type_init
 from .environment import build_type_env
@@ -190,30 +191,20 @@ class KediType:
         return None
 
     def resolve_required(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
-        """Resolve, distinguishing *no annotation* from *unresolvable annotation*.
-
-        Returns ``None`` only when no annotation was written. A written but
-        unresolvable annotation (e.g. ``MissingType`` or a typo) raises
-        ``TypeError`` instead of silently degrading to ``str`` / skipping
-        validation.
-        """
+        """``None`` only when no annotation was written; a written-but-unresolvable
+        annotation raises instead of silently degrading to ``str``."""
         if self.is_none():
             return None
         resolved = self.resolve(rt, env)
         if resolved is None:
-            raise TypeError(f"Unknown type annotation {self!s}")
+            raise KediTypeExecutionError(f"Unknown type annotation {self!s}")
         return resolved
 
     def get_adapter(
         self, rt: KediRuntime, env: dict[str, Any] | None = None
     ) -> Optional[TypeAdapter]:
-        """Build a ``TypeAdapter`` leniently (introspection-only callers).
-
-        Returns ``None`` when there is no annotation *or* when a written
-        annotation cannot be resolved/adapted, so editor hovers and schema
-        introspection never crash on a typo. Runtime validation goes through
-        ``validate``, which is strict.
-        """
+        """Lenient adapter build for introspection-only callers (returns ``None`` on a
+        typo so editor hovers don't crash); runtime validation uses strict ``validate``."""
         if self.is_none():
             return None
         resolved = self.resolve(rt, env)
@@ -236,7 +227,9 @@ class KediType:
         try:
             adapter = _build_type_adapter(resolved)
         except Exception as exc:  # pragma: no cover - defensive; TypeAdapter is permissive
-            raise TypeError(f"Cannot build validator for type {self!s}: {exc}") from exc
+            raise KediTypeExecutionError(
+                f"Cannot build validator for type {self!s}: {exc}"
+            ) from exc
         return adapter.validate_python(value)
 
     def __repr__(self) -> str:
@@ -418,28 +411,30 @@ def assign_value_from_native(
         if kedi_type.is_none():
             if isinstance(native, str):
                 return native
-            raise TypeError("Native non-string assignment requires explicit type annotation")
-        # Resolve up front: a bare annotation that names an unknown type
-        # (e.g. ``[x: MissingType]``) raises a precise "Unknown type
-        # annotation X" error instead of silently bypassing validation.
-        # A backtick type expression that fails to evaluate keeps the legacy
-        # "does not match annotated type" diagnostic via the except below.
+            raise KediTypeExecutionError(
+                "Native non-string assignment requires explicit type annotation"
+            )
+        # Resolve up front so a bare unknown type name raises "Unknown type annotation X"
+        # rather than silently bypassing validation (backtick type exprs keep the
+        # generic mismatch diagnostic via the except below).
         try:
             resolved = kedi_type.resolve(rt, env)
         except Exception:
             resolved = None
         else:
             if resolved is None:
-                raise TypeError(f"Unknown type annotation {kedi_type!s}")
+                raise KediTypeExecutionError(f"Unknown type annotation {kedi_type!s}")
         if isinstance(native, str) and resolved is not None and resolved is not str:
-            raise TypeError("Annotation type mismatch: got str value")
+            raise KediTypeExecutionError("Annotation type mismatch: got str value")
         try:
             return kedi_type.validate(rt, env, native)
         except Exception:
-            raise TypeError("Native assignment value does not match annotated type")
+            raise KediTypeExecutionError("Native assignment value does not match annotated type")
     else:
         if not kedi_type.is_none():
-            raise TypeError("Angle-inline pure python cannot have a non-str annotation")
+            raise KediTypeExecutionError(
+                "Angle-inline pure python cannot have a non-str annotation"
+            )
         return str(native)
 
 

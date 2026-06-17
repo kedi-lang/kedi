@@ -629,7 +629,7 @@ def test_typed_output_in_return_context(monkeypatch: Any) -> None:
 
 
 def test_invalid_output_type_name_raises(monkeypatch: Any) -> None:
-    # BUG-002: a written-but-unresolvable output annotation must raise instead
+    # a written-but-unresolvable output annotation must raise instead
     # of silently degrading to ``str``.
     with pytest.raises(Exception, match="Unknown type annotation NotARealType"):
         _run(

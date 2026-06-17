@@ -348,9 +348,8 @@ class StatementExecutor:
             return _NO_RETURN
 
         if isinstance(stmt, ReturnStmt):
-            # Gate on the structured type (return_type_expr) too, not just the legacy
-            # string annotation, so structured-only typed returns take the native path
-            # and get enforced by _enforce_return_type (BUG-016).
+            # Gate on the structured type too (not just the legacy string) so
+            # structured-only typed returns take the enforced native path.
             return_kedi_type = KediType.from_node(
                 proc.return_type_expr, proc.return_type_annotation
             )

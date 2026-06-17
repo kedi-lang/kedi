@@ -1,4 +1,4 @@
-"""BUG-013/014/024: optimized-artifact load errors must fail loud.
+"""optimized-artifact load errors must fail loud.
 
 An invalid ``.optimized.json`` must raise a clear error from the loader, and
 ``run_tests`` / ``run_evals`` must propagate it instead of silently falling

@@ -15,7 +15,7 @@ def _compile_file(path: Path, *, runtime_globals=None):
 
 
 def test_imported_procedure_sees_importer_runtime_globals(tmp_path: Path) -> None:
-    """BUG-009: an imported procedure must run under the importing program's
+    """an imported procedure must run under the importing program's
     runtime globals so program-level context such as ``args`` is available."""
     (tmp_path / "lib.kedi").write_text(
         "@show_arg() -> str:\n  = <`args.name`>\n\n> export:\n  show_arg\n",
@@ -53,9 +53,8 @@ def test_imported_procedure_called_directly_sees_runtime_globals(tmp_path: Path)
 def test_module_top_level_export_materializes_but_return_does_not_leak(
     tmp_path: Path,
 ) -> None:
-    """BUG-008 (design lock): importing a module runs its top-level code to
-    materialize exported values, but the module's top-level RETURN value must
-    not leak into the importing program."""
+    """Importing a module runs its top-level code to materialize exported values,
+    but the module's top-level RETURN value must not leak into the importer."""
     (tmp_path / "lib.kedi").write_text(
         "[shared: int] = `7`\n= module-top-level-return\n\n> export:\n  shared\n",
         encoding="utf-8",

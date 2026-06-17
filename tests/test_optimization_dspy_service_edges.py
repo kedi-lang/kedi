@@ -202,7 +202,7 @@ def test_module_builder_edges(monkeypatch: pytest.MonkeyPatch) -> None:
     signature = builder._create_signature(["x"], [("answer", None)], {})
     assert "answer" in signature.model_fields
 
-    # BUG-023: a written-but-unresolvable annotation must raise, not silently
+    # a written-but-unresolvable annotation must raise, not silently
     # downgrade to ``str``.
     monkeypatch.setattr(
         "kedi.lang.compiler.type_system.KediType.resolve",
@@ -351,7 +351,7 @@ def test_prompt_loader_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     loader = OptimizedPromptLoader(source)
 
     assert loader.load_optimized_prompts() == {}
-    # Invalid optimized JSON must fail loud, not silently degrade to {} (BUG-014).
+    # Invalid optimized JSON must fail loud, not silently degrade to {}.
     loader.optimized_path.write_text("{bad json", encoding="utf-8")
     with pytest.raises(ValueError, match="Invalid optimized prompt file"):
         loader.load_optimized_prompts()

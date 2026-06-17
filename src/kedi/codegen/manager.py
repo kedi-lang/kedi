@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..errors import KediValueExecutionError
 from ..lang.ast import Program
 from ..lang.parser import parse_program
 from ..reporter import CliReporter, Reporter
@@ -55,13 +56,12 @@ class CodegenManager:
         cache = self.cache_path_for(source_path)
         start, end = self._block_markers(proc_name)
         body = tests.strip() + "\n\n" + impl.strip()
-        # Generated code must not itself emit a cache marker line, or the per-procedure
-        # split would be corrupted. Fail loud rather than silently mangle the cache.
+        # A generated marker line would corrupt the per-procedure split; fail loud.
         if any(
             line.strip().startswith(("# >>> kedi-codegen:", "# <<< kedi-codegen:"))
             for line in body.splitlines()
         ):
-            raise ValueError(
+            raise KediValueExecutionError(
                 f"Generated code for {proc_name!r} contains a reserved kedi-codegen "
                 "cache marker line; refusing to write a corruptible cache."
             )

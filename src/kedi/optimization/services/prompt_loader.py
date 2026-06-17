@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ...errors import KediValueExecutionError
 from ...lang.ast import Program, TemplateLine
 from ..utils import normalize_optimized_prompt_prefix
 
@@ -55,7 +56,9 @@ class OptimizedPromptLoader:
             with open(self.optimized_path, encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError) as e:
-            raise ValueError(f"Invalid optimized prompt file {self.optimized_path}: {e}")
+            raise KediValueExecutionError(
+                f"Invalid optimized prompt file {self.optimized_path}: {e}"
+            )
 
     def inject_optimized_prompts(self, program: Program) -> None:
         """Inject optimized prompts into program's optimize spans.

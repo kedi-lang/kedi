@@ -23,14 +23,11 @@ def as_resolved_kedi_type(value: object) -> ResolvedKediType | None:
 
 
 def runtime_isinstance(value: object, expected: ResolvedKediType) -> bool:
-    # Bare class (no generic args) -> plain isinstance. A parameterized generic
-    # like ``list[str]`` (a ``types.GenericAlias``) can satisfy ``isinstance(.., type)``
-    # on CPython, so route it to the generic check below via its ``__origin__``.
+    # Bare class -> isinstance. A parameterized generic (GenericAlias) can pass
+    # isinstance(.., type) on CPython, so route it below via __origin__.
     if isinstance(expected, type) and getattr(expected, "__origin__", None) is None:
         return isinstance(value, expected)
-    # Generic/parameterized types (e.g. ``list[str]``): validate the generic
-    # arguments too, strictly. Fail closed — unsupported, mistyped, or
-    # would-need-coercion values are rejected rather than silently accepted.
+    # Validate generic args strictly; fail closed on mistyped/uncoercible values.
     try:
         TypeAdapter(expected).validate_python(value, strict=True)
         return True

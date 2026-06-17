@@ -53,7 +53,7 @@ class TypeResolver:
 
             # A written-but-unresolvable annotation raises instead of being
             # silently omitted, so optimizer signatures cannot diverge from
-            # the source program (BUG-023).
+            # the source program.
             resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
             stored_type = as_resolved_kedi_type(resolved_type)
             # resolve_required only returns a valid resolved type (else it raises),
@@ -89,7 +89,7 @@ class TypeResolver:
 
             # A written-but-unresolvable annotation raises instead of silently
             # downgrading to str, so optimizer signatures cannot diverge from
-            # the source program (BUG-023).
+            # the source program.
             resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
             stored_type = as_resolved_kedi_type(resolved_type)
             output_types[field_name] = stored_type if stored_type is not None else str

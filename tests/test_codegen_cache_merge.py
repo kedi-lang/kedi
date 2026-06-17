@@ -1,4 +1,4 @@
-"""BUG-011: codegen cache must merge by procedure identity, not clobber.
+"""codegen cache must merge by procedure identity, not clobber.
 
 Writing the cache for a second procedure must preserve the block generated
 for an earlier procedure in the same ``.cache.kedi`` file.

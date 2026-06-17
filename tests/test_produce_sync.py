@@ -18,7 +18,7 @@ def test_run_sync_without_running_loop() -> None:
 
 
 def test_run_sync_inside_running_loop_returns_cleanly() -> None:
-    """BUG-019: a sync produce boundary must work inside a running loop."""
+    """a sync produce boundary must work inside a running loop."""
 
     async def driver() -> str:
         return run_sync(_echo("nested"))

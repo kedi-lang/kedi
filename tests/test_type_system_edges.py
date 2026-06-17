@@ -106,7 +106,7 @@ def test_kedi_type_adapter_and_legacy_resolution_edges(
     assert KediType("missing_name_for_type_resolution").get_adapter(rt, {}) is None
     # No annotation -> validate returns the value unchanged.
     assert KediType(None).validate(rt, {}, "value") == "value"
-    # Written-but-unresolvable annotation -> validate raises (BUG-001/002/004).
+    # Written-but-unresolvable annotation -> validate raises.
     with pytest.raises(TypeError, match="Unknown type annotation"):
         KediType("missing_name_for_type_resolution").validate(rt, {}, "value")
     # resolve_required mirrors that distinction directly.

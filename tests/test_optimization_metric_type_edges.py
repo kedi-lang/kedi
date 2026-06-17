@@ -56,7 +56,7 @@ def test_type_handler_schema_and_signature_edges(
     assert schema["count"] is int
     assert getattr(schema["items"], "__origin__", None) is list
 
-    # A written-but-unresolvable annotation fails loud (BUG-023).
+    # A written-but-unresolvable annotation fails loud.
     with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
         handler.build_output_schema([("missing", "MissingType")])
 

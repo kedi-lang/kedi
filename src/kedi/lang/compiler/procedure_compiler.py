@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from typing import Any, Callable
 
 from ...core import KediRuntime
+from ...errors import KediTypeExecutionError
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import ScopedDict, build_python_env
@@ -96,20 +97,20 @@ class ProcedureCompiler:
             )
 
             if param_name not in kwargs:
-                raise TypeError(f"Missing parameter: {param_name}")
+                raise KediTypeExecutionError(f"Missing parameter: {param_name}")
 
             provided = kwargs[param_name]
 
-            # Untyped params default to ``str``: a str argument passes as-is, a
-            # native non-str (e.g. ``show(`1`)``) raises — no implicit coercion.
+            # Untyped params are str: a str arg passes, a native non-str raises.
             if kedi_type.is_none():
                 kedi_type = KediType(TypeRef(name="str"))
 
-            # Strict validation for parameters using TypeAdapter
             try:
                 validated = kedi_type.validate(self.rt, None, provided)
             except Exception:
-                raise TypeError(f"Parameter '{param_name}' does not match annotated type")
+                raise KediTypeExecutionError(
+                    f"Parameter '{param_name}' does not match annotated type"
+                )
             kwargs[param_name] = validated
 
     def _enforce_return_type(
@@ -119,23 +120,19 @@ class ProcedureCompiler:
         kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
 
         if kedi_type.is_none():
-            # Default to str: non-string native returns are illegal
+            # Untyped return is str; a non-string native return is illegal.
             if last_return is not None and not isinstance(last_return, str):
-                raise TypeError("Return value must be str; annotate function to return non-string")
+                raise KediTypeExecutionError(
+                    "Return value must be str; annotate function to return non-string"
+                )
             return "" if last_return is None else str(last_return)
 
-        # Annotated return: a written-but-unresolvable annotation raises a precise
-        # "Unknown type annotation X" error rather than the generic mismatch below.
+        # Raise a precise "Unknown type annotation X" before validating the value.
         kedi_type.resolve_required(self.rt, env)
-
-        # Annotated return: strict validate and return validated value. The
-        # unresolvable-annotation case already raised above, so any failure here is
-        # a genuine value/type mismatch.
         try:
-            # Do not allow string literal coercion for returns
             return kedi_type.validate(self.rt, env, last_return)
         except Exception:
-            raise TypeError("Return value does not match annotated type")
+            raise KediTypeExecutionError("Return value does not match annotated type")
 
     @contextmanager
     def _nested_procedure_scope(self, proc: ProcedureDef, closure_env: dict):

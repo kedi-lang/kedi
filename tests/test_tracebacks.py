@@ -79,7 +79,7 @@ def test_traceback_uses_source_map_path_when_span_has_no_path(tmp_path: Path) ->
         last_filename = trace.tb_frame.f_code.co_filename
         trace = trace.tb_next
 
-    # BUG-010: each embedded Python snippet gets a UNIQUE virtual co_filename for
+    # each embedded Python snippet gets a UNIQUE virtual co_filename for
     # traceback identity; the real source path is preserved on the python trace span
     # (used for rendering), not on the raw Python frame.
     assert last_filename is not None and last_filename.startswith("<kedi-python:")

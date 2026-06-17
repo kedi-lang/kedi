@@ -7,7 +7,7 @@ from kedi.lang.compiler import compile_program
 
 
 def test_toplevel_templateline_is_rejected() -> None:
-    """BUG-025: an impossible top-level TemplateLine must not be a silent no-op."""
+    """an impossible top-level TemplateLine must not be a silent no-op."""
     prog = Program(
         toplevel_body=[TemplateLine(segments=[TextSegment(text="ignored")])],
         toplevel_return=ReturnStmt(segments=[TextSegment(text="done")]),

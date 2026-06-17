@@ -50,7 +50,7 @@ class StructuredTypeHandler:
                 continue
 
             # A written-but-unresolvable annotation raises instead of silently
-            # downgrading to str (BUG-023).
+            # downgrading to str.
             resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
             stored_type = as_resolved_kedi_type(resolved_type)
             output_schema[field_name] = stored_type if stored_type is not None else str

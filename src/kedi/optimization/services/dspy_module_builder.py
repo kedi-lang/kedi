@@ -142,6 +142,6 @@ class DSPyModuleBuilder:
 
         # An annotation is present here (the caller only resolves typed fields);
         # a written-but-unresolvable annotation raises rather than silently
-        # falling back to str (BUG-023).
+        # falling back to str.
         resolved_type = KediType(type_anno).resolve_required(self.type_handler.runtime, None)
         return resolved_type if resolved_type is not None else str

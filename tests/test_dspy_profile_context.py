@@ -54,7 +54,7 @@ def _record_dspy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Any]]:
 def test_plain_produce_runs_inside_default_lm_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """BUG-020: the produce path is authoritative via ``dspy.context``."""
+    """the produce path is authoritative via ``dspy.context``."""
     with _record_dspy(monkeypatch) as contexts:
         adapter = DSPyAdapter(model="openai/gpt-4o-mini")
         adapter.produce_sync("prompt", {"answer": str})
@@ -68,7 +68,7 @@ def test_plain_produce_runs_inside_default_lm_context(
 def test_active_profile_context_is_not_overridden_by_produce_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """BUG-020: an active profile override must win; produce adds no default."""
+    """an active profile override must win; produce adds no default."""
     with _record_dspy(monkeypatch) as contexts:
         adapter = DSPyAdapter(model="openai/gpt-4o-mini")
         with adapter.profile_override(AgentProfile(model="anthropic/claude")):

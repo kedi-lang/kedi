@@ -1,8 +1,7 @@
-"""Phase B regression tests for inline-Python scoping and the Python origin map.
+"""Inline-Python scoping and the Python origin map.
 
-Covers BUG-017 (inline statement mutations not synced), BUG-018 (empty Python
-block raising IndentationError), and BUG-010 (Python origin map overwriting
-snippets that share the same .kedi file).
+Existing Kedi vars mutate back, new Python names don't leak, empty blocks are
+no-ops, and each embedded snippet maps to its own line in tracebacks.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from kedi.lang import compile_program, parse_program
 
 
 def test_inline_statement_mutates_existing_kedi_var() -> None:
-    # BUG-017: an inline statement that mutates an existing Kedi var must sync back.
+    # an inline statement that mutates an existing Kedi var must sync back.
     executor = DefaultExecutor()
     rt = KediRuntime()
 
@@ -40,7 +39,7 @@ def test_inline_statement_does_not_leak_new_python_names() -> None:
 
 
 def test_empty_python_block_runs_as_noop() -> None:
-    # BUG-018: an empty block must compile to a no-op rather than raising.
+    # an empty block must compile to a no-op rather than raising.
     executor = DefaultExecutor()
     rt = KediRuntime()
 
@@ -87,7 +86,7 @@ def test_block_mutation_syncs_runtime_env() -> None:
 
 
 def test_python_trace_maps_to_first_snippet_in_same_file(tmp_path: Path) -> None:
-    # BUG-010: the first embedded snippet raising must map to its own line, not a later snippet's.
+    # the first embedded snippet raising must map to its own line, not a later snippet's.
     srcp = tmp_path / "two_snippets.kedi"
     srcp.write_text(
         "@boom() -> str:\n  = <`1 / 0`>\n  = <`2 + 2`>\n\n= <boom()>\n",

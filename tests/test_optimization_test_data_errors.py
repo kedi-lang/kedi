@@ -1,4 +1,4 @@
-"""BUG-015: optimization test_data load errors must fail the run.
+"""optimization test_data load errors must fail the run.
 
 ``load_test_data`` returns None for an absent dataset but raises RuntimeError
 on a real load failure. ``run_optimization_cli`` must let that surface as a

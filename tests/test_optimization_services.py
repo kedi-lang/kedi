@@ -329,7 +329,7 @@ def test_type_resolver_no_annotations():
 def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
     # No-annotation params/outputs keep their defaults; resolvable annotations
     # resolve. A written-but-unresolvable annotation (``MissingType``) now
-    # raises instead of silently being omitted/downgraded (BUG-023).
+    # raises instead of silently being omitted/downgraded.
     src = """
 @test(items: list[int], raw) -> str:
   = ok
@@ -371,7 +371,7 @@ def test_type_resolver_unresolvable_annotations_raise(monkeypatch):
     assert resolver.resolve_param_types(ProcedureDef("plain", ["x"])) == {}
 
     # A resolution that returns None for a written annotation now raises
-    # rather than silently omitting/downgrading (BUG-023).
+    # rather than silently omitting/downgrading.
     monkeypatch.setattr(
         "kedi.optimization.services.type_resolver.KediType.resolve",
         lambda self, runtime, env: None,

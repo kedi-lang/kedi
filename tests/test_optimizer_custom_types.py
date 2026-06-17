@@ -48,7 +48,7 @@ class Result(BaseModel):
 
 
 def test_unresolvable_param_type_raises():
-    """A written-but-unresolvable param annotation must fail loud (BUG-023)."""
+    """A written-but-unresolvable param annotation must fail loud."""
     import pytest
 
     src = """
