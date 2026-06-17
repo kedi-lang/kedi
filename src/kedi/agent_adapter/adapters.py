@@ -18,6 +18,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
 from ..agent_profile import AgentProfile
+from ..agent_profile.settings import dspy_lm_settings, pydantic_model_settings
 from ..dynamic_models import build_dynamic_model
 from ..effort import pydantic_effort_value
 from ..model_normalization import normalize_for_litellm, normalize_for_pydantic_ai
@@ -45,12 +46,22 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     Adapter to use Pydantic AI agents.
     """
 
-    def __init__(self, model: str | Model | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        model: str | Model | None = None,
+        *,
+        model_settings: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
         self._tool_scope = ToolScope()
         self._profile_stack: list[AgentProfile] = []
         if isinstance(model, str):
             model = normalize_for_pydantic_ai(model) if model is not None else None
+        if model_settings:
+            filtered_settings = pydantic_model_settings(model_settings)
+            if filtered_settings:
+                kwargs["model_settings"] = filtered_settings
         super().__init__(model, **kwargs)
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -111,6 +122,13 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if output_schema:
             output_type = self.type_builder(output_schema)
         run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        model_settings = pydantic_model_settings(self.active_profile.settings)
+        if model_settings:
+            existing_settings = run_kwargs.get("model_settings")
+            if isinstance(existing_settings, dict):
+                run_kwargs["model_settings"] = {**existing_settings, **model_settings}
+            else:
+                run_kwargs["model_settings"] = model_settings
         toolsets = self._toolsets_for_run()
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
@@ -222,6 +240,7 @@ class DSPyAdapter:
         max_tokens: int = 4000,
         temperature: float = 1.0,
         provider: dspy.Provider | None = None,
+        model_settings: dict[str, Any] | None = None,
         **kwargs,
     ):
         model = normalize_for_litellm(model)
@@ -229,6 +248,7 @@ class DSPyAdapter:
         self._lm_provider = provider
         self._lm_max_tokens = max_tokens
         self._lm_temperature = temperature
+        self._lm_settings = dspy_lm_settings(model_settings or {})
         self._lm_extra_kwargs = dict(kwargs)
         self._tool_scope = ToolScope()
         self._profile_stack: list[AgentProfile] = []
@@ -238,14 +258,25 @@ class DSPyAdapter:
         dspy.settings.configure(lm=self._default_lm())
 
     def _default_lm(self) -> LM:
-        return LM(
-            model=self._lm_model,
-            provider=self._lm_provider,
-            max_tokens=self._lm_max_tokens,
-            temperature=self._lm_temperature,
-            cache=False,
-            **self._lm_extra_kwargs,
-        )
+        provider, kwargs = self._lm_kwargs()
+        return LM(model=self._lm_model, provider=provider, **kwargs)
+
+    def _lm_kwargs(
+        self,
+        profile_settings: dict[str, Any] | None = None,
+        *,
+        effort: str | None = None,
+    ) -> tuple[dspy.Provider | None, dict[str, Any]]:
+        kwargs = dict(getattr(self, "_lm_extra_kwargs", {}))
+        kwargs.update(getattr(self, "_lm_settings", {}))
+        kwargs.update(dspy_lm_settings(profile_settings or {}))
+        kwargs.setdefault("max_tokens", getattr(self, "_lm_max_tokens", 4000))
+        kwargs.setdefault("temperature", getattr(self, "_lm_temperature", 1.0))
+        kwargs.setdefault("cache", False)
+        if effort is not None:
+            kwargs["reasoning_effort"] = effort
+        provider = cast(dspy.Provider | None, kwargs.pop("provider", self._lm_provider))
+        return provider, kwargs
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
         return self._tool_scope.tool_scope(tools)
@@ -391,7 +422,7 @@ class DSPyAdapter:
             self._profile_stack = stack
         stack.append(profile)
         try:
-            if not needs_model_override and profile.effort is None:
+            if not needs_model_override and profile.effort is None and not profile.settings:
                 yield
                 return
             model = self._lm_model
@@ -399,15 +430,10 @@ class DSPyAdapter:
                 if profile.model is None:
                     raise RuntimeError("Profile requires a model override but no model is set.")
                 model = normalize_for_litellm(profile.model)
-            lm_kwargs = dict(self._lm_extra_kwargs)
-            if profile.effort is not None:
-                lm_kwargs["reasoning_effort"] = profile.effort
+            provider, lm_kwargs = self._lm_kwargs(dict(profile.settings), effort=profile.effort)
             lm = LM(
                 model=model,
-                provider=self._lm_provider,
-                max_tokens=self._lm_max_tokens,
-                temperature=self._lm_temperature,
-                cache=False,
+                provider=provider,
                 **lm_kwargs,
             )
             with dspy.context(lm=lm):

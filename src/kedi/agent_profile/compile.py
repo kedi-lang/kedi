@@ -8,6 +8,7 @@ from .registry import (
     ProfileEffortMember,
     ProfileMcpMember,
     ProfileModelMember,
+    ProfileSettingsMember,
     ProfileSystemMember,
     ProfileToolMember,
 )
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
         ProfileEffortEntry,
         ProfileMcpEntry,
         ProfileModelEntry,
+        ProfileSettingsEntry,
         ProfileSystemEntry,
         Program,
     )
@@ -31,6 +33,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
+        | ProfileSettingsMember
     ] = []
     for entry in stmt.model_members:
         members.append(_model_entry_to_member(entry))
@@ -40,6 +43,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_system_entry_to_member(entry))
     for entry in stmt.mcp_members:
         members.append(_mcp_entry_to_member(entry))
+    for entry in stmt.settings_members:
+        members.append(_settings_entry_to_member(entry))
     if stmt.tool_names:
         members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
     return ProfileDefinition(name=stmt.name, members=members)
@@ -71,6 +76,10 @@ def _mcp_entry_to_member(entry: ProfileMcpEntry) -> ProfileMcpMember:
     return ProfileMcpMember(fields=tuple(entry.fields))
 
 
+def _settings_entry_to_member(entry: ProfileSettingsEntry) -> ProfileSettingsMember:
+    return ProfileSettingsMember(fields=tuple(entry.fields))
+
+
 def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
     return {name: profile_stmt_to_definition(stmt) for name, stmt in prog.profile_defs.items()}
 
@@ -95,6 +104,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         EffortDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
+        SettingsDirectiveStmt,
         ProcedureDef,
         SystemDirectiveStmt,
         UseDirectiveStmt,
@@ -104,6 +114,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_effort_directive,
         eval_mcp_directive,
         eval_model_directive,
+        eval_settings_directive,
         eval_system_directive,
     )
     from .tools import eval_use_directive
@@ -125,6 +136,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, McpDirectiveStmt):
             active = active.merge(eval_mcp_directive(rt, item, env))
+        elif isinstance(item, SettingsDirectiveStmt):
+            active = active.merge(eval_settings_directive(rt, item, env))
         elif isinstance(item, UseDirectiveStmt):
             active = active.merge(
                 eval_use_directive(

@@ -638,6 +638,9 @@ procedures as agent tools.
 > profile: fast:
     > model: groq:qwen/qwen3-32b
     > effort: minimal
+    > settings:
+        temperature: 0.2
+        max_tokens: 1024
     > system:
         Prefer short direct answers.
         Adapt examples for <audience>.
@@ -645,6 +648,9 @@ procedures as agent tools.
     > model: openrouter/google/gemini-3-flash-preview
     > effort: high
     > system: Be precise and cite the relevant tool output.
+    > settings:
+        parallel_tool_calls: true
+        num_retries: 2
     > mcp:
         command: vsh
         args: `["run", "--mcp"]`
@@ -659,13 +665,20 @@ procedures as agent tools.
   DSPy receives the value directly as `reasoning_effort`.
 - `> system: text` — set active agent instructions for subsequent procedure
   captures and prompt calls.
+- `> settings:` — set active model configuration for subsequent procedure
+  captures and prompt calls. Values are `name: value` lines; plain values are
+  parsed as simple scalars (`true`, `false`, numbers, `null`) and backtick
+  expressions are evaluated as Python for complex values. Kedi keeps the merged
+  settings in the active profile, then filters them at adapter boundaries:
+  Pydantic AI receives only supported `ModelSettings` keys, and DSPy receives
+  only supported `dspy.LM` kwargs. Unknown setting names are parser/LSP errors.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> model:`,
-  `> effort:`, `> system:`, `> mcp:`, and/or `> use:` members.
+  `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.

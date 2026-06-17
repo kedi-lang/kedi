@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from kedi.lang.ast import McpField
+    from kedi.lang.ast import SettingsField
     from kedi.lang.ast import TemplateLine
 
 
@@ -43,6 +44,12 @@ class ProfileMcpMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileSettingsMember:
+    kind: Literal["settings"] = "settings"
+    fields: tuple["SettingsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
     members: list[
@@ -51,4 +58,5 @@ class ProfileDefinition:
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
+        | ProfileSettingsMember
     ] = field(default_factory=list)

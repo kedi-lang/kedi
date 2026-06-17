@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any
 
 from ..effort import EffortValue
 from .mcp import McpServerSpec
@@ -13,6 +15,7 @@ class AgentProfile:
     model: str | None = None
     effort: EffortValue | None = None
     system: str | None = None
+    settings: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerSpec, ...] = ()
 
@@ -28,6 +31,8 @@ class AgentProfile:
             updates["effort"] = other.effort
         if other.system is not None:
             updates["system"] = other.system
+        if other.settings:
+            updates["settings"] = {**(self.settings or {}), **other.settings}
         if other.tools:
             updates["tools"] = _merge_tool_names(self.tools, other.tools)
         if other.mcp_servers:
@@ -37,7 +42,7 @@ class AgentProfile:
         return replace(self, **updates)
 
     def frozen_copy(self) -> AgentProfile:
-        return replace(self)
+        return replace(self, settings=dict(self.settings or {}))
 
     def needs_model_override(self, adapter_default: str | None) -> bool:
         if self.model is None:
@@ -50,6 +55,7 @@ class AgentProfile:
         return (
             self.effort is not None
             or bool(self.mcp_servers)
+            or bool(self.settings)
             or self.needs_model_override(adapter_default)
         )
 

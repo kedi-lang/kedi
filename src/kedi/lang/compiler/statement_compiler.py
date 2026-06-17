@@ -11,6 +11,7 @@ from ...agent_profile.model import (
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_settings_directive,
     eval_system_directive,
 )
 from ...agent_profile.tools import eval_use_directive
@@ -25,6 +26,7 @@ from ..ast import (
     PythonBlock,
     ReturnBlockStmt,
     ReturnStmt,
+    SettingsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
     TemplateBlock,
@@ -247,6 +249,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, McpDirectiveStmt):
                     active = active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, SettingsDirectiveStmt):
+                    active = active.merge(eval_settings_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, UseDirectiveStmt):
                     active = active.merge(

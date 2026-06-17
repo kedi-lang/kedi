@@ -11,6 +11,7 @@ from ...agent_profile.model import (
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_settings_directive,
     eval_system_directive,
 )
 from ...agent_profile.registry import ProfileDefinition
@@ -28,6 +29,7 @@ from ..ast import (
     ProfileDefStmt,
     Program,
     ReturnStmt,
+    SettingsDirectiveStmt,
     SystemDirectiveStmt,
     TemplateLine,
     UseDirectiveStmt,
@@ -350,6 +352,9 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, McpDirectiveStmt):
                         active = active.merge(eval_mcp_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, SettingsDirectiveStmt):
+                        active = active.merge(eval_settings_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, UseDirectiveStmt):
                         active = active.merge(

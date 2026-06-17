@@ -11,6 +11,7 @@ from kedi.lang.ast import (
     InputSegment,
     ProfileDefStmt,
     ProfileModelEntry,
+    ProfileSettingsEntry,
     ProfileSystemEntry,
     Span,
     TemplateLine,
@@ -32,6 +33,8 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
         "    > system: Keep answers short.\n"
         "    > mcp:\n"
         "        command: fs-mcp\n"
+        "    > settings:\n"
+        "        temperature: 0.2\n"
         "> use: light\n"
     )
     tokens = features.compute_semantic_tokens_full(src, "/tmp/profile.kedi")
@@ -56,7 +59,10 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 8 and token_type == property_type for line, _, _, token_type, _ in decoded)
     assert any(line == 8 and token_type == string_type for line, _, _, token_type, _ in decoded)
     assert any(line == 9 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 9 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 10 and token_type == property_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 10 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 11 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 11 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
 def test_hover_on_model_profile_and_use_directives() -> None:
@@ -64,6 +70,8 @@ def test_hover_on_model_profile_and_use_directives() -> None:
 > model: haiku
 > effort: low
 > system: Be concise.
+> settings:
+    parallel_tool_calls: true
 > system: Be <tone>.
 > profile: light:
     > model: opus
@@ -73,6 +81,9 @@ def test_hover_on_model_profile_and_use_directives() -> None:
         command: profile-mcp
     > system:
         Prefer <tone> answers.
+    > settings:
+        temperature: 0.2
+        num_retries: 2
 > mcp:
     transport: stdio
     command: vsh
@@ -86,11 +97,22 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
     assert "> effort:" in hover_text_at(src, "profile.kedi", "effort", occurrence=1)
     assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
+    assert "> settings:" in hover_text_at(src, "profile.kedi", "settings", occurrence=1)
+    assert "Pydantic AI `ModelSettings` only" in hover_text_at(
+        src, "profile.kedi", "parallel_tool_calls"
+    )
     assert "Input segment" in hover_text_at(src, "profile.kedi", "tone", occurrence=1)
     assert "Keep answers short." in hover_text_at(src, "profile.kedi", "Keep")
     assert "reusable profile MCP" in hover_text_at(src, "profile.kedi", "mcp", occurrence=1)
     assert "Command used" in hover_text_at(src, "profile.kedi", "profile-mcp")
     assert "Text segment" in hover_text_at(src, "profile.kedi", "Prefer")
+    assert "reusable profile model configuration" in hover_text_at(
+        src, "profile.kedi", "settings", occurrence=2
+    )
+    assert "Pydantic AI `ModelSettings` and DSPy `LM`" in hover_text_at(
+        src, "profile.kedi", "temperature"
+    )
+    assert "DSPy `LM` only" in hover_text_at(src, "profile.kedi", "num_retries")
     assert "> mcp:" in hover_text_at(src, "profile.kedi", "mcp", occurrence=3)
     assert "MCP field" in hover_text_at(src, "profile.kedi", "transport")
     assert "stdio" in hover_text_at(src, "profile.kedi", "stdio")
@@ -100,6 +122,18 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "haiku" in hover_text_at(src, "profile.kedi", "haiku")
     assert "Agent profile" in hover_text_at(src, "profile.kedi", "light", occurrence=1)
     assert "> use:" in hover_text_at(src, "profile.kedi", "light", occurrence=2)
+
+
+def test_hover_on_backtick_setting_and_settings_helpers() -> None:
+    src = '> settings:\n    stop_sequences: `["END"]`\n'
+
+    assert '`["END"]`' in hover_text_at(src, "profile.kedi", "stop_sequences")
+    assert "no adapter; valid keys are" in features._setting_adapter_label("imaginary")
+    profile = ProfileDefStmt(
+        name="empty_settings",
+        settings_members=[ProfileSettingsEntry(fields=[])],
+    )
+    assert "(no settings members)" in features._profile_signature_markdown(profile)
 
 
 def test_profile_docstring_replaces_default_profile_hover() -> None:

@@ -10,10 +10,12 @@ from .registry import (
     ProfileEffortMember,
     ProfileMcpMember,
     ProfileModelMember,
+    ProfileSettingsMember,
     ProfileSystemMember,
     ProfileToolMember,
 )
 from .mcp import McpServerSpec, mcp_spec_from_mapping
+from .settings import parse_plain_setting_value
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
@@ -23,6 +25,8 @@ if TYPE_CHECKING:
         McpDirectiveStmt,
         McpField,
         SystemDirectiveStmt,
+        SettingsDirectiveStmt,
+        SettingsField,
         TemplateLine,
         UseDirectiveStmt,
     )
@@ -162,13 +166,36 @@ def eval_mcp_directive(
     return AgentProfile(mcp_servers=(eval_mcp_fields(rt, stmt.fields, env),))
 
 
+def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
+    if field.backtick_code is not None:
+        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+    if field.plain_value is not None:
+        return parse_plain_setting_value(field.plain_value)
+    return None
+
+
+def eval_settings_fields(
+    rt: KediRuntime, fields: list[SettingsField] | tuple[SettingsField, ...], env: dict[str, Any]
+) -> dict[str, Any]:
+    return {field.name: eval_settings_field_value(rt, field, env) for field in fields}
+
+
+def eval_settings_directive(
+    rt: KediRuntime,
+    stmt: SettingsDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return AgentProfile(settings=eval_settings_fields(rt, stmt.fields, env))
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: ProfileModelMember
     | ProfileEffortMember
     | ProfileSystemMember
     | ProfileToolMember
-    | ProfileMcpMember,
+    | ProfileMcpMember
+    | ProfileSettingsMember,
     env: dict[str, Any],
 ) -> AgentProfile:
     if member.kind == "model":
@@ -201,6 +228,8 @@ def _member_to_patch(
         return AgentProfile(tools=member.tool_names)
     if member.kind == "mcp":
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
+    if member.kind == "settings":
+        return AgentProfile(settings=eval_settings_fields(rt, member.fields, env))
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")
 
 

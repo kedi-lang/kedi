@@ -4,8 +4,10 @@ import pytest
 from typing import Any, cast
 
 from kedi.agent_profile import AgentProfile
-from kedi.agent_profile.model import eval_mcp_field_value
+from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
+from kedi.agent_profile.settings import parse_plain_setting_value
+from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     EffortDirectiveStmt,
@@ -13,6 +15,8 @@ from kedi.lang.ast import (
     ModelDirectiveStmt,
     ProcedureDef,
     ProfileDefStmt,
+    SettingsDirectiveStmt,
+    SettingsField,
     SystemDirectiveStmt,
     UseDirectiveStmt,
 )
@@ -87,6 +91,38 @@ def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:
     assert isinstance(prog.procedures[0].body[0], McpDirectiveStmt)
 
 
+def test_parse_settings_directives_top_level_profile_and_procedure() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+    max_tokens: 128
+    stop_sequences: `["END"]`
+
+> profile: precise:
+    > settings:
+        parallel_tool_calls: false
+
+@foo():
+    > settings:
+        num_retries: 1
+    >> value [x]
+"""
+    prog = parse_program(src)
+
+    assert isinstance(prog.ordered_toplevel[0], SettingsDirectiveStmt)
+    assert [(field.name, field.plain_value) for field in prog.ordered_toplevel[0].fields] == [
+        ("temperature", "0.2"),
+        ("max_tokens", "128"),
+        ("stop_sequences", None),
+    ]
+    assert prog.ordered_toplevel[0].fields[2].backtick_code == '["END"]'
+    profile = prog.profile_defs["precise"]
+    assert profile.settings_members[0].fields[0].name == "parallel_tool_calls"
+    assert profile.settings_members[0].fields[0].plain_value == "false"
+    assert isinstance(prog.procedures[0].body[0], SettingsDirectiveStmt)
+    assert prog.procedures[0].body[0].fields[0].name == "num_retries"
+
+
 def test_mcp_profile_capture_uses_runtime_globals() -> None:
     src = """
 > profile: dynamic:
@@ -157,6 +193,24 @@ def test_mcp_field_without_value_evaluates_to_none() -> None:
     from kedi.lang.ast import McpField
 
     assert eval_mcp_field_value(cast(Any, None), McpField(name="env"), {}) is None
+
+
+def test_settings_field_value_and_plain_scalar_parsing() -> None:
+    rt = KediRuntime()
+
+    assert parse_plain_setting_value("true") is True
+    assert parse_plain_setting_value("null") is None
+    assert parse_plain_setting_value("'literal'") == "literal"
+    assert parse_plain_setting_value("plain-value") == "plain-value"
+    assert (
+        eval_settings_field_value(
+            rt,
+            SettingsField(name="temperature", backtick_code="answer / 100"),
+            {"answer": 42},
+        )
+        == 0.42
+    )
+    assert eval_settings_field_value(cast(Any, None), SettingsField(name="temperature"), {}) is None
 
 
 def test_mcp_spec_validation() -> None:
@@ -298,6 +352,28 @@ def test_procedure_capture_uses_source_order_effort() -> None:
     bar_def = _procedure_def(rt._procedures["bar"])
     assert foo_def.captured_agent_profile.effort == "low"
     assert bar_def.captured_agent_profile.effort == "high"
+
+
+def test_procedure_capture_uses_source_order_settings() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+@foo():
+    >> value [x]
+> settings:
+    max_tokens: 128
+@bar():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    bar_def = _procedure_def(rt._procedures["bar"])
+    assert foo_def.captured_agent_profile.settings == {"temperature": 0.2}
+    assert bar_def.captured_agent_profile.settings == {
+        "temperature": 0.2,
+        "max_tokens": 128,
+    }
 
 
 def test_runtime_globals_are_available_during_profile_capture() -> None:
@@ -462,6 +538,27 @@ def test_use_profile_applies_effort_at_capture_time() -> None:
     assert adapter.effort_calls == ["max"]
 
 
+def test_use_profile_applies_settings_at_capture_time() -> None:
+    src = """
+> profile: dynamic:
+    > settings:
+        temperature: 0.3
+        parallel_tool_calls: false
+> use: dynamic
+@foo():
+    >> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    foo_def = _procedure_def(rt._procedures["foo"])
+    assert foo_def.captured_agent_profile.settings == {
+        "temperature": 0.3,
+        "parallel_tool_calls": False,
+    }
+    rt._invoke_procedure(rt._procedures["foo"], [])
+    assert adapter.settings_calls == [{"temperature": 0.3, "parallel_tool_calls": False}]
+
+
 def test_effort_applies_to_top_level_prompt() -> None:
     src = """
 > effort: medium
@@ -471,6 +568,28 @@ def test_effort_applies_to_top_level_prompt() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert adapter.effort_calls == ["medium"]
+
+
+def test_settings_applies_to_top_level_prompt_and_procedure_body() -> None:
+    src = """
+> settings:
+    temperature: 0.2
+>> first [x]
+
+@foo():
+    > settings:
+        max_tokens: 10
+    >> second [y]
+
+= <foo()>
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+    assert adapter.settings_calls == [
+        {"temperature": 0.2},
+        {"temperature": 0.2, "max_tokens": 10},
+    ]
 
 
 def test_backtick_effort_applies_in_profile_and_body() -> None:
@@ -509,12 +628,28 @@ def test_invalid_plain_effort_rejected_inside_profile() -> None:
     assert any(diag.code == "K-EFFORT-VALUE" for diag in exc_info.value.diagnostics)
 
 
+def test_invalid_model_setting_key_rejected() -> None:
+    with pytest.raises(KediParseError) as exc_info:
+        parse_program("> settings:\n    imaginary: 1\n")
+
+    assert any(diag.code == "K-SETTING-KEY" for diag in exc_info.value.diagnostics)
+
+
 def test_agent_profile_merge() -> None:
-    base = AgentProfile(model="a", effort="low", system="old")
-    merged = base.merge(AgentProfile(model="b", effort="high", system="new"))
+    base = AgentProfile(model="a", effort="low", system="old", settings={"temperature": 0.2})
+    merged = base.merge(
+        AgentProfile(
+            model="b",
+            effort="high",
+            system="new",
+            settings={"max_tokens": 100, "temperature": 0.5},
+        )
+    )
     assert merged.model == "b"
     assert merged.effort == "high"
     assert merged.system == "new"
+    assert merged.settings == {"temperature": 0.5, "max_tokens": 100}
     assert base.model == "a"
     assert base.effort == "low"
     assert base.system == "old"
+    assert base.settings == {"temperature": 0.2}

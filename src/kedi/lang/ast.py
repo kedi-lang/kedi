@@ -269,6 +269,19 @@ class McpDirectiveStmt(Stmt):
 
 
 @dataclass
+class SettingsField:
+    name: str = ""
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class SettingsDirectiveStmt(Stmt):
+    fields: List[SettingsField] = field(default_factory=list)
+
+
+@dataclass
 class UseDirectiveStmt(Stmt):
     target: str = ""
     tool_names: List[str] = field(default_factory=list)
@@ -292,6 +305,7 @@ class ProfileDefStmt(Stmt):
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
+    settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
@@ -322,6 +336,12 @@ class ProfileSystemEntry:
 @dataclass
 class ProfileMcpEntry:
     fields: List[McpField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileSettingsEntry:
+    fields: List[SettingsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

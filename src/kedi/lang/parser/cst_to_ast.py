@@ -35,6 +35,7 @@ from tree_sitter import Node, Tree
 
 from ...effort import EFFORT_VALUES, is_valid_effort
 from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
+from ...agent_profile.settings import MODEL_SETTING_KEYS, is_valid_model_setting_key
 from ...source_loading import CompositeSourceMap
 from ..ast import (
     AssignBlockStmt,
@@ -62,6 +63,7 @@ from ..ast import (
     ProfileEffortEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
+    ProfileSettingsEntry,
     ProfileSystemEntry,
     Program,
     ProgramWithValidation,
@@ -73,6 +75,8 @@ from ..ast import (
     Segment,
     Span,
     Stmt,
+    SettingsDirectiveStmt,
+    SettingsField,
     SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
@@ -276,6 +280,10 @@ class _Walker:
                 stmt = self._walk_mcp_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "settings_directive":
+                stmt = self._walk_settings_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "profile_directive":
                 stmt = self._walk_profile_directive(child)
                 if stmt.name in prog.profile_defs:
@@ -387,6 +395,16 @@ class _Walker:
             node,
             f"MCP transport must be one of: {expected}",
             code="K-MCP-TRANSPORT",
+        )
+
+    def _validate_setting_key(self, node: Node, name: str) -> None:
+        if is_valid_model_setting_key(name):
+            return
+        expected = ", ".join(sorted(MODEL_SETTING_KEYS))
+        self._error(
+            node,
+            f"model setting must be one of: {expected}",
+            code="K-SETTING-KEY",
         )
 
     def _validate_block_comments(self) -> None:
@@ -651,6 +669,8 @@ class _Walker:
             return self._walk_system_directive(node)
         if t == "mcp_directive":
             return self._walk_mcp_directive(node)
+        if t == "settings_directive":
+            return self._walk_settings_directive(node)
         if t == "use_directive":
             return self._walk_use_directive(node)
         if t == "profile_directive":
@@ -1295,6 +1315,35 @@ class _Walker:
             loc=self._span(node),
         )
 
+    def _walk_settings_directive(self, node: Node) -> SettingsDirectiveStmt:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[SettingsField] = []
+        for child in _named_children(body_node):
+            fields.append(self._walk_settings_field(child))
+        return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
+
+    def _walk_settings_field(self, node: Node) -> SettingsField:
+        name_node = _field(node, "name")
+        value_node = _field(node, "value")
+        assert name_node is not None
+        assert value_node is not None
+        name = _identifier_name(self.source, name_node)
+        self._validate_setting_key(name_node, name)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return SettingsField(
+                name=name,
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        return SettingsField(
+            name=name,
+            plain_value=_src_text(self.source, value_node).strip(),
+            loc=self._span(node),
+        )
+
     def _walk_use_directive(self, node: Node) -> UseDirectiveStmt:
         body_node = _field(node, "body")
         if body_node is not None:
@@ -1334,6 +1383,7 @@ class _Walker:
         effort_members: list[ProfileEffortEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
+        settings_members: list[ProfileSettingsEntry] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -1427,16 +1477,25 @@ class _Walker:
                     mcp_members.append(
                         ProfileMcpEntry(fields=mcp_stmt.fields, loc=self._span(child))
                     )
+                elif child.type == "settings_directive":
+                    settings_stmt = self._walk_settings_directive(child)
+                    settings_members.append(
+                        ProfileSettingsEntry(
+                            fields=settings_stmt.fields,
+                            loc=self._span(child),
+                        )
+                    )
         if (
             not members
             and not effort_members
             and not system_members
             and not mcp_members
+            and not settings_members
             and not tool_names
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -1445,6 +1504,7 @@ class _Walker:
             effort_members=effort_members,
             system_members=system_members,
             mcp_members=mcp_members,
+            settings_members=settings_members,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

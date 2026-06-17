@@ -40,14 +40,24 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     initialized_models: list[Any] = []
+    initialized_kwargs: list[dict[str, Any]] = []
 
-    def fake_agent_init(self: object, model: object = None, **_: Any) -> None:
+    def fake_agent_init(self: object, model: object = None, **kwargs: Any) -> None:
         initialized_models.append(model)
+        initialized_kwargs.append(kwargs)
 
     monkeypatch.setattr(adapters_module.Agent, "__init__", fake_agent_init)
 
     adapter = cast(Any, PydanticAdapter(model="openai/gpt-4o-mini"))
     PydanticAdapter(model=TestModel())
+    PydanticAdapter(
+        model="openai/gpt-4o-mini",
+        model_settings={"temperature": 0.1, "num_retries": 2},
+    )
+    PydanticAdapter(
+        model="openai/gpt-4o-mini",
+        model_settings={"num_retries": 2},
+    )
 
     async def fake_run(template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
         assert template == "template"
@@ -60,6 +70,8 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
 
     assert initialized_models[0] == "openai:gpt-4o-mini"
     assert isinstance(initialized_models[1], TestModel)
+    assert initialized_kwargs[2]["model_settings"] == {"temperature": 0.1}
+    assert "model_settings" not in initialized_kwargs[3]
 
     built = PydanticAdapter.type_builder({"answer": int})
     assert issubclass(built, BaseModel)
@@ -182,6 +194,62 @@ def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -
         )
 
 
+def test_pydantic_adapter_filters_active_profile_model_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._profile_stack = [
+        AgentProfile(
+            settings={
+                "temperature": 0.2,
+                "parallel_tool_calls": False,
+                "num_retries": 2,
+            }
+        )
+    ]
+    seen_kwargs: list[dict[str, Any]] = []
+
+    async def fake_run(template: str, **kwargs: Any) -> SimpleNamespace:
+        assert template == "template"
+        seen_kwargs.append(kwargs)
+        return SimpleNamespace(output=DirectOutput(value="ok"))
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+
+    assert asyncio.run(adapter.produce("template", output_type=DirectOutput)) == DirectOutput(
+        value="ok"
+    )
+    assert seen_kwargs == [
+        {
+            "output_type": DirectOutput,
+            "model_settings": {
+                "temperature": 0.2,
+                "parallel_tool_calls": False,
+            },
+        }
+    ]
+
+    seen_kwargs.clear()
+    assert asyncio.run(
+        adapter.produce(
+            "template",
+            output_type=DirectOutput,
+            model_settings={"seed": 1},
+        )
+    ) == DirectOutput(value="ok")
+    assert seen_kwargs == [
+        {
+            "output_type": DirectOutput,
+            "model_settings": {
+                "seed": 1,
+                "temperature": 0.2,
+                "parallel_tool_calls": False,
+            },
+        }
+    ]
+
+
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:
     adapter = object.__new__(PydanticAdapter)
     adapter._profile_stack = []
@@ -248,6 +316,32 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
 
     with pytest.raises(ValueError, match="Output schema must be provided"):
         DSPyAdapter.type_builder({})
+
+
+def test_dspy_adapter_filters_lm_settings() -> None:
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._lm_provider = None
+    adapter._lm_max_tokens = 4000
+    adapter._lm_temperature = 1.0
+    adapter._lm_extra_kwargs = {}
+    adapter._lm_settings = {"max_tokens": 64}
+
+    provider, kwargs = adapter._lm_kwargs(
+        {
+            "temperature": 0.2,
+            "num_retries": 2,
+            "parallel_tool_calls": False,
+        }
+    )
+
+    assert provider is None
+    assert kwargs == {
+        "max_tokens": 64,
+        "temperature": 0.2,
+        "cache": False,
+        "num_retries": 2,
+    }
 
 
 def test_dspy_adapter_produce_and_sync_use_predict(

@@ -108,6 +108,17 @@ def test_diagnostics_accept_streamable_http_mcp_transport() -> None:
     assert features.compute_diagnostics(src, "example.kedi") == []
 
 
+def test_diagnostics_report_invalid_model_setting_key() -> None:
+    src = "> settings:\n    imaginary: true\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-SETTING-KEY"
+    assert "model setting must be one of" in diag.message
+    assert diag.range.start.line == 1
+
+
 def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")

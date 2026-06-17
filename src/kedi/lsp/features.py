@@ -80,6 +80,7 @@ from ..lang.ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
+    ProfileSettingsEntry,
     ProfileSystemEntry,
     Program,
     ProgramWithValidation,
@@ -88,6 +89,8 @@ from ..lang.ast import (
     ReturnBlockStmt,
     ReturnStmt,
     Span,
+    SettingsDirectiveStmt,
+    SettingsField,
     SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
@@ -105,6 +108,11 @@ from ..lang.call_arg_access import iter_call_arg_nested
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
+from ..agent_profile.settings import (
+    DSPY_LM_SETTING_KEYS,
+    MODEL_SETTING_KEYS,
+    PYDANTIC_MODEL_SETTING_KEYS,
+)
 from ..module_registry import describe_module_search_paths, module_search_paths
 from .ast_helpers import assignment_name_span
 from .ast_spans import name_token_span
@@ -1270,6 +1278,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.mcp_members:
                 visit(member)
+            for member in node.settings_members:
+                visit(member)
             return
         if isinstance(node, SystemDirectiveStmt):
             for line in node.template_lines:
@@ -1279,7 +1289,15 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, SettingsDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, ProfileMcpEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileSettingsEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -1420,12 +1438,18 @@ def _describe_ast_node(node) -> Optional[str]:
         return _mcp_directive_markdown(node)
     if isinstance(node, McpField):
         return _mcp_field_markdown(node)
+    if isinstance(node, SettingsDirectiveStmt):
+        return _settings_directive_markdown(node)
+    if isinstance(node, SettingsField):
+        return _settings_field_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
         return _profile_mcp_entry_markdown(node)
+    if isinstance(node, ProfileSettingsEntry):
+        return _profile_settings_entry_markdown(node)
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)
     if isinstance(node, ProfileDefStmt):
@@ -1534,9 +1558,29 @@ def _mcp_field_markdown(field: McpField) -> str:
     return f"**MCP field** `{field.name}` = {value} — {desc}"
 
 
+def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in stmt.fields) or "`<empty>`"
+    return (
+        "**`> settings:`** — set active model configuration for subsequent "
+        "agent calls in this indentation block. Configured fields: "
+        f"{fields}."
+    )
+
+
+def _settings_field_markdown(field: SettingsField) -> str:
+    value = _settings_field_value_preview(field)
+    adapters = _setting_adapter_label(field.name)
+    return f"**Model setting** `{field.name}` = {value} — passed to {adapters}."
+
+
 def _profile_mcp_entry_markdown(entry: ProfileMcpEntry) -> str:
     fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
     return f"**`> mcp:`** — reusable profile MCP server configuration. Fields: {fields}."
+
+
+def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
+    return f"**`> settings:`** — reusable profile model configuration. Fields: {fields}."
 
 
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
@@ -1579,6 +1623,25 @@ def _mcp_field_value_preview(field: McpField) -> str:
     return f"`{field.plain_value or ''}`"
 
 
+def _settings_field_value_preview(field: SettingsField) -> str:
+    if field.backtick_code is not None:
+        return f"`{field.backtick_code}`"
+    return f"`{field.plain_value or ''}`"
+
+
+def _setting_adapter_label(name: str) -> str:
+    in_pydantic = name in PYDANTIC_MODEL_SETTING_KEYS
+    in_dspy = name in DSPY_LM_SETTING_KEYS
+    if in_pydantic and in_dspy:
+        return "Pydantic AI `ModelSettings` and DSPy `LM`"
+    if in_pydantic:
+        return "Pydantic AI `ModelSettings` only"
+    if in_dspy:
+        return "DSPy `LM` only"
+    expected = ", ".join(sorted(MODEL_SETTING_KEYS))
+    return f"no adapter; valid keys are {expected}"
+
+
 def _missing_agent_profile_hover(name: str, imported_surface: ImportedSurface) -> str:
     module_info = imported_surface.modules.get(name)
     if module_info is not None:
@@ -1619,6 +1682,12 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         if value != "``":
             system_parts.append(value)
     system_summary = ", ".join(system_parts) if system_parts else "(no system members)"
+    settings_parts: list[str] = []
+    for member in profile.settings_members:
+        fields = ", ".join(f"`{field.name}`" for field in member.fields)
+        if fields:
+            settings_parts.append(fields)
+    settings_summary = ", ".join(settings_parts) if settings_parts else "(no settings members)"
     tool_summary = (
         ", ".join(f"`{name}`" for name in profile.tool_names)
         if profile.tool_names
@@ -1629,6 +1698,7 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         f"Reusable agent settings. `> model:` members: {model_summary}.\n\n"
         f"`> effort:` members: {effort_summary}.\n\n"
         f"`> system:` members: {system_summary}.\n\n"
+        f"`> settings:` members: {settings_summary}.\n\n"
         f"`> use:` tool members: {tool_summary}.\n\n"
         "Profile body values are evaluated when `> use:` runs."
     )
