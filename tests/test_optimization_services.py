@@ -327,8 +327,11 @@ def test_type_resolver_no_annotations():
 
 
 def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
+    # No-annotation params/outputs keep their defaults; resolvable annotations
+    # resolve. A written-but-unresolvable annotation (``MissingType``) now
+    # raises instead of silently being omitted/downgraded (BUG-023).
     src = """
-@test(items: list[int], missing: MissingType, raw) -> str:
+@test(items: list[int], raw) -> str:
   = ok
 """
     prog = parse_program(src)
@@ -338,7 +341,6 @@ def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
 
     param_types = resolver.resolve_param_types(proc)
     assert "items" in param_types
-    assert "missing" not in param_types
     assert "raw" not in param_types
 
     assert resolver.resolve_output_types([]) == {}
@@ -347,30 +349,48 @@ def test_type_resolver_outputs_defaults_typing_constructs_and_failures():
             ("plain", None),
             ("count", "int"),
             ("items", "list[int]"),
-            ("unknown", "MissingType"),
         ]
     )
     assert outputs["plain"] is str
     assert outputs["count"] is int
     assert getattr(outputs["items"], "__origin__", None) is list
-    assert outputs["unknown"] is str
+
+    # Unresolvable param/output annotations fail loud.
+    bad_proc = parse_program("@bad(missing: MissingType) -> str:\n  = ok\n").procedures[0]
+    with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
+        resolver.resolve_param_types(bad_proc)
+    with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
+        resolver.resolve_output_types([("unknown", "MissingType")])
 
 
-def test_type_resolver_direct_fallback_paths(monkeypatch):
+def test_type_resolver_unresolvable_annotations_raise(monkeypatch):
     rt = compile_program(parse_program("= ok"), adapter=None)
     resolver = TypeResolver(rt)
 
+    # No annotations -> omitted.
     assert resolver.resolve_param_types(ProcedureDef("plain", ["x"])) == {}
 
+    # A resolution that returns None for a written annotation now raises
+    # rather than silently omitting/downgrading (BUG-023).
+    monkeypatch.setattr(
+        "kedi.optimization.services.type_resolver.KediType.resolve",
+        lambda self, runtime, env: None,
+    )
+    proc = ProcedureDef("broken", ["x"], param_type_annotations={"x": "int"})
+    with pytest.raises(TypeError, match="Unknown type annotation"):
+        resolver.resolve_param_types(proc)
+    with pytest.raises(TypeError, match="Unknown type annotation"):
+        resolver.resolve_output_types([("value", "int")])
+
+    # A resolution that raises propagates.
     def fail_resolve(self: Any, runtime: Any, env: Any) -> Any:
         raise RuntimeError("boom")
 
     monkeypatch.setattr("kedi.optimization.services.type_resolver.KediType.resolve", fail_resolve)
+    with pytest.raises(RuntimeError, match="boom"):
+        resolver.resolve_output_types([("value", "int")])
 
-    proc = ProcedureDef("broken", ["x"], param_type_annotations={"x": "int"})
-    assert resolver.resolve_param_types(proc) == {}
-    assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
-
+    # A resolution returning a non-type value falls back to str (output path).
     def resolve_to_value(self: Any, runtime: Any, env: Any) -> object:
         return object()
 
@@ -378,7 +398,6 @@ def test_type_resolver_direct_fallback_paths(monkeypatch):
         "kedi.optimization.services.type_resolver.KediType.resolve",
         resolve_to_value,
     )
-
     assert resolver.resolve_output_types([("value", "int")]) == {"value": str}
 
 

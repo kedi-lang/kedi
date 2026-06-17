@@ -110,6 +110,24 @@ def _is_valid_type(obj: Any) -> bool:
     )
 
 
+def _build_type_adapter(resolved: Any) -> TypeAdapter:
+    """Build a strict ``TypeAdapter`` for a resolved Python type.
+
+    BaseModels, dataclasses and ``TypedDict``s carry their own config, so
+    pydantic rejects a ``config`` argument for them; build those without one.
+    Everything else gets a strict, ``arbitrary_types_allowed`` adapter.
+    """
+    import dataclasses
+
+    if (
+        (isinstance(resolved, type) and issubclass(resolved, BaseModel))
+        or dataclasses.is_dataclass(resolved)
+        or hasattr(resolved, "__required_keys__")
+    ):
+        return TypeAdapter(resolved)
+    return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+
+
 # ---------------------------------------------------------------------
 # KediType
 # ---------------------------------------------------------------------
@@ -166,16 +184,38 @@ class KediType:
             return self._legacy_resolve(rt, env)
         return None
 
+    def resolve_required(self, rt: KediRuntime, env: dict[str, Any] | None = None) -> Optional[Any]:
+        """Resolve, distinguishing *no annotation* from *unresolvable annotation*.
+
+        Returns ``None`` only when no annotation was written. A written but
+        unresolvable annotation (e.g. ``MissingType`` or a typo) raises
+        ``TypeError`` instead of silently degrading to ``str`` / skipping
+        validation.
+        """
+        if self.is_none():
+            return None
+        resolved = self.resolve(rt, env)
+        if resolved is None:
+            raise TypeError(f"Unknown type annotation {self!s}")
+        return resolved
+
     def get_adapter(
         self, rt: KediRuntime, env: dict[str, Any] | None = None
     ) -> Optional[TypeAdapter]:
+        """Build a ``TypeAdapter`` leniently (introspection-only callers).
+
+        Returns ``None`` when there is no annotation *or* when a written
+        annotation cannot be resolved/adapted, so editor hovers and schema
+        introspection never crash on a typo. Runtime validation goes through
+        ``validate``, which is strict.
+        """
         if self.is_none():
             return None
         resolved = self.resolve(rt, env)
         if resolved is None:
             return None
         try:
-            return TypeAdapter(resolved, config={"strict": True, "arbitrary_types_allowed": True})
+            return _build_type_adapter(resolved)
         except Exception:
             return None
 
@@ -187,9 +227,13 @@ class KediType:
         *,
         allow_str_coercion: bool = False,
     ) -> Any:
-        adapter = self.get_adapter(rt, env)
-        if adapter is None:
+        resolved = self.resolve_required(rt, env)
+        if resolved is None:
             return value
+        try:
+            adapter = _build_type_adapter(resolved)
+        except Exception as exc:
+            raise TypeError(f"Cannot build validator for type {self!s}: {exc}") from exc
         return adapter.validate_python(value)
 
     def __repr__(self) -> str:
@@ -372,10 +416,20 @@ def assign_value_from_native(
             if isinstance(native, str):
                 return native
             raise TypeError("Native non-string assignment requires explicit type annotation")
-        if isinstance(native, str):
-            try_typ = kedi_type.resolve(rt, env)
-            if try_typ is not None and try_typ is not str:
-                raise TypeError("Annotation type mismatch: got str value")
+        # Resolve up front: a bare annotation that names an unknown type
+        # (e.g. ``[x: MissingType]``) raises a precise "Unknown type
+        # annotation X" error instead of silently bypassing validation.
+        # A backtick type expression that fails to evaluate keeps the legacy
+        # "does not match annotated type" diagnostic via the except below.
+        try:
+            resolved = kedi_type.resolve(rt, env)
+        except Exception:
+            resolved = None
+        else:
+            if resolved is None:
+                raise TypeError(f"Unknown type annotation {kedi_type!s}")
+        if isinstance(native, str) and resolved is not None and resolved is not str:
+            raise TypeError("Annotation type mismatch: got str value")
         try:
             return kedi_type.validate(rt, env, native)
         except Exception:

@@ -155,7 +155,9 @@ def prepare_segments(
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
             kedi_type = KediType.from_node(seg.type_expr, seg.type_annotation)
-            pytype = kedi_type.resolve(rt, env=kwargs)
+            # None (no annotation) still defaults to str downstream; a written
+            # but unresolvable annotation raises instead of silently becoming str.
+            pytype = kedi_type.resolve_required(rt, kwargs)
             expr.append(rt.o(seg.name, pytype))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)

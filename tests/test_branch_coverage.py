@@ -28,7 +28,10 @@ def test_resolved_type_helpers_cover_typing_aliases() -> None:
     assert resolved_type_name(str) == "str"
     assert resolved_type_name(list[str]) == "list"
     assert runtime_isinstance("x", str)
-    assert runtime_isinstance("x", list[str]) is True
+    # Generic args are validated fail-closed now: a str is not a list[str].
+    assert runtime_isinstance("x", list[str]) is False
+    assert runtime_isinstance(["x"], list[str]) is True
+    assert runtime_isinstance(["x"], list[int]) is False
 
 
 def test_smallest_enclosing_visits_toplevel_return() -> None:

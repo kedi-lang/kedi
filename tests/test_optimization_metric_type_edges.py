@@ -50,13 +50,15 @@ def test_type_handler_schema_and_signature_edges(
             ("plain", None),
             ("count", "int"),
             ("items", "list[int]"),
-            ("missing", "MissingType"),
         ]
     )
     assert schema["plain"] is str
     assert schema["count"] is int
     assert getattr(schema["items"], "__origin__", None) is list
-    assert schema["missing"] is str
+
+    # A written-but-unresolvable annotation fails loud (BUG-023).
+    with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
+        handler.build_output_schema([("missing", "MissingType")])
 
     with pytest.raises(ValueError, match="Output schema"):
         handler.create_dspy_signature_sync(["x"], [])
@@ -73,7 +75,8 @@ def test_type_handler_schema_and_signature_edges(
 
     with monkeypatch.context() as mp:
         mp.setattr("kedi.lang.compiler.type_system.KediType.resolve", fail_resolve)
-        assert handler.build_output_schema([("broken", "int")]) == {"broken": str}
+        with pytest.raises(RuntimeError, match="bad type"):
+            handler.build_output_schema([("broken", "int")])
 
     def no_arrow_builder(output_schema: dict[str, type], **_: Any) -> str:
         assert output_schema

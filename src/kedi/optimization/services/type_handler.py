@@ -49,18 +49,11 @@ class StructuredTypeHandler:
                 output_schema[field_name] = str
                 continue
 
-            try:
-                resolved_type = KediType(type_anno).resolve(self.runtime, {})
-
-                stored_type = as_resolved_kedi_type(resolved_type)
-                if stored_type is not None:
-                    output_schema[field_name] = stored_type
-                else:
-                    # Fallback to str
-                    output_schema[field_name] = str
-            except Exception:
-                # Type resolution failed - default to str
-                output_schema[field_name] = str
+            # A written-but-unresolvable annotation raises instead of silently
+            # downgrading to str (BUG-023).
+            resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
+            stored_type = as_resolved_kedi_type(resolved_type)
+            output_schema[field_name] = stored_type if stored_type is not None else str
 
         return output_schema
 
