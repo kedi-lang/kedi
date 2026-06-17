@@ -237,7 +237,7 @@ class KediType:
             return value
         try:
             adapter = _build_type_adapter(resolved)
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive; TypeAdapter is permissive
             raise TypeError(f"Cannot build validator for type {self!s}: {exc}") from exc
         return adapter.validate_python(value)
 

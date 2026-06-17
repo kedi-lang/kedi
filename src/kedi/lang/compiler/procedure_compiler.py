@@ -128,12 +128,12 @@ class ProcedureCompiler:
         # "Unknown type annotation X" error rather than the generic mismatch below.
         kedi_type.resolve_required(self.rt, env)
 
-        # Annotated return: strict validate and return validated value
+        # Annotated return: strict validate and return validated value. The
+        # unresolvable-annotation case already raised above, so any failure here is
+        # a genuine value/type mismatch.
         try:
             # Do not allow string literal coercion for returns
             return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
-        except TypeError:
-            raise
         except Exception:
             raise TypeError("Return value does not match annotated type")
 

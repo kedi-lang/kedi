@@ -56,7 +56,9 @@ class TypeResolver:
             # the source program (BUG-023).
             resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
             stored_type = as_resolved_kedi_type(resolved_type)
-            if stored_type is not None:
+            # resolve_required only returns a valid resolved type (else it raises),
+            # so stored_type is always set here.
+            if stored_type is not None:  # pragma: no branch
                 param_types[param_name] = stored_type
 
         return param_types
