@@ -29,6 +29,7 @@ from ..ast import (
     Program,
     ReturnStmt,
     SystemDirectiveStmt,
+    TemplateLine,
     UseDirectiveStmt,
 )
 from .evaluation import evaluate_python_inline, execute_python_block
@@ -375,6 +376,11 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, ProfileDefStmt):
                         continue
+                    if isinstance(item, TemplateLine):
+                        raise ValueError(
+                            "Top-level TemplateLine is not a valid program node; "
+                            "use '>>' for a top-level template prompt."
+                        )
                     with block_agent_profile_scope(active):
                         self.executor.execute_single_statement(item, kwargs, is_toplevel=True)
 
