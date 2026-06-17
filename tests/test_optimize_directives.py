@@ -68,10 +68,9 @@ def test_parse_unknown_directive_error():
     # This should fail because "data" is only valid in @eval blocks, not procedures
     # Actually, legacy `>` lines are treated as codegen prompts, so this would work
     # But let's test a truly unknown directive pattern
-    # Phase-6 refactor: the legacy "any unrecognized ``>`` directive
-    # becomes ``proc.ai_prompt``" fallback was an undocumented
-    # backward-compat path. The tree-sitter grammar accepts only
-    # ``> auto:`` and ``> optimize: <name>:`` inside a procedure body
+    # The legacy "any unrecognized ``>`` directive becomes ``proc.ai_prompt``"
+    # fallback was an undocumented backward-compat path. The tree-sitter grammar
+    # accepts only ``> auto:`` and ``> optimize: <name>:`` inside a procedure body
     # and rejects everything else as a parse error. Callers should
     # migrate to ``> auto:``.
     src2 = "\n@foo():\n  > directive: name: arg:\n    >> Some content\n"

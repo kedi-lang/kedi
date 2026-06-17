@@ -2,10 +2,7 @@
 
 This module is the bridge between the tree-sitter parser (which produces
 a concrete syntax tree of opaque ``tree_sitter.Node`` objects) and the
-existing Kedi AST defined in :mod:`kedi.lang.ast`. It is the
-Phase-6 replacement for the entire pre-refactor parser package
-(``preprocessing.py``, ``program_parser.py``, ``segment_parser.py``,
-``statement_parser.py``, ``block_parser.py``).
+Kedi AST defined in :mod:`kedi.lang.ast`.
 
 Design notes:
 
@@ -23,8 +20,7 @@ Design notes:
     backward compatibility with read sites that still use the legacy
     ``setattr``-based access pattern (``getattr(prog,
     "_validation_evals", [])``), the same lists are also exposed as
-    ``_validation_tests`` and ``_validation_evals`` attributes. The
-    Phase-7 migration removes those aliases.
+    ``_validation_tests`` and ``_validation_evals`` attributes.
 
 The walker is implemented as a single class with one ``_walk_<rule>``
 method per relevant CST node type, plus a small dispatcher
@@ -340,8 +336,7 @@ class _Walker:
                 self._error(child, f"unexpected top-level node {t!r}")
 
         # ProgramWithValidation back-compat: expose the lists via the
-        # legacy `_validation_*` attribute names too. Phase 7 removes
-        # this aliasing once consumers migrate to `.tests` / `.evals`.
+        # legacy `_validation_*` attribute names too.
         if isinstance(prog, ProgramWithValidation):
             setattr(prog, "_validation_tests", prog.tests)
             setattr(prog, "_validation_evals", prog.evals)
@@ -397,8 +392,7 @@ class _Walker:
     def _validate_block_comments(self) -> None:
         r"""Enforce legacy `###` block-comment invariants.
 
-        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``
-        in the pre-refactor parser):
+        Rules (matching ``kedi.lang.parser.preprocessing.strip_comments``):
 
           - A line that is exactly ``###`` (after stripping horizontal
             whitespace) toggles block-comment mode.
@@ -998,12 +992,11 @@ class _Walker:
     def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
-        # interleave extras with a retried external-scan). The
-        # pre-refactor parser, by contrast, stripped the body indent
-        # before parsing — so its TextSegments did not carry that
-        # indentation. We restore parity here by lstripping the
-        # leading WS off the FIRST segment of each template_expr ONLY
-        # when it's a plain TextSegment. Internal-segment whitespace
+        # interleave extras with a retried external-scan). Template body
+        # lines therefore carry that leading whitespace in TextSegments;
+        # lstripping the leading WS off the FIRST segment of each
+        # template_expr restores the expected shape when it's a plain
+        # TextSegment. Internal-segment whitespace
         # (the gap between an `<input>` and the text that follows it)
         # is preserved.
         if segs and isinstance(segs[0], TextSegment):
