@@ -147,6 +147,31 @@ def test_mcp_profile_capture_uses_runtime_globals() -> None:
     assert server.args == ("serve",)
 
 
+def test_mcp_fields_support_plain_and_inline_python_strings() -> None:
+    src = """
+> mcp:
+    transport: `transport_name`
+    command: `command_name`
+    args: `["serve"]`
+@foo():
+    >> value [x]
+"""
+    rt = compile_program(
+        parse_program(src),
+        adapter=_adapter(),
+        runtime_globals={
+            "transport_name": "stdio",
+            "command_name": "uvx",
+        },
+    )
+
+    proc = _procedure_def(rt._procedures["foo"])
+    server = proc.captured_agent_profile.mcp_servers[0]
+    assert server.transport == "stdio"
+    assert server.command == "uvx"
+    assert server.args == ("serve",)
+
+
 def test_mcp_inside_procedure_body_applies_to_following_prompt() -> None:
     src = """
 @foo():
@@ -211,6 +236,48 @@ def test_settings_field_value_and_plain_scalar_parsing() -> None:
         == 0.42
     )
     assert eval_settings_field_value(cast(Any, None), SettingsField(name="temperature"), {}) is None
+
+
+def test_settings_inline_python_supports_non_string_values() -> None:
+    src = """
+> settings:
+    parallel_tool_calls: `False`
+    stop_sequences: `["END", "DONE"]`
+    extra_body: `{"mode": "json"}`
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    rt.run_main()
+
+    assert adapter.settings_calls == [
+        {
+            "parallel_tool_calls": False,
+            "stop_sequences": ["END", "DONE"],
+            "extra_body": {"mode": "json"},
+        }
+    ]
+
+
+def test_settings_support_plain_and_inline_python_strings() -> None:
+    src = """
+> settings:
+    tool_choice: required
+    service_tier: `"flex"`
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    rt.run_main()
+
+    assert adapter.settings_calls == [
+        {
+            "tool_choice": "required",
+            "service_tier": "flex",
+        }
+    ]
 
 
 def test_mcp_spec_validation() -> None:

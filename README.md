@@ -66,15 +66,24 @@ kedi your_program.kedi
 
 ### Agent Profiles
 
-Route different procedures to different models without repeating adapter
-configuration. Profiles are captured when a procedure is defined; later
-`> model:` directives do not retroactively change earlier procedures.
+Route different procedures to different models, settings, system prompts, MCP
+servers, and tool scopes without repeating adapter configuration. Profiles are
+captured when a procedure is defined; later directives do not retroactively
+change earlier procedures.
 
 ````kedi
 > profile: fast:
     > model: groq:qwen/qwen3-32b
+    > effort: minimal
+    > settings:
+        temperature: 0.2
 > profile: quality:
     > model: openrouter/google/gemini-3-flash-preview
+    > effort: high
+    > system: Be precise and use the available tools when useful.
+    > mcp:
+        command: vsh
+        args: `["run", "--mcp"]`
 
 > use: fast
 @draft(prompt: str) -> str:
@@ -90,7 +99,11 @@ configuration. Profiles are captured when a procedure is defined; later
 ````
 
 - `> model: name` — set the model for subsequent procedure captures (plain name or `` `expression` ``)
-- `> profile: name:` — define a reusable profile with nested `> model:` and/or `> use:` members
+- `> effort: minimal|low|medium|high|xhigh|max` — set reasoning effort
+- `> system:` — set plain or multiline agent instructions with `<name>` and ``<`python`>`` substitutions
+- `> settings:` — set adapter-filtered model settings; use backticks for Python values like `` `["END"]` ``
+- `> mcp:` — load MCP tools; string fields can be plain strings or inline Python like `` `os.getenv("STDIO_COMMAND")` ``
+- `> profile: name:` — define a reusable profile with nested `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members
 - `> use: name` or `> use: \`name\`` — register a **procedure** as an agent tool when the name matches a procedure; otherwise merge a profile by **profile name** (not the importing module name)
 - Multiline `> use:` lists procedure tools explicitly:
 
@@ -106,6 +119,8 @@ Profiles and tool scopes can be shared across files with `> export:` / `> import
 
 ```bash
 kedi your_program.kedi
+kedi parse your_program.kedi
+kedi your_program.kedi --parse
 kedi your_program.kedi --test
 kedi your_program.kedi --eval
 kedi your_program.kedi --eval --optimize --optimizer gepa

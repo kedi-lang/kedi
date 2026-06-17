@@ -38,6 +38,46 @@ def test_cli_passes_extra_args_to_program_env(tmp_path: Path) -> None:
     assert result.output == "1:True:None\n"
 
 
+def test_cli_parse_command_renders_kedi_parse_error(tmp_path: Path) -> None:
+    source = tmp_path / "bad.kedi"
+    source.write_text("@boom(\n  = nope\n", encoding="utf-8")
+
+    result = CliRunner().invoke(cli_module.main, ["parse", str(source)])
+
+    assert result.exit_code == 1
+    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert f'File "{source}", line 1, column 1' in result.output
+    assert "@boom(" in result.output
+    assert "^" in result.output
+
+
+def test_cli_parse_command_requires_source_argument() -> None:
+    result = CliRunner().invoke(cli_module.main, ["parse"])
+
+    assert result.exit_code == 2
+    assert "Missing argument 'SOURCE'." in result.output
+
+
+def test_cli_parse_flag_parses_without_compile(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    source = _source(tmp_path)
+
+    def fail_compile(*args: Any, **kwargs: Any) -> tuple[bool, str | None]:
+        raise AssertionError("parse-only should not run codegen")
+
+    monkeypatch.setattr(cli_module, "maybe_run_codegen", fail_compile)
+
+    command_result = CliRunner().invoke(cli_module.main, ["parse", str(source)])
+    flag_result = CliRunner().invoke(cli_module.main, [str(source), "--parse"])
+
+    assert command_result.exit_code == 0
+    assert command_result.output == ""
+    assert flag_result.exit_code == 0
+    assert flag_result.output == ""
+
+
 def test_cli_optimize_success_and_failure_paths(
     tmp_path: Path,
     monkeypatch: Any,

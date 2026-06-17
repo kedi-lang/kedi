@@ -672,6 +672,15 @@ procedures as agent tools.
   settings in the active profile, then filters them at adapter boundaries:
   Pydantic AI receives only supported `ModelSettings` keys, and DSPy receives
   only supported `dspy.LM` kwargs. Unknown setting names are parser/LSP errors.
+  Use backticks when the setting value should be a real Python object instead
+  of a string or simple scalar:
+
+  ```kedi
+  > settings:
+      parallel_tool_calls: `False`
+      stop_sequences: `["END", "DONE"]`
+      extra_body: `{"mode": "json"}`
+  ```
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure
@@ -694,6 +703,15 @@ Use `> mcp:` to load tools from an MCP server for the active agent scope:
     command: vsh
     args: `["run", "--mcp"]`
     env: `{}`
+```
+
+String fields can be plain Kedi strings or inline Python expressions:
+
+```kedi
+> mcp:
+    transport: `os.getenv("MCP_TRANSPORT")`
+    command: `os.getenv("STDIO_COMMAND")`
+    url: https://example.com/mcp
 ```
 
 - `transport` must be `stdio`, `sse`, `http`, or `streamable-http`. If omitted
