@@ -40,11 +40,7 @@ def test_load_optimized_prompts_invalid_json_raises(tmp_path: Path) -> None:
 def test_run_tests_propagates_invalid_optimized_json(tmp_path: Path) -> None:
     source = tmp_path / "tests.kedi"
     source.write_text(
-        "@id(x):\n"
-        "  = <x>\n\n"
-        "@test: id:\n"
-        "  > case: ok:\n"
-        "    `assert id('x') == 'x'`\n",
+        "@id(x):\n  = <x>\n\n@test: id:\n  > case: ok:\n    `assert id('x') == 'x'`\n",
         encoding="utf-8",
     )
     _write_invalid_optimized(source)
