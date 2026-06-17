@@ -619,9 +619,9 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
                 raise value
             return value
 
+    # run_program_cli runs the program exactly once with a lazily-built adapter.
     runtimes = [
         FakeRuntime([None]),
-        FakeRuntime([RuntimeError("No adapter provided to KediRuntime")]),
         FakeRuntime(["with adapter"]),
     ]
     monkeypatch.setattr(
@@ -640,10 +640,10 @@ def test_maybe_codegen_and_run_program_cli_paths(tmp_path: Path, monkeypatch: An
     )
 
     monkeypatch.setenv("KEDI_DEBUG_OPTIMIZED", "0")
-    runtimes = [FakeRuntime([RuntimeError("different")])]
+    runtimes = [FakeRuntime([RuntimeError("boom")])]
     try:
         app.run_program_cli(str(source), adapter="pydantic", model=None)
     except RuntimeError as exc:
-        assert str(exc) == "different"
+        assert str(exc) == "boom"
     else:
-        raise AssertionError("unexpected RuntimeError should be re-raised")
+        raise AssertionError("run_main errors should propagate")
