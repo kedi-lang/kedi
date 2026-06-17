@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, cast
+from typing import Any, Callable
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
@@ -214,7 +214,7 @@ class StatementExecutor:
         self.rt = rt
         self.compiler = StatementCompiler(rt)
 
-    def execute(self, proc: Any, closure_env: dict[str, Any]) -> Any:
+    def execute(self, proc: ProcedureDef, closure_env: dict[str, Any]) -> Any:
         """Execute procedure body statements and return the last return value."""
         from .type_system import pop_type_env, push_type_env
 
@@ -226,13 +226,13 @@ class StatementExecutor:
         new_proc_names: list[str] = []
 
         # Inherit parent type environment
-        parent_stack = getattr(self.rt, "_type_env_stack", None)
-        if isinstance(parent_stack, list) and len(parent_stack) >= 2:
+        parent_stack = self.rt._type_env_stack
+        if len(parent_stack) >= 2:
             type_scope.update(parent_stack[-2])
 
-        captured = getattr(proc, "captured_agent_profile", None)
+        captured = proc.captured_agent_profile
         active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
-        profile_registry = getattr(self.rt, "_profile_registry", {})
+        profile_registry = self.rt._profile_registry
 
         try:
             for stmt in proc.body:
@@ -315,20 +315,19 @@ class StatementExecutor:
                 register_type(self.rt, stmt.typedef, type_scope, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, ProcDefStmt):
-            child = cast(ProcedureDef, stmt.proc)
-            if child is not None:
-                child.captured_agent_profile = active.frozen_copy()
-                child.lexical_env = dict(closure_env)
-                proc_compiler = ProcedureCompiler(self.rt)
-                fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            child = stmt.proc
+            child.captured_agent_profile = active.frozen_copy()
+            child.lexical_env = dict(closure_env)
+            proc_compiler = ProcedureCompiler(self.rt)
+            fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
-                procs = self.rt._procedures
-                if child.name in procs and child.name not in saved_procs:
-                    saved_procs[child.name] = procs[child.name]
-                elif child.name not in procs:
-                    new_proc_names.append(child.name)
-                procs[child.name] = fn_nested
+            procs = self.rt._procedures
+            if child.name in procs and child.name not in saved_procs:
+                saved_procs[child.name] = procs[child.name]
+            elif child.name not in procs:
+                new_proc_names.append(child.name)
+            procs[child.name] = fn_nested
             return _NO_RETURN
 
         if isinstance(stmt, PythonBlock):

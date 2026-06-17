@@ -166,7 +166,9 @@ def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(target)
     def _sync_tool(*args: Any, **kwargs: Any) -> Any:
         result = target(*args, **kwargs)
-        return asyncio.run(result) if inspect.isawaitable(result) else result
+        if inspect.isawaitable(result):
+            return run_sync(cast(Coroutine[Any, Any, Any], result))
+        return result
 
     setattr(_sync_tool, _DSPY_SYNC_TOOL_MARKER, True)
     return _sync_tool

@@ -523,6 +523,22 @@ def test_procedure_def_for_tool_handles_missing_metadata() -> None:
     assert procedure_def_for_tool(rt, "plain") is None
 
 
+def test_python_callable_for_tool_skips_non_dict_envs() -> None:
+    from kedi.agent_profile.tools import python_callable_for_tool
+
+    def tool() -> str:
+        return "ok"
+
+    rt = compile_program(parse_program("= ok"))
+    cast(Any, rt)._import_env = object()
+    cast(Any, rt)._prelude_env = object()
+    cast(Any, rt)._globals_env = object()
+    rt._initial_globals_env = {"tool": tool}
+
+    assert python_callable_for_tool(rt, "tool") is tool
+    assert python_callable_for_tool(rt, "missing") is None
+
+
 def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
     from unittest.mock import AsyncMock, patch
 

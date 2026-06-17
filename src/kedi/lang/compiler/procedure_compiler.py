@@ -74,11 +74,10 @@ class ProcedureCompiler:
 
         # Inject imported and top-level values.
         current_env = self.rt._current_env.get()
-        for env_name in ("_import_env", "_globals_env"):
-            source_env = getattr(self.rt, env_name, None)
-            if not isinstance(source_env, dict):
+        for env in (self.rt._import_env, self.rt._globals_env):
+            if not isinstance(env, dict):
                 continue
-            for k, v in source_env.items():
+            for k, v in env.items():
                 kwargs.setdefault(k, v)
                 if isinstance(current_env, dict):
                     current_env.setdefault(k, v)

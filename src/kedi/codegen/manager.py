@@ -117,7 +117,7 @@ class CodegenManager:
         context.procedure_definitions = [
             kedi_procedure_to_python_signature(pd)
             for pd in program.procedures
-            if not pd.auto_spec and not getattr(pd, "ai_prompt", None)
+            if not pd.auto_spec and not pd.ai_prompt
         ]
 
         return context

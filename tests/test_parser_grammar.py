@@ -330,7 +330,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             ],
         )
     )
-    assert hasattr(render_arg, "__render_segments__")
+    assert render_arg.render_segments
     unknown_arg = _FakeNode("call_arg", children=[_FakeNode("unknown", start=0, end=4)], end=4)
     assert stmt_walker._walk_call_arg(unknown_arg).value == "stmt"
     inline_without_code = _FakeNode("inline_python_expr")

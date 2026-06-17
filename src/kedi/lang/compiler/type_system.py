@@ -468,7 +468,7 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
     except ValueError:
         return None
     data: dict[str, Any] = {}
-    fields = getattr(model, "model_fields", {})
+    fields = model.model_fields
     for token in tokens:
         if "=" not in token:
             return None
@@ -476,22 +476,19 @@ def _parse_model_repr(value: str, model: type[BaseModel]) -> dict[str, Any] | No
         if name not in fields:
             return None
         field = fields[name]
-        annotation = getattr(field, "annotation", str) or str
+        annotation = field.annotation or str
         data[name] = _convert_basic_literal(raw, annotation)
     return data
 
 
 def push_type_env(rt: KediRuntime) -> dict[str, Any]:
-    stack = getattr(rt, "_type_env_stack", None)
-    if stack is None:
-        stack = []
-        setattr(rt, "_type_env_stack", stack)
+    if rt._type_env_stack is None:
+        rt._type_env_stack = []
     new_env: dict[str, Any] = {}
-    stack.append(new_env)
+    rt._type_env_stack.append(new_env)
     return new_env
 
 
 def pop_type_env(rt: KediRuntime) -> None:
-    stack = getattr(rt, "_type_env_stack", None)
-    if isinstance(stack, list) and stack:
-        stack.pop()
+    if rt._type_env_stack:
+        rt._type_env_stack.pop()

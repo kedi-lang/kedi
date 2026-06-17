@@ -479,6 +479,18 @@ def test_dspy_adapter_register_tool_wraps_async_callable() -> None:
     assert tool(query="kedi", limit=2) == "kedi:2"
 
 
+def test_dspy_sync_tool_function_awaits_inside_running_loop() -> None:
+    async def lookup(query: str) -> str:
+        return query.upper()
+
+    wrapped = dspy_sync_tool_function(lookup)
+
+    async def outer() -> str:
+        return wrapped("kedi")
+
+    assert asyncio.run(outer()) == "KEDI"
+
+
 def test_dspy_adapter_register_tool_wraps_async_callable_instance() -> None:
     class WebFetchLocalTool:
         """Callable object doc should not replace __call__ metadata."""

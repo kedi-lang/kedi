@@ -238,3 +238,9 @@ def test_literal_model_repr_default_and_native_assignment_helpers() -> None:
 
     assert detect_rhs_kind([]) == (False, False, False)
     pop_type_env(KediRuntime())
+
+    rt = KediRuntime()
+    rt._type_env_stack = None
+    pushed = type_system_module.push_type_env(rt)
+    assert pushed == {}
+    assert rt._type_env_stack == [pushed]

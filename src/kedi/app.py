@@ -368,9 +368,7 @@ def maybe_run_codegen(
             source_map=loaded.source_map,
         )
         # Check for auto_spec (new) or ai_prompt (legacy)
-        needs = any(
-            getattr(p, "auto_spec", None) or getattr(p, "ai_prompt", None) for p in prog.procedures
-        )
+        needs = any(p.auto_spec or p.ai_prompt for p in prog.procedures)
         if not needs:
             return True, None
 

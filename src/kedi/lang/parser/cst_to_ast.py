@@ -1078,17 +1078,15 @@ class _Walker:
         return CallSegment(name=name, args=args, loc=self._span(node))
 
     def _walk_call_arg(self, node: Node) -> CallArg:
-        r"""Build a CallArg matching the legacy runtime expectations.
+        r"""Build a call argument with explicit payload fields.
 
-        The runtime (``compiler/evaluation._evaluate_arg``) checks for
-        these duck-typed attributes on a ``LiteralArg``:
+        A literal argument can carry one of these payloads:
 
-          - ``__native_backtick__``: arg passes a native Python value
+          - ``native_backtick``: arg passes a native Python value
             (from a bare backtick `` `expr` ``).
-          - ``__python_segment__``: arg is a single ``<\`...\`>`` segment.
-          - ``__call_segment__``: arg is a single ``<func(...)>`` segment.
-          - ``__render_segments__``: arg is a mini-template; render its
-            segments to a string at call time.
+          - ``python_segment``: arg is a single ``<\`...\`>`` segment.
+          - ``call_segment``: arg is a single ``<func(...)>`` segment.
+          - ``render_segments``: arg is a mini-template rendered to a string.
         """
         children = _named_children(node)
         if not children:
@@ -1097,23 +1095,32 @@ class _Walker:
         first = children[0]
         if first.type == "inline_python_expr":
             code = self._walk_inline_python_expr(first)
-            lit = LiteralArg(value="__NATIVE_BACKTICK__", loc=self._span(node))
-            setattr(lit, "__native_backtick__", code)
+            lit = LiteralArg(
+                value="__NATIVE_BACKTICK__", loc=self._span(node), native_backtick=code
+            )
             return lit
 
         if first.type == "template_arg":
             segs = [self._walk_segment_in_call(c) for c in _named_children(first)]
-            lit = LiteralArg(value="__RENDER__", loc=self._span(node))
             if len(segs) == 1:
                 only = segs[0]
                 if isinstance(only, PythonExprSegment):
-                    setattr(lit, "__python_segment__", only)
-                    return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        python_segment=only,
+                    )
                 if isinstance(only, CallSegment):
-                    setattr(lit, "__call_segment__", only)
-                    return lit
-            setattr(lit, "__render_segments__", segs)
-            return lit
+                    return LiteralArg(
+                        value="__RENDER__",
+                        loc=self._span(node),
+                        call_segment=only,
+                    )
+            return LiteralArg(
+                value="__RENDER__",
+                loc=self._span(node),
+                render_segments=segs,
+            )
 
         # Unknown shape — make a best-effort literal.
         lit = LiteralArg(value=_src_text(self.source, node), loc=self._span(node))

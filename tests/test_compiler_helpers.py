@@ -83,6 +83,8 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     cast(Any, broken_rt)._current_env = RaisingCurrentEnv()
     assert build_python_env(broken_rt, {"local": 1})["local"] == 1
     assert "List" in build_type_env(broken_rt, None)
+    cast(Any, broken_rt)._type_env_stack = None
+    assert "List" in build_type_env(broken_rt, None)
     with pytest.raises(KeyError, match="Unknown variable"):
         lookup_value(broken_rt, "missing", {})
 
@@ -113,6 +115,36 @@ def test_build_python_env_wraps_procedures_and_coerces_model_values() -> None:
     setattr(rt, "_type_env_stack", [{"thing": object()}])
     assert build_python_env(rt, non_model_env)["thing"] is not non_model_env["thing"]
     assert non_model_env["thing"] == "value"
+
+
+def test_proc_wrapper_allows_metadata_without_procedure_def() -> None:
+    from kedi.lang.procedure_introspection import ProcedurePythonMetadata
+
+    rt = KediRuntime()
+
+    def loose() -> str:
+        return "ok"
+
+    setattr(
+        loose,
+        "__kedi_procedure_metadata__",
+        ProcedurePythonMetadata(
+            name="loose",
+            params=(),
+            param_types=(),
+            param_defaults=(),
+            default_values=(),
+            return_type="str",
+            docstring=None,
+        ),
+    )
+    rt._procedures["loose"] = loose
+
+    wrapper = compiler_env._make_proc_wrapper(rt, "loose", loose, {})
+
+    assert wrapper() == "ok"
+    assert getattr(wrapper, "__kedi_procedure_metadata__").name == "loose"
+    assert not hasattr(wrapper, "__kedi_procedure_def__")
 
 
 def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:

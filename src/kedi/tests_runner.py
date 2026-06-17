@@ -94,7 +94,7 @@ def run_tests(
             adapter=adapter,
             runtime_globals=runtime_globals,
         )
-    suites: List[TestSuite] = getattr(rt, "_validation_tests", [])
+    suites: List[TestSuite] = rt._validation_tests
     results: List[TestRunResult] = []
     for suite in suites:
         case_results: List[TestCaseResult] = []
@@ -159,7 +159,7 @@ def run_evals(
             adapter=adapter,
             runtime_globals=runtime_globals,
         )
-    suites: List[EvalSuite] = getattr(rt, "_validation_evals", [])
+    suites: List[EvalSuite] = rt._validation_evals
     results: List[EvalRunResult] = []
 
     for suite in suites:

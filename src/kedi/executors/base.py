@@ -317,7 +317,7 @@ class DefaultExecutor:
             return 0
         if span.source_path is not None:
             return max(0, span.start_line + kedi_line_offset - 1)
-        source_map = getattr(rt, "_source_map", None)
+        source_map = rt._source_map
         if source_map is None or not hasattr(source_map, "resolve_line"):
             return 0
         resolved = source_map.resolve_line(span.start_line)

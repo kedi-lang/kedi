@@ -128,6 +128,10 @@ class CallArg:
 @dataclass
 class LiteralArg(CallArg):
     value: str = ""
+    native_backtick: Optional[str] = field(default=None, repr=False, compare=False)
+    render_segments: List["Segment"] = field(default_factory=list, repr=False, compare=False)
+    call_segment: Optional["CallSegment"] = field(default=None, repr=False, compare=False)
+    python_segment: Optional["PythonExprSegment"] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

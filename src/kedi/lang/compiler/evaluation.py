@@ -20,6 +20,12 @@ from ..ast import (
     TextSegment,
     VarArg,
 )
+from ..call_arg_access import (
+    call_arg_call_segment,
+    call_arg_native_backtick,
+    call_arg_python_segment,
+    call_arg_render_segments,
+)
 from ..parser.escapes import preserve_escaped_whitespace
 from .environment import lookup_value
 from .type_system import KediType
@@ -212,18 +218,20 @@ def evaluate_assignment_rhs(
 def _evaluate_arg(rt: KediRuntime, arg: CallArg, local_env: dict[str, Any]) -> Any:
     """Evaluate a single call argument."""
     if isinstance(arg, LiteralArg):
-        if hasattr(arg, "__native_backtick__"):
-            code = getattr(arg, "__native_backtick__")
-            return evaluate_python_inline(rt, code, local_env, span=arg.loc)
-        if hasattr(arg, "__render_segments__"):
-            segs = getattr(arg, "__render_segments__")
-            return render_expression(rt, segs, local_env, context="return")
-        if hasattr(arg, "__call_segment__"):
-            nested = getattr(arg, "__call_segment__")
-            return evaluate_call(rt, nested, local_env)
-        if hasattr(arg, "__python_segment__"):
-            pyseg = getattr(arg, "__python_segment__")
-            return evaluate_python_inline(rt, pyseg.code, local_env, span=pyseg.loc)
+        native = call_arg_native_backtick(arg)
+        if native is not None:
+            return evaluate_python_inline(rt, native, local_env, span=arg.loc)
+        render_segments = call_arg_render_segments(arg)
+        if render_segments:
+            return render_expression(rt, render_segments, local_env, context="return")
+        call_segment = call_arg_call_segment(arg)
+        if call_segment is not None:
+            return evaluate_call(rt, call_segment, local_env)
+        python_segment = call_arg_python_segment(arg)
+        if python_segment is not None:
+            return evaluate_python_inline(
+                rt, python_segment.code, local_env, span=python_segment.loc
+            )
         return arg.value
     elif isinstance(arg, VarArg):
         return lookup_value(rt, arg.name, local_env)
