@@ -142,6 +142,7 @@ class ProgramCompiler:
                     self.adapter,
                     executor=self.rt.executor,
                     module_stack=active_stack,
+                    runtime_globals=dict(self.rt._initial_globals_env),
                 ).compile(imported_prog)
                 imported_rt.run_main()
                 self._merge_exports(module_path, imported_prog, imported_rt)
