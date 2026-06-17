@@ -411,6 +411,8 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(monkeypatch: pytest.Mon
 
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._lm_extra_kwargs = {}
+    adapter._profile_stack = []
     adapter._tool_scope = ToolScope()
     rt = compile_program(parse_program(src), adapter=adapter)
 
@@ -504,6 +506,8 @@ async def fetch(url: str) -> str:
 
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
+    adapter._lm_extra_kwargs = {}
+    adapter._profile_stack = []
     adapter._tool_scope = ToolScope()
     rt = compile_program(parse_program(src), adapter=adapter)
 

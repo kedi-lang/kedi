@@ -1,17 +1,42 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
+from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from kedi.cli import main as cli_main
 from kedi.lang import compile_program, parse_program
 from kedi.utils import parse_args
 from tests.mock_adapter import MockAdapter, WordChainMockAdapter
+from tests.utils_llm import llm_retry
 
 _FILES_DIR = Path(__file__).resolve().parent / "files"
+_SCOPING_KEDI = _FILES_DIR / "scoping.kedi"
 _WORD_CHAIN_KEDI = _FILES_DIR / "word_chain.kedi"
+
+
+def _build_live_adapter() -> DSPyAdapter | PydanticAdapter:
+    adapter_name = os.environ.get("KEDI_ADAPTER", "pydantic").lower()
+    model_name = os.environ.get("MODEL_NAME", os.environ.get("GROQ_MODEL", "groq:qwen/qwen3-32b"))
+    if adapter_name == "dspy":
+        return DSPyAdapter(model=model_name)
+    return PydanticAdapter(model=model_name)
+
+
+@pytest.mark.llm
+@pytest.mark.vcr
+@llm_retry(tries=3, delay_s=0.5)
+def test_kedi_program_scoping() -> None:
+    src = _SCOPING_KEDI.read_text(encoding="utf-8")
+    rt = compile_program(
+        parse_program(src, source_path=str(_SCOPING_KEDI)),
+        adapter=_build_live_adapter(),
+    )
+    out = rt.run_main()
+    assert isinstance(out, str)
 
 
 def test_kedi_program_word_chain() -> None:

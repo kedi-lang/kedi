@@ -276,6 +276,8 @@ def test_dspy_adapter_produce_and_sync_use_predict(
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = None
+    adapter._profile_stack = []
     result = asyncio.run(
         adapter.produce(
             "prompt",

@@ -210,6 +210,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
 
 class DSPyAdapter:
+    # Class-level defaults so the LM config is readable via native attribute access
+    # even on adapters built without __init__ (e.g. test doubles).
+    _lm_provider: dspy.Provider | None = None
+    _lm_max_tokens: int = 4000
+    _lm_temperature: float = 1.0
+
     def __init__(
         self,
         model: str,
@@ -234,11 +240,11 @@ class DSPyAdapter:
     def _default_lm(self) -> LM:
         return LM(
             model=self._lm_model,
-            provider=getattr(self, "_lm_provider", None),
-            max_tokens=getattr(self, "_lm_max_tokens", 4000),
-            temperature=getattr(self, "_lm_temperature", 1.0),
+            provider=self._lm_provider,
+            max_tokens=self._lm_max_tokens,
+            temperature=self._lm_temperature,
             cache=False,
-            **getattr(self, "_lm_extra_kwargs", {}),
+            **self._lm_extra_kwargs,
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -335,9 +341,9 @@ class DSPyAdapter:
         profile override is on the stack. The baseline ``dspy.settings.configure``
         from ``__init__`` remains the fallback for first-run safety.
         """
-        if getattr(self, "_profile_stack", ()):
+        if self._profile_stack:
             return nullcontext()
-        if getattr(self, "_lm_model", None) is None:
+        if self._lm_model is None:
             return nullcontext()
         return dspy.context(lm=self._default_lm())
 
