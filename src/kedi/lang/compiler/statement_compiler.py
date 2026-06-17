@@ -351,7 +351,9 @@ class StatementExecutor:
             # Gate on the structured type (return_type_expr) too, not just the legacy
             # string annotation, so structured-only typed returns take the native path
             # and get enforced by _enforce_return_type (BUG-016).
-            return_kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
+            return_kedi_type = KediType.from_node(
+                proc.return_type_expr, proc.return_type_annotation
+            )
             if not return_kedi_type.is_none():
                 native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
                 return native if native is not None else preserve_escaped_whitespace(rendered)

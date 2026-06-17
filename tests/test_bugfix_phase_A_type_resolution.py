@@ -49,7 +49,7 @@ def test_bug004_unknown_return_type_raises() -> None:
 
 def test_no_annotation_still_defaults_to_str() -> None:
     """No annotation (vs. an unresolvable one) keeps the lenient str default."""
-    assert run_without_llm("[x] = `\"hi\"`\n= <x>\n") == "hi"
+    assert run_without_llm('[x] = `"hi"`\n= <x>\n') == "hi"
 
 
 # ---------------------------------------------------------------------------

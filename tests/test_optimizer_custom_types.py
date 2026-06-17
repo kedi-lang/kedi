@@ -16,7 +16,7 @@ def test_pydantic_input_output():
 
     # Define the models in a prelude block so they are registered in the kedi
     # runtime's type environment and the optimizer can resolve them.
-    src = '''
+    src = """
 ```
 from pydantic import BaseModel
 
@@ -34,7 +34,7 @@ class Result(BaseModel):
     Analyze person: <person>
     [result: Result]
   = `result`
-'''
+"""
     prog = parse_program(src)
     rt = compile_program(prog, adapter=None)
 
