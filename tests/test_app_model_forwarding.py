@@ -163,7 +163,7 @@ def _patch_optimizer_services(
     *,
     program: ProgramWithValidation | None = None,
     train_error: Exception | None = None,
-    test_error: Exception | None = RuntimeError("no test data"),
+    test_error: Exception | None = None,
     optimizer_error: Exception | None = None,
     optimized: Any = "better prompt",
 ) -> dict[str, Any]:

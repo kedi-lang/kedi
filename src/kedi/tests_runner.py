@@ -81,17 +81,13 @@ def run_tests(
             except (OSError, ValueError):
                 pass
 
-    # Load program with optimized prompts if available (only for file paths)
+    # Load program with optimized prompts if available (only for file paths).
+    # load_program_with_optimized_prompts returns the BASE program when no
+    # .optimized.json exists, so genuine load/compile errors fail loud here
+    # rather than silently falling back to an unoptimized run.
     if source_path:
-        try:
-            program = load_program_with_optimized_prompts(source_path)
-            rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
-        except Exception:
-            rt = _load_program_with_validations(
-                src_main,
-                adapter=adapter,
-                runtime_globals=runtime_globals,
-            )
+        program = load_program_with_optimized_prompts(source_path)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
     else:
         rt = _load_program_with_validations(
             src_main,
@@ -148,19 +144,15 @@ def run_evals(
                 # Path resolution failed - likely source code, not a path
                 pass
 
-    # Load program with optimized prompts if available (only for file paths)
+    # Load program with optimized prompts if available (only for file paths).
+    # load_program_with_optimized_prompts returns the BASE program when no
+    # .optimized.json exists, so genuine load/compile errors fail loud here
+    # rather than silently falling back to an unoptimized run.
     if source_path:
-        try:
-            # Load with optimized prompts
-            program = load_program_with_optimized_prompts(source_path)
-            # Compile with optimized prompts
-            rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
-        except Exception:
-            rt = _load_program_with_validations(
-                src_main,
-                adapter=adapter,
-                runtime_globals=runtime_globals,
-            )
+        # Load with optimized prompts
+        program = load_program_with_optimized_prompts(source_path)
+        # Compile with optimized prompts (fail loud — no silent base-program fallback)
+        rt = compile_program(program, adapter=adapter, runtime_globals=runtime_globals)
     else:
         rt = _load_program_with_validations(
             src_main,
