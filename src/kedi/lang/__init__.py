@@ -1,11 +1,10 @@
 """Public API for the Kedi language layer.
 
-The pre-refactor parser package (``preprocessing.py``, ``program_parser.py``,
-``segment_parser.py``, ``statement_parser.py``, ``block_parser.py``) was
-deleted in Phase 8 of the tree-sitter refactor. So were the legacy
-``TypeValidator`` / ``ValidationResult`` helpers from ``lang/types.py`` —
-the structured ``TypeExpr`` hierarchy in :mod:`kedi.lang.ast` covers
-the cases ``TypeValidator`` used to regex-parse.
+Parsing is handled by the tree-sitter grammar and CST→AST walker.
+The legacy ``TypeValidator`` / ``ValidationResult`` helpers from
+``lang/types.py`` were removed — the structured ``TypeExpr`` hierarchy
+in :mod:`kedi.lang.ast` covers the cases ``TypeValidator`` used to
+regex-parse.
 """
 
 from __future__ import annotations

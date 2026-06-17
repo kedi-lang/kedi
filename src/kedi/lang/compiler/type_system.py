@@ -1,18 +1,13 @@
 """Type system for the Kedi compiler.
 
-Phase-7 refactor: ``KediType`` is now driven by structured ``TypeExpr``
-nodes produced by the tree-sitter CST→AST walker. The pre-refactor
-parser stored every type annotation as a raw string and ``eval``'d it
-at compile time across four different paths; with structured types we
-dispatch on ``TypeRef`` / ``TypeApply`` / ``TypeUnion``, and ``eval``
-survives only inside the explicit ``TypePython`` (backtick) escape
-hatch.
+``KediType`` is driven by structured ``TypeExpr`` nodes produced by the
+CST→AST walker. It dispatches on ``TypeRef`` / ``TypeApply`` /
+``TypeUnion``, and ``eval`` survives only inside the explicit
+``TypePython`` (backtick) escape hatch.
 
 Backward-compat: ``KediType`` still accepts a raw string for callers
-that have not yet migrated to the structured representation; in that
-mode it falls back to the legacy ``eval``-based resolution. Phase 8
-removes that path once every compiler / codegen / optimizer call site
-constructs ``KediType`` from a ``TypeExpr``.
+that pass legacy annotations; in that mode it falls back to
+``eval``-based resolution.
 """
 
 from __future__ import annotations
@@ -142,11 +137,10 @@ def _build_type_adapter(resolved: Any) -> TypeAdapter:
 class KediType:
     """A type annotation, either structured (``TypeExpr``) or legacy string.
 
-    The structured form is preferred — Phase-7 call sites construct
-    ``KediType`` from the AST's ``type_expr`` field whenever available.
-    The legacy string path remains so unmigrated callers
-    (codegen, optimizer utilities, hand-built AST in tests) still
-    work; it routes through ``eval`` like the pre-refactor parser.
+    Prefer constructing from the AST's ``type_expr`` field when available.
+    The legacy string path remains for unmigrated callers (codegen,
+    optimizer utilities, hand-built AST in tests) and routes through
+    ``eval``.
     """
 
     def __init__(self, source: Union[TypeExpr, str, None]):
@@ -170,8 +164,7 @@ class KediType:
         """Build a ``KediType`` from a pair of AST fields.
 
         Prefers the structured ``type_expr``; falls back to
-        ``type_annotation`` so consumers that haven't migrated still
-        work end-to-end during the Phase-7→8 transition.
+        ``type_annotation`` when the structured form is absent.
         """
         if type_expr is not None:
             return cls(type_expr)
@@ -245,7 +238,7 @@ class KediType:
     # ---- legacy fallback ----
 
     def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
-        """Resolve a raw annotation string via ``eval`` (pre-refactor path)."""
+        """Resolve a raw annotation string via ``eval``."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
             return None
@@ -285,7 +278,7 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
 
 
 # ---------------------------------------------------------------------
-# Helpers below this point are unchanged from the pre-refactor module.
+# Helpers
 # ---------------------------------------------------------------------
 
 

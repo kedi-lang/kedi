@@ -1,7 +1,7 @@
 """``kedi-lsp`` — Language Server Protocol scaffold for Kedi.
 
-Phase-9 deliverable of the tree-sitter refactor. The server is a thin
-``pygls`` shim over the tree-sitter parser + CST→AST walker:
+The server is a thin ``pygls`` shim over the tree-sitter parser +
+CST→AST walker:
 
   - Diagnostics: re-parse on every ``didOpen`` / ``didChange`` and
     publish ``KediDiagnostic``s with their ``Span`` info.
