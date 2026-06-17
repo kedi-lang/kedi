@@ -257,9 +257,13 @@ class KediRuntime:
 
         self._python_origin_counter += 1
         origin_span = span
+        # Always key the origin by a UNIQUE virtual filename so multiple embedded
+        # Python snippets in the same .kedi file don't overwrite each other's origin /
+        # linecache entry (BUG-010). The real source path + line metadata are carried
+        # on ``origin_span`` (read by KediPythonOrigin.to_trace for rendering).
         filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
         if span is not None and getattr(span, "source_path", None):
-            filename = span.source_path
+            origin_span = span
         elif (
             span is not None
             and self._source_map is not None
@@ -267,7 +271,6 @@ class KediRuntime:
         ):
             resolved = self._source_map.resolve_line(span.start_line)
             if resolved is not None:
-                filename = resolved.source_path
                 origin_span = replace(
                     span,
                     start_line=resolved.source_line,
