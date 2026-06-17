@@ -138,6 +138,9 @@ class ProgramCompiler:
             ):
                 module_path = self._resolve_import_path(prog, module_import)
                 imported_prog = self._load_imported_program(module_path)
+                # Share the importer's runtime globals (currently just the immutable
+                # CLI ``args``) so imported procedures resolve them. Shallow copy is
+                # fine while the env stays immutable; deep-copy if it ever grows.
                 imported_rt = ProgramCompiler(
                     self.adapter,
                     executor=self.rt.executor,

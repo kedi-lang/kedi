@@ -107,7 +107,7 @@ class ProcedureCompiler:
 
             # Strict validation for parameters using TypeAdapter
             try:
-                validated = kedi_type.validate(self.rt, None, provided, allow_str_coercion=False)
+                validated = kedi_type.validate(self.rt, None, provided)
             except Exception:
                 raise TypeError(f"Parameter '{param_name}' does not match annotated type")
             kwargs[param_name] = validated
@@ -133,7 +133,7 @@ class ProcedureCompiler:
         # a genuine value/type mismatch.
         try:
             # Do not allow string literal coercion for returns
-            return kedi_type.validate(self.rt, env, last_return, allow_str_coercion=False)
+            return kedi_type.validate(self.rt, env, last_return)
         except Exception:
             raise TypeError("Return value does not match annotated type")
 

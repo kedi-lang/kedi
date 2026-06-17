@@ -365,7 +365,7 @@ result = math.pi * x  # WRONG: fences not indented
 Rules:
 - Opening/closing fences must be alone on their lines (no inline `` ```python code``` ``)
 - Code must match the surrounding Kedi indentation level
-- Variables in scope are injected and changes reflect back
+- Variables in scope are injected, and reassignments to those **existing** Kedi variables reflect back. New names created inside the block stay local to the block and do **not** leak into Kedi scope — assign to an existing Kedi variable (or use a value-returning block) to surface a result.
 - The code is dedented relative to its indentation level before execution
 
 ### Value-Returning Python Blocks

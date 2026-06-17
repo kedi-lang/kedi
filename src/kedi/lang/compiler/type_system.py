@@ -229,8 +229,6 @@ class KediType:
         rt: KediRuntime,
         env: dict[str, Any] | None,
         value: Any,
-        *,
-        allow_str_coercion: bool = False,
     ) -> Any:
         resolved = self.resolve_required(rt, env)
         if resolved is None:

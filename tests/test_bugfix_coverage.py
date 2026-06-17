@@ -4,6 +4,7 @@ don't already exercise (keeps the 100% `make prod` gate satisfied)."""
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import typing
 from contextlib import nullcontext
 
@@ -143,3 +144,57 @@ def test_cli_eval_no_cache_cleans_cache(tmp_path, monkeypatch) -> None:
     result = CliRunner().invoke(cli_main, [str(src), "--eval", "--no-cache"])
     assert result.exit_code == 0
     assert not cache.exists()
+
+
+# --- review Finding 1: runtime_isinstance is strict for generic args -----------
+
+
+def test_runtime_isinstance_strict_generic_rejections() -> None:
+    from kedi.resolved_types import runtime_isinstance
+
+    assert runtime_isinstance(["a", "b"], list[str]) is True
+    # Strict: a tuple is not a list, and a float is not an int element.
+    assert runtime_isinstance(("a", "b"), list[str]) is False
+    assert runtime_isinstance([1, 2.0], list[int]) is False
+    assert runtime_isinstance({"a": 1.0}, dict[str, int]) is False
+
+
+# --- review Finding 2: run_sync carries contextvars into the worker thread -----
+
+
+def test_run_sync_preserves_contextvars_inside_running_loop() -> None:
+    from kedi.agent_adapter.utils import run_sync
+
+    var: contextvars.ContextVar[str] = contextvars.ContextVar("t", default="default")
+
+    async def _read() -> str:
+        return var.get()
+
+    async def _outer() -> str:
+        var.set("inner")
+        # Inside a running loop run_sync uses a worker thread; the context must
+        # still carry ``var`` so the coroutine reads "inner", not the default.
+        return run_sync(_read())
+
+    assert asyncio.run(_outer()) == "inner"
+
+
+# --- review Finding 7: codegen refuses to cache a body containing a marker -----
+
+
+def test_write_cache_rejects_marker_in_generated_body(tmp_path) -> None:
+    mgr = CodegenManager(agent=None)
+    with pytest.raises(ValueError, match="reserved kedi-codegen"):
+        mgr.write_cache(tmp_path / "p.kedi", "p", "# >>> kedi-codegen: evil", "")
+
+
+# --- review Finding 3: untyped param's default must also be str ----------------
+
+
+def test_untyped_param_nonstr_default_raises() -> None:
+    # Untyped param means `str`; a native non-str default violates that and raises
+    # when used. Annotate the param (e.g. `n: int = \`0\``) for a non-str default.
+    src = "@f(n = `0`):\n  = <`str(n)`>\n\n= <f()>\n"
+    rt = compile_program(parse_program(src), adapter=None)
+    with pytest.raises(Exception, match="Parameter 'n' does not match annotated type"):
+        rt.run_main()

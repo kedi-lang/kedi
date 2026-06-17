@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable, Coroutine, TypeVar
+from typing import Any, Callable, Coroutine, TypeVar, cast
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
@@ -38,8 +39,13 @@ def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
+    # Carry the caller's context into the worker thread so context-local state
+    # (e.g. a ``dspy.context(lm=...)`` profile override) is visible to ``coro``;
+    # ThreadPoolExecutor does not copy contextvars on its own.
+    ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as executor:
-        return executor.submit(lambda: asyncio.run(coro)).result()
+        # cast: Context.run's own TypeVar doesn't unify with run_sync's via submit().
+        return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, coro)).result())
 
 
 def kedi_procedure_tool_spec(
@@ -286,9 +292,7 @@ def _coerce_tool_arguments(
             if isinstance(resolved, type) and issubclass(resolved, BaseModel):
                 kwargs[param_name] = coerce_model_value(resolved, provided)
             else:
-                kwargs[param_name] = kedi_type.validate(
-                    rt, None, provided, allow_str_coercion=False
-                )
+                kwargs[param_name] = kedi_type.validate(rt, None, provided)
         except Exception as exc:
             raise TypeError(f"Parameter '{param_name}' does not match annotated type") from exc
 

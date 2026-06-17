@@ -55,6 +55,16 @@ class CodegenManager:
         cache = self.cache_path_for(source_path)
         start, end = self._block_markers(proc_name)
         body = tests.strip() + "\n\n" + impl.strip()
+        # Generated code must not itself emit a cache marker line, or the per-procedure
+        # split would be corrupted. Fail loud rather than silently mangle the cache.
+        if any(
+            line.strip().startswith(("# >>> kedi-codegen:", "# <<< kedi-codegen:"))
+            for line in body.splitlines()
+        ):
+            raise ValueError(
+                f"Generated code for {proc_name!r} contains a reserved kedi-codegen "
+                "cache marker line; refusing to write a corruptible cache."
+            )
         block = f"{start}\n{body.strip()}\n{end}\n"
 
         existing = cache.read_text(encoding="utf-8") if cache.exists() else ""
