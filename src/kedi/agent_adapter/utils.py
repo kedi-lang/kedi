@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine, TypeVar
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
@@ -22,6 +23,23 @@ from ..lang.procedure_schema import (
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
+
+_T = TypeVar("_T")
+
+
+def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
+    """Run ``coro`` to completion from sync code, even inside a running loop.
+
+    When no event loop is running this is just :func:`asyncio.run`. When called
+    from within a running loop (``asyncio.run`` would raise there) the coroutine
+    is executed on its own loop in a dedicated worker thread.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(lambda: asyncio.run(coro)).result()
 
 
 def kedi_procedure_tool_spec(

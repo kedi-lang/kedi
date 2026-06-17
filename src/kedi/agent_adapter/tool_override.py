@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, Sequence, runtime_checkable
 
@@ -32,29 +33,29 @@ class SupportsToolRegistration(Protocol):
 
 class ToolScope:
     def __init__(self) -> None:
-        self._scoped_tools: list[Any] = []
+        self._scoped_tools: ContextVar[tuple[Any, ...]] = ContextVar(
+            "kedi_scoped_tools", default=()
+        )
 
     @contextmanager
     def tool_scope(self, tools: Sequence[Any] = ()) -> Iterator[None]:
-        previous = list(self._scoped_tools)
-        self._scoped_tools = []
-        for tool in tools:
-            self.register_tool(tool)
+        token = self._scoped_tools.set(())
         try:
+            for tool in tools:
+                self.register_tool(tool)
             yield
         finally:
-            self._scoped_tools = previous
+            self._scoped_tools.reset(token)
 
     def register_tool(self, tool: Any) -> None:
+        current = self._scoped_tools.get()
         name = getattr(tool, "name", None)
         if name is not None:
-            self._scoped_tools = [
-                registered
-                for registered in self._scoped_tools
-                if getattr(registered, "name", None) != name
-            ]
-        self._scoped_tools.append(tool)
+            current = tuple(
+                registered for registered in current if getattr(registered, "name", None) != name
+            )
+        self._scoped_tools.set((*current, tool))
 
     @property
     def scoped_tools(self) -> tuple[Any, ...]:
-        return tuple(self._scoped_tools)
+        return self._scoped_tools.get()
