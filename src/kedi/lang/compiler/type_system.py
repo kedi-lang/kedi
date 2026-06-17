@@ -53,6 +53,11 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
 def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
+        # ``None`` in a type position means ``NoneType`` (e.g. ``Union[str, None]``,
+        # ``str | None``). Resolving it to the *value* ``None`` would collide with the
+        # "unresolvable" sentinel and make any Optional-style annotation look unresolved.
+        if expr.name == "None":
+            return type(None)
         return _lookup_name(rt, expr.name, type_env)
 
     if isinstance(expr, TypeApply):
