@@ -8,7 +8,9 @@ effects twice).
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+import time
 
 import kedi.app as app
 from kedi.agent_adapter.lazy import LazyAdapter
@@ -136,3 +138,19 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert "profile_override" in rec.calls
     assert "tool_scope" in rec.calls
     assert ("register_tool", "tool") in rec.calls
+
+
+def test_lazy_adapter_factory_is_called_once_for_concurrent_first_use() -> None:
+    rec = _RecordingAdapter()
+    builds: list[int] = []
+
+    def factory() -> _RecordingAdapter:
+        time.sleep(0.01)
+        builds.append(1)
+        return rec
+
+    lazy = LazyAdapter(factory)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        assert list(executor.map(lambda _: lazy.produce_sync(), range(8))) == ["ps"] * 8
+
+    assert builds == [1]

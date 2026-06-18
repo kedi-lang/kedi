@@ -41,20 +41,26 @@ class TypeResolver:
         """
         param_types: dict[str, ResolvedKediType] = {}
 
-        if not procedure.param_type_annotations:
+        param_exprs = procedure.param_type_exprs or {}
+        param_strs = procedure.param_type_annotations or {}
+        if not param_exprs and not param_strs:
             return param_types
 
         # Resolve each parameter's type annotation
         for param_name in procedure.params:
-            type_anno = procedure.param_type_annotations.get(param_name)
-            if not type_anno:
+            type_expr = param_exprs.get(param_name)
+            type_anno = param_strs.get(param_name)
+            if type_expr is None and not type_anno:
                 # No annotation -> omit (untyped params carry no type constraint).
                 continue
 
             # A written-but-unresolvable annotation raises instead of being
             # silently omitted, so optimizer signatures cannot diverge from
             # the source program.
-            resolved_type = KediType(type_anno).resolve_required(self.runtime, {})
+            resolved_type = KediType.from_node(type_expr, type_anno).resolve_required(
+                self.runtime,
+                {},
+            )
             stored_type = as_resolved_kedi_type(resolved_type)
             # resolve_required only returns a valid resolved type (else it raises),
             # so stored_type is always set here.

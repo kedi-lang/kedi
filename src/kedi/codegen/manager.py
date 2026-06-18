@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 from ..errors import KediValueExecutionError
 from ..lang.ast import Program
@@ -69,7 +70,16 @@ class CodegenManager:
 
         existing = cache.read_text(encoding="utf-8") if cache.exists() else ""
         content = self._replace_block(existing, proc_name, block)
-        cache.write_text(content, encoding="utf-8")
+        self._write_text_atomic(cache, content)
+
+    def _write_text_atomic(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _split_block(self, existing: str, proc_name: str) -> tuple[str, str] | None:
         """Return (before, after) around ``proc_name``'s block, or None if absent.
@@ -171,7 +181,7 @@ class CodegenManager:
             return
         remaining = self._remove_block(cache.read_text(encoding="utf-8"), proc_name)
         if remaining.strip():
-            cache.write_text(remaining.rstrip() + "\n", encoding="utf-8")
+            self._write_text_atomic(cache, remaining.rstrip() + "\n")
         else:
             cache.unlink()
 
@@ -195,9 +205,21 @@ class CodegenManager:
         5. If any impl succeeds and passes tests, return True
         """
         name = proc_header.split("(")[0].strip().lstrip("@")
-        kedi_tests = ""
-        python_tests = ""
 
+        try:
+            return self._orchestrate_generation(source_path, proc_header, prompt, spec, name)
+        finally:
+            if not self.use_cache:
+                self.cleanup_failed_cache(source_path, name)
+
+    def _orchestrate_generation(
+        self,
+        source_path: Path,
+        proc_header: str,
+        prompt: str,
+        spec: str,
+        name: str,
+    ) -> bool:
         if self.is_cached(source_path, name):
             return True
 
@@ -211,6 +233,8 @@ class CodegenManager:
         # Iterative generation: each stage gets more attempts
         test_error_feedback = None
         impl_error_feedback = None
+        python_tests = ""
+        kedi_tests = ""
 
         for stage in range(self.config.max_retries):
             num_attempts = stage + 1  # Stage 1 → 1 attempt, Stage 2 → 2 attempts, etc.

@@ -191,13 +191,17 @@ def test_star_export_includes_agent_profiles(tmp_path: Path) -> None:
     assert "_hidden" not in rt._profile_registry
 
 
-def test_internal_filesystem_module_exports_profile_and_tools(tmp_path: Path) -> None:
+def test_internal_filesystem_module_exports_profile_and_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     data_file = tmp_path / "data.txt"
     data_file.write_text("hello filesystem", encoding="utf-8")
 
     main = tmp_path / "main.kedi"
     main.write_text(
-        f"> import: filesystem\n\n= <read_text_file(`{str(data_file)!r}`)>\n",
+        '> import: filesystem\n\n= <read_text_file(`"data.txt"`)>\n',
         encoding="utf-8",
     )
 
@@ -208,59 +212,83 @@ def test_internal_filesystem_module_exports_profile_and_tools(tmp_path: Path) ->
     assert "read_text_file" in rt._procedures
 
 
-def test_internal_filesystem_apply_patch_tool_updates_file(tmp_path: Path) -> None:
+def test_internal_filesystem_apply_patch_tool_updates_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     data_file = tmp_path / "data.txt"
     data_file.write_text("hello\nold value\nbye\n", encoding="utf-8")
-    patch = (
-        "*** Begin Patch\n"
-        f"*** Update File: {data_file}\n"
-        "@@\n"
-        " hello\n"
-        "-old value\n"
-        "+new value\n"
-        " bye\n"
-        "*** End Patch\n"
-    )
 
     main = tmp_path / "main.kedi"
     main.write_text(
-        f"> import: filesystem\n\n= <apply_patch(`{patch!r}`)>\n",
+        "> import: filesystem\n\n"
+        '= <apply_patch(`"update"`, `"data.txt"`, `""`, `"old value"`, `"new value"`)>\n',
         encoding="utf-8",
     )
 
     rt = _compile_file(main)
 
-    assert rt.run_main() == f"updated {data_file}"
+    assert rt.run_main() == f"updated {data_file.resolve()}"
     assert data_file.read_text(encoding="utf-8") == "hello\nnew value\nbye\n"
 
 
-def test_internal_filesystem_apply_patch_accepts_wrapperless_patch(
+def test_internal_filesystem_apply_patch_add_rejects_existing_file(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     data_file = tmp_path / "data.txt"
-    data_file.write_text(
-        "from .constants import *\nfrom .vfx import Projectile\n", encoding="utf-8"
-    )
-    patch = (
-        f"*** Update File: {data_file}\n"
-        "@@ hunks @@\n"
-        "+import random\n"
-        " from .constants import *\n"
-        " from .vfx import Projectile\n"
-    )
+    data_file.write_text("existing", encoding="utf-8")
 
     main = tmp_path / "main.kedi"
     main.write_text(
-        f"> import: filesystem\n\n= <apply_patch(`{patch!r}`)>\n",
+        '> import: filesystem\n\n= <apply_patch(`"add"`, `"data.txt"`, `"new"`)>\n',
         encoding="utf-8",
     )
 
     rt = _compile_file(main)
 
-    assert rt.run_main() == f"updated {data_file}"
-    assert data_file.read_text(encoding="utf-8") == (
-        "import random\nfrom .constants import *\nfrom .vfx import Projectile\n"
+    with pytest.raises(Exception, match="file already exists"):
+        rt.run_main()
+
+
+def test_internal_filesystem_apply_patch_rejects_ambiguous_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_file = tmp_path / "data.txt"
+    data_file.write_text("same\nsame\n", encoding="utf-8")
+
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        '> import: filesystem\n\n= <apply_patch(`"update"`, `"data.txt"`, `""`, `"same"`, `"new"`)>\n',
+        encoding="utf-8",
     )
+
+    rt = _compile_file(main)
+
+    with pytest.raises(Exception, match="ambiguous"):
+        rt.run_main()
+
+
+def test_internal_filesystem_rejects_out_of_root_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside.txt"
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        f'> import: filesystem\n\n= <write_text_file(`{str(outside)!r}`, `"owned"`)>\n',
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    with pytest.raises(Exception, match="path escapes filesystem root"):
+        rt.run_main()
 
 
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
@@ -285,11 +313,22 @@ def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> Non
             "path_exists",
             "list_directory",
             "create_directory",
-            "remove_file",
-            "remove_directory",
             "get_file_info",
         )
     ]
+
+
+def test_internal_errors_module_formats_single_package_name(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        '> import: errors\n\n= ```\nraise ModuleNotInstalledError("abc")\n```\n',
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    with pytest.raises(Exception, match="abc is not installed"):
+        rt.run_main()
 
 
 def test_missing_exported_name_raises_during_compile(tmp_path: Path) -> None:

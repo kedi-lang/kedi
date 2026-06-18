@@ -463,6 +463,18 @@ def test_runtime_globals_are_available_during_profile_capture() -> None:
     assert foo_def.captured_agent_profile.system == "Address the user as Ada."
 
 
+def test_runtime_globals_are_available_in_top_level_templates() -> None:
+    src = ">> Hello <args> [x]\n= <x>\n"
+    adapter = _adapter()
+    rt = compile_program(
+        parse_program(src),
+        adapter=adapter,
+        runtime_globals={"args": AttrDict({"name": "Ada"}, default=None)},
+    )
+
+    assert rt.run_main() == "x-value"
+
+
 def test_call_site_model_does_not_override_captured_procedure_profile() -> None:
     src = """
 > model: proc-model

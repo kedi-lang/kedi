@@ -102,6 +102,20 @@ def test_lexical_closure_reads_assignment(monkeypatch: Any) -> None:
     assert out == "2"
 
 
+def test_lexical_closure_reads_latest_outer_assignment(monkeypatch: Any) -> None:
+    src = (
+        "@outer():\n"
+        "  [x] = before\n"
+        "  @inner():\n"
+        "    = <x>\n"
+        "  [x] = after\n"
+        "  = <inner()>\n\n"
+        "= <outer()>\n"
+    )
+    out = _run(src)
+    assert out == "after"
+
+
 def test_lexical_closure_updates_outer_assignment(monkeypatch: Any) -> None:
     src = (
         "@outer():\n"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Sequence, cast
 
 import dspy
@@ -50,7 +51,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     ) -> None:
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
         self._tool_scope = ToolScope()
-        self._profile_stack: list[AgentProfile] = []
+        self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
+            f"kedi_pydantic_profile_stack_{id(self)}",
+            default=(),
+        )
         if isinstance(model, str):
             model = normalize_for_pydantic_ai(model) if model is not None else None
         if model_settings:
@@ -84,7 +88,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     @property
     def active_profile(self) -> AgentProfile:
-        stack = getattr(self, "_profile_stack", ())
+        stack_var = getattr(self, "_profile_stack_var", None)
+        stack = stack_var.get() if stack_var is not None else ()
         return stack[-1] if stack else AgentProfile.empty()
 
     @staticmethod
@@ -207,11 +212,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                     }
                 ]
             }
-        stack = getattr(self, "_profile_stack", None)
-        if stack is None:
-            stack = []
-            self._profile_stack = stack
-        stack.append(profile)
+        stack_var = self._profile_stack_var
+        token = stack_var.set((*stack_var.get(), profile))
         try:
             if not override_kwargs:
                 yield
@@ -219,7 +221,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             with self.override(**override_kwargs):
                 yield
         finally:
-            stack.pop()
+            stack_var.reset(token)
 
 
 class DSPyAdapter:
@@ -246,7 +248,10 @@ class DSPyAdapter:
         self._lm_settings = dspy_lm_settings(model_settings or {})
         self._lm_extra_kwargs = dict(kwargs)
         self._tool_scope = ToolScope()
-        self._profile_stack: list[AgentProfile] = []
+        self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
+            f"kedi_dspy_profile_stack_{id(self)}",
+            default=(),
+        )
         # Keep a one-time baseline configure so plain (no-profile) produce has a
         # global LM; per-call correctness comes from the ``dspy.context`` wrap in
         # ``produce_sync`` / ``profile_override`` (innermost context wins).
@@ -298,7 +303,8 @@ class DSPyAdapter:
 
     @property
     def active_profile(self) -> AgentProfile:
-        stack = getattr(self, "_profile_stack", ())
+        stack_var = getattr(self, "_profile_stack_var", None)
+        stack = stack_var.get() if stack_var is not None else ()
         return stack[-1] if stack else AgentProfile.empty()
 
     @staticmethod
@@ -367,7 +373,8 @@ class DSPyAdapter:
         profile override is on the stack. The baseline ``dspy.settings.configure``
         from ``__init__`` remains the fallback for first-run safety.
         """
-        if self._profile_stack:
+        stack_var = getattr(self, "_profile_stack_var", None)
+        if stack_var is not None and stack_var.get():
             return nullcontext()
         if self._lm_model is None:
             return nullcontext()
@@ -411,11 +418,8 @@ class DSPyAdapter:
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         needs_model_override = profile.needs_model_override(self.default_model())
-        stack = getattr(self, "_profile_stack", None)
-        if stack is None:
-            stack = []
-            self._profile_stack = stack
-        stack.append(profile)
+        stack_var = self._profile_stack_var
+        token = stack_var.set((*stack_var.get(), profile))
         try:
             if not needs_model_override and profile.effort is None and not profile.settings:
                 yield
@@ -434,4 +438,4 @@ class DSPyAdapter:
             with dspy.context(lm=lm):
                 yield
         finally:
-            stack.pop()
+            stack_var.reset(token)

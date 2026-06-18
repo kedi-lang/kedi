@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
+import threading
+from contextvars import ContextVar
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -26,6 +28,14 @@ from kedi.lang import compile_program, parse_program
 
 class DirectOutput(BaseModel):
     value: str
+
+
+def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
+    setattr(
+        adapter,
+        "_profile_stack_var",
+        ContextVar(f"test_profile_stack_{id(adapter)}", default=tuple(profiles)),
+    )
 
 
 def test_make_repr_uses_class_name_for_standard_class_repr() -> None:
@@ -93,6 +103,33 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         PydanticAdapter.type_builder({})
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("template"))
+
+
+def test_pydantic_adapter_profile_stack_is_context_local() -> None:
+    adapter = PydanticAdapter(model=None)
+    seen: list[dict[str, Any]] = []
+    entered_b = threading.Event()
+    finish = threading.Event()
+
+    def run_a() -> None:
+        with adapter.profile_override(AgentProfile(settings={"temperature": 0.1})):
+            entered_b.wait(1)
+            seen.append(dict(adapter.active_profile.settings))
+            finish.set()
+
+    def run_b() -> None:
+        with adapter.profile_override(AgentProfile(settings={"temperature": 0.9})):
+            entered_b.set()
+            finish.wait(1)
+
+    thread_a = threading.Thread(target=run_a)
+    thread_b = threading.Thread(target=run_b)
+    thread_a.start()
+    thread_b.start()
+    thread_a.join()
+    thread_b.join()
+
+    assert seen == [{"temperature": 0.1}]
 
 
 def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,15 +244,16 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
 ) -> None:
     adapter = object.__new__(PydanticAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [
+    _set_profile_stack(
+        adapter,
         AgentProfile(
             settings={
                 "temperature": 0.2,
                 "parallel_tool_calls": False,
                 "num_retries": 2,
             }
-        )
-    ]
+        ),
+    )
     seen_kwargs: list[dict[str, Any]] = []
 
     async def fake_run(template: str, **kwargs: Any) -> SimpleNamespace:
@@ -260,7 +298,7 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:
     adapter = object.__new__(PydanticAdapter)
-    adapter._profile_stack = []
+    _set_profile_stack(adapter)
     adapter._model = "openai:gpt-4o-mini"
 
     broken_profile = cast(
@@ -284,7 +322,7 @@ def test_pydantic_adapter_includes_active_profile_mcp_toolsets(
 
     adapter = object.__new__(PydanticAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),))]
+    _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),)))
 
     assert adapter._toolsets_for_run() == ["mcp-toolset"]
 
@@ -379,7 +417,7 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = None
-    adapter._profile_stack = []
+    _set_profile_stack(adapter)
     result = asyncio.run(
         adapter.produce(
             "prompt",
@@ -473,11 +511,12 @@ def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
 
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [
+    _set_profile_stack(
+        adapter,
         AgentProfile(
             mcp_servers=(McpServerSpec(command="vsh", args=("run", "--mcp"), env={"A": "B"}),)
-        )
-    ]
+        ),
+    )
 
     result = asyncio.run(adapter._produce_with_mcp(object(), ["local"], "prompt", {"extra": 1}))
 
@@ -518,7 +557,8 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
 
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),))]
+    adapter._lm_model = None
+    _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),)))
 
     result = adapter.produce_sync("prompt", {"answer": str}, user_prompt="ignored", extra=1)
 
@@ -533,9 +573,10 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
 def test_dspy_adapter_mcp_rejects_non_stdio() -> None:
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [
-        AgentProfile(mcp_servers=(McpServerSpec(transport="http", url="http://localhost"),))
-    ]
+    _set_profile_stack(
+        adapter,
+        AgentProfile(mcp_servers=(McpServerSpec(transport="http", url="http://localhost"),)),
+    )
 
     with pytest.raises(NotImplementedError, match="stdio"):
         asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
@@ -544,7 +585,7 @@ def test_dspy_adapter_mcp_rejects_non_stdio() -> None:
 def test_dspy_adapter_mcp_rejects_missing_stdio_command() -> None:
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()
-    adapter._profile_stack = [AgentProfile(mcp_servers=(McpServerSpec(),))]
+    _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(),)))
 
     with pytest.raises(ValueError, match="stdio transport requires a command"):
         asyncio.run(adapter._produce_with_mcp(object(), [], "prompt", {}))
@@ -553,7 +594,7 @@ def test_dspy_adapter_mcp_rejects_missing_stdio_command() -> None:
 def test_dspy_adapter_profile_override_rejects_broken_model_profile() -> None:
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
-    adapter._profile_stack = []
+    _set_profile_stack(adapter)
 
     broken_profile = cast(
         AgentProfile,

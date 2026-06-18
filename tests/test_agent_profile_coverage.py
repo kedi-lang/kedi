@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -51,6 +52,14 @@ from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp import features
 from tests.lsp_helpers import hover_text_at, position_at_line
 from tests.mock_adapter import MockAdapter
+
+
+def _set_profile_stack(adapter: object) -> None:
+    setattr(
+        adapter,
+        "_profile_stack_var",
+        ContextVar(f"test_profile_stack_{id(adapter)}", default=()),
+    )
 
 
 def test_agent_profile_merge_and_override_flags() -> None:
@@ -228,6 +237,7 @@ def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> N
 
     adapter = object.__new__(PydanticAdapter)
     adapter._model = "openai:gpt-4o-mini"
+    _set_profile_stack(adapter)
     with adapter.profile_override(AgentProfile(model="openai:gpt-4o-mini")):
         pass
     assert entered == []
@@ -284,6 +294,7 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter._lm_max_tokens = 1
     adapter._lm_temperature = 0.0
     adapter._lm_extra_kwargs = {}
+    _set_profile_stack(adapter)
 
     with adapter.profile_override(AgentProfile(model="openai:gpt-4o-mini")):
         pass

@@ -79,7 +79,7 @@ def test_active_profile_context_is_not_overridden_by_produce_default(
     # second (default) LM context that would shadow the profile's context.
     entered = [lm for lm in contexts if not isinstance(lm, tuple)]
     assert entered == []
-    assert adapter._profile_stack == []
+    assert adapter.active_profile == AgentProfile.empty()
 
 
 def test_profile_override_uses_profile_model_context(

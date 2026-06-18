@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
 
 from ...agent_adapter.adapters import DSPyAdapter
+from ...agent_adapter.utils import run_sync
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType
 from ...resolved_types import ResolvedKediType, as_resolved_kedi_type, resolved_type_name
@@ -172,4 +172,4 @@ class StructuredTypeHandler:
         Returns:
             DSPy Signature object or string signature
         """
-        return asyncio.run(self.create_dspy_signature(inputs, output_fields, use_string_signature))
+        return run_sync(self.create_dspy_signature(inputs, output_fields, use_string_signature))

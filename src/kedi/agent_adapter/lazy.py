@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 if TYPE_CHECKING:
@@ -20,10 +21,13 @@ class LazyAdapter:
     def __init__(self, factory: Callable[[], Any]) -> None:
         self._factory = factory
         self._real: Any | None = None
+        self._lock = Lock()
 
     def _ensure(self) -> Any:
         if self._real is None:
-            self._real = self._factory()
+            with self._lock:
+                if self._real is None:
+                    self._real = self._factory()
         return self._real
 
     def default_model(self) -> str | None:

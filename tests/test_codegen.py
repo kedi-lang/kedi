@@ -199,6 +199,21 @@ def test_codegen_cleanup_failed_cache_removes_failed_block(tmp_path: Path) -> No
     assert not cache.exists()
 
 
+def test_codegen_cache_write_is_atomic_and_preserves_blocks(tmp_path: Path) -> None:
+    src = tmp_path / "prog.kedi"
+    src.write_text("= ok\n", encoding="utf-8")
+    mgr = CodegenManager(MockPassingAgent())
+
+    mgr.write_cache(src, "first", "", "@first():\n  = one\n")
+    mgr.write_cache(src, "second", "", "@second():\n  = two\n")
+    mgr.write_cache(src, "first", "", "@first():\n  = changed\n")
+
+    cache_text = mgr.cache_path_for(src).read_text(encoding="utf-8")
+    assert "@first():\n  = changed" in cache_text
+    assert "@second():\n  = two" in cache_text
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
 def test_codegen_context_for_generation_falls_back_on_context_extraction_errors(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -337,6 +352,20 @@ def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:
     # Now tests should pass using discovery (includes .cache)
     results = run_tests(str(src))
     assert results and all(c.success for s in results for c in s.cases)
+
+
+def test_codegen_orchestrator_success_with_no_cache_removes_generated_cache(
+    tmp_path: Path,
+) -> None:
+    src = tmp_path / "g.kedi"
+    src.write_text(
+        "@f():\n  > auto: \n    implement a function returning ok\n\n= <f()>\n",
+        encoding="utf-8",
+    )
+    mgr = CodegenManager(MockPassingAgent(), use_cache=False)
+
+    assert mgr.orchestrate_generation(src, "@f():", "implement", "spec")
+    assert not (tmp_path / "g.cache.kedi").exists()
 
 
 def test_cli_like_codegen_runner(tmp_path: Path) -> None:

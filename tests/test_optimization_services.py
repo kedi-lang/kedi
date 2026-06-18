@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 from pathlib import Path
@@ -307,6 +308,23 @@ def test_type_resolver_basic_types():
 
     assert "x" in param_types
     assert param_types["x"] is int
+
+
+def test_type_resolver_reads_structured_param_type_exprs():
+    src = """
+@test(items: list[str]) -> str:
+  = ok
+"""
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+
+    resolver = TypeResolver(rt)
+    proc = prog.procedures[0]
+    param_types = resolver.resolve_param_types(proc)
+
+    assert "items" in param_types
+    assert getattr(param_types["items"], "__origin__", None) is list
+    assert getattr(param_types["items"], "__args__", ()) == (str,)
 
 
 def test_type_resolver_no_annotations():
@@ -692,6 +710,21 @@ def test_type_handler_multi_output():
 
     assert "result1" in signature
     assert "result2" in signature
+
+
+def test_type_handler_sync_signature_works_inside_running_loop():
+    src = "@test(x: int) -> int:\n  = `x * 2`"
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=None)
+    handler = StructuredTypeHandler(rt)
+
+    async def run() -> str:
+        return handler.create_dspy_signature_sync(["x"], [("result", "int")])
+
+    signature = asyncio.run(run())
+
+    assert "x" in signature
+    assert "result" in signature
 
 
 # ==================== DSPy-Dependent Service Tests ====================

@@ -17,7 +17,7 @@ import json
 import shlex
 from typing import Any, Optional, Union
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
@@ -224,7 +224,7 @@ class KediType:
             raise KediTypeExecutionError(
                 f"Cannot build validator for type {self!s}: {exc}"
             ) from exc
-        return adapter.validate_python(value)
+        return adapter.validate_python(value, strict=True)
 
     def __repr__(self) -> str:
         if self._expr is not None:
@@ -352,7 +352,12 @@ def register_type(
                 _pydantic_default(default_value),
             )
 
-    new_model = build_dynamic_model(typedef.name, BaseModel, field_defs)
+    new_model = build_dynamic_model(
+        typedef.name,
+        BaseModel,
+        field_defs,
+        __config__=ConfigDict(strict=True, extra="forbid"),
+    )
     init_namespace = build_type_env(rt, local_env or {})
     init_namespace[typedef.name] = new_model
     setattr(

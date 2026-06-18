@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from pathlib import Path
 from typing import Any, cast
 
@@ -93,6 +94,15 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(compiler_env.typing, "__all__", ("_PrivateTypingName",), raising=False)
     assert "_PrivateTypingName" not in build_type_env(KediRuntime(), None)
+
+
+def test_runtime_lookup_reads_current_env() -> None:
+    rt = KediRuntime()
+    token = rt._current_env.set({"current": "value"})
+    try:
+        assert rt._lookup_value("current", {}) == "value"
+    finally:
+        rt._current_env.reset(token)
 
 
 def test_build_python_env_wraps_procedures_and_coerces_model_values() -> None:
@@ -297,6 +307,29 @@ def test_runtime_core_edge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(rt, "_evaluate_expression", fake_evaluate_expression)
     assert rt._kedi_run(["ignored"], {}) == {}
+
+
+def test_no_tool_template_does_not_import_pydantic_ai_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Adapter:
+        def produce_sync(self, *, template: str, output_schema: dict[str, Any], **_: Any) -> Any:
+            class Result:
+                answer = "ok"
+
+            return Result()
+
+    real_import = builtins.__import__
+
+    def guarded_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "pydantic_ai" or name.startswith("pydantic_ai."):
+            raise AssertionError(f"unexpected pydantic_ai import: {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    rt = compile_kedi_program(parse_program(">> answer [answer]\n= <answer>\n"), adapter=Adapter())
+
+    assert rt.run_main() == "ok"
 
 
 def test_program_compiler_private_helpers_and_inline_toplevel(tmp_path: Path) -> None:

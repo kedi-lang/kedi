@@ -7,10 +7,14 @@ class ModuleNotInstalledError(ModuleNotFoundError):
     def __init__(self, package_names: str | list[str], required_by: str | None = None):
         self.package_name = package_names
         self.required_by = required_by
+        names = [package_names] if isinstance(package_names, str) else list(package_names)
+        joined = ", ".join(names)
+        package_word = "package" if len(names) == 1 else "packages"
+        verb = "is" if len(names) == 1 else "are"
         if required_by is not None:
-            message = f"{required_by} requires {', '.join(package_names)}, but those are not installed."
+            message = f"{required_by} requires {package_word} {joined}, but {joined} {verb} not installed."
         else:
-            message = f"{', '.join(package_names)} are not installed."
+            message = f"{joined} {verb} not installed."
         super().__init__(message)
 ```
 

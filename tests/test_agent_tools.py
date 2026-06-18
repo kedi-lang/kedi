@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -20,6 +21,14 @@ if TYPE_CHECKING:
 
 def _adapter() -> MockAdapter:
     return MockAdapter(default_model="default-model")
+
+
+def _set_empty_profile_stack(adapter: object) -> None:
+    setattr(
+        adapter,
+        "_profile_stack_var",
+        ContextVar(f"test_profile_stack_{id(adapter)}", default=()),
+    )
 
 
 def _procedure_def(fn: object) -> ProcedureDef:
@@ -416,7 +425,7 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
     adapter._lm_extra_kwargs = {}
-    adapter._profile_stack = []
+    _set_empty_profile_stack(adapter)
     adapter._tool_scope = ToolScope()
     rt = compile_program(parse_program(src), adapter=adapter)
 
@@ -453,6 +462,7 @@ def test_dspy_kedi_tool_resolves_custom_type_arg_schema() -> None:
 
     assert tool.args == {
         "request": {
+            "additionalProperties": False,
             "properties": {
                 "queries": {"items": {"type": "string"}, "type": "array"},
                 "limit": {"default": 5, "type": "integer"},
@@ -511,7 +521,7 @@ async def fetch(url: str) -> str:
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
     adapter._lm_extra_kwargs = {}
-    adapter._profile_stack = []
+    _set_empty_profile_stack(adapter)
     adapter._tool_scope = ToolScope()
     rt = compile_program(parse_program(src), adapter=adapter)
 

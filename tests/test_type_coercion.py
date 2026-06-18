@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.lang import compile_program, parse_program
 from kedi.resolved_types import ResolvedKediType
 
@@ -100,6 +101,34 @@ def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:
     """Run a kedi program with specific LLM responses."""
     runtime = compile_program(parse_program(src), adapter=TypeCoercionMockAdapter(responses))
     return runtime.run_main()
+
+
+def test_core_validates_adapter_output_with_default_pydantic_coercion() -> None:
+    src = ">> Give [x: int]\n= <`type(x).__name__ + ':' + str(x)`>\n"
+
+    assert _run_with_responses(src, {"x": "42"}) == "int:42"
+
+
+def test_core_rejects_uncoercible_adapter_output() -> None:
+    src = ">> Give [x: int]\n= <x>\n"
+
+    with pytest.raises(Exception):
+        _run_with_responses(src, {"x": "not an int"})
+
+
+def test_kedi_type_models_validate_strictly_for_native_values() -> None:
+    src = '~Person(age: int)\n[p: Person] = `Person(age="3")`\n= <`p.age`>\n'
+
+    with pytest.raises(Exception):
+        _run_with_responses(src, {})
+
+
+def test_pydantic_adapter_output_model_keeps_default_coercion() -> None:
+    model = PydanticAdapter.type_builder({"x": int})
+
+    result = model(x="1")
+
+    assert result.x == 1
 
 
 class TestValidAdapterResponses:

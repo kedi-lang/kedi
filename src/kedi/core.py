@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
+from pydantic import BaseModel, TypeAdapter
+
 from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
 from .executors.base import DefaultExecutor, Executor
 
@@ -136,15 +138,44 @@ class KediRuntime:
         except KeyError as e:
             raise KeyError(f"Unknown procedure: {name}") from e
 
+    def _lookup_value(self, key: str, env: ValueEnv) -> Any:
+        if key in env:
+            return env[key]
+
+        current_env = self._current_env.get()
+        if isinstance(current_env, dict) and key in current_env:
+            return current_env[key]
+
+        for layer in (
+            self._globals_env,
+            self._initial_globals_env,
+            self._prelude_env,
+            self._import_env,
+        ):
+            if isinstance(layer, dict) and key in layer:
+                return layer[key]
+
+        raise KeyError(f"Value not found in environment: {key}")
+
+    @staticmethod
+    def _validate_adapter_output(value: Any, expected_type: Any, *, explicit_type: bool) -> Any:
+        if not explicit_type:
+            return value
+        if (
+            isinstance(value, BaseModel)
+            and isinstance(expected_type, type)
+            and issubclass(expected_type, BaseModel)
+        ):
+            return value
+        return TypeAdapter(expected_type).validate_python(value)
+
     def _evaluate_expression(
         self, expr: Expression, env: ValueEnv
     ) -> Tuple[Optional[str], Optional[OutputExpr]]:
         if isinstance(expr, str):
             return expr, None
         if isinstance(expr, InputExpr):
-            if expr.key not in env:
-                raise KeyError(f"Value not found in environment: {expr.key}")
-            return str(env[expr.key]), None
+            return str(self._lookup_value(expr.key, env)), None
         if isinstance(expr, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
             callee = self._get_proc(expr.func_name)
@@ -155,9 +186,7 @@ class KediRuntime:
 
     def _evaluate_value(self, value: Any, env: ValueEnv) -> Any:
         if isinstance(value, InputExpr):
-            if value.key not in env:
-                raise KeyError(f"Value not found in environment: {value.key}")
-            return env[value.key]
+            return self._lookup_value(value.key, env)
         if isinstance(value, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in value.args]
             callee = self._get_proc(value.func_name)
@@ -342,6 +371,7 @@ class KediRuntime:
         typed_fields: Dict[str, Any] = {
             out.key: (out.pytype if out.pytype is not None else str) for out in outputs
         }
+        explicit_typed_fields = {out.key for out in outputs if out.pytype is not None}
         # Keep question format stable for tests; append description after to preserve key parsing
         base_q = (
             f"Fill in the fields: [{required[0]}]."
@@ -375,23 +405,25 @@ class KediRuntime:
             )
 
         from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
         from .agent_profile import AgentToolOverrideUnsupported
-        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
 
         tool_ctx = nullcontext()
-        if profile.tools:
+        tool_names = tuple(profile.tools)
+        if tool_names:
             if isinstance(self.adapter, SupportsToolRegistration):
                 tool_ctx = self.adapter.tool_scope()
             else:
                 raise AgentToolOverrideUnsupported(
-                    f"Active adapter does not support tool registration (requested tools={profile.tools!r})"
+                    f"Active adapter does not support tool registration (requested tools={tool_names!r})"
                 )
 
         with tool_ctx:
-            if profile.tools:
+            if tool_names:
+                from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+                from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+
                 assert isinstance(self.adapter, SupportsToolRegistration)
-                for tool_name in profile.tools:
+                for tool_name in tool_names:
                     proc = procedure_def_for_tool(self, tool_name)
                     if proc is not None:
                         self.adapter.register_tool(kedi_procedure_tool_spec(self, proc))
@@ -416,5 +448,10 @@ class KediRuntime:
             value = getattr(result, key, NotFound)  # Ensure result has the attribute
             if value is NotFound:
                 raise ValueError(f"LLM did not return required key: {key}")
+            value = self._validate_adapter_output(
+                value,
+                typed_fields[key],
+                explicit_type=key in explicit_typed_fields,
+            )
             env[key] = value
         return {k: env[k] for k in required}

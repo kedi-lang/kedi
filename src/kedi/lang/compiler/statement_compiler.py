@@ -323,7 +323,7 @@ class StatementExecutor:
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
             child = stmt.proc
             child.captured_agent_profile = active.frozen_copy()
-            child.lexical_env = dict(closure_env)
+            child.lexical_env = closure_env
             proc_compiler = ProcedureCompiler(self.rt)
             fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
