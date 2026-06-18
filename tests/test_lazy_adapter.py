@@ -8,9 +8,9 @@ effects twice).
 from __future__ import annotations
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-import time
 
 import kedi.app as app
 from kedi.agent_adapter.lazy import LazyAdapter
