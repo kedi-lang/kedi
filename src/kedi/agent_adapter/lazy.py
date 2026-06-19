@@ -4,9 +4,13 @@ from contextlib import AbstractContextManager
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
+from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile
     from .tool_override import ToolSpec
+
+AvailableAdapter = DSPyAdapter | PydanticAdapter
 
 
 class LazyAdapter:
@@ -20,10 +24,10 @@ class LazyAdapter:
 
     def __init__(self, factory: Callable[[], Any]) -> None:
         self._factory = factory
-        self._real: Any | None = None
+        self._real: Any = None
         self._lock = Lock()
 
-    def _ensure(self) -> Any:
+    def _ensure(self) -> AvailableAdapter:
         if self._real is None:
             with self._lock:
                 if self._real is None:

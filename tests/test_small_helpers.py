@@ -249,7 +249,13 @@ def test_package_main_and_settings_module(monkeypatch: pytest.MonkeyPatch) -> No
         runpy.run_module("kedi.__main__", run_name="__main__")
 
     assert exc_info.value.code == 7
-    assert importlib.import_module("kedi.__main__") is not None
+
+    main_module = importlib.import_module("kedi.__main__")
+    dotenv_calls: list[bool] = []
+    monkeypatch.setattr(main_module.dotenv, "load_dotenv", lambda: dotenv_calls.append(True))
+
+    assert main_module.main() == 7
+    assert dotenv_calls == [True]
 
     settings_module = importlib.reload(kedi.settings)
     assert settings_module.settings.adapter == "pydantic"

@@ -16,6 +16,7 @@ from pygls.lsp.server import LanguageServer
 
 from .._version import __version__
 from . import features
+from . import kedi_docstrings
 from .python_virtual import compute_python_virtual_document
 
 _LOGGER = logging.getLogger(__name__)
@@ -219,6 +220,89 @@ def make_server() -> LanguageServer:
         )
         return {"uri": uri, **result}
 
+    # ----- Custom: embedded Kedi-in-Python-docstring interop -----
+
+    @server.feature("kedi/kediDocstringRanges")
+    def _kedi_docstring_ranges(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "ranges": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "ranges": kedi_docstrings.compute_kedi_docstring_ranges(source),
+        }
+
+    @server.feature("kedi/kediDocstringDiagnostics")
+    def _kedi_docstring_diagnostics(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "diagnostics": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "diagnostics": kedi_docstrings.compute_kedi_docstring_diagnostics(
+                source,
+                _uri_to_path(uri),
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringHover")
+    def _kedi_docstring_hover(params: Any) -> dict | None:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return None
+        source = _request_source(server, uri, params)
+        return kedi_docstrings.compute_kedi_docstring_hover(
+            source,
+            _uri_to_path(uri),
+            position,
+        )
+
+    @server.feature("kedi/kediDocstringDefinition")
+    def _kedi_docstring_definition(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return {"uri": uri or "", "locations": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "locations": kedi_docstrings.compute_kedi_docstring_definition(
+                source,
+                uri,
+                _uri_to_path(uri),
+                position,
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringReferences")
+    def _kedi_docstring_references(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return {"uri": uri or "", "locations": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "locations": kedi_docstrings.compute_kedi_docstring_references(
+                source,
+                uri,
+                _uri_to_path(uri),
+                position,
+                include_declaration=_request_include_declaration(params),
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringSemanticTokens")
+    def _kedi_docstring_semantic_tokens(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "data": []}
+        source = _request_source(server, uri, params)
+        return {"uri": uri, **kedi_docstrings.compute_kedi_docstring_semantic_tokens(source)}
+
     return server
 
 
@@ -267,6 +351,52 @@ def _request_focus_line(params: Any) -> Optional[int]:
         if isinstance(line, int):
             return line
     return None
+
+
+def _request_position(params: Any) -> Optional[lsp.Position]:
+    if isinstance(params, dict):
+        position = params.get("position")
+        if isinstance(position, dict):
+            line = position.get("line")
+            character = position.get("character")
+            if isinstance(line, int) and isinstance(character, int):
+                return lsp.Position(line=line, character=character)
+        return None
+    position = getattr(params, "position", None)
+    if position is None:
+        return None
+    line = getattr(position, "line", None)
+    character = getattr(position, "character", None)
+    if isinstance(line, int) and isinstance(character, int):
+        return lsp.Position(line=line, character=character)
+    return None
+
+
+def _request_include_declaration(params: Any) -> bool:
+    if isinstance(params, dict):
+        value = params.get("includeDeclaration")
+        if isinstance(value, bool):
+            return value
+        context = params.get("context")
+        if isinstance(context, dict):
+            value = context.get("includeDeclaration") or context.get("include_declaration")
+            return bool(value)
+        return False
+    value = getattr(params, "include_declaration", None)
+    if isinstance(value, bool):
+        return value
+    value = getattr(params, "includeDeclaration", None)
+    if isinstance(value, bool):
+        return value
+    context = getattr(params, "context", None)
+    if context is not None:
+        value = getattr(context, "include_declaration", None)
+        if isinstance(value, bool):
+            return value
+        value = getattr(context, "includeDeclaration", None)
+        if isinstance(value, bool):
+            return value
+    return False
 
 
 def _publish_diagnostics(server: LanguageServer, uri: str) -> None:

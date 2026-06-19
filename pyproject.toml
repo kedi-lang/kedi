@@ -48,7 +48,7 @@ Source = "https://github.com/kedi-lang/kedi"
 Tracker = "https://github.com/kedi-lang/kedi/issues"
 
 [project.scripts]
-kedi = "kedi.cli:main"
+kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
 
 [tool.hatch.build]

@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 
 import click
-import dotenv
 
 from kedi.app import (
     maybe_run_codegen,
@@ -19,8 +18,6 @@ from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
-
-dotenv.load_dotenv()
 
 context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 

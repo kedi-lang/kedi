@@ -350,6 +350,28 @@ def test_empty_use_directive_raises() -> None:
         eval_use_directive(KediRuntime(), UseDirectiveStmt(), {}, {}, available_procedures=set())
 
 
+def test_use_directive_accepts_runtime_global_python_callable() -> None:
+    from kedi.agent_profile.tools import eval_use_directive
+    from kedi.core import KediRuntime
+    from kedi.lang.ast import UseDirectiveStmt
+
+    def lookup() -> str:
+        return "ok"
+
+    rt = KediRuntime()
+    rt.set_initial_globals({"lookup": lookup})
+
+    profile = eval_use_directive(
+        rt,
+        UseDirectiveStmt(target="lookup"),
+        {},
+        {},
+        available_procedures=set(),
+    )
+
+    assert profile.tools == ("lookup",)
+
+
 def test_unknown_tool_procedure_at_runtime_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
