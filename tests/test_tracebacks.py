@@ -398,6 +398,9 @@ def test_render_execution_error_covers_empty_frames_keyerror_and_multitrace_styl
     assert "Kedi stack trace:" in key_output
     assert "Kedi error: KeyError" in key_output
     assert "missing" in key_output
+    assert key_error.render() == key_output
+    assert str(key_error) == key_output
+    assert repr(key_error) == key_output
 
     span = Span(0, 22, 7, 1, 7, 23, source_path="/tmp/sample.kedi")
     frame = KediTraceFrame(
