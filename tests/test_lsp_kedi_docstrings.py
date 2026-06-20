@@ -90,10 +90,18 @@ def broken(name: str) -> str:
 
 
 def test_kedi_docstring_semantic_tokens_are_remapped() -> None:
+    from kedi.lsp import features
+
     tokens = kedi_docstrings.compute_kedi_docstring_semantic_tokens(PY_SOURCE)
     decoded = decode_semantic_tokens(tokens["data"])
+    token_types = {
+        features.SEMANTIC_TOKEN_TYPES[token_type]
+        for line, _, _, token_type, _ in decoded
+        if line == 12
+    }
 
     assert any(line == 12 for line, *_ in decoded)
+    assert {"keyword", "operator", "string", "variable"} <= token_types
 
 
 def test_kedi_docstring_ignores_non_kedi_docstrings_and_invalid_python() -> None:
