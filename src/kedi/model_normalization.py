@@ -6,7 +6,9 @@ The same logical id is often written two ways (any vendor, not one provider):
   name from the rest (which may contain more slashes), e.g. ``groq/qwen/qwen3-32b``.
 
 - **Pydantic AI** (and similar): ``<provider>:<rest>`` — first colon separates the
-  same two parts, e.g. ``groq:qwen/qwen3-32b``.
+  same two parts, e.g. ``groq:qwen/qwen3-32b``. OpenAI chat-completions models
+  use Pydantic AI's explicit ``openai-chat:`` provider to avoid the deprecated
+  ambiguous ``openai:`` prefix.
 
 Kedi normalizes at each boundary so either spelling works in CLI and env.
 
@@ -31,10 +33,20 @@ def normalize_for_litellm(model: str) -> str:
 
 def normalize_for_pydantic_ai(model: str) -> str:
     """Use the first colon between provider and rest (Pydantic-style)."""
-    if not model or "/" not in model or "://" in model:
+    if not model or "://" in model:
         return model
+    if model.startswith("openai-chat:") or model.startswith("openai-responses:"):
+        return model
+    if model.startswith("openai:"):
+        return "openai-chat:" + model[len("openai:") :]
     si = model.find("/")
     ci = model.find(":")
+    if si == -1:
+        return model
     if ci != -1 and (si == -1 or ci < si):
         return model
-    return model[:si] + ":" + model[si + 1 :]
+    provider = model[:si]
+    rest = model[si + 1 :]
+    if provider == "openai":
+        provider = "openai-chat"
+    return provider + ":" + rest

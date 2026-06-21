@@ -77,7 +77,7 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
 
     monkeypatch.setattr(adapter, "run", fake_run)
 
-    assert initialized_models[0] == "openai:gpt-4o-mini"
+    assert initialized_models[0] == "openai-chat:gpt-4o-mini"
     assert isinstance(initialized_models[1], TestModel)
     assert initialized_kwargs[2]["model_settings"] == {"temperature": 0.1}
     assert "model_settings" not in initialized_kwargs[3]

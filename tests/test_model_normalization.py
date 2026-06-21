@@ -19,11 +19,14 @@ def test_slash_form_unchanged_for_litellm() -> None:
 def test_slash_to_colon_for_pydantic() -> None:
     assert normalize_for_pydantic_ai("acme/foo/bar-baz") == "acme:foo/bar-baz"
     assert normalize_for_pydantic_ai("groq/qwen/qwen3-32b") == "groq:qwen/qwen3-32b"
+    assert normalize_for_pydantic_ai("openai/gpt-4o") == "openai-chat:gpt-4o"
 
 
 def test_colon_form_unchanged_for_pydantic() -> None:
     assert normalize_for_pydantic_ai("acme:foo/bar-baz") == "acme:foo/bar-baz"
     assert normalize_for_pydantic_ai("groq:qwen/qwen3-32b") == "groq:qwen/qwen3-32b"
+    assert normalize_for_pydantic_ai("openai-chat:gpt-4o") == "openai-chat:gpt-4o"
+    assert normalize_for_pydantic_ai("openai-responses:gpt-4o") == ("openai-responses:gpt-4o")
 
 
 def test_round_trip_multi_segment_provider() -> None:
@@ -41,4 +44,4 @@ def test_urls_untouched() -> None:
 
 def test_no_slash_no_change_for_pydantic() -> None:
     assert normalize_for_pydantic_ai("gpt-4o") == "gpt-4o"
-    assert normalize_for_pydantic_ai("openai:gpt-4o") == "openai:gpt-4o"
+    assert normalize_for_pydantic_ai("openai:gpt-4o") == "openai-chat:gpt-4o"
