@@ -108,8 +108,18 @@ def lookup() -> str:
     return "lookup result"
 
 
+class AddressReprValue:
+    def __init__(self, label: str) -> None:
+        self.label = label
+
+    def __repr__(self) -> str:
+        return f"<AddressReprValue label={self.label!r} at {hex(id(self))}>"
+
+
 @pytest.fixture
 def adapter() -> ApiAdapter:
+    api_module._PARSE_CACHE.clear()
+    api_module._RESPONSE_CACHE.clear()
     configured = ApiAdapter()
     configure(model="configured:model", adapter=configured)
     return configured
@@ -127,6 +137,114 @@ def test_query_binds_arguments_and_defaults(adapter: ApiAdapter) -> None:
     assert summarize("Kedi") == "short summary"
     assert "Kedi" in adapter.templates[0]
     assert "clear" in adapter.templates[0]
+
+
+def test_query_parse_cache_reuses_identical_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    api_module._PARSE_CACHE.clear()
+    calls = 0
+    real_parse = api_module.parse_program
+
+    def counting_parse(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "parse_program", counting_parse)
+
+    @query
+    def first() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    @query
+    def second() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert first is not second
+    assert calls == 1
+
+
+def test_query_response_cache_reuses_same_call(adapter: ApiAdapter) -> None:
+    @query(cache=True)
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize("Kedi") == "short summary"
+    assert summarize("Kedi") == "short summary"
+    assert len(adapter.templates) == 1
+
+
+def test_query_response_cache_splits_by_args_and_env(adapter: ApiAdapter) -> None:
+    @query(cache=True)
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize("Kedi") == "short summary"
+    assert summarize("Python") == "short summary"
+    assert len(adapter.templates) == 2
+
+    @query(cache=True, env={"topic": "env topic"})
+    def summarize_from_env(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize_from_env("Kedi") == "short summary"
+    assert len(adapter.templates) == 3
+
+
+def test_response_cache_key_normalizes_memory_addresses() -> None:
+    def sample(value: AddressReprValue) -> None:
+        return None
+
+    kwargs_a = {"value": AddressReprValue("same")}
+    kwargs_b = {"value": AddressReprValue("same")}
+
+    assert repr(kwargs_a["value"]) != repr(kwargs_b["value"])
+    assert api_module._response_cache_key(
+        kind="query",
+        inner=sample,
+        source_id="sample",
+        source_hash="hash",
+        args=(),
+        kwargs=kwargs_a,
+        config_env={},
+        env={},
+    ) == api_module._response_cache_key(
+        kind="query",
+        inner=sample,
+        source_id="sample",
+        source_hash="hash",
+        args=(),
+        kwargs=kwargs_b,
+        config_env={},
+        env={},
+    )
+
+
+def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -> None:
+    @query(cache=True)
+    def summarize(topic: AddressReprValue) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    assert summarize(AddressReprValue("Kedi")) == "short summary"
+    assert len(adapter.templates) == 1
 
 
 def test_query_supports_dynamic_runtime_output_type(adapter: ApiAdapter) -> None:
@@ -499,6 +617,45 @@ def test_bind_file_exposes_kedi_source_as_python_callable(
     assert adapter.templates == [
         "Fill in the fields: [summary].\nSummarize Kedi. Return [summary]."
     ]
+
+
+def test_bind_parse_cache_reuses_identical_file_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    api_module._PARSE_CACHE.clear()
+    calls = 0
+    real_parse = api_module.parse_program
+    source = tmp_path / "answer.kedi"
+    source.write_text(">> Return [answer].\n= <answer>\n", encoding="utf-8")
+
+    def counting_parse(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, "parse_program", counting_parse)
+
+    @bind(file=source)
+    def first() -> str: ...
+
+    @bind(file=source)
+    def second() -> str: ...
+
+    assert first is not second
+    assert calls == 1
+
+
+def test_bind_response_cache_reuses_same_call(adapter: ApiAdapter, tmp_path: Path) -> None:
+    source = tmp_path / "summarize.kedi"
+    source.write_text(">> Summarize <topic>. Return [summary].\n= <summary>\n", encoding="utf-8")
+
+    @bind(file=source, cache=True)
+    def summarize(topic: str) -> str: ...
+
+    assert summarize("Kedi") == "short summary"
+    assert summarize("Kedi") == "short summary"
+    assert len(adapter.templates) == 1
 
 
 def test_bind_file_profile_arguments_apply_for_one_call(

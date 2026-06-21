@@ -3,8 +3,10 @@ from __future__ import annotations
 import builtins
 import dataclasses
 import functools
+import hashlib
 import inspect
 import os
+import re
 import textwrap
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
@@ -30,7 +32,10 @@ _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
 _TYPE_INJECT_ATTR = "__kedi_type_inject__"
+_MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 _TYPE_REGISTRY: dict[str, dict[str, builtins.type[Any]]] = {}
+_PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
+_RESPONSE_CACHE: dict[str, Any] = {}
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,54 @@ def _wrap_query_source(source: str) -> str:
     return f"@__kedi_query_entry__() -> Any:\n{body}\n"
 
 
+def _source_hash(source: str) -> str:
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _parse_cached(
+    *,
+    kind: str,
+    source: str,
+    source_path: str | None = None,
+) -> tuple[Any, str]:
+    digest = _source_hash(source)
+    key = (kind, source_path, digest)
+    program = _PARSE_CACHE.get(key)
+    if program is None:
+        program = parse_program(source, source_path=source_path)
+        _PARSE_CACHE[key] = program
+    return program, digest
+
+
+def _stable_repr(value: Any) -> str:
+    return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
+
+
+def _response_cache_key(
+    *,
+    kind: str,
+    inner: Callable[..., Any],
+    source_id: str,
+    source_hash: str,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+    config_env: Mapping[str, Any],
+    env: Mapping[str, Any],
+) -> str:
+    payload = (
+        kind,
+        getattr(inner, "__module__", ""),
+        _callable_name(inner),
+        source_id,
+        source_hash,
+        tuple(_stable_repr(arg) for arg in args),
+        tuple((key, _stable_repr(value)) for key, value in sorted(kwargs.items())),
+        tuple((key, _stable_repr(value)) for key, value in sorted(config_env.items())),
+        tuple((key, _stable_repr(value)) for key, value in sorted(env.items())),
+    )
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+
 def _agent_profile_overrides(
     *,
     system: str | None,
@@ -159,15 +212,32 @@ def _read_bind_file(file: str | os.PathLike[str], fn: Callable[..., Any]) -> tup
 
 def _decorate_kedi_program(
     *,
+    kind: str,
     inner: Callable[P, R],
     program: Any,
+    source_id: str,
+    source_hash: str,
     tool_map: Mapping[str, Callable[..., Any]],
     env: Mapping[str, Any],
     profile_override: AgentProfile,
     use_main: bool,
+    cache: bool,
 ) -> Callable[P, R]:
     def run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
+        cache_key = _response_cache_key(
+            kind=kind,
+            inner=inner,
+            source_id=source_id,
+            source_hash=source_hash,
+            args=args,
+            kwargs=kwargs,
+            config_env=config.env,
+            env=env,
+        )
+        if cache and cache_key in _RESPONSE_CACHE:
+            return cast(R, _RESPONSE_CACHE[cache_key])
+
         adapter = _build_adapter(config)
         runtime_globals = {
             **config.tools,
@@ -185,11 +255,15 @@ def _decorate_kedi_program(
         )
         with block_agent_profile_scope(profile):
             if use_main:
-                return cast(R, runtime.run_main())
-            return cast(
-                R,
-                runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
-            )
+                result = cast(R, runtime.run_main())
+            else:
+                result = cast(
+                    R,
+                    runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
+                )
+        if cache:
+            _RESPONSE_CACHE[cache_key] = result
+        return result
 
     if _is_async_callable(inner):
 
@@ -498,6 +572,7 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -510,6 +585,7 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     tool_map, profile_override = _agent_profile_overrides(
         system=system,
@@ -521,14 +597,19 @@ def query(
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
         source = _extract_kedi_source(inner)
-        program = parse_program(_wrap_query_source(source))
+        wrapped_source = _wrap_query_source(source)
+        program, digest = _parse_cached(kind="query", source=wrapped_source)
         return _decorate_kedi_program(
+            kind="query",
             inner=inner,
             program=program,
+            source_id=_callable_name(inner),
+            source_hash=digest,
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
             use_main=False,
+            cache=cache,
         )
 
     if fn is not None:
@@ -545,6 +626,7 @@ def bind(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     tool_map, profile_override = _agent_profile_overrides(
         system=system,
@@ -556,14 +638,19 @@ def bind(
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
         source, path = _read_bind_file(file, inner)
-        program = parse_program(source, source_path=str(path))
+        source_path = str(path)
+        program, digest = _parse_cached(kind="bind", source=source, source_path=source_path)
         return _decorate_kedi_program(
+            kind="bind",
             inner=inner,
             program=program,
+            source_id=source_path,
+            source_hash=digest,
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
             use_main=True,
+            cache=cache,
         )
 
     return decorate
