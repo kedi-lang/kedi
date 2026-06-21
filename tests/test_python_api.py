@@ -11,7 +11,17 @@ import pytest
 from pydantic import BaseModel
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from kedi import bind, configure, context, query, reset_config, tool, type as kedi_type
+from kedi import (
+    cache_info,
+    clear_cache,
+    bind,
+    configure,
+    context,
+    query,
+    reset_config,
+    tool,
+    type as kedi_type,
+)
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
@@ -167,6 +177,25 @@ def test_query_parse_cache_reuses_identical_source(monkeypatch: pytest.MonkeyPat
 
     assert first is not second
     assert calls == 1
+
+
+def test_cache_info_and_clear_cache(adapter: ApiAdapter) -> None:
+    @query(cache=True)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    info = cache_info()
+    assert info.parse_entries >= 1
+    assert info.response_entries >= 1
+
+    clear_cache()
+
+    assert cache_info().parse_entries == 0
+    assert cache_info().response_entries == 0
 
 
 def test_query_response_cache_reuses_same_call(adapter: ApiAdapter) -> None:
@@ -656,6 +685,38 @@ def test_bind_response_cache_reuses_same_call(adapter: ApiAdapter, tmp_path: Pat
     assert summarize("Kedi") == "short summary"
     assert summarize("Kedi") == "short summary"
     assert len(adapter.templates) == 1
+
+
+def test_bind_reload_rereads_file_and_uses_new_hash(adapter: ApiAdapter, tmp_path: Path) -> None:
+    source = tmp_path / "summarize.kedi"
+    source.write_text(">> First <topic>. Return [summary].\n= <summary>\n", encoding="utf-8")
+
+    @bind(file=source, reload=True, cache=True)
+    def summarize(topic: str) -> str: ...
+
+    assert summarize("Kedi") == "short summary"
+    assert "First Kedi" in adapter.templates[-1]
+    source.write_text(">> Second <topic>. Return [summary].\n= <summary>\n", encoding="utf-8")
+
+    assert summarize("Kedi") == "short summary"
+    assert "Second Kedi" in adapter.templates[-1]
+    assert len(adapter.templates) == 2
+
+
+def test_bind_without_reload_keeps_decorated_file_source(
+    adapter: ApiAdapter,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "summarize.kedi"
+    source.write_text(">> First <topic>. Return [summary].\n= <summary>\n", encoding="utf-8")
+
+    @bind(file=source)
+    def summarize(topic: str) -> str: ...
+
+    source.write_text(">> Second <topic>. Return [summary].\n= <summary>\n", encoding="utf-8")
+
+    assert summarize("Kedi") == "short summary"
+    assert "First Kedi" in adapter.templates[-1]
 
 
 def test_bind_file_profile_arguments_apply_for_one_call(

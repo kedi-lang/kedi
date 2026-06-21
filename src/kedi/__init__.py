@@ -1,5 +1,16 @@
 from ._version import __version__
-from .api import bind, configure, context, query, reset_config, tool, type
+from .api import (
+    CacheInfo,
+    bind,
+    cache_info,
+    clear_cache,
+    configure,
+    context,
+    query,
+    reset_config,
+    tool,
+    type,
+)
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (
@@ -11,7 +22,10 @@ from .executors.debug import (
 
 __all__ = [
     "__version__",
+    "CacheInfo",
     "bind",
+    "cache_info",
+    "clear_cache",
     "configure",
     "context",
     "query",

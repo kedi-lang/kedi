@@ -49,6 +49,12 @@ class _APIConfig:
     env: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class CacheInfo:
+    parse_entries: int
+    response_entries: int
+
+
 _DEFAULT_CONFIG = _APIConfig()
 _config_var: ContextVar[_APIConfig] = ContextVar("kedi_api_config", default=_DEFAULT_CONFIG)
 
@@ -145,6 +151,18 @@ def _parse_cached(
     return program, digest
 
 
+def cache_info() -> CacheInfo:
+    return CacheInfo(
+        parse_entries=len(_PARSE_CACHE),
+        response_entries=len(_RESPONSE_CACHE),
+    )
+
+
+def clear_cache() -> None:
+    _PARSE_CACHE.clear()
+    _RESPONSE_CACHE.clear()
+
+
 def _stable_repr(value: Any) -> str:
     return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
 
@@ -217,6 +235,7 @@ def _decorate_kedi_program(
     program: Any,
     source_id: str,
     source_hash: str,
+    reload_program: Callable[[], tuple[Any, str]] | None,
     tool_map: Mapping[str, Callable[..., Any]],
     env: Mapping[str, Any],
     profile_override: AgentProfile,
@@ -225,11 +244,15 @@ def _decorate_kedi_program(
 ) -> Callable[P, R]:
     def run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
+        active_program = program
+        active_source_hash = source_hash
+        if reload_program is not None:
+            active_program, active_source_hash = reload_program()
         cache_key = _response_cache_key(
             kind=kind,
             inner=inner,
             source_id=source_id,
-            source_hash=source_hash,
+            source_hash=active_source_hash,
             args=args,
             kwargs=kwargs,
             config_env=config.env,
@@ -249,7 +272,7 @@ def _decorate_kedi_program(
         }
         profile = config.profile.merge(profile_override)
         runtime = compile_program(
-            program,
+            active_program,
             adapter=adapter,
             runtime_globals=runtime_globals,
         )
@@ -605,6 +628,7 @@ def query(
             program=program,
             source_id=_callable_name(inner),
             source_hash=digest,
+            reload_program=None,
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
@@ -627,6 +651,7 @@ def bind(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     cache: bool = False,
+    reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     tool_map, profile_override = _agent_profile_overrides(
         system=system,
@@ -640,12 +665,18 @@ def bind(
         source, path = _read_bind_file(file, inner)
         source_path = str(path)
         program, digest = _parse_cached(kind="bind", source=source, source_path=source_path)
+
+        def reload_bound_program() -> tuple[Any, str]:
+            reloaded_source, _ = _read_bind_file(path, inner)
+            return _parse_cached(kind="bind", source=reloaded_source, source_path=source_path)
+
         return _decorate_kedi_program(
             kind="bind",
             inner=inner,
             program=program,
             source_id=source_path,
             source_hash=digest,
+            reload_program=reload_bound_program if reload else None,
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
@@ -656,4 +687,15 @@ def bind(
     return decorate
 
 
-__all__ = ["bind", "configure", "context", "query", "reset_config", "tool", "type"]
+__all__ = [
+    "CacheInfo",
+    "bind",
+    "cache_info",
+    "clear_cache",
+    "configure",
+    "context",
+    "query",
+    "reset_config",
+    "tool",
+    "type",
+]
