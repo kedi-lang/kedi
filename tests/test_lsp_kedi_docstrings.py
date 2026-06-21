@@ -7,7 +7,6 @@ from lsprotocol import types as lsp
 from kedi.lsp import kedi_docstrings
 from tests.lsp_helpers import decode_semantic_tokens, position_of
 
-
 PY_SOURCE = '''from pydantic import BaseModel
 
 import kedi

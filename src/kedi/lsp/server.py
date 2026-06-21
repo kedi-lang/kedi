@@ -15,8 +15,7 @@ from lsprotocol import types as lsp
 from pygls.lsp.server import LanguageServer
 
 from .._version import __version__
-from . import features
-from . import kedi_docstrings
+from . import features, kedi_docstrings
 from .python_virtual import compute_python_virtual_document
 
 _LOGGER = logging.getLogger(__name__)

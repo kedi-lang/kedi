@@ -5,25 +5,27 @@ import dataclasses
 from pathlib import Path
 from typing import Any, TypeVar
 
-import kedi
-import kedi.api as api_module
 import pytest
 from pydantic import BaseModel
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
+import kedi
+import kedi.api as api_module
 from kedi import (
+    bind,
     cache_info,
     clear_cache,
-    bind,
     configure,
     context,
     query,
     reset_config,
     tool,
+)
+from kedi import (
     type as kedi_type,
 )
-from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict

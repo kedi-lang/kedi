@@ -10,8 +10,8 @@ from __future__ import annotations
 import ast
 import inspect
 import re
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from lsprotocol import types as lsp
