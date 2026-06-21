@@ -10,6 +10,7 @@ from kedi.app import (
     run_evals_cli,
     run_optimization_cli,
     run_program_cli,
+    run_source_cli,
     run_tests_cli,
 )
 from kedi.error_rendering import render_execution_error, render_parse_error
@@ -23,7 +24,13 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 
 
 @click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
-@click.argument("source")
+@click.argument("source", required=False)
+@click.option(
+    "-c",
+    "--command",
+    "command_source",
+    help="Run Kedi source from the command string instead of a file",
+)
 @click.option(
     "--adapter",
     type=click.Choice(["pydantic", "dspy"]),
@@ -129,11 +136,18 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
     is_flag=True,
     help="Suppress progress output from codegen and GEPA optimization",
 )
-@click.option("--parse", "parse_only", is_flag=True, help="Parse the source without compiling")
+@click.option(
+    "-p",
+    "--parse",
+    "parse_only",
+    is_flag=True,
+    help="Parse the source without compiling",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
-    source: str,
+    source: str | None,
+    command_source: str | None,
     adapter: str,
     adapter_model: str,
     codegen_agent: str,
@@ -156,31 +170,62 @@ def main(
     parse_only: bool = False,
 ):
     if source == "parse":
-        if not ctx.args:
+        if command_source is not None:
+            parse_only = True
+            source = None
+        elif not ctx.args:
             raise click.UsageError("Missing argument 'SOURCE'.")
-        source = ctx.args[0]
-        parse_only = True
-        ctx.args = ctx.args[1:]
-    try:
-        with open(source, "r", encoding="utf-8") as f:
-            f.read()
-    except Exception as e:
-        click.echo(f"Error reading {source}: {e}", err=True)
-        ctx.exit(1)
+        else:
+            source = ctx.args[0]
+            parse_only = True
+            ctx.args = ctx.args[1:]
+    if command_source is None and source is None:
+        raise click.UsageError("Missing argument 'SOURCE'.")
+    if command_source is not None and source is not None:
+        ctx.args = [source, *ctx.args]
+        source = None
+    if command_source is None:
+        assert source is not None
+        try:
+            with open(source, "r", encoding="utf-8") as f:
+                f.read()
+        except Exception as e:
+            click.echo(f"Error reading {source}: {e}", err=True)
+            ctx.exit(1)
+    elif optimize or test or do_eval:
+        raise click.UsageError("-c/--command only supports direct run or --parse.")
     runtime_args = parse_args(ctx.args)
     try:
         if parse_only:
-            source_path = Path(source).resolve()
-            bundle = load_kedi_source_bundle(source_path)
-            parse_program(
-                bundle.text,
-                source_path=str(source_path),
-                source_map=bundle.source_map,
-            )
+            if command_source is not None:
+                parse_program(command_source, source_path="<command>")
+            else:
+                assert source is not None
+                source_path = Path(source).resolve()
+                bundle = load_kedi_source_bundle(source_path)
+                parse_program(
+                    bundle.text,
+                    source_path=str(source_path),
+                    source_map=bundle.source_map,
+                )
             return 0
+
+        if command_source is not None:
+            code, out = run_source_cli(
+                command_source,
+                adapter=adapter,
+                model=adapter_model,
+                runtime_args=runtime_args,
+            )
+            if out:
+                click.echo(out)
+            if code != 0:
+                ctx.exit(code)
+            return code
 
         # Run optimization if requested (independent of eval flag)
         if optimize:
+            assert source is not None
             code, msg = run_optimization_cli(
                 source,
                 optimizer=optimizer,
@@ -210,6 +255,7 @@ def main(
             # Run validations
             if test:
                 try:
+                    assert source is not None
                     code, out = run_tests_cli(
                         source,
                         adapter=adapter,
@@ -228,6 +274,7 @@ def main(
                 # Optimization is handled above by run_optimization_cli when --optimize is set.
                 # Do not pass optimize=True here or GEPA would run twice with default budget/model.
                 try:
+                    assert source is not None
                     code, out = run_evals_cli(
                         source,
                         adapter=adapter,
@@ -256,6 +303,7 @@ def main(
                 return code
 
         # Run codegen if needed
+        assert source is not None
         ok, err = maybe_run_codegen(
             source,
             agent=codegen_agent,
