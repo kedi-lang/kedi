@@ -44,7 +44,44 @@ DSPY_LM_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-MODEL_SETTING_KEYS: Final[frozenset[str]] = PYDANTIC_MODEL_SETTING_KEYS | DSPY_LM_SETTING_KEYS
+LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "api_key",
+        "base_url",
+        "callbacks",
+        "configurable_fields",
+        "configurable_prefix",
+        "disable_streaming",
+        "extra_body",
+        "extra_headers",
+        "frequency_penalty",
+        "logit_bias",
+        "max_retries",
+        "max_tokens",
+        "metadata",
+        "model_kwargs",
+        "organization",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "rate_limiter",
+        "reasoning",
+        "reasoning_effort",
+        "seed",
+        "stop",
+        "stop_sequences",
+        "stream_usage",
+        "streaming",
+        "tags",
+        "temperature",
+        "timeout",
+        "tool_choice",
+        "top_p",
+    }
+)
+
+MODEL_SETTING_KEYS: Final[frozenset[str]] = (
+    PYDANTIC_MODEL_SETTING_KEYS | DSPY_LM_SETTING_KEYS | LANGCHAIN_MODEL_SETTING_KEYS
+)
 
 
 def is_valid_model_setting_key(name: str) -> bool:
@@ -80,3 +117,7 @@ def pydantic_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
 
 def dspy_lm_settings(settings: SettingsMap) -> dict[str, SettingValue]:
     return {key: value for key, value in settings.items() if key in DSPY_LM_SETTING_KEYS}
+
+
+def langchain_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
+    return {key: value for key, value in settings.items() if key in LANGCHAIN_MODEL_SETTING_KEYS}

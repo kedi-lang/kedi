@@ -50,3 +50,16 @@ def normalize_for_pydantic_ai(model: str) -> str:
     if provider == "openai":
         provider = "openai-chat"
     return provider + ":" + rest
+
+
+def normalize_for_langchain(model: str) -> str:
+    """Use LangChain's provider-prefixed chat model id form."""
+    if not model or "://" in model:
+        return model
+    if model.startswith("openai-chat:"):
+        return "openai:" + model[len("openai-chat:") :]
+    si = model.find("/")
+    ci = model.find(":")
+    if si == -1 or (ci != -1 and ci < si):
+        return model
+    return model[:si] + ":" + model[si + 1 :]

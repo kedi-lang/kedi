@@ -4,13 +4,13 @@ from contextlib import AbstractContextManager
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
 
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile
     from .tool_override import ToolSpec
 
-AvailableAdapter = DSPyAdapter | PydanticAdapter
+AvailableAdapter = DSPyAdapter | LangChainAdapter | PydanticAdapter
 
 
 class LazyAdapter:

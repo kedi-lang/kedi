@@ -925,6 +925,29 @@ def test_configure_builds_dspy_adapter_lazily(monkeypatch: pytest.MonkeyPatch) -
     assert seen == [("openrouter:test-model", {"temperature": 0.3})]
 
 
+def test_configure_builds_langchain_adapter_lazily(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = ApiAdapter()
+    seen: list[tuple[str | None, dict[str, Any]]] = []
+
+    def fake_adapter(model: str | None, **kwargs: Any) -> ApiAdapter:
+        seen.append((model, kwargs))
+        return adapter
+
+    monkeypatch.setattr(adapters_module, "LangChainAdapter", fake_adapter)
+    configure(model="openrouter:test-model", adapter="langchain", temperature=0.3)
+
+    @query
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert seen == []
+    assert answer() == "ok"
+    assert seen == [("openrouter:test-model", {"temperature": 0.3})]
+
+
 def test_configure_dspy_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)

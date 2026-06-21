@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from .agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.lazy import LazyAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
@@ -18,10 +18,12 @@ from .utils import ArgType, AttrDict
 
 def _build_runtime_adapter(
     adapter: str, model: str | None
-) -> DSPyAdapter | PydanticAdapter[Any, Any]:
+) -> DSPyAdapter | LangChainAdapter | PydanticAdapter[Any, Any]:
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "dspy":
         return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+    if adapter == "langchain":
+        return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
     return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
 
 
