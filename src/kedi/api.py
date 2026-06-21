@@ -27,7 +27,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
-AdapterName = Literal["pydantic", "dspy"]
+AdapterName = Literal["pydantic", "dspy", "langchain"]
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
@@ -310,6 +310,11 @@ def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: 
 
             return PydanticAdapter(model, **dict(adapter_kwargs))
 
+        if adapter_name == "langchain":
+            from .agent_adapter.adapters import LangChainAdapter
+
+            return LangChainAdapter(model, **dict(adapter_kwargs))
+
         if model is None:
             raise ValueError("DSPy adapter requires an explicit model.")
 
@@ -363,8 +368,10 @@ def _build_config(
     adapter_obj: AgentAdapter[Any] | LazyAdapter | None
     adapter_name: AdapterName
     if isinstance(adapter_default, str):
-        if adapter_default not in ("pydantic", "dspy"):
-            raise ValueError("adapter must be 'pydantic', 'dspy', or an AgentAdapter instance")
+        if adapter_default not in ("pydantic", "dspy", "langchain"):
+            raise ValueError(
+                "adapter must be 'pydantic', 'dspy', 'langchain', or an AgentAdapter instance"
+            )
         adapter_name = cast(AdapterName, adapter_default)
         merged_kwargs = {**dict(base_adapter_kwargs), **dict(adapter_kwargs)}
         adapter_obj = _lazy_adapter(adapter_name, cast(str | None, model_default), merged_kwargs)

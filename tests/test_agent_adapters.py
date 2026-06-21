@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import inspect
 import sys
 import threading
@@ -14,8 +15,8 @@ from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import adapters as adapters_module
-from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter, make_repr
-from kedi.agent_adapter.tool_override import ToolScope
+from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter, make_repr
+from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
     kedi_procedure_tool_spec,
@@ -28,6 +29,10 @@ from kedi.lang import compile_program, parse_program
 
 class DirectOutput(BaseModel):
     value: str
+
+
+class DirectAnswer(BaseModel):
+    answer: str
 
 
 def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
@@ -77,7 +82,7 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
 
     monkeypatch.setattr(adapter, "run", fake_run)
 
-    assert initialized_models[0] == "openai:gpt-4o-mini"
+    assert initialized_models[0] == "openai-chat:gpt-4o-mini"
     assert isinstance(initialized_models[1], TestModel)
     assert initialized_kwargs[2]["model_settings"] == {"temperature": 0.1}
     assert "model_settings" not in initialized_kwargs[3]
@@ -103,6 +108,374 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         PydanticAdapter.type_builder({})
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("template"))
+
+
+def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    events: dict[str, Any] = {
+        "models": [],
+        "agents": [],
+        "tools": [],
+        "mcp_configs": [],
+    }
+
+    class FakeAgent:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+        async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+            events["payload"] = payload
+            response_format = self.kwargs["response_format"]
+            return {"structured_response": response_format(answer="ok")}
+
+    class FakeStructuredTool:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+            self.metadata = None
+
+        @classmethod
+        def from_function(cls, **kwargs: Any) -> FakeStructuredTool:
+            events["tools"].append(kwargs)
+            return cls(**kwargs)
+
+    class FakeMCPClient:
+        def __init__(self, configs: dict[str, Any]) -> None:
+            events["mcp_configs"].append(configs)
+
+        async def get_tools(self) -> list[str]:
+            return ["mcp-tool"]
+
+    def fake_init_chat_model(model: str, **settings: Any) -> dict[str, Any]:
+        call = {"model": model, "settings": settings}
+        events["models"].append(call)
+        return call
+
+    def fake_create_agent(**kwargs: Any) -> FakeAgent:
+        events["agents"].append(kwargs)
+        return FakeAgent(**kwargs)
+
+    langchain = ModuleType("langchain")
+    chat_models = ModuleType("langchain.chat_models")
+    agents = ModuleType("langchain.agents")
+    langchain_core = ModuleType("langchain_core")
+    langchain_core_tools = ModuleType("langchain_core.tools")
+    langchain_mcp_adapters = ModuleType("langchain_mcp_adapters")
+    langchain_mcp_client = ModuleType("langchain_mcp_adapters.client")
+
+    chat_models.init_chat_model = fake_init_chat_model  # type: ignore[attr-defined]
+    agents.create_agent = fake_create_agent  # type: ignore[attr-defined]
+    langchain_core_tools.StructuredTool = FakeStructuredTool  # type: ignore[attr-defined]
+    langchain_mcp_client.MultiServerMCPClient = FakeMCPClient  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "langchain", langchain)
+    monkeypatch.setitem(sys.modules, "langchain.chat_models", chat_models)
+    monkeypatch.setitem(sys.modules, "langchain.agents", agents)
+    monkeypatch.setitem(sys.modules, "langchain_core", langchain_core)
+    monkeypatch.setitem(sys.modules, "langchain_core.tools", langchain_core_tools)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", langchain_mcp_adapters)
+    monkeypatch.setitem(sys.modules, "langchain_mcp_adapters.client", langchain_mcp_client)
+    return events
+
+
+def test_langchain_adapter_produces_with_structured_output_and_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    adapter = LangChainAdapter(
+        model="openrouter/google/gemini-3-flash-preview",
+        model_settings={"temperature": 0.1, "parallel_tool_calls": False, "num_retries": 2},
+    )
+    adapter.register_tool(
+        python_callable_tool_spec(
+            "lookup",
+            lambda query: f"found {query}",
+        )
+    )
+
+    with adapter.profile_override(
+        AgentProfile(
+            model="openai/gpt-4o-mini",
+            effort="max",
+            system="Follow instructions.",
+            settings={"max_tokens": 12, "num_retries": 5},
+            mcp_servers=(McpServerSpec(command="vsh", args=("run", "--mcp"), env={"A": "B"}),),
+        )
+    ):
+        result = asyncio.run(
+            adapter.produce(
+                "template",
+                output_schema={"answer": str},
+                instructions="Use terse prose.",
+                trace_id="abc",
+            )
+        )
+
+    assert result.answer == "ok"
+    assert events["models"] == [
+        {
+            "model": "openai:gpt-4o-mini",
+            "settings": {
+                "temperature": 0.1,
+                "parallel_tool_calls": False,
+                "max_tokens": 12,
+                "reasoning_effort": "xhigh",
+            },
+        }
+    ]
+    assert events["agents"][0]["model"] == events["models"][0]
+    assert len(events["agents"][0]["tools"]) == 2
+    assert events["agents"][0]["system_prompt"] == "Use terse prose."
+    assert events["payload"] == {
+        "messages": [{"role": "user", "content": "template"}],
+        "trace_id": "abc",
+    }
+    assert events["mcp_configs"] == [
+        {
+            "kedi_mcp_0": {
+                "transport": "stdio",
+                "command": "vsh",
+                "args": ["run", "--mcp"],
+                "env": {"A": "B"},
+            }
+        }
+    ]
+
+
+def test_langchain_adapter_uses_output_type_and_sync_produce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_langchain_modules(monkeypatch)
+    adapter = LangChainAdapter(model={"fake": "model"})
+
+    assert adapter.produce_sync("template", output_type=DirectAnswer).answer == "ok"
+    assert adapter.default_model() is None
+    with adapter.tool_scope(("manual-tool",)):
+        assert adapter.scoped_tools == ("manual-tool",)
+    assert adapter.scoped_tools == ()
+
+
+def test_langchain_adapter_requires_output_spec() -> None:
+    adapter = LangChainAdapter(model={"fake": "model"})
+
+    with pytest.raises(ValueError, match="Output schema cannot be empty"):
+        LangChainAdapter.type_builder({})
+    with pytest.raises(ValueError, match="Output spec must be provided"):
+        asyncio.run(adapter.produce("template"))
+    with pytest.raises(RuntimeError, match="requires a model"):
+        LangChainAdapter()._model_for_run()
+
+
+def test_langchain_adapter_register_tool_preserves_schema_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+
+    def search(query: str, limit: int = 5) -> str:
+        return f"{query}:{limit}"
+
+    json_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query."},
+            "limit": {"type": "integer", "default": 5},
+        },
+        "required": ["query"],
+    }
+    spec = ToolSpec(
+        fn=search,
+        name="search",
+        description="Search docs.",
+        json_schema=json_schema,
+        metadata={"source": "kedi"},
+    )
+    adapter = LangChainAdapter(model={"fake": "model"})
+    adapter.register_tool(spec)
+    tool = adapter.scoped_tools[0]
+
+    assert events["tools"][0]["name"] == "search"
+    assert events["tools"][0]["description"] == "Search docs."
+    assert events["tools"][0]["func"]("docs", limit=2) == "docs:2"
+    assert events["tools"][0]["args_schema"] == json_schema
+    assert tool.metadata == {"source": "kedi"}
+
+
+def test_langchain_adapter_wraps_async_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+
+    async def lookup(query: str) -> str:
+        return f"async:{query}"
+
+    adapter = LangChainAdapter(model={"fake": "model"})
+    adapter.register_tool(
+        ToolSpec(
+            fn=lookup,
+            name="lookup",
+            description=None,
+            json_schema=None,
+            metadata={},
+        )
+    )
+
+    assert events["tools"][0]["description"] == "lookup"
+    assert events["tools"][0]["func"]("docs") == "async:docs"
+
+
+def test_langchain_mcp_configs_cover_transports_and_errors() -> None:
+    configs = adapters_module._langchain_mcp_server_configs(
+        AgentProfile(
+            mcp_servers=(
+                McpServerSpec(command="vsh", args=("run", "--mcp")),
+                McpServerSpec(transport="sse", url="http://localhost/sse"),
+                McpServerSpec(
+                    transport="sse",
+                    url="http://localhost/sse2",
+                    headers={"S": "V"},
+                ),
+                McpServerSpec(
+                    transport="http",
+                    url="http://localhost/mcp",
+                    headers={"H": "V"},
+                ),
+                McpServerSpec(transport="http", url="http://localhost/mcp2"),
+            )
+        )
+    )
+
+    assert configs == {
+        "kedi_mcp_0": {
+            "transport": "stdio",
+            "command": "vsh",
+            "args": ["run", "--mcp"],
+        },
+        "kedi_mcp_1": {
+            "transport": "sse",
+            "url": "http://localhost/sse",
+        },
+        "kedi_mcp_2": {
+            "transport": "sse",
+            "url": "http://localhost/sse2",
+            "headers": {"S": "V"},
+        },
+        "kedi_mcp_3": {
+            "transport": "streamable_http",
+            "url": "http://localhost/mcp",
+            "headers": {"H": "V"},
+        },
+        "kedi_mcp_4": {
+            "transport": "streamable_http",
+            "url": "http://localhost/mcp2",
+        },
+    }
+
+    with pytest.raises(ValueError, match="stdio transport requires a command"):
+        adapters_module._langchain_mcp_server_configs(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="stdio"),))
+        )
+    with pytest.raises(ValueError, match="sse transport requires a url"):
+        adapters_module._langchain_mcp_server_configs(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="sse"),))
+        )
+    with pytest.raises(ValueError, match="http transport requires a url"):
+        adapters_module._langchain_mcp_server_configs(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="http"),))
+        )
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        adapters_module._langchain_mcp_server_configs(
+            AgentProfile(mcp_servers=(McpServerSpec(transport=cast(Any, "websocket")),))
+        )
+
+
+def test_langchain_settings_merge_openrouter_effort() -> None:
+    adapter = LangChainAdapter(
+        model="openrouter/google/gemini-3-flash-preview",
+        model_settings={"temperature": 0.2, "reasoning": {"summary": "auto"}},
+    )
+
+    with adapter.profile_override(
+        AgentProfile(
+            effort="high",
+            settings={"max_tokens": 20, "num_retries": 3},
+        )
+    ):
+        settings = adapter._settings_for_run("openrouter:google/gemini-3-flash-preview")
+
+    assert settings == {
+        "temperature": 0.2,
+        "reasoning": {"summary": "auto", "effort": "high"},
+        "max_tokens": 20,
+    }
+
+
+def test_langchain_structured_response_supports_mapping_and_object() -> None:
+    answer = DirectAnswer(answer="ok")
+
+    assert adapters_module._langchain_structured_response({"structured_response": answer}) is answer
+    assert (
+        adapters_module._langchain_structured_response(SimpleNamespace(structured_response=answer))
+        is answer
+    )
+    with pytest.raises(ValueError, match="did not return structured_response"):
+        adapters_module._langchain_structured_response({"output": answer})
+    with pytest.raises(ValueError, match="did not return structured_response"):
+        adapters_module._langchain_structured_response(SimpleNamespace(output=answer))
+
+
+def _block_import(monkeypatch: pytest.MonkeyPatch, blocked_name: str) -> None:
+    real_import = builtins.__import__
+
+    def fake_import(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == blocked_name:
+            raise ImportError(f"blocked {blocked_name}")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def test_langchain_adapter_dependency_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain.chat_models")
+        with pytest.raises(ModuleNotFoundError, match="requires langchain"):
+            LangChainAdapter(model="openai:gpt-4o-mini")._chat_model_for_run()
+
+    adapter = LangChainAdapter(model={"fake": "model"})
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain.agents")
+        with pytest.raises(ModuleNotFoundError, match="requires langchain"):
+            adapter._create_agent(
+                model={"fake": "model"},
+                tools=(),
+                response_format=DirectAnswer,
+                system_prompt=None,
+            )
+
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain_mcp_adapters.client")
+        with pytest.raises(ModuleNotFoundError, match="requires langchain-mcp-adapters"):
+            asyncio.run(
+                adapter._mcp_tools_for_profile(
+                    AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),))
+                )
+            )
+
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain_core.tools")
+        with pytest.raises(ModuleNotFoundError, match="requires langchain-core"):
+            adapters_module._langchain_tool_from_spec(
+                ToolSpec(
+                    fn=lambda: "ok",
+                    name="lookup",
+                    description=None,
+                    json_schema=None,
+                    metadata={},
+                )
+            )
+
+    assert asyncio.run(adapter._mcp_tools_for_profile(AgentProfile.empty())) == []
 
 
 def test_pydantic_adapter_profile_stack_is_context_local() -> None:

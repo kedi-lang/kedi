@@ -113,15 +113,25 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
         def produce_sync(self) -> None:
             return None
 
+    class FakeLangChainAdapter:
+        def __init__(self, *, model: str) -> None:
+            seen.append(("langchain", model))
+
+        def produce_sync(self) -> None:
+            return None
+
     monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
+    monkeypatch.setattr(app, "LangChainAdapter", FakeLangChainAdapter)
 
     app._build_runtime_adapter("dspy", None)
     app._build_runtime_adapter("pydantic", None)
+    app._build_runtime_adapter("langchain", None)
 
     assert seen == [
         ("dspy", "groq/qwen/qwen3-32b"),
         ("pydantic", "groq:qwen/qwen3-32b"),
+        ("langchain", "groq:qwen/qwen3-32b"),
     ]
 
 
