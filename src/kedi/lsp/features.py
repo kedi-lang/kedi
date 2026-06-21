@@ -2663,8 +2663,12 @@ _CAPTURE_TO_LSP: dict = {
     "constant.builtin": ("keyword", 0),
     # Operators / punctuation
     "operator": ("operator", 0),
-    # We deliberately leave ``punctuation.*`` out — colouring every
-    # paren / colon / bracket looks noisy. Re-enable here if desired.
+    # Only punctuation.special is semantically meaningful in Kedi (`@`,
+    # `~`, `>`, ``` and backticks). Delimiters stay uncoloured to avoid
+    # noisy paren / colon / bracket highlighting.
+    "punctuation.special": ("operator", 0),
+    # We deliberately leave ``punctuation.delimiter`` out — colouring
+    # every paren / colon / bracket looks noisy.
     # Keywords
     "keyword": ("keyword", 0),
     "keyword.return": ("keyword", 0),

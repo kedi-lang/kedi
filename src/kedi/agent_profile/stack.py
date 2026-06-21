@@ -21,7 +21,9 @@ def current_block_agent_profile() -> AgentProfile:
 
 @contextmanager
 def block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
-    token = _block_agent_profile.set(profile)
+    current = _block_agent_profile.get()
+    effective = profile if current is None else current.merge(profile)
+    token = _block_agent_profile.set(effective)
     try:
         yield
     finally:

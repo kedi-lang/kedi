@@ -8,7 +8,7 @@ requests used by editor extension forwarding.
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 from urllib.parse import unquote, urlparse
 
 from lsprotocol import types as lsp
@@ -16,6 +16,7 @@ from pygls.lsp.server import LanguageServer
 
 from .._version import __version__
 from . import features
+from . import kedi_docstrings
 from .python_virtual import compute_python_virtual_document
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,6 +27,11 @@ def _uri_to_path(uri: str) -> Optional[str]:
     if parsed.scheme != "file":
         return None
     return unquote(parsed.path)
+
+
+def _is_python_uri(uri: str) -> bool:
+    path = _uri_to_path(uri)
+    return path is not None and path.endswith(".py")
 
 
 def make_server() -> LanguageServer:
@@ -60,6 +66,15 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_HOVER)
     def _hover(params: lsp.HoverParams) -> Optional[lsp.Hover]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return cast(
+                Optional[lsp.Hover],
+                kedi_docstrings.compute_kedi_docstring_hover(
+                    doc.source,
+                    _uri_to_path(params.text_document.uri),
+                    params.position,
+                ),
+            )
         return features.compute_hover(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -71,6 +86,14 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)
     def _definition(params: lsp.DefinitionParams) -> Optional[lsp.Location]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            locations = kedi_docstrings.compute_kedi_docstring_definition(
+                doc.source,
+                params.text_document.uri,
+                _uri_to_path(params.text_document.uri),
+                params.position,
+            )
+            return cast(Optional[lsp.Location], locations[0] if locations else None)
         return features.compute_definition(
             source=doc.source,
             uri=params.text_document.uri,
@@ -83,6 +106,17 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_REFERENCES)
     def _references(params: lsp.ReferenceParams) -> List[lsp.Location]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return cast(
+                List[lsp.Location],
+                kedi_docstrings.compute_kedi_docstring_references(
+                    doc.source,
+                    params.text_document.uri,
+                    _uri_to_path(params.text_document.uri),
+                    params.position,
+                    include_declaration=params.context.include_declaration,
+                ),
+            )
         return features.compute_references(
             source=doc.source,
             uri=params.text_document.uri,
@@ -98,6 +132,8 @@ def make_server() -> LanguageServer:
         params: lsp.DocumentSymbolParams,
     ) -> List[lsp.DocumentSymbol]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return []
         return features.compute_document_symbols(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -108,6 +144,8 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_PREPARE_RENAME)
     def _prepare_rename(params: lsp.PrepareRenameParams) -> Optional[lsp.Range]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return None
         return features.compute_prepare_rename(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -117,6 +155,8 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_RENAME)
     def _rename(params: lsp.RenameParams) -> Optional[lsp.WorkspaceEdit]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return None
         return features.compute_rename(
             source=doc.source,
             uri=params.text_document.uri,
@@ -130,6 +170,8 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_FORMATTING)
     def _formatting(params: lsp.DocumentFormattingParams) -> List[lsp.TextEdit]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return []
         return features.compute_formatting(doc.source)
 
     # ----- Signature help -----
@@ -142,6 +184,8 @@ def make_server() -> LanguageServer:
         params: lsp.SignatureHelpParams,
     ) -> Optional[lsp.SignatureHelp]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return None
         return features.compute_signature_help(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -153,6 +197,8 @@ def make_server() -> LanguageServer:
     @server.feature(lsp.TEXT_DOCUMENT_INLAY_HINT)
     def _inlay_hint(params: lsp.InlayHintParams) -> List[lsp.InlayHint]:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return []
         return features.compute_inlay_hints(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -177,6 +223,10 @@ def make_server() -> LanguageServer:
         params: lsp.SemanticTokensParams,
     ) -> lsp.SemanticTokens:
         doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return lsp.SemanticTokens(
+                data=kedi_docstrings.compute_kedi_docstring_semantic_tokens(doc.source)["data"]
+            )
         return features.compute_semantic_tokens_full(
             source=doc.source,
             source_path=_uri_to_path(params.text_document.uri),
@@ -218,6 +268,89 @@ def make_server() -> LanguageServer:
             focus_line=_request_focus_line(params),
         )
         return {"uri": uri, **result}
+
+    # ----- Custom: embedded Kedi-in-Python-docstring interop -----
+
+    @server.feature("kedi/kediDocstringRanges")
+    def _kedi_docstring_ranges(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "ranges": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "ranges": kedi_docstrings.compute_kedi_docstring_ranges(source),
+        }
+
+    @server.feature("kedi/kediDocstringDiagnostics")
+    def _kedi_docstring_diagnostics(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "diagnostics": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "diagnostics": kedi_docstrings.compute_kedi_docstring_diagnostics(
+                source,
+                _uri_to_path(uri),
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringHover")
+    def _kedi_docstring_hover(params: Any) -> dict | None:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return None
+        source = _request_source(server, uri, params)
+        return kedi_docstrings.compute_kedi_docstring_hover(
+            source,
+            _uri_to_path(uri),
+            position,
+        )
+
+    @server.feature("kedi/kediDocstringDefinition")
+    def _kedi_docstring_definition(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return {"uri": uri or "", "locations": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "locations": kedi_docstrings.compute_kedi_docstring_definition(
+                source,
+                uri,
+                _uri_to_path(uri),
+                position,
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringReferences")
+    def _kedi_docstring_references(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        position = _request_position(params)
+        if uri is None or position is None:
+            return {"uri": uri or "", "locations": []}
+        source = _request_source(server, uri, params)
+        return {
+            "uri": uri,
+            "locations": kedi_docstrings.compute_kedi_docstring_references(
+                source,
+                uri,
+                _uri_to_path(uri),
+                position,
+                include_declaration=_request_include_declaration(params),
+            ),
+        }
+
+    @server.feature("kedi/kediDocstringSemanticTokens")
+    def _kedi_docstring_semantic_tokens(params: Any) -> dict:
+        uri = _text_document_uri(params)
+        if uri is None:
+            return {"uri": "", "data": []}
+        source = _request_source(server, uri, params)
+        return {"uri": uri, **kedi_docstrings.compute_kedi_docstring_semantic_tokens(source)}
 
     return server
 
@@ -269,9 +402,64 @@ def _request_focus_line(params: Any) -> Optional[int]:
     return None
 
 
+def _request_position(params: Any) -> Optional[lsp.Position]:
+    if isinstance(params, dict):
+        position = params.get("position")
+        if isinstance(position, dict):
+            line = position.get("line")
+            character = position.get("character")
+            if isinstance(line, int) and isinstance(character, int):
+                return lsp.Position(line=line, character=character)
+        return None
+    position = getattr(params, "position", None)
+    if position is None:
+        return None
+    line = getattr(position, "line", None)
+    character = getattr(position, "character", None)
+    if isinstance(line, int) and isinstance(character, int):
+        return lsp.Position(line=line, character=character)
+    return None
+
+
+def _request_include_declaration(params: Any) -> bool:
+    if isinstance(params, dict):
+        value = params.get("includeDeclaration")
+        if isinstance(value, bool):
+            return value
+        context = params.get("context")
+        if isinstance(context, dict):
+            value = context.get("includeDeclaration") or context.get("include_declaration")
+            return bool(value)
+        return False
+    value = getattr(params, "include_declaration", None)
+    if isinstance(value, bool):
+        return value
+    value = getattr(params, "includeDeclaration", None)
+    if isinstance(value, bool):
+        return value
+    context = getattr(params, "context", None)
+    if context is not None:
+        value = getattr(context, "include_declaration", None)
+        if isinstance(value, bool):
+            return value
+        value = getattr(context, "includeDeclaration", None)
+        if isinstance(value, bool):
+            return value
+    return False
+
+
 def _publish_diagnostics(server: LanguageServer, uri: str) -> None:
     doc = server.workspace.get_text_document(uri)
-    diagnostics = features.compute_diagnostics(source=doc.source, source_path=_uri_to_path(uri))
+    if _is_python_uri(uri):
+        diagnostics = cast(
+            List[lsp.Diagnostic],
+            kedi_docstrings.compute_kedi_docstring_diagnostics(
+                doc.source,
+                _uri_to_path(uri),
+            ),
+        )
+    else:
+        diagnostics = features.compute_diagnostics(source=doc.source, source_path=_uri_to_path(uri))
     server.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
     )

@@ -422,3 +422,23 @@ def run_program_cli(
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
     return 0, ("" if out is None else str(out))
+
+
+def run_source_cli(
+    source_text: str,
+    *,
+    adapter: str,
+    model: str | None,
+    runtime_args: CliArgs | None = None,
+    source_path: str = "<command>",
+) -> Tuple[int, str]:
+    program = parse_program(source_text, source_path=source_path)
+    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
+    rt = compile_program(
+        program,
+        adapter=lazy_adapter,
+        runtime_globals=_runtime_globals(runtime_args),
+    )
+    _set_runtime_args(rt, runtime_args)
+    out = rt.run_main()
+    return 0, ("" if out is None else str(out))

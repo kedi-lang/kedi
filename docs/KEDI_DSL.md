@@ -781,6 +781,188 @@ Example:
 Agent tools require an adapter that supports tool registration (for example
 Pydantic AI). Adapters without tool support raise a clear error at runtime.
 
+## Python API
+
+Kedi can be embedded in Python without creating a separate CLI entrypoint. The
+Python API keeps the same DSL semantics: templates, `> use:`, profiles,
+settings, typed outputs, Python substitutions, and custom Kedi types still work.
+
+### `@kedi.query`
+
+Decorate a Python function whose docstring starts with a standalone `kedi`
+header. Function arguments become runtime globals for the Kedi program.
+
+```python
+import kedi
+
+
+@kedi.type
+class Review:
+    decision: str
+    summary: str
+
+
+@kedi.query(cache=True, settings={"temperature": 0.2})
+def review_snippet(language: str, code: str) -> Review:
+    """kedi
+    >> Review this <language> snippet.
+    Return [review: Review].
+    = `review`
+    """
+    ...
+```
+
+Rules:
+- The Python function body is not executed; it exists for signature, type, and
+  docstring metadata.
+- Use backtick returns for native typed values. ``= `review` `` returns the
+  `Review` object; ``= <review>`` stringifies it.
+- Function parameters, defaults, configured `env`, registered tools, and
+  auto-injected `@kedi.type` classes are available to inline Python
+  substitutions such as ``[output: `output_type`]``.
+- `cache=True` enables response caching for identical source, arguments, and
+  env. Parse caching is always keyed by the exact source hash.
+
+Dynamic output types can be passed as normal Python values:
+
+```python
+from typing import TypeVar
+
+T = TypeVar("T")
+
+
+@kedi.query
+def extract_output(*, text: str, output_type: type[T]) -> T:
+    """kedi
+    >> Extract [output: `output_type`] from <text>.
+    = `output`
+    """
+    ...
+```
+
+### `@kedi.bind`
+
+Use `bind` when the Kedi implementation should live in a `.kedi` file while
+Python owns the call signature.
+
+```python
+@kedi.bind(file="summarize.kedi", cache=True, reload=True)
+def summarize(topic: str) -> str:
+    ...
+```
+
+`summarize.kedi`:
+
+```kedi
+>> Summarize <topic> for <audience>.
+Return [summary].
+
+= <summary>
+```
+
+The Python body is only a stub; the `.kedi` file is the implementation.
+
+Rules:
+- Relative files resolve from the Python source file that defines the bound
+  function.
+- The bound function body is ignored.
+- `reload=True` rereads and reparses the file on each call when the source hash
+  changes. Without `reload=True`, the file is read when the decorator runs.
+- `bind` accepts the same profile override parameters as `query`: `system`,
+  `effort`, `settings`, `tools`, `env`, `mcp_servers`, and `cache`.
+
+### Configuration and Context
+
+Configure defaults once:
+
+```python
+kedi.configure(
+    model="openrouter:google/gemini-3-flash-preview",
+    adapter="pydantic",
+    system="Use tools when they are relevant.",
+    effort="low",
+    settings={"temperature": 0.2},
+    tools=[search_docs],
+    env={"audience": "maintainers"},
+)
+```
+
+If `model` or `adapter` are not passed explicitly, `configure()` reads
+`KEDI_ADAPTER_MODEL` and `KEDI_ADAPTER` from the environment after loading
+`.env`. `kedi.context(...)` temporarily merges the same options and restores
+the previous configuration when the block exits. It supports both sync and async
+context managers.
+
+Runtime env precedence is:
+1. configured tools and query/bind-local tools
+2. Python call arguments
+3. auto-injected `@kedi.type` classes
+4. `kedi.configure(env=...)`
+5. `kedi.context(env=...)` or query/bind `env=...`
+
+Later entries override earlier entries. This lets explicit env values override
+call arguments when you intentionally want to force a runtime type or value.
+
+### Types and Tools
+
+`@kedi.type` registers Python classes for Kedi type resolution:
+
+```python
+@kedi.type
+class Person:
+    name: str
+    age: int
+
+
+@kedi.type(inject=False)
+class InternalPayload(BaseModel):
+    raw: str
+```
+
+- Existing Pydantic models, Pydantic dataclasses, and standard dataclasses are
+  registered as-is.
+- Bare classes are converted with `dataclasses.dataclass` and then registered.
+- `inject=True` is the default and makes the class available to Kedi programs
+  in the same Python module. Use `inject=False` and pass `env={"Name": Type}`
+  when you want explicit control.
+
+`@kedi.tool` wraps Python callables for adapter tool registration. The callable
+signature and docstring are used for schema and description metadata.
+
+```python
+@kedi.tool(name="search_docs", description="Search local project notes.", retries=1)
+def search_docs(query: str) -> str:
+    return "..."
+```
+
+Register tools through `kedi.configure(tools=[...])`, `kedi.context(tools=[...])`,
+or per-callable `@kedi.query(tools=[...])` / `@kedi.bind(tools=[...])`. A Kedi
+program still uses `> use: search_docs` to expose that registered callable to
+the active prompt.
+
+### Cache Helpers
+
+```python
+info = kedi.cache_info()
+kedi.clear_cache()
+```
+
+`cache_info()` returns the number of parse and response cache entries.
+`clear_cache()` clears both memory caches. Response caching is opt-in with
+`cache=True`; parse caching is always source-hash based.
+
+## Command-Line Parse Helpers
+
+Use `-c` to run Kedi source from the command line and `-p` / `--parse` to parse
+without compiling or executing:
+
+```bash
+kedi -c "= done"
+kedi -p -c "@broken("
+kedi parse program.kedi
+kedi program.kedi --parse
+```
+
 ## Prompt Optimization Blocks
 
 Mark specific template spans in a procedure for optimization using the `> optimize: name:` directive:

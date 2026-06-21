@@ -41,6 +41,138 @@ def test_server_custom_requests_prefer_request_text():
     )
 
 
+def test_server_standard_handlers_route_python_files_to_kedi_docstrings(monkeypatch):
+    from kedi.lsp import server as server_module
+
+    uri = "file:///tmp/api.py"
+    source = '''import kedi
+
+@kedi.query
+def ask(name: str) -> str:
+    """kedi
+    >> Hello <name>. [answer]
+    = <answer>
+    """
+    ...
+'''
+
+    class Document:
+        def __init__(self, text):
+            self.source = text
+
+    class Workspace:
+        def get_text_document(self, requested_uri):
+            assert requested_uri == uri
+            return Document(source)
+
+    server = server_module.make_server()
+    cast(Any, server.protocol)._workspace = Workspace()
+    handlers = server.protocol.fm.features
+    published = []
+    monkeypatch.setattr(
+        server,
+        "text_document_publish_diagnostics",
+        lambda params: published.append(params),
+    )
+
+    def kedi_feature_called(**kwargs):
+        raise AssertionError(f"Kedi file feature should not parse Python docs: {kwargs}")
+
+    monkeypatch.setattr(server_module.features, "compute_diagnostics", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_hover", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_definition", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_references", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_document_symbols", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_prepare_rename", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_rename", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_signature_help", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_inlay_hints", kedi_feature_called)
+    monkeypatch.setattr(server_module.features, "compute_semantic_tokens_full", kedi_feature_called)
+
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_diagnostics",
+        lambda src, source_path: ["diagnostic"],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_hover",
+        lambda src, source_path, pos: {"contents": "hover"},
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_definition",
+        lambda src, uri, source_path, pos: ["definition"],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_references",
+        lambda src, uri, source_path, pos, include_declaration: [include_declaration],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_semantic_tokens",
+        lambda src: {"data": [1, 2, 3, 4, 5]},
+    )
+
+    text_document = SimpleNamespace(uri=uri)
+    position = position_of(source, "name>")
+    handlers[lsp.TEXT_DOCUMENT_DID_OPEN](SimpleNamespace(text_document=text_document))
+    assert published[-1].diagnostics == ["diagnostic"]
+    assert handlers[lsp.TEXT_DOCUMENT_HOVER](
+        SimpleNamespace(text_document=text_document, position=position)
+    ) == {"contents": "hover"}
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_DEFINITION](
+            SimpleNamespace(text_document=text_document, position=position)
+        )
+        == "definition"
+    )
+    assert handlers[lsp.TEXT_DOCUMENT_REFERENCES](
+        SimpleNamespace(
+            text_document=text_document,
+            position=position,
+            context=SimpleNamespace(include_declaration=True),
+        )
+    ) == [True]
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_DOCUMENT_SYMBOL](SimpleNamespace(text_document=text_document))
+        == []
+    )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_PREPARE_RENAME](
+            SimpleNamespace(text_document=text_document, position=position)
+        )
+        is None
+    )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_RENAME](
+            SimpleNamespace(text_document=text_document, position=position, new_name="new")
+        )
+        is None
+    )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_FORMATTING](SimpleNamespace(text_document=text_document)) == []
+    )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_SIGNATURE_HELP](
+            SimpleNamespace(text_document=text_document, position=position)
+        )
+        is None
+    )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_INLAY_HINT](
+            SimpleNamespace(
+                text_document=text_document, range=lsp.Range(start=position, end=position)
+            )
+        )
+        == []
+    )
+    assert handlers[lsp.TEXT_DOCUMENT_SEMANTIC_TOKENS_FULL](
+        SimpleNamespace(text_document=text_document)
+    ).data == [1, 2, 3, 4, 5]
+
+
 def test_server_helpers_and_registered_handlers(monkeypatch):
     from kedi.lsp import server as server_module
 
@@ -99,6 +231,36 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
         record("semantic", "tokens"),
     )
     monkeypatch.setattr(server_module.features, "compute_python_ranges", lambda src: ["range"])
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_ranges",
+        lambda src: ["kedi-range"],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_diagnostics",
+        lambda src, source_path: ["kedi-diagnostic"],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_hover",
+        lambda src, source_path, pos: {"contents": "hover"},
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_definition",
+        lambda src, uri, source_path, pos: ["definition"],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_references",
+        lambda src, uri, source_path, pos, include_declaration: [include_declaration],
+    )
+    monkeypatch.setattr(
+        server_module.kedi_docstrings,
+        "compute_kedi_docstring_semantic_tokens",
+        lambda src: {"data": [1, 2, 3, 4, 5]},
+    )
     monkeypatch.setattr(
         server_module,
         "compute_python_virtual_document",
@@ -193,6 +355,39 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
         )["focusKey"]
         == 3
     )
+    assert handlers["kedi/kediDocstringRanges"]({}) == {"uri": "", "ranges": []}
+    assert handlers["kedi/kediDocstringRanges"]({"textDocument": {"uri": uri}, "text": source}) == {
+        "uri": uri,
+        "ranges": ["kedi-range"],
+    }
+    assert handlers["kedi/kediDocstringDiagnostics"]({}) == {
+        "uri": "",
+        "diagnostics": [],
+    }
+    assert handlers["kedi/kediDocstringDiagnostics"](
+        {"textDocument": {"uri": uri}, "text": source}
+    ) == {"uri": uri, "diagnostics": ["kedi-diagnostic"]}
+    assert handlers["kedi/kediDocstringHover"]({}) is None
+    assert handlers["kedi/kediDocstringHover"](
+        {"textDocument": {"uri": uri}, "text": source, "position": {"line": 1, "character": 2}}
+    ) == {"contents": "hover"}
+    assert handlers["kedi/kediDocstringDefinition"]({}) == {"uri": "", "locations": []}
+    assert handlers["kedi/kediDocstringDefinition"](
+        {"textDocument": {"uri": uri}, "text": source, "position": {"line": 1, "character": 2}}
+    ) == {"uri": uri, "locations": ["definition"]}
+    assert handlers["kedi/kediDocstringReferences"]({}) == {"uri": "", "locations": []}
+    assert handlers["kedi/kediDocstringReferences"](
+        {
+            "textDocument": {"uri": uri},
+            "text": source,
+            "position": {"line": 1, "character": 2},
+            "includeDeclaration": True,
+        }
+    ) == {"uri": uri, "locations": [True]}
+    assert handlers["kedi/kediDocstringSemanticTokens"]({}) == {"uri": "", "data": []}
+    assert handlers["kedi/kediDocstringSemanticTokens"](
+        {"textDocument": {"uri": uri}, "text": source}
+    ) == {"uri": uri, "data": [1, 2, 3, 4, 5]}
 
     assert server_module._uri_to_path("untitled:Untitled-1") is None
     assert server_module._uri_to_path("file:///tmp/a%20b.kedi") == "/tmp/a b.kedi"
@@ -216,6 +411,52 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
         is None
     )
     assert server_module._request_focus_line(SimpleNamespace()) is None
+    assert server_module._request_position(
+        {"position": {"line": 1, "character": 2}}
+    ) == lsp.Position(line=1, character=2)
+    assert server_module._request_position({"position": {"line": "bad", "character": 2}}) is None
+    assert server_module._request_position(SimpleNamespace(position=position)) == position
+    assert (
+        server_module._request_position(
+            SimpleNamespace(position=SimpleNamespace(line="bad", character=2))
+        )
+        is None
+    )
+    assert server_module._request_position(SimpleNamespace()) is None
+    assert server_module._request_include_declaration({"includeDeclaration": True}) is True
+    assert server_module._request_include_declaration({}) is False
+    assert server_module._request_include_declaration({"context": {}}) is False
+    assert server_module._request_include_declaration({"context": "bad"}) is False
+    assert (
+        server_module._request_include_declaration({"context": {"include_declaration": True}})
+        is True
+    )
+    assert (
+        server_module._request_include_declaration(SimpleNamespace(include_declaration=True))
+        is True
+    )
+    assert (
+        server_module._request_include_declaration(SimpleNamespace(includeDeclaration=True)) is True
+    )
+    assert (
+        server_module._request_include_declaration(
+            SimpleNamespace(context=SimpleNamespace(include_declaration=True))
+        )
+        is True
+    )
+    assert (
+        server_module._request_include_declaration(
+            SimpleNamespace(context=SimpleNamespace(includeDeclaration=True))
+        )
+        is True
+    )
+    assert (
+        server_module._request_include_declaration(
+            SimpleNamespace(context=SimpleNamespace(includeDeclaration="bad"))
+        )
+        is False
+    )
+    assert server_module._request_include_declaration(SimpleNamespace()) is False
 
 
 def test_server_main_starts_io(monkeypatch):

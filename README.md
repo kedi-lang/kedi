@@ -64,6 +64,51 @@ pip install -e .
 kedi your_program.kedi
 ```
 
+### Python API
+
+Embed Kedi directly in Python when you want typed LLM calls to feel like normal
+functions. `@kedi.query` reads Kedi from the function docstring, `@kedi.bind`
+binds a `.kedi` file to a Python callable, and `@kedi.type` makes Python types
+available to Kedi outputs.
+
+```python
+import kedi
+
+
+@kedi.type
+class Review:
+    decision: str
+    summary: str
+
+
+@kedi.tool(description="Search local project notes.")
+def search_docs(query: str) -> str:
+    return "Kedi embeds typed prompt programs in Python."
+
+
+kedi.configure(
+    model="openrouter:google/gemini-3-flash-preview",
+    tools=[search_docs],
+    env={"audience": "maintainers"},
+)
+
+
+@kedi.query(cache=True)
+def review_snippet(language: str, code: str) -> Review:
+    """kedi
+    > use: search_docs
+    >> Review this <language> snippet for <audience>.
+    Return [review: Review].
+    = `review`
+    """
+    ...
+```
+
+Use `kedi.context(...)` for temporary profile/env overrides, `cache=True` for
+call-result caching, `kedi.cache_info()` / `kedi.clear_cache()` for cache
+inspection, and `@kedi.bind(file="program.kedi", reload=True)` when you want a
+Python function backed by an editable Kedi source file.
+
 ### Agent Profiles
 
 Route different procedures to different models, settings, system prompts, MCP
@@ -119,6 +164,8 @@ Profiles and tool scopes can be shared across files with `> export:` / `> import
 
 ```bash
 kedi your_program.kedi
+kedi -c "= done"
+kedi -p -c "@broken("
 kedi parse your_program.kedi
 kedi your_program.kedi --parse
 kedi your_program.kedi --test

@@ -80,7 +80,10 @@ def kedi_procedure_tool_spec(
 
 def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     """Build an adapter-neutral tool spec from a Python callable."""
-    return ToolSpec(fn=fn, name=name, description=_callable_description(fn))
+    description = getattr(fn, "__kedi_tool_description__", None)
+    if not isinstance(description, str):
+        description = _callable_description(fn)
+    return ToolSpec(fn=fn, name=name, description=description)
 
 
 def kedi_procedure_to_pydantic_tool(

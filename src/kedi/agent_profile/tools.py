@@ -29,6 +29,10 @@ def eval_use_directive(
         raise KediExecutionError("Empty '> use:' directive")
     if name in available_procedures:
         return AgentProfile(tools=(name,))
+    if callable(env.get(name)):
+        return AgentProfile(tools=(name,))
+    if python_callable_for_tool(rt, name) is not None:
+        return AgentProfile(tools=(name,))
     definition = registry.get(name)
     if definition is not None:
         return eval_profile_definition(rt, definition, env)

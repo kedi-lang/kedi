@@ -28,6 +28,13 @@ def test_cli_reports_source_read_errors() -> None:
     assert "Error reading missing.kedi" in result.output
 
 
+def test_cli_requires_source_or_command() -> None:
+    result = CliRunner().invoke(cli_module.main, [])
+
+    assert result.exit_code == 2
+    assert "Missing argument 'SOURCE'." in result.output
+
+
 def test_cli_passes_extra_args_to_program_env(tmp_path: Path) -> None:
     source = tmp_path / "main.kedi"
     source.write_text('= `f"{args.id}:{args.enabled}:{args.missing}"`\n', encoding="utf-8")
@@ -36,6 +43,68 @@ def test_cli_passes_extra_args_to_program_env(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert result.output == "1:True:None\n"
+
+
+def test_cli_command_runs_inline_source() -> None:
+    result = CliRunner().invoke(cli_module.main, ["-c", "= done"])
+
+    assert result.exit_code == 0
+    assert result.output == "done\n"
+
+
+def test_cli_command_passes_extra_args_to_program_env() -> None:
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["-c", '= `f"{args.id}:{args.enabled}:{args.missing}"`', "--id", "1", "--enabled"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "1:True:None\n"
+
+
+def test_cli_command_parse_flag_and_parse_command() -> None:
+    flag_result = CliRunner().invoke(cli_module.main, ["-c", "= done", "--parse"])
+    short_flag_result = CliRunner().invoke(cli_module.main, ["-c", "= done", "-p"])
+    command_result = CliRunner().invoke(cli_module.main, ["parse", "-c", "= done"])
+
+    assert flag_result.exit_code == 0
+    assert flag_result.output == ""
+    assert short_flag_result.exit_code == 0
+    assert short_flag_result.output == ""
+    assert command_result.exit_code == 0
+    assert command_result.output == ""
+
+
+def test_cli_command_renders_parse_error() -> None:
+    result = CliRunner().invoke(cli_module.main, ["-c", "@boom(\n  = nope"])
+
+    assert result.exit_code == 1
+    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert 'File "<command>", line 1, column 1' in result.output
+
+
+def test_cli_command_exits_with_nonzero_run_source_code(monkeypatch: Any) -> None:
+    monkeypatch.setattr(cli_module, "run_source_cli", lambda *args, **kwargs: (7, ""))
+
+    result = CliRunner().invoke(cli_module.main, ["-c", "= done"])
+
+    assert result.exit_code == 7
+    assert result.output == ""
+
+
+def test_cli_command_rejects_file_and_file_bound_modes(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+
+    with_positional_arg = CliRunner().invoke(
+        cli_module.main, ["-c", "= `args.name`", "--name", "Ada"]
+    )
+    with_test = CliRunner().invoke(cli_module.main, ["-c", "= done", "--test"])
+
+    assert with_positional_arg.exit_code == 0
+    assert with_positional_arg.output == "Ada\n"
+    assert source.exists()
+    assert with_test.exit_code == 2
+    assert "-c/--command only supports direct run or --parse." in with_test.output
 
 
 def test_cli_parse_command_renders_kedi_parse_error(tmp_path: Path) -> None:
@@ -71,11 +140,14 @@ def test_cli_parse_flag_parses_without_compile(
 
     command_result = CliRunner().invoke(cli_module.main, ["parse", str(source)])
     flag_result = CliRunner().invoke(cli_module.main, [str(source), "--parse"])
+    short_flag_result = CliRunner().invoke(cli_module.main, [str(source), "-p"])
 
     assert command_result.exit_code == 0
     assert command_result.output == ""
     assert flag_result.exit_code == 0
     assert flag_result.output == ""
+    assert short_flag_result.exit_code == 0
+    assert short_flag_result.output == ""
 
 
 def test_cli_optimize_success_and_failure_paths(

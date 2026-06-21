@@ -86,6 +86,17 @@ class KediExecutionError(RuntimeError):
     def __post_init__(self) -> None:
         RuntimeError.__init__(self, self.message)
 
+    def render(self, *, use_color: bool = False) -> str:
+        from .error_rendering import render_execution_error
+
+        return render_execution_error(self, use_color=use_color)
+
+    def __str__(self) -> str:
+        return self.render()
+
+    def __repr__(self) -> str:
+        return self.render()
+
 
 class KediTypeExecutionError(KediExecutionError, TypeError):
     pass
