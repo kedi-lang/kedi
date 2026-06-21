@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+from pathlib import Path
 from typing import Any, TypeVar
 
 import kedi
 import kedi.api as api_module
 import pytest
 from pydantic import BaseModel
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
-from kedi import configure, context, query, reset_config, tool
+from kedi import bind, configure, context, query, reset_config, tool, type as kedi_type
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
@@ -94,6 +97,8 @@ class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
         )
         if schema.get("output") is Person:
             return AttrDict({"output": {"name": "John", "age": 30}})
+        if "person" in schema:
+            return AttrDict({"person": {"name": "Ada", "age": 42}})
         if "summary" in schema:
             return AttrDict({"summary": "short summary"})
         return AttrDict({"answer": "ok"})
@@ -139,6 +144,92 @@ def test_query_supports_dynamic_runtime_output_type(adapter: ApiAdapter) -> None
 
     assert result == Person(name="John", age=30)
     assert adapter.schemas[0] == {"output": Person}
+
+
+def test_query_env_overrides_bound_runtime_globals(adapter: ApiAdapter) -> None:
+    @query(env={"output_type": Person})
+    def extract_output(*, template: str, output_type: type[Any]) -> Person:
+        """kedi
+        >> Extract [output: `output_type`] from <template>.
+        = `output`
+        """
+
+    result = extract_output(template="John is 30 years old.", output_type=str)
+
+    assert result == Person(name="John", age=30)
+    assert adapter.schemas[0] == {"output": Person}
+
+
+def test_kedi_type_transforms_bare_class_and_auto_injects(adapter: ApiAdapter) -> None:
+    @kedi_type
+    class AutoPerson:
+        name: str
+        age: int
+
+    assert dataclasses.is_dataclass(AutoPerson)
+
+    @query
+    def extract_person(text: str) -> AutoPerson:
+        """kedi
+        >> Extract [person: AutoPerson] from <text>.
+        = `person`
+        """
+
+    assert extract_person("Ada is 42.") == AutoPerson(name="Ada", age=42)
+    assert adapter.schemas[0] == {"person": AutoPerson}
+
+
+def test_kedi_type_registers_existing_type_surfaces_without_transform() -> None:
+    class ApiPerson(BaseModel):
+        name: str
+
+    @dataclasses.dataclass
+    class StdPerson:
+        name: str
+
+    @pydantic_dataclass
+    class PydanticPerson:
+        name: str
+
+    assert kedi_type(ApiPerson) is ApiPerson
+    assert kedi_type(StdPerson) is StdPerson
+    assert kedi_type(PydanticPerson) is PydanticPerson
+
+
+def test_kedi_type_inject_false_skips_auto_env(adapter: ApiAdapter) -> None:
+    @kedi_type(inject=False)
+    class HiddenPerson:
+        name: str
+        age: int
+
+    assert dataclasses.is_dataclass(HiddenPerson)
+    assert "HiddenPerson" not in api_module._auto_type_env(
+        test_kedi_type_inject_false_skips_auto_env
+    )
+
+    @query(env={"HiddenPerson": HiddenPerson})
+    def extract_person(text: str) -> HiddenPerson:
+        """kedi
+        >> Extract [person: HiddenPerson] from <text>.
+        = `person`
+        """
+
+    assert extract_person("Ada is 42.") == HiddenPerson(name="Ada", age=42)
+    assert adapter.schemas[0] == {"person": HiddenPerson}
+
+
+def test_kedi_type_rejects_non_classes() -> None:
+    with pytest.raises(TypeError, match="classes"):
+        kedi_type(lookup)  # type: ignore[arg-type]
+
+
+def test_auto_type_env_ignores_callables_without_module_name() -> None:
+    def local() -> None:
+        return None
+
+    local.__module__ = None  # type: ignore[assignment]
+
+    assert api_module._auto_type_env(local) == {}
 
 
 def test_query_namespace_object_matches_decorator_api(adapter: ApiAdapter) -> None:
@@ -198,6 +289,41 @@ def test_context_temporarily_overrides_config() -> None:
     assert len(inner.templates) == 1
     assert answer() == "ok"
     assert len(outer.templates) == 2
+
+
+def test_configure_env_overrides_call_arguments() -> None:
+    adapter = ApiAdapter()
+    configure(adapter=adapter, env={"topic": "configured topic"})
+
+    @query
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize("call topic") == "short summary"
+    assert "configured topic" in adapter.templates[0]
+    assert "call topic" not in adapter.templates[0]
+
+
+def test_context_env_overrides_config_env() -> None:
+    adapter = ApiAdapter()
+    configure(adapter=adapter, env={"topic": "configured topic"})
+
+    @query
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    with context(env={"topic": "context topic"}):
+        assert summarize("call topic") == "short summary"
+
+    assert "context topic" in adapter.templates[0]
+    assert "configured topic" not in adapter.templates[0]
+    assert "call topic" not in adapter.templates[0]
 
 
 def test_context_supports_async_manager() -> None:
@@ -284,7 +410,7 @@ def test_tool_decorator_sets_name_description_and_retries(adapter: ApiAdapter) -
     assert flaky_lookup() == "lookup result"
     assert calls == 2
 
-    @query(use=[flaky_lookup])
+    @query(tools=[flaky_lookup])
     def answer() -> str:
         """kedi
         > use: search_docs
@@ -343,8 +469,8 @@ def test_tool_rejects_negative_retries() -> None:
         tool(retries=-1)
 
 
-def test_query_use_alias_registers_callable_tools(adapter: ApiAdapter) -> None:
-    @query(use=[lookup])
+def test_query_registers_callable_tools(adapter: ApiAdapter) -> None:
+    @query(tools=[lookup])
     def answer() -> str:
         """kedi
         >> Return [answer].
@@ -353,6 +479,90 @@ def test_query_use_alias_registers_callable_tools(adapter: ApiAdapter) -> None:
 
     assert answer() == "ok"
     assert adapter.tools == [("lookup",)]
+
+
+def test_bind_file_exposes_kedi_source_as_python_callable(
+    adapter: ApiAdapter,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "summarize.kedi"
+    source.write_text(
+        ">> Summarize <topic>. Return [summary].\n= <summary>\n",
+        encoding="utf-8",
+    )
+
+    @kedi.bind(file=source)
+    def summarize(topic: str) -> str:
+        raise AssertionError("bound function body should not run")
+
+    assert summarize("Kedi") == "short summary"
+    assert adapter.templates == [
+        "Fill in the fields: [summary].\nSummarize Kedi. Return [summary]."
+    ]
+
+
+def test_bind_file_profile_arguments_apply_for_one_call(
+    adapter: ApiAdapter,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "answer.kedi"
+    source.write_text(
+        "> use: lookup\n>> Call the available tool if useful and return [answer].\n= <answer>\n",
+        encoding="utf-8",
+    )
+
+    @bind(file=source, system="Use terse prose.", settings={"temperature": 0.2}, tools=[lookup])
+    def answer() -> str: ...
+
+    assert answer() == "ok"
+    assert adapter.instructions == ["Use terse prose."]
+    assert adapter.settings == [{"temperature": 0.2}]
+    assert adapter.tools == [("lookup",)]
+
+
+def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: Path) -> None:
+    source = tmp_path / "extract.kedi"
+    source.write_text(
+        ">> Extract [output: `output_type`] from <template>.\n= `output`\n",
+        encoding="utf-8",
+    )
+
+    @bind(file=source, env={"output_type": Person})
+    def extract_output(*, template: str, output_type: type[Any]) -> Person: ...
+
+    result = extract_output(template="John is 30 years old.", output_type=str)
+
+    assert result == str(Person(name="John", age=30))
+    assert adapter.schemas[0] == {"output": Person}
+
+
+def test_bind_file_resolves_relative_to_python_source_file(
+    adapter: ApiAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.py"
+    owner.write_text("# owner module\n", encoding="utf-8")
+    (tmp_path / "relative.kedi").write_text(
+        ">> Return [answer] about <topic>.\n= <answer>\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(api_module.inspect, "getsourcefile", lambda fn: str(owner))
+
+    @bind(file="relative.kedi")
+    def answer(topic: str) -> str: ...
+
+    assert answer("Kedi") == "ok"
+    assert "Kedi" in adapter.templates[0]
+
+
+def test_bind_file_reports_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.kedi"
+
+    with pytest.raises(FileNotFoundError, match="Kedi bind file not found"):
+
+        @bind(file=missing)
+        def answer() -> str: ...
 
 
 def test_configure_default_tools_are_available_to_use_directive(adapter: ApiAdapter) -> None:

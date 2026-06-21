@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+import dataclasses
 import functools
 import inspect
 import os
@@ -7,6 +9,7 @@ import textwrap
 from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Literal, ParamSpec, TypeVar, cast, overload
 
 import dotenv
@@ -20,11 +23,14 @@ from .lang import compile_program, parse_program
 
 P = ParamSpec("P")
 R = TypeVar("R")
+ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
 AdapterName = Literal["pydantic", "dspy"]
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
+_TYPE_INJECT_ATTR = "__kedi_type_inject__"
+_TYPE_REGISTRY: dict[str, dict[str, builtins.type[Any]]] = {}
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,7 @@ class _APIConfig:
     adapter_kwargs: Mapping[str, Any] = field(default_factory=dict)
     profile: AgentProfile = field(default_factory=AgentProfile.empty)
     tools: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
+    env: Mapping[str, Any] = field(default_factory=dict)
 
 
 _DEFAULT_CONFIG = _APIConfig()
@@ -46,11 +53,40 @@ def _callable_name(fn: Callable[..., Any]) -> str:
     if isinstance(tool_name, str) and tool_name:
         return tool_name
     name = getattr(fn, "__name__", None)
-    return name if isinstance(name, str) else type(fn).__name__
+    return name if isinstance(name, str) else builtins.type(fn).__name__
 
 
 def _tool_mapping(tools: Sequence[Callable[..., Any]]) -> dict[str, Callable[..., Any]]:
     return {_callable_name(tool): tool for tool in tools}
+
+
+def _is_existing_type_surface(cls: builtins.type[Any]) -> bool:
+    from pydantic import BaseModel
+    from pydantic.dataclasses import is_pydantic_dataclass
+
+    return issubclass(cls, BaseModel) or is_pydantic_dataclass(cls) or dataclasses.is_dataclass(cls)
+
+
+def _register_type(cls: ClassT, *, inject: bool) -> ClassT:
+    if not isinstance(cls, builtins.type):
+        raise TypeError("@kedi.type can only decorate classes.")
+
+    registered = cls if _is_existing_type_surface(cls) else dataclasses.dataclass(cls)
+    setattr(registered, _TYPE_INJECT_ATTR, inject)
+
+    module_registry = _TYPE_REGISTRY.setdefault(registered.__module__, {})
+    if inject:
+        module_registry[registered.__name__] = registered
+    else:
+        module_registry.pop(registered.__name__, None)
+    return cast(ClassT, registered)
+
+
+def _auto_type_env(fn: Callable[..., Any]) -> dict[str, Any]:
+    module = getattr(fn, "__module__", None)
+    if not isinstance(module, str):
+        return {}
+    return dict(_TYPE_REGISTRY.get(module, {}))
 
 
 def _extract_kedi_source(fn: Callable[..., Any]) -> str:
@@ -85,6 +121,91 @@ def _wrap_query_source(source: str) -> str:
     return f"@__kedi_query_entry__() -> Any:\n{body}\n"
 
 
+def _agent_profile_overrides(
+    *,
+    system: str | None,
+    effort: EffortValue | None,
+    settings: Mapping[str, Any] | None,
+    tools: Sequence[Callable[..., Any]],
+    mcp_servers: Sequence[McpServerSpec],
+) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
+    tool_map = _tool_mapping(tools)
+    return tool_map, AgentProfile(
+        effort=effort,
+        system=system,
+        settings=dict(settings or {}),
+        tools=tuple(tool_map),
+        mcp_servers=tuple(mcp_servers),
+    )
+
+
+def _resolve_bind_file(file: str | os.PathLike[str], fn: Callable[..., Any]) -> Path:
+    path = Path(file)
+    if path.is_absolute():
+        return path
+
+    source_file = inspect.getsourcefile(fn)
+    if source_file is None:  # pragma: no cover - interactive/session fallback.
+        return path.resolve()
+    return (Path(source_file).resolve().parent / path).resolve()
+
+
+def _read_bind_file(file: str | os.PathLike[str], fn: Callable[..., Any]) -> tuple[str, Path]:
+    path = _resolve_bind_file(file, fn)
+    if not path.exists():
+        raise FileNotFoundError(f"Kedi bind file not found: {path}")
+    return path.read_text(encoding="utf-8"), path
+
+
+def _decorate_kedi_program(
+    *,
+    inner: Callable[P, R],
+    program: Any,
+    tool_map: Mapping[str, Callable[..., Any]],
+    env: Mapping[str, Any],
+    profile_override: AgentProfile,
+    use_main: bool,
+) -> Callable[P, R]:
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        config = _config_var.get()
+        adapter = _build_adapter(config)
+        runtime_globals = {
+            **config.tools,
+            **tool_map,
+            **_bound_runtime_globals(inner, args, kwargs),
+            **_auto_type_env(inner),
+            **config.env,
+            **env,
+        }
+        profile = config.profile.merge(profile_override)
+        runtime = compile_program(
+            program,
+            adapter=adapter,
+            runtime_globals=runtime_globals,
+        )
+        with block_agent_profile_scope(profile):
+            if use_main:
+                return cast(R, runtime.run_main())
+            return cast(
+                R,
+                runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
+            )
+
+    if _is_async_callable(inner):
+
+        @functools.wraps(inner)
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            return run(*args, **kwargs)
+
+        return cast(Callable[P, R], async_wrapper)
+
+    @functools.wraps(inner)
+    def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        return run(*args, **kwargs)
+
+    return sync_wrapper
+
+
 def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: Mapping[str, Any]):
     def factory() -> AgentAdapter[Any]:
         if adapter_name == "pydantic":
@@ -112,6 +233,7 @@ def _build_config(
     effort: EffortValue | None,
     settings: Mapping[str, Any] | None,
     tools: Sequence[Callable[..., Any]],
+    env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     adapter_kwargs: Mapping[str, Any],
 ) -> _APIConfig:
@@ -127,6 +249,7 @@ def _build_config(
         model_default = os.getenv("KEDI_ADAPTER_MODEL") or None if model is _UNSET else model
         base_profile = AgentProfile.empty()
         base_tools: Mapping[str, Callable[..., Any]] = {}
+        base_env: Mapping[str, Any] = {}
         base_adapter_kwargs: Mapping[str, Any] = {}
     else:
         adapter_default = (
@@ -137,6 +260,7 @@ def _build_config(
         model_default = base.model if model is _UNSET else model
         base_profile = base.profile
         base_tools = base.tools
+        base_env = base.env
         base_adapter_kwargs = base.adapter_kwargs
 
     adapter_obj: AgentAdapter[Any] | LazyAdapter | None
@@ -153,6 +277,7 @@ def _build_config(
         merged_kwargs = dict(adapter_kwargs)
 
     tool_map = {**dict(base_tools), **_tool_mapping(tools)}
+    merged_env = {**dict(base_env), **dict(env or {})}
     profile_patch = AgentProfile(
         model=cast(str | None, model_default),
         effort=effort,
@@ -169,6 +294,7 @@ def _build_config(
         adapter_kwargs=merged_kwargs,
         profile=profile,
         tools=tool_map,
+        env=merged_env,
     )
 
 
@@ -186,6 +312,7 @@ def configure(
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
     tools: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     **adapter_kwargs: Any,
 ) -> None:
@@ -200,6 +327,7 @@ def configure(
             effort=effort,
             settings=settings,
             tools=tools,
+            env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
         )
@@ -240,6 +368,7 @@ def context(
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
     tools: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     **adapter_kwargs: Any,
 ) -> _KediContext:
@@ -253,6 +382,7 @@ def context(
             effort=effort,
             settings=settings,
             tools=tools,
+            env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
         )
@@ -335,6 +465,27 @@ def _is_async_callable(fn: Callable[..., Any]) -> bool:
 
 
 @overload
+def type(cls: ClassT) -> ClassT: ...
+
+
+@overload
+def type(*, inject: bool = True) -> Callable[[ClassT], ClassT]: ...
+
+
+def type(
+    cls: ClassT | None = None,
+    *,
+    inject: bool = True,
+) -> ClassT | Callable[[ClassT], ClassT]:
+    def decorate(inner: ClassT) -> ClassT:
+        return _register_type(inner, inject=inject)
+
+    if cls is not None:
+        return decorate(cls)
+    return decorate
+
+
+@overload
 def query(fn: Callable[P, R]) -> Callable[P, R]: ...
 
 
@@ -345,7 +496,7 @@ def query(
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
     tools: Sequence[Callable[..., Any]] = (),
-    use: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -357,60 +508,65 @@ def query(
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
     tools: Sequence[Callable[..., Any]] = (),
-    use: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
-    query_tools = tuple(tools) + tuple(use)
-    query_tool_map = _tool_mapping(query_tools)
-    query_profile = AgentProfile(
-        effort=effort,
+    tool_map, profile_override = _agent_profile_overrides(
         system=system,
-        settings=dict(settings or {}),
-        tools=tuple(query_tool_map),
-        mcp_servers=tuple(mcp_servers),
+        effort=effort,
+        settings=settings,
+        tools=tools,
+        mcp_servers=mcp_servers,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
         source = _extract_kedi_source(inner)
         program = parse_program(_wrap_query_source(source))
-
-        def run(*args: P.args, **kwargs: P.kwargs) -> R:
-            config = _config_var.get()
-            adapter = _build_adapter(config)
-            runtime_globals = {
-                **config.tools,
-                **query_tool_map,
-                **_bound_runtime_globals(inner, args, kwargs),
-            }
-            profile = config.profile.merge(query_profile)
-            runtime = compile_program(
-                program,
-                adapter=adapter,
-                runtime_globals=runtime_globals,
-            )
-            with block_agent_profile_scope(profile):
-                return cast(
-                    R,
-                    runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
-                )
-
-        if _is_async_callable(inner):
-
-            @functools.wraps(inner)
-            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                return run(*args, **kwargs)
-
-            return cast(Callable[P, R], async_wrapper)
-
-        @functools.wraps(inner)
-        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            return run(*args, **kwargs)
-
-        return sync_wrapper
+        return _decorate_kedi_program(
+            inner=inner,
+            program=program,
+            tool_map=tool_map,
+            env=dict(env or {}),
+            profile_override=profile_override,
+            use_main=False,
+        )
 
     if fn is not None:
         return decorate(fn)
     return decorate
 
 
-__all__ = ["configure", "context", "query", "reset_config", "tool"]
+def bind(
+    *,
+    file: str | os.PathLike[str],
+    system: str | None = None,
+    effort: EffortValue | None = None,
+    settings: Mapping[str, Any] | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
+    mcp_servers: Sequence[McpServerSpec] = (),
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    tool_map, profile_override = _agent_profile_overrides(
+        system=system,
+        effort=effort,
+        settings=settings,
+        tools=tools,
+        mcp_servers=mcp_servers,
+    )
+
+    def decorate(inner: Callable[P, R]) -> Callable[P, R]:
+        source, path = _read_bind_file(file, inner)
+        program = parse_program(source, source_path=str(path))
+        return _decorate_kedi_program(
+            inner=inner,
+            program=program,
+            tool_map=tool_map,
+            env=dict(env or {}),
+            profile_override=profile_override,
+            use_main=True,
+        )
+
+    return decorate
+
+
+__all__ = ["bind", "configure", "context", "query", "reset_config", "tool", "type"]
