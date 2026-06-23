@@ -9,6 +9,7 @@ description = "Kedi Language"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "groq",
     "dspy",
     "click",
     "pytest>=8.2",
@@ -26,7 +27,7 @@ dependencies = [
     "langchain-openai",
     "langchain-openrouter",
     "langchain-mcp-adapters",
-    "pydantic-ai-harness>=0.3.0",
+    "pydantic-ai-harness[code-mode]>=0.3.0",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
