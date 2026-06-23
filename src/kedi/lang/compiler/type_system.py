@@ -215,6 +215,9 @@ class KediType:
         env: dict[str, Any] | None,
         value: Any,
     ) -> Any:
+        from ...promise import force
+
+        value = force(value)  # never hand a promise to pydantic; resolve first
         resolved = self.resolve_required(rt, env)
         if resolved is None:
             return value
@@ -285,6 +288,9 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
 
 def coerce_model_value(model: type[BaseModel], value: Any) -> Any:
     """Coerce a value to a Pydantic model."""
+    from ...promise import force
+
+    value = force(value)
     if isinstance(value, model):
         return value
     if isinstance(value, BaseModel):

@@ -50,12 +50,15 @@ def compile_program(
     adapter: AgentAdapter[Any] | None = None,
     executor: Executor | None = None,
     runtime_globals: dict[str, Any] | None = None,
+    engine: Any | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
     This is the main entry point for the compiler.
     """
-    compiler = ProgramCompiler(adapter, executor=executor, runtime_globals=runtime_globals)
+    compiler = ProgramCompiler(
+        adapter, executor=executor, runtime_globals=runtime_globals, engine=engine
+    )
     return compiler.compile(prog)
 
 
@@ -69,10 +72,12 @@ class ProgramCompiler:
         executor: Executor | None = None,
         module_stack: tuple[Path, ...] = (),
         runtime_globals: dict[str, Any] | None = None,
+        engine: Any | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
-        self.rt = KediRuntime(adapter=adapter, executor=executor)
+        self.engine = engine
+        self.rt = KediRuntime(adapter=adapter, executor=executor, engine=engine)
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
         self.proc_compiler = ProcedureCompiler(self.rt)
@@ -144,6 +149,7 @@ class ProgramCompiler:
                     executor=self.rt.executor,
                     module_stack=active_stack,
                     runtime_globals=dict(self.rt._initial_globals_env),
+                    engine=self.engine,
                 ).compile(imported_prog)
                 imported_rt.run_main()
                 self._merge_exports(module_path, imported_prog, imported_rt)

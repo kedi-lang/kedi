@@ -17,6 +17,62 @@ from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 
 
+class KediEnv(dict):
+    """Exec namespace that resolves ``KediPromise`` values lazily, on lookup.
+
+    CPython routes ``LOAD_NAME`` (module/exec top level) and ``LOAD_GLOBAL`` (function and
+    comprehension free variables — the slow path taken when ``globals`` is a non-exact ``dict``)
+    through ``__getitem__``. So a promise output resolves only when the executing Python actually
+    references that name — never all of them up front. Resolved values are cached back so repeated
+    lookups are cheap and identity is stable.
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        value = dict.__getitem__(self, key)
+        from ...promise import KediPromise
+
+        if isinstance(value, KediPromise):
+            resolved = value.resolve()
+            dict.__setitem__(self, key, resolved)
+            return resolved
+        return value
+
+
+def assert_kedienv_routing() -> None:
+    """Fail loudly if this interpreter doesn't route name lookups through ``KediEnv.__getitem__``.
+
+    Parallel mode's lazy promise resolution relies on CPython consulting a non-exact-``dict``
+    globals via ``__getitem__`` for ``LOAD_GLOBAL``/``LOAD_NAME`` (a slow-path behavior verified on
+    CPython 3.10). If a future interpreter drops it, promises would silently leak into user Python
+    as raw objects — so we refuse parallel mode here rather than degrade. Cheap; run once.
+    """
+    from concurrent.futures import Future
+
+    from ...promise import KediPromise
+
+    fut: Future = Future()
+    fut.set_result({"x": "ok"})
+    ns = KediEnv()
+    builtins_ns = __builtins__ if isinstance(__builtins__, dict) else __builtins__.__dict__
+    ns["__builtins__"] = builtins_ns
+    ns["x"] = KediPromise(fut, "x")
+    exec(
+        compile(
+            "def __probe__():\n global x\n return x\n__r__ = __probe__()",
+            "<kedienv-selfcheck>",
+            "exec",
+        ),
+        ns,
+        ns,
+    )
+    if isinstance(dict.__getitem__(ns, "__r__"), KediPromise):  # pragma: no cover - guard
+        raise RuntimeError(
+            "KediEnv routing self-check failed: this Python build does not route LOAD_GLOBAL "
+            "through KediEnv.__getitem__, so parallel mode cannot resolve promises lazily. "
+            "Run Kedi sequentially (unset KEDI_PARALLEL / do not use kedi.parallel())."
+        )
+
+
 def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     """Look up a variable in the environment hierarchy."""
     if name in local_env:
@@ -37,8 +93,15 @@ def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
 
 
 def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
-    """Build execution environment for Python code with full context."""
-    env: dict[str, Any] = {"__builtins__": builtins.__dict__}
+    """Build execution environment for Python code with full context.
+
+    Returns a :class:`KediEnv` so promise outputs resolve lazily, only when the executing Python
+    references them (Concern 1: unused output fields are never awaited). Critically this also
+    avoids a self-deadlock: a tool running inside a produce job must not eagerly resolve the
+    in-flight template's own (still-running) output promise.
+    """
+    env: dict[str, Any] = KediEnv()
+    env["__builtins__"] = builtins.__dict__
 
     # Layer environments: imports -> prelude -> globals -> current -> local
     for source in (rt._import_env, rt._prelude_env, rt._globals_env):

@@ -339,28 +339,19 @@ class DefaultExecutor:
         *,
         kedi_line_offset: int = 0,
     ) -> Any:
-        """Run ``code`` as a block: existing Kedi vars are ``nonlocal`` (mutations
-        sync back), new Python names stay local."""
+        """Run ``code`` as a block. Existing Kedi vars are exposed as ``global`` so reads route
+        through ``KediEnv.__getitem__`` (lazy promise resolution) and mutations sync back; new
+        Python names stay local and don't leak."""
         env = self._build_python_env(rt, local_env)
         names = list(local_env.keys())
-        params = ", ".join(names)
-        header = [
-            f"def __kedi_wrapper__({params}):",
-            "    def __kedi_block__():",
-        ]
-        if names:  # empty ``nonlocal`` is a SyntaxError
-            header.append(f"        nonlocal {params}")
-        body = ["        " + line for line in code.splitlines()]
-        # Return existing names only (their mutated values); new locals don't leak.
-        updated_map = "{" + ", ".join(f"{name!r}: {name}" for name in names) + "}"
+        # A function wrapper is needed so ``return`` is legal; declaring the Kedi vars ``global``
+        # makes their reads LOAD_GLOBAL (-> KediEnv.__getitem__) and writes STORE_GLOBAL (-> env).
+        header = ["def __kedi_wrapper__():"]
+        if names:  # empty ``global`` is a SyntaxError
+            header.append(f"    global {', '.join(names)}")
+        body = ["    " + line for line in code.splitlines()]
         wrapper_src = "\n".join(
-            header
-            + body
-            + [
-                "        pass",  # guarantees a non-empty block body
-                "    __kedi_ret__ = __kedi_block__()",
-                f"    return (__kedi_ret__, {updated_map})",
-            ]
+            header + body + ["    pass"]  # guarantees a non-empty body
         )
         filename = self._python_filename(
             rt,
@@ -372,7 +363,10 @@ class DefaultExecutor:
         # Pad so traceback line numbers stay aligned with the Kedi source line.
         compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
         exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
-        result, updated = env["__kedi_wrapper__"](**{name: local_env[name] for name in names})
+        result = env["__kedi_wrapper__"]()
+        # Sync mutated Kedi vars back, reading raw (no KediEnv resolution) so untouched promises
+        # stay lazy; touched ones were cached concrete by KediEnv on access.
+        updated = {name: dict.__getitem__(env, name) for name in names if name in env}
         self._sync_existing_variables(rt, local_env, updated)
         return result
 
@@ -385,9 +379,12 @@ class DefaultExecutor:
         runtime_env = rt._current_env.get()
         for var_name in list(target.keys()):
             if var_name in source:
-                target[var_name] = source[var_name]
+                # Raw read: never trigger KediEnv promise resolution during sync-back, so an
+                # untouched promise stays lazy.
+                value = dict.__getitem__(source, var_name)
+                target[var_name] = value
                 if runtime_env is not None:
-                    runtime_env[var_name] = source[var_name]
+                    runtime_env[var_name] = value
 
     def _emit_debug(self, event: str, step: str, **payload: Any) -> None:
         if self.debug_exporter is None:
