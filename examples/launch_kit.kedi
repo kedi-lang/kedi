@@ -15,4 +15,4 @@
   >> State the single biggest adoption risk for <idea> in one sentence. Risk: [risk: str].
   = NAME: <name> // TAGLINE: <tagline> // TWEET: <tweet> // PERSONAS: <personas> // RISK: <risk>
 
-= <make_kit(idea)>
+= <make_kit(<idea>)>
