@@ -42,6 +42,7 @@ from kedi.lang.ast import (
     ProfileSystemEntry,
     Program,
     PythonExprSegment,
+    SettingsField,
     Span,
     TemplateLine,
     TextSegment,
@@ -460,6 +461,10 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     assert mcp_directive_hover is not None and "> mcp:" in mcp_directive_hover
     mcp_field_hover = features._describe_ast_node(McpField(name="url", plain_value="http://x"))
     assert mcp_field_hover is not None and "HTTP/SSE MCP server URL" in mcp_field_hover
+    settings_field_hover = features._describe_ast_node(
+        SettingsField(name="codemode", plain_value="on")
+    )
+    assert settings_field_hover is not None and "capabilities only" in settings_field_hover
 
     plain_only = ProfileDefStmt(
         name="plain",

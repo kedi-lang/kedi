@@ -41,7 +41,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 @click.option(
     "--adapter-model",
     envvar=["KEDI_ADAPTER_MODEL", "MODEL_NAME"],
-    default="groq:qwen/qwen3-32b",
+    default=None,
     help="Model for template adapter",
 )
 @click.option(
@@ -149,7 +149,7 @@ def main(
     source: str | None,
     command_source: str | None,
     adapter: str,
-    adapter_model: str,
+    adapter_model: str | None,
     codegen_agent: str,
     codegen_model: str,
     codegen_retries: int,

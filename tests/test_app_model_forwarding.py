@@ -97,24 +97,24 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
 
 def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
-    seen: list[tuple[str, str]] = []
+    seen: list[tuple[str, str | None]] = []
 
     class FakeDSPyAdapter:
-        def __init__(self, *, model: str) -> None:
+        def __init__(self, *, model: str | None) -> None:
             seen.append(("dspy", model))
 
         def produce_sync(self) -> None:
             return None
 
     class FakePydanticAdapter:
-        def __init__(self, *, model: str) -> None:
+        def __init__(self, *, model: str | None) -> None:
             seen.append(("pydantic", model))
 
         def produce_sync(self) -> None:
             return None
 
     class FakeLangChainAdapter:
-        def __init__(self, *, model: str) -> None:
+        def __init__(self, *, model: str | None) -> None:
             seen.append(("langchain", model))
 
         def produce_sync(self) -> None:
@@ -130,9 +130,23 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
 
     assert seen == [
         ("dspy", "groq/qwen/qwen3-32b"),
-        ("pydantic", "groq:qwen/qwen3-32b"),
+        ("pydantic", None),
         ("langchain", "groq:qwen/qwen3-32b"),
     ]
+
+
+def test_pydantic_runtime_adapter_does_not_default_to_groq(monkeypatch: Any) -> None:
+    seen: list[str | None] = []
+
+    class FakePydanticAdapter:
+        def __init__(self, *, model: str | None) -> None:
+            seen.append(model)
+
+    monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
+
+    app._build_runtime_adapter("pydantic", None)
+
+    assert seen == [None]
 
 
 def test_run_tests_and_evals_cli_codegen_failure_and_optimize_paths(

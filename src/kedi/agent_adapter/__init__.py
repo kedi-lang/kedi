@@ -1,6 +1,7 @@
 from typing import Any
 
 from .meta import AgentAdapter, T
+from .monty_interpreter import MontyInterpreter
 from .tool_override import SupportsToolRegistration, ToolSpec
 
 
@@ -18,6 +19,7 @@ def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
 
 __all__ = [
     "AgentAdapter",
+    "MontyInterpreter",
     "SupportsToolRegistration",
     "T",
     "ToolSpec",

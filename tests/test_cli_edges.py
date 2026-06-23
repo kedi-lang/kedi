@@ -92,6 +92,23 @@ def test_cli_command_exits_with_nonzero_run_source_code(monkeypatch: Any) -> Non
     assert result.output == ""
 
 
+def test_cli_command_does_not_default_pydantic_model(monkeypatch: Any) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+
+    def run_source(source: str, **kwargs: Any) -> tuple[int, str]:
+        seen.update(kwargs)
+        return 0, ""
+
+    monkeypatch.setattr(cli_module, "run_source_cli", run_source)
+
+    result = CliRunner().invoke(cli_module.main, ["-c", "= done"])
+
+    assert result.exit_code == 0
+    assert seen["model"] is None
+
+
 def test_cli_command_rejects_file_and_file_bound_modes(tmp_path: Path) -> None:
     source = _source(tmp_path)
 

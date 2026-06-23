@@ -12,8 +12,11 @@ __pycache__/
 
 # Dev files
 dev/
+kedicode/
 test.marker
 markers.md
+examples/webgpu_kedi_demo/models/*.gguf
+examples/webgpu_kedi_demo/models/*.part
 
 # Distribution / packaging
 .Python
@@ -237,3 +240,5 @@ docs/*_PLAN.md
 # Optimizer
 kedi-optimizer
 features.md
+/examples/webgpu_kedi_demo
+docs/CODEACT_CODEMODE_NOTES.md

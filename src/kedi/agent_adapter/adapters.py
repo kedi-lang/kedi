@@ -17,6 +17,7 @@ from pydantic_ai.output import OutputDataT
 
 from ..agent_profile import AgentProfile
 from ..agent_profile.settings import (
+    code_mode_enabled,
     dspy_lm_settings,
     langchain_model_settings,
     pydantic_model_settings,
@@ -47,6 +48,17 @@ def _mcp_toolset_from_config(name: str, server_config: dict[str, object]) -> Any
     return MCPToolset(cast(Any, config))
 
 
+def _code_mode_capability() -> Any:
+    from pydantic_ai_harness.code_mode import CodeMode
+
+    return CodeMode()
+
+
+def _with_code_mode_capability(capabilities: object = ()) -> list[Any]:
+    existing = () if capabilities is None else cast("Sequence[Any]", capabilities)
+    return [*existing, _code_mode_capability()]
+
+
 class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     """
     Adapter to use Pydantic AI agents.
@@ -57,6 +69,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         model: str | Model | None = None,
         *,
         model_settings: dict[str, Any] | None = None,
+        codemode: bool = False,
         **kwargs: Any,
     ) -> None:
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
@@ -71,6 +84,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             filtered_settings = pydantic_model_settings(model_settings)
             if filtered_settings:
                 kwargs["model_settings"] = filtered_settings
+        if codemode:
+            kwargs["capabilities"] = _with_code_mode_capability(kwargs.get("capabilities"))
         super().__init__(model, **kwargs)
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -142,6 +157,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets = self._toolsets_for_run()
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
+        if code_mode_enabled(self.active_profile.settings):
+            run_kwargs["capabilities"] = _with_code_mode_capability(run_kwargs.get("capabilities"))
         return (await self.run(template, **cast(Any, run_kwargs))).output
 
     def _toolsets_for_run(self) -> list[Any] | None:

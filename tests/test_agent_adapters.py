@@ -72,6 +72,12 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         model="openai/gpt-4o-mini",
         model_settings={"num_retries": 2},
     )
+    PydanticAdapter(model="openai/gpt-4o-mini", codemode=True)
+    PydanticAdapter(
+        model="openai/gpt-4o-mini",
+        codemode=True,
+        capabilities=("existing",),
+    )
 
     async def fake_run(template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
         assert template == "template"
@@ -86,6 +92,9 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     assert isinstance(initialized_models[1], TestModel)
     assert initialized_kwargs[2]["model_settings"] == {"temperature": 0.1}
     assert "model_settings" not in initialized_kwargs[3]
+    assert initialized_kwargs[4]["capabilities"][0].__class__.__name__ == "CodeMode"
+    assert initialized_kwargs[5]["capabilities"][0] == "existing"
+    assert initialized_kwargs[5]["capabilities"][1].__class__.__name__ == "CodeMode"
 
     built = PydanticAdapter.type_builder({"answer": int})
     assert issubclass(built, BaseModel)
@@ -624,6 +633,7 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
                 "temperature": 0.2,
                 "parallel_tool_calls": False,
                 "num_retries": 2,
+                "codemode": True,
             }
         ),
     )
@@ -646,8 +656,10 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
                 "temperature": 0.2,
                 "parallel_tool_calls": False,
             },
+            "capabilities": [seen_kwargs[0]["capabilities"][0]],
         }
     ]
+    assert seen_kwargs[0]["capabilities"][0].__class__.__name__ == "CodeMode"
 
     seen_kwargs.clear()
     assert asyncio.run(
@@ -665,8 +677,10 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
                 "temperature": 0.2,
                 "parallel_tool_calls": False,
             },
+            "capabilities": [seen_kwargs[0]["capabilities"][0]],
         }
     ]
+    assert seen_kwargs[0]["capabilities"][0].__class__.__name__ == "CodeMode"
 
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:

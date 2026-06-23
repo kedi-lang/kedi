@@ -26,6 +26,7 @@ dependencies = [
     "langchain-openai",
     "langchain-openrouter",
     "langchain-mcp-adapters",
+    "pydantic-ai-harness>=0.3.0",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
@@ -54,6 +55,9 @@ Tracker = "https://github.com/kedi-lang/kedi/issues"
 [project.scripts]
 kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
+
+[project.optional-dependencies]
+monty = ["pydantic-monty"]
 
 [tool.hatch.build]
 include-package-data = true

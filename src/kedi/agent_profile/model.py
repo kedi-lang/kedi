@@ -15,7 +15,7 @@ from .registry import (
     ProfileSystemMember,
     ProfileToolMember,
 )
-from .settings import parse_plain_setting_value
+from .settings import parse_codemode_setting, parse_plain_setting_value
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
@@ -168,9 +168,15 @@ def eval_mcp_directive(
 
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
-        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+        value = rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+        if field.name == "codemode":
+            return parse_codemode_setting(value)
+        return value
     if field.plain_value is not None:
-        return parse_plain_setting_value(field.plain_value)
+        value = parse_plain_setting_value(field.plain_value)
+        if field.name == "codemode":
+            return parse_codemode_setting(value)
+        return value
     return None
 
 

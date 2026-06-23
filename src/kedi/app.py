@@ -24,7 +24,7 @@ def _build_runtime_adapter(
         return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
     if adapter == "langchain":
         return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
-    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+    return PydanticAdapter(model=model)
 
 
 CliArgs = AttrDict[str, ArgType]
@@ -161,10 +161,10 @@ def run_optimization_cli(
                 "DSPy is required for GEPA optimizer. Install with: uv add dspy-ai",
             )
     else:
-        model = adapter_model or "groq:qwen/qwen3-32b"
+        model = adapter_model
         if adapter == "dspy":
             try:
-                adapter_for_runtime = DSPyAdapter(model=model)
+                adapter_for_runtime = DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
             except ImportError:
                 return (
                     1,

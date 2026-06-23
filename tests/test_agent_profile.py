@@ -7,7 +7,7 @@ import pytest
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
 from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
-from kedi.agent_profile.settings import parse_plain_setting_value
+from kedi.agent_profile.settings import parse_codemode_setting, parse_plain_setting_value
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
@@ -237,6 +237,21 @@ def test_settings_field_value_and_plain_scalar_parsing() -> None:
         == 0.42
     )
     assert eval_settings_field_value(cast(Any, None), SettingsField(name="temperature"), {}) is None
+    assert (
+        eval_settings_field_value(rt, SettingsField(name="codemode", plain_value="on"), {}) is True
+    )
+    assert (
+        eval_settings_field_value(rt, SettingsField(name="codemode", plain_value="off"), {})
+        is False
+    )
+    assert (
+        eval_settings_field_value(rt, SettingsField(name="codemode", backtick_code="True"), {})
+        is True
+    )
+    with pytest.raises(ValueError, match="codemode"):
+        parse_codemode_setting("maybe")
+    with pytest.raises(ValueError, match="codemode"):
+        parse_codemode_setting(1)
 
 
 def test_settings_inline_python_supports_non_string_values() -> None:
@@ -259,6 +274,21 @@ def test_settings_inline_python_supports_non_string_values() -> None:
             "extra_body": {"mode": "json"},
         }
     ]
+
+
+def test_settings_support_codemode_switch_without_model_settings_leak() -> None:
+    src = """
+> settings:
+    codemode: on
+    temperature: 0.2
+>> value [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    rt.run_main()
+
+    assert adapter.settings_calls == [{"codemode": True, "temperature": 0.2}]
 
 
 def test_settings_support_plain_and_inline_python_strings() -> None:

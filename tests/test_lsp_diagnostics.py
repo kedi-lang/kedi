@@ -119,6 +119,12 @@ def test_diagnostics_report_invalid_model_setting_key() -> None:
     assert diag.range.start.line == 1
 
 
+def test_diagnostics_accept_codemode_setting() -> None:
+    src = "> settings:\n    codemode: on\n"
+
+    assert features.compute_diagnostics(src, "example.kedi") == []
+
+
 def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")

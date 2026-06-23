@@ -7,6 +7,8 @@ from typing import Any, Final
 SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
+CAPABILITY_SETTING_KEYS: Final[frozenset[str]] = frozenset({"codemode"})
+
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
         "max_tokens",
@@ -80,7 +82,10 @@ LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
-    PYDANTIC_MODEL_SETTING_KEYS | DSPY_LM_SETTING_KEYS | LANGCHAIN_MODEL_SETTING_KEYS
+    PYDANTIC_MODEL_SETTING_KEYS
+    | DSPY_LM_SETTING_KEYS
+    | LANGCHAIN_MODEL_SETTING_KEYS
+    | CAPABILITY_SETTING_KEYS
 )
 
 
@@ -109,6 +114,25 @@ def parse_plain_setting_value(raw: str) -> SettingValue:
         return ast.literal_eval(value)
     except (SyntaxError, ValueError):
         return value
+
+
+def parse_codemode_setting(value: SettingValue) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"on", "true"}:
+            return True
+        if lowered in {"off", "false"}:
+            return False
+    raise ValueError("codemode setting must be on/off or true/false")
+
+
+def code_mode_enabled(settings: SettingsMap) -> bool:
+    value = settings.get("codemode")
+    if value is None:
+        return False
+    return parse_codemode_setting(value)
 
 
 def pydantic_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:

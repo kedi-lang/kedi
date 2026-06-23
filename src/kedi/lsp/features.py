@@ -58,6 +58,7 @@ except Exception:  # pragma: no cover — degraded mode if the wheel is missing
     _PY_HIGHLIGHTS_QUERY = None
 
 from ..agent_profile.settings import (
+    CAPABILITY_SETTING_KEYS,
     DSPY_LM_SETTING_KEYS,
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
@@ -1630,6 +1631,8 @@ def _settings_field_value_preview(field: SettingsField) -> str:
 
 
 def _setting_adapter_label(name: str) -> str:
+    if name in CAPABILITY_SETTING_KEYS:
+        return "Pydantic AI adapter capabilities only"
     in_pydantic = name in PYDANTIC_MODEL_SETTING_KEYS
     in_dspy = name in DSPY_LM_SETTING_KEYS
     if in_pydantic and in_dspy:
