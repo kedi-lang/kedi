@@ -403,6 +403,20 @@ def test_async_query_decorates_async_functions(adapter: ApiAdapter) -> None:
     assert asyncio.run(answer()) == "ok"
 
 
+def test_query_runs_under_parallel_context(adapter: ApiAdapter) -> None:
+    # kedi.parallel() opts the query into the threaded engine; a single-template query still
+    # returns its concrete result (drained + forced at the API boundary).
+    @kedi.query
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    with kedi.parallel(max_workers=2):
+        assert answer() == "ok"
+
+
 def test_configure_is_available_on_namespace() -> None:
     adapter = ApiAdapter()
     kedi.configure(adapter=adapter)
