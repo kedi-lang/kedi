@@ -383,6 +383,19 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
     )
     assert captured == []
 
+    captured.clear()
+    features._emit_token_spans_for_range(
+        src_lines=["only"],
+        emit=capture,
+        start_line=1,
+        start_col=0,
+        end_line=1,
+        end_col=1,
+        token_type=4,
+        token_mods=0,
+    )
+    assert captured == []
+
 
 def test_semantic_tokens_multiline_python_emit_edges() -> None:
     src = "= <`def f():\n    >> return 1\n`>\n"

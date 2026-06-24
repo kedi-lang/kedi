@@ -2752,6 +2752,24 @@ def _python_code_lines(text: str) -> list[str]:
     return lines
 
 
+def _utf16_len(text: str) -> int:
+    """Return the number of UTF-16 code units in ``text``.
+
+    LSP semantic tokens use UTF-16 character offsets, while tree-sitter
+    points expose byte columns. They only differ once a line contains
+    non-ASCII text, which is common in Kedi prompt templates.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _byte_col_to_utf16_col(line: str, byte_col: int) -> int:
+    if byte_col <= 0:
+        return 0
+    raw = line.encode("utf-8")
+    prefix = raw[: min(byte_col, len(raw))].decode("utf-8", "ignore")
+    return _utf16_len(prefix)
+
+
 def _emit_token_spans_for_range(
     *,
     src_lines: Sequence[str],
@@ -2763,23 +2781,33 @@ def _emit_token_spans_for_range(
     token_type: int,
     token_mods: int,
 ) -> None:
-    """Emit one or more LSP semantic-token spans for a possibly multi-line range."""
+    """Emit one or more LSP semantic-token spans for a possibly multi-line range.
+
+    ``start_col`` and ``end_col`` are tree-sitter byte columns. Convert them
+    to UTF-16 columns before emitting LSP tokens.
+    """
     if start_line == end_line:
-        emit(start_line, start_col, end_col - start_col, token_type, token_mods)
+        if start_line >= len(src_lines):
+            return
+        utf16_start = _byte_col_to_utf16_col(src_lines[start_line], start_col)
+        utf16_end = _byte_col_to_utf16_col(src_lines[start_line], end_col)
+        emit(start_line, utf16_start, utf16_end - utf16_start, token_type, token_mods)
         return
     if start_line < len(src_lines):
+        utf16_start = _byte_col_to_utf16_col(src_lines[start_line], start_col)
         emit(
             start_line,
-            start_col,
-            max(0, len(src_lines[start_line]) - start_col),
+            utf16_start,
+            max(0, _utf16_len(src_lines[start_line]) - utf16_start),
             token_type,
             token_mods,
         )
     for line_idx in range(start_line + 1, end_line):
         if line_idx < len(src_lines):
-            emit(line_idx, 0, len(src_lines[line_idx]), token_type, token_mods)
+            emit(line_idx, 0, _utf16_len(src_lines[line_idx]), token_type, token_mods)
     if end_col > 0 and end_line < len(src_lines):
-        emit(end_line, 0, end_col, token_type, token_mods)
+        utf16_end = _byte_col_to_utf16_col(src_lines[end_line], end_col)
+        emit(end_line, 0, utf16_end, token_type, token_mods)
 
 
 def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp.SemanticTokens:

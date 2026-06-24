@@ -240,5 +240,12 @@ docs/*_PLAN.md
 # Optimizer
 kedi-optimizer
 features.md
+<<<<<<< Updated upstream
 /examples/webgpu_kedi_demo
 docs/CODEACT_CODEMODE_NOTES.md
+=======
+docs/CODEACT_CODEMODE_NOTES.md
+/examples/webgpu_kedi_demo
+/kedicode
+docs/WEBGPU_ADAPTER_DESIGN.md
+>>>>>>> Stashed changes

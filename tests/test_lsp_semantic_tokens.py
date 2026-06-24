@@ -81,6 +81,32 @@ def test_semantic_tokens_cover_assignment_targets_and_args():
     )
 
 
+def test_semantic_tokens_use_utf16_columns_after_non_ascii_prompt_text():
+    src = (
+        ">> Deanerys Targaryen kaçıncı sezon kaçıncı bölümde ölüyor: "
+        "[date: SeasonInfo]\n\n"
+        "= <date>\n"
+    )
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = decode_semantic_tokens(tokens.data)
+
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    type_type = features.SEMANTIC_TOKEN_TYPES.index("type")
+    first_line = src.splitlines()[0]
+
+    date_col = first_line.index("date")
+    season_info_col = first_line.index("SeasonInfo")
+
+    assert any(
+        line == 0 and col == date_col and length == 4 and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 0 and col == season_info_col and length == 10 and token_type == type_type
+        for line, col, length, token_type, _ in decoded
+    )
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------
