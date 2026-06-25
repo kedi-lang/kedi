@@ -18,10 +18,17 @@ from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter, make_repr
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
+    dspy_code_act,
+    dspy_code_act_bridge_source,
+    dspy_code_act_tools,
     dspy_sync_tool_function,
+    installed_package_version,
     kedi_procedure_tool_spec,
+    monty_compat_capabilities,
+    monty_compat_prompt_context,
     python_callable_tool_spec,
 )
+from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.lang import compile_program, parse_program
@@ -33,6 +40,23 @@ class DirectOutput(BaseModel):
 
 class DirectAnswer(BaseModel):
     answer: str
+
+
+class FakeLangChainTool:
+    name = "search_docs"
+    description = "Search docs."
+    args_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "Search query."}},
+        "required": ["query"],
+    }
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def invoke(self, args: dict[str, Any]) -> str:
+        self.calls.append(args)
+        return f"found:{args['query']}"
 
 
 def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
@@ -249,6 +273,67 @@ def test_langchain_adapter_produces_with_structured_output_and_profile(
     ]
 
 
+def test_langchain_adapter_codemode_wraps_tools_as_run_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    monkeypatch.setattr(
+        adapters_module,
+        "monty_compat_prompt_context",
+        lambda: "## Monty Sandbox — Supported Python Features\nfake context",
+    )
+    adapter = LangChainAdapter(model={"fake": "model"}, codemode=True)
+    adapter._tool_scope.register_tool(FakeLangChainTool())
+
+    assert asyncio.run(adapter.produce("template", output_type=DirectAnswer)).answer == "ok"
+
+    tools = events["agents"][0]["tools"]
+    assert [tool.name for tool in tools] == ["search_schema", "run_code"]
+    assert events["tools"][0]["name"] == "search_schema"
+    assert events["tools"][1]["name"] == "run_code"
+    assert events["tools"][1]["args_schema"]["properties"]["code"]["type"] == "string"
+    assert "def search_docs" not in events["tools"][1]["description"]
+    assert "query: str" not in events["tools"][1]["description"]
+    assert tools[1].metadata == {"code_arg_name": "code", "code_arg_language": "python"}
+
+    schema = events["tools"][0]["func"](names=["search_docs"])
+    assert schema["available_tools"] == ["search_docs"]
+    assert schema["matches"][0]["signature"].startswith("def search_docs")
+    assert schema["matches"][0]["parameters_json_schema"]["properties"]["query"]["type"] == "string"
+    assert events["tools"][1]["func"]("search_docs(query='kedi')") == "found:kedi"
+    assert events["tools"][1]["func"]("search_docs('positional')") == "found:positional"
+    error = events["tools"][1]["func"]("import bs4")
+    assert error["error"].startswith("MontyRuntimeError:")
+    assert "search_schema" in error["hint"]
+    assert "Available run_code function names: search_docs." in events["agents"][0]["system_prompt"]
+    assert "Use `search_schema`" in events["agents"][0]["system_prompt"]
+    assert "do not assume third-party packages" in events["agents"][0]["system_prompt"]
+    assert "## Monty Sandbox — Supported Python Features" in events["agents"][0]["system_prompt"]
+
+
+def test_langchain_adapter_profile_codemode_wraps_tools_as_run_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    monkeypatch.setattr(
+        adapters_module,
+        "monty_compat_prompt_context",
+        lambda: "## Monty Sandbox — Supported Python Features\nfake context",
+    )
+    adapter = LangChainAdapter(model={"fake": "model"})
+    adapter._tool_scope.register_tool(FakeLangChainTool())
+
+    with adapter.profile_override(AgentProfile(settings={"codemode": True})):
+        profile_tools = asyncio.run(adapter._tools_for_run())
+        assert asyncio.run(adapter.produce("template", output_type=DirectAnswer)).answer == "ok"
+
+    tools = events["agents"][0]["tools"]
+    assert [tool.name for tool in tools] == ["search_schema", "run_code"]
+    assert [tool.name for tool in profile_tools] == ["search_schema", "run_code"]
+    assert events["tools"][0]["func"](query="docs")["matches"][0]["name"] == "search_docs"
+    assert events["tools"][1]["func"]("search_docs(query='profile')") == "found:profile"
+
+
 def test_langchain_adapter_uses_output_type_and_sync_produce(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -259,6 +344,7 @@ def test_langchain_adapter_uses_output_type_and_sync_produce(
     assert adapter.default_model() is None
     with adapter.tool_scope(("manual-tool",)):
         assert adapter.scoped_tools == ("manual-tool",)
+        assert asyncio.run(adapter._tools_for_run()) == ["manual-tool"]
     assert adapter.scoped_tools == ()
 
 
@@ -485,6 +571,243 @@ def test_langchain_adapter_dependency_errors(monkeypatch: pytest.MonkeyPatch) ->
             )
 
     assert asyncio.run(adapter._mcp_tools_for_profile(AgentProfile.empty())) == []
+
+
+def test_langchain_code_mode_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = adapters_module._LangChainCodeModeRunner()
+
+    assert runner.run(code=" \n ", functions={}) == ""
+    assert runner.run(code="def helper():\n    return 1", functions={}) == ""
+
+    class FakeMonty:
+        streams: list[tuple[str, str]] = []
+        result: Any = None
+
+        def __init__(self, code: str, inputs: list[str]) -> None:
+            self.code = code
+            self.inputs = inputs
+
+        def run(
+            self,
+            *,
+            inputs: dict[str, Any],
+            external_functions: dict[str, Any],
+            print_callback: Any,
+        ) -> Any:
+            assert inputs == external_functions
+            for stream, value in self.streams:
+                print_callback(stream, value)
+            return self.result
+
+    monkeypatch.setattr(adapters_module, "_monty_class", lambda: FakeMonty)
+
+    FakeMonty.streams = [("stderr", "ignored"), ("stdout", "printed\n")]
+    FakeMonty.result = 3
+    assert runner.run(code="1 + 2", functions={}, restart=True) == {
+        "output": "printed",
+        "result": 3,
+    }
+
+    FakeMonty.result = None
+    assert runner.run(code="print('x')", functions={}) == "printed"
+
+    FakeMonty.streams = []
+    assert runner.run(code="None", functions={}) == ""
+
+    def plain_callable(**kwargs: Any) -> str:
+        return f"plain:{kwargs['value']}"
+
+    assert adapters_module._langchain_tool_name(plain_callable) == "plain_callable"
+    assert adapters_module._langchain_tool_name(object()) is None
+    assert adapters_module._langchain_code_mode_functions([object()]) == {}
+    assert adapters_module._langchain_code_mode_tool_definitions([object()]) == {}
+    assert (
+        adapters_module._langchain_tool_callable(
+            plain_callable,
+            "plain_callable",
+            ("value",),
+        )("ok")
+        == "plain:ok"
+    )
+    with pytest.raises(TypeError, match="only 1 schema parameters"):
+        adapters_module._langchain_tool_callable(
+            plain_callable,
+            "plain_callable",
+            ("value",),
+        )("ok", "extra")
+    with pytest.raises(TypeError, match="multiple values"):
+        adapters_module._langchain_tool_callable(
+            plain_callable,
+            "plain_callable",
+            ("value",),
+        )("ok", value="duplicate")
+
+    async def async_callable(**kwargs: Any) -> str:
+        return f"async:{kwargs['value']}"
+
+    assert (
+        adapters_module._langchain_tool_callable(async_callable, "async_callable", ("value",))(
+            value="ok"
+        )
+        == "async:ok"
+    )
+    with pytest.raises(TypeError, match="not callable"):
+        adapters_module._langchain_tool_callable(object(), "bad")()
+
+    class ArgsSchema:
+        @classmethod
+        def model_json_schema(cls) -> dict[str, Any]:
+            return {"type": "object", "properties": {"query": {"type": "string"}}}
+
+    assert adapters_module._langchain_tool_parameters_schema(
+        SimpleNamespace(args_schema=ArgsSchema), "lookup"
+    )["properties"] == {"query": {"type": "string"}}
+    assert adapters_module._langchain_tool_parameters_schema(
+        SimpleNamespace(args={"query": {"type": "string"}}), "lookup"
+    )["properties"] == {"query": {"type": "string"}}
+    assert (
+        adapters_module._langchain_tool_parameter_names(
+            SimpleNamespace(args_schema={"type": "object", "properties": []})
+        )
+        == ()
+    )
+    assert (
+        adapters_module._langchain_tool_parameters_schema(
+            SimpleNamespace(args_schema={"type": "array"}), "lookup"
+        )["type"]
+        == "object"
+    )
+    assert adapters_module._langchain_tool_description(SimpleNamespace(description=1)) is None
+    assert adapters_module._langchain_search_schema(
+        adapters_module._langchain_code_mode_tool_definitions([FakeLangChainTool()]),
+        query="missing",
+    ) == {"available_tools": ["search_docs"], "matches": []}
+    all_schemas = adapters_module._langchain_search_schema(
+        adapters_module._langchain_code_mode_tool_definitions([FakeLangChainTool()])
+    )
+    assert all_schemas["matches"][0]["name"] == "search_docs"
+    assert (
+        adapters_module._langchain_code_mode_system_prompt(
+            base="Base instructions.",
+            tool_defs={},
+            monty_context="## Monty fake context",
+        )
+        == "Base instructions.\n\n"
+        "LangChain code mode is active. The only exposed tools are `search_schema` and "
+        "`run_code`. Do not ask for or rely on native tool calls for the underlying "
+        "application tools.\n"
+        "Available run_code function names: none.\n"
+        "Use `search_schema` when you need a function's arguments, JSON schema, or exact "
+        "signature. After inspecting the schema, call `run_code` with Python that invokes "
+        "the selected function directly by name. Prefer keyword arguments exactly as shown "
+        "in the schema, e.g. `tool_name(arg_name=value)`, and do not guess argument names "
+        "for tools whose schema you have not inspected. Keep code small and task-focused; "
+        "do not assume third-party packages are installed in the sandbox; prefer available "
+        "tools and Python standard-library parsing. Code passed to `run_code` must be "
+        "Monty-compatible; follow the Monty capability context below before choosing "
+        "imports, builtins, exceptions, or language constructs. Use `restart=True` only "
+        "when previous sandbox state could interfere.\n\n"
+        "## Monty fake context"
+    )
+
+    assert adapters_module._sanitize_python_identifier("1-search") == "_1_search"
+    assert adapters_module._sanitize_python_identifier("class") == "class_"
+    assert adapters_module._sanitize_python_identifier("") == "_"
+    assert adapters_module._single_python_definition_name("def ok():\n    return 1") == "ok"
+    assert adapters_module._single_python_definition_name("@") is None
+    assert adapters_module._single_python_definition_name("x = 1\ny = 2") is None
+    assert adapters_module._single_python_definition_name("1 + 2") is None
+    assert "Monty fake context" not in adapters_module._langchain_code_mode_system_prompt(
+        base=None,
+        tool_defs={},
+        monty_context="",
+    )
+
+
+def test_langchain_code_mode_monty_compat_prompt_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monty_compat_prompt_context.cache_clear()
+
+    monkeypatch.setattr(adapter_utils.importlib_metadata, "version", lambda name: f"{name}:1.2.3")
+    assert installed_package_version("pydantic-monty") == "pydantic-monty:1.2.3"
+
+    def missing_version(_name: str) -> str:
+        raise adapter_utils.importlib_metadata.PackageNotFoundError
+
+    monkeypatch.setattr(adapter_utils.importlib_metadata, "version", missing_version)
+    assert installed_package_version("pydantic-monty") == "unknown"
+
+    calls: list[tuple[str, str, bool]] = []
+
+    class FakeCacheModule:
+        @staticmethod
+        def get_capabilities(*, cache: str, version: str, only_released: bool) -> object:
+            calls.append((cache, version, only_released))
+            return object()
+
+    monkeypatch.setattr(
+        adapter_utils.importlib,
+        "import_module",
+        lambda name: FakeCacheModule,
+    )
+    assert monty_compat_capabilities("0.0.18") is not None
+    assert calls == [("auto", "0.0.18", True)]
+
+    class FakeCapabilities:
+        def to_prompt_context(self) -> str:
+            return "## Monty Sandbox — Supported Python Features\nsupports loops"
+
+    capability_calls: list[str] = []
+    monkeypatch.setattr(adapter_utils, "installed_package_version", lambda name: "0.0.18")
+    monkeypatch.setattr(
+        adapter_utils,
+        "monty_compat_capabilities",
+        lambda version: capability_calls.append(version) or FakeCapabilities(),
+    )
+    prompt = monty_compat_prompt_context()
+    assert "Installed pydantic-monty version: 0.0.18." in prompt
+    assert "`cache='auto'`" in prompt
+    assert "supports loops" in prompt
+    assert monty_compat_prompt_context() == prompt
+    assert capability_calls == ["0.0.18"]
+
+    monty_compat_prompt_context.cache_clear()
+
+    def broken_capabilities(_version: str) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(adapter_utils, "monty_compat_capabilities", broken_capabilities)
+    fallback = monty_compat_prompt_context()
+    assert "Compatibility Context Unavailable" in fallback
+    assert "RuntimeError: boom" in fallback
+
+    monty_compat_prompt_context.cache_clear()
+
+    class EmptyCapabilities:
+        def to_prompt_context(self) -> str:
+            return "  "
+
+    monkeypatch.setattr(
+        adapter_utils, "monty_compat_capabilities", lambda version: EmptyCapabilities()
+    )
+    assert "Compatibility Context Unavailable" in monty_compat_prompt_context()
+    monty_compat_prompt_context.cache_clear()
+
+
+def test_langchain_code_mode_dependency_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain_core.tools")
+        with pytest.raises(ModuleNotFoundError, match="code mode requires langchain-core"):
+            adapters_module._langchain_code_mode_tools(
+                [],
+                adapters_module._LangChainCodeModeRunner(),
+            )
+
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "pydantic_monty")
+        with pytest.raises(RuntimeError, match="requires pydantic-monty"):
+            adapters_module._monty_class()
 
 
 def test_pydantic_adapter_profile_stack_is_context_local() -> None:
@@ -827,6 +1150,121 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
+
+
+def test_dspy_adapter_codemode_uses_codeact_with_bridge_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: dict[str, Any] = {}
+
+    class FakeSignature:
+        def __init__(self) -> None:
+            self.instructions: str | None = None
+
+        def with_instructions(self, instructions: str | None) -> "FakeSignature":
+            self.instructions = instructions
+            return self
+
+    class FakeCodeAct:
+        def __init__(self, signature: FakeSignature, tools: list[Any], interpreter: Any) -> None:
+            events["signature"] = signature
+            events["tools"] = tools
+            events["interpreter"] = interpreter
+
+        def __call__(self, **kwargs: Any) -> dict[str, Any]:
+            return {"kind": "codeact", **kwargs}
+
+    monkeypatch.setattr(adapters_module.dspy, "CodeAct", FakeCodeAct)
+    monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(lambda _: FakeSignature()))
+    monkeypatch.setattr(
+        adapter_utils,
+        "monty_compat_prompt_context",
+        lambda: "## Monty Sandbox — Supported Python Features\nfake context",
+    )
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._tool_scope = ToolScope()
+    adapter._lm_model = None
+    adapter._codemode = False
+    _set_profile_stack(adapter, AgentProfile(settings={"codemode": True}))
+
+    def lookup(query: str) -> str:
+        """Lookup docs."""
+        return query.upper()
+
+    adapter.register_tool(python_callable_tool_spec("lookup", lookup))
+    result = adapter.produce_sync("prompt", {"answer": str}, instructions="use code", extra=1)
+
+    assert result == {"kind": "codeact", "extra": 1, "user_prompt": "prompt"}
+    assert "use code" in events["signature"].instructions
+    assert "DSPy CodeAct is active" in events["signature"].instructions
+    assert "## Monty Sandbox — Supported Python Features" in events["signature"].instructions
+    bridge_tool = events["tools"][0]
+    assert bridge_tool.name == "lookup"
+    assert bridge_tool.desc == "Lookup docs."
+    assert bridge_tool.args == {"query": {"type": "string"}}
+    bridge_source = inspect.getsource(bridge_tool.func)
+    assert "def lookup(**kwargs):" in bridge_source
+    assert bridge_source.strip() in events["interpreter"].skip_sources
+    assert events["interpreter"].tools["lookup"] is adapter.scoped_tools[0].func
+
+
+def test_dspy_code_act_leaves_signature_unchanged_without_monty_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: dict[str, Any] = {}
+
+    class FakeSignature:
+        def with_instructions(self, _instructions: str) -> "FakeSignature":
+            raise AssertionError("signature should not be rewritten without Monty context")
+
+    class FakeCodeAct:
+        def __init__(self, signature: FakeSignature, tools: list[Any], interpreter: Any) -> None:
+            events["signature"] = signature
+            events["tools"] = tools
+            events["interpreter"] = interpreter
+
+    monkeypatch.setattr(adapter_utils, "monty_compat_prompt_context", lambda: "")
+    monkeypatch.setattr(adapter_utils.dspy, "CodeAct", FakeCodeAct)
+
+    signature = FakeSignature()
+
+    dspy_code_act(signature, [])
+
+    assert events["signature"] is signature
+    assert events["tools"] == []
+
+
+def test_dspy_code_act_tool_helpers_sanitize_and_preserve_host_tools() -> None:
+    def lookup(query: str) -> str:
+        return query
+
+    tool = SimpleNamespace(
+        name="1-search",
+        desc=None,
+        args={"query": {"type": "string"}},
+        arg_types={"query": str},
+        func=lookup,
+    )
+    keyword_tool = SimpleNamespace(
+        name="class",
+        desc=None,
+        args={},
+        arg_types={},
+        func=lambda: "keyword",
+    )
+
+    bridge_tools, host_tools, skip_sources = dspy_code_act_tools([tool, keyword_tool])
+
+    assert bridge_tools[0].name == "_1_search"
+    assert bridge_tools[1].name == "class_"
+    assert host_tools["_1_search"](query="ok") == "ok"
+    assert host_tools["class_"]() == "keyword"
+    assert skip_sources == {
+        dspy_code_act_bridge_source("_1_search").strip(),
+        dspy_code_act_bridge_source("class_").strip(),
+    }
+    assert "def _1_search(**kwargs):" in inspect.getsource(bridge_tools[0].func)
 
 
 def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(

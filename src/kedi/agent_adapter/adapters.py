@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import keyword
+import re
+import textwrap
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
@@ -10,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, Mapping, S
 import dspy
 from dspy import LM
 from pydantic import BaseModel
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ToolDefinition
 from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
@@ -31,6 +34,7 @@ from ..model_normalization import (
 )
 from ..resolved_types import ResolvedKediType
 from .tool_override import ToolScope, ToolSpec
+from .utils import dspy_code_act, monty_compat_prompt_context
 
 if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
@@ -259,12 +263,15 @@ class LangChainAdapter:
         model: Any = None,
         *,
         model_settings: dict[str, Any] | None = None,
+        codemode: bool = False,
         **kwargs: Any,
     ) -> None:
         self._model = normalize_for_langchain(model) if isinstance(model, str) else model
         self._model_settings = langchain_model_settings(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
+        self._codemode = codemode
         self._tool_scope = ToolScope()
+        self._code_mode_runner = _LangChainCodeModeRunner()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_langchain_profile_stack_{id(self)}",
             default=(),
@@ -307,7 +314,16 @@ class LangChainAdapter:
 
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
-        tools = await self._tools_for_run()
+        raw_tools = await self._raw_tools_for_run()
+        if self._code_mode_active():
+            tool_defs = _langchain_code_mode_tool_definitions(raw_tools)
+            instructions = _langchain_code_mode_system_prompt(
+                base=instructions,
+                tool_defs=tool_defs,
+            )
+            tools = _langchain_code_mode_tools(raw_tools, self._code_mode_runner)
+        else:
+            tools = raw_tools
         agent = self._create_agent(
             model=model,
             tools=tools,
@@ -396,7 +412,16 @@ class LangChainAdapter:
         )
 
     async def _tools_for_run(self) -> list[Any]:
+        tools = await self._raw_tools_for_run()
+        if self._code_mode_active():
+            return _langchain_code_mode_tools(tools, self._code_mode_runner)
+        return tools
+
+    async def _raw_tools_for_run(self) -> list[Any]:
         return [*self.scoped_tools, *await self._mcp_tools_for_profile(self.active_profile)]
+
+    def _code_mode_active(self) -> bool:
+        return self._codemode or code_mode_enabled(self.active_profile.settings)
 
     async def _mcp_tools_for_profile(self, profile: AgentProfile) -> list[Any]:
         if not profile.mcp_servers:
@@ -429,6 +454,369 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
     )
     native_tool.metadata = tool.metadata
     return native_tool
+
+
+_RUN_CODE_ARGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "code": {
+            "type": "string",
+            "description": "The Python code to execute in the sandbox.",
+        },
+        "restart": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Set to true to reset sandbox state. When false, definitions from "
+                "previous calls are preserved."
+            ),
+        },
+    },
+    "required": ["code"],
+}
+
+_RUN_CODE_DESCRIPTION = """\
+Execute Python code in a sandbox.
+
+The last expression's value is returned automatically. Use print() only for supplementary
+output. State is preserved between calls; pass restart=True to clear it.
+"""
+
+_SEARCH_SCHEMA_ARGS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Optional substring to match against available code-mode function names.",
+        },
+        "names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional exact function names to inspect.",
+        },
+    },
+}
+
+_SEARCH_SCHEMA_DESCRIPTION = "Look up schemas for functions callable from run_code."
+
+_INVALID_IDENT_CHARS = re.compile(r"[^a-zA-Z0-9_]")
+
+
+class _LangChainCodeModeRunner:
+    def __init__(self) -> None:
+        self._prelude: list[str] = []
+
+    def reset(self) -> None:
+        self._prelude.clear()
+
+    def run(
+        self,
+        *,
+        code: str,
+        functions: Mapping[str, Callable[..., Any]],
+        restart: bool = False,
+    ) -> Any:
+        if restart:
+            self.reset()
+        code = textwrap.dedent(code).strip()
+        if not code:
+            return ""
+        definition_name = _single_python_definition_name(code)
+        if definition_name is not None and definition_name not in functions:
+            self._prelude.append(code)
+            return ""
+
+        Monty = _monty_class()
+        stdout: list[str] = []
+
+        def print_callback(stream: str, value: str) -> None:
+            if stream == "stdout":
+                stdout.append(value)
+
+        sandbox = Monty(_join_python_blocks([*self._prelude, code]), inputs=list(functions))
+        result = sandbox.run(
+            inputs=dict(functions),
+            external_functions=dict(functions),
+            print_callback=print_callback,
+        )
+        captured = "".join(stdout).rstrip("\n")
+        if captured and result is not None:
+            return {"output": captured, "result": result}
+        if captured:
+            return captured
+        return "" if result is None else result
+
+
+def _langchain_code_mode_tools(
+    tools: Sequence[Any],
+    runner: _LangChainCodeModeRunner,
+) -> list[Any]:
+    try:
+        from langchain_core.tools import StructuredTool
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "LangChainAdapter code mode requires langchain-core. Install with: uv add langchain"
+        ) from exc
+
+    functions = _langchain_code_mode_functions(tools)
+    tool_defs = _langchain_code_mode_tool_definitions(tools)
+
+    def search_schema(query: str | None = None, names: list[str] | None = None) -> dict[str, Any]:
+        return _langchain_search_schema(tool_defs, query=query, names=names)
+
+    def run_code(code: str, restart: bool = False) -> Any:
+        try:
+            return runner.run(code=code, functions=functions, restart=restart)
+        except Exception as exc:
+            return {
+                "error": f"{type(exc).__name__}: {exc}",
+                "hint": (
+                    "Revise the code and call run_code again. Inspect tool schemas with "
+                    "search_schema, use keyword arguments from the schema, and avoid assuming "
+                    "third-party packages are installed in the sandbox."
+                ),
+            }
+
+    search_tool = StructuredTool.from_function(
+        func=search_schema,
+        name="search_schema",
+        description=_SEARCH_SCHEMA_DESCRIPTION,
+        args_schema=_SEARCH_SCHEMA_ARGS_SCHEMA,
+    )
+    run_tool = StructuredTool.from_function(
+        func=run_code,
+        name="run_code",
+        description=_RUN_CODE_DESCRIPTION,
+        args_schema=_RUN_CODE_ARGS_SCHEMA,
+    )
+    run_tool.metadata = {"code_arg_name": "code", "code_arg_language": "python"}
+    return [search_tool, run_tool]
+
+
+def _langchain_code_mode_functions(tools: Sequence[Any]) -> dict[str, Callable[..., Any]]:
+    functions: dict[str, Callable[..., Any]] = {}
+    for tool in tools:
+        name = _langchain_tool_name(tool)
+        if name is None:
+            continue
+        function_name = _sanitize_python_identifier(name)
+        parameter_names = _langchain_tool_parameter_names(tool)
+        functions[function_name] = _langchain_tool_callable(tool, function_name, parameter_names)
+    return functions
+
+
+def _langchain_code_mode_tool_definitions(tools: Sequence[Any]) -> dict[str, ToolDefinition]:
+    tool_defs: dict[str, ToolDefinition] = {}
+    for tool in tools:
+        name = _langchain_tool_name(tool)
+        if name is None:
+            continue
+        function_name = _sanitize_python_identifier(name)
+        tool_defs[function_name] = ToolDefinition(
+            name=function_name,
+            description=_langchain_tool_description(tool),
+            parameters_json_schema=_langchain_tool_parameters_schema(tool, function_name),
+            sequential=True,
+        )
+    return tool_defs
+
+
+def _langchain_tool_name(tool: Any) -> str | None:
+    name = getattr(tool, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    if callable(tool):
+        callable_name = getattr(tool, "__name__", None)
+        return callable_name if isinstance(callable_name, str) and callable_name else None
+    return None
+
+
+def _langchain_tool_callable(
+    tool: Any,
+    name: str,
+    parameter_names: Sequence[str] = (),
+) -> Callable[..., Any]:
+    def _call(*args: Any, **kwargs: Any) -> Any:
+        kwargs = _merge_positional_tool_args(name, parameter_names, args, kwargs)
+        if hasattr(tool, "invoke"):
+            result = tool.invoke(kwargs)
+        elif callable(tool):
+            result = tool(**kwargs)
+        else:
+            raise TypeError(f"LangChain code mode tool is not callable: {tool!r}")
+        if inspect.isawaitable(result):
+            from .utils import run_sync
+
+            return run_sync(cast(Coroutine[Any, Any, Any], result))
+        return result
+
+    _call.__name__ = name
+    _call.__qualname__ = name
+    return _call
+
+
+def _merge_positional_tool_args(
+    tool_name: str,
+    parameter_names: Sequence[str],
+    args: Sequence[Any],
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = dict(kwargs)
+    if not args:
+        return merged
+    if len(args) > len(parameter_names):
+        raise TypeError(
+            f"{tool_name}() got {len(args)} positional arguments but only "
+            f"{len(parameter_names)} schema parameters are available"
+        )
+    for index, value in enumerate(args):
+        parameter_name = parameter_names[index]
+        if parameter_name in merged:
+            raise TypeError(f"{tool_name}() got multiple values for argument '{parameter_name}'")
+        merged[parameter_name] = value
+    return merged
+
+
+def _langchain_tool_description(tool: Any) -> str | None:
+    description = getattr(tool, "description", None)
+    return description if isinstance(description, str) and description else None
+
+
+def _langchain_tool_parameters_schema(tool: Any, name: str) -> dict[str, Any]:
+    args_schema = getattr(tool, "args_schema", None)
+    if isinstance(args_schema, dict):
+        schema = dict(args_schema)
+    elif hasattr(args_schema, "model_json_schema"):
+        schema = cast(Any, args_schema).model_json_schema()
+    else:
+        args = getattr(tool, "args", None)
+        schema = {"type": "object", "properties": dict(args)} if isinstance(args, Mapping) else {}
+
+    if schema.get("type") != "object":
+        schema["type"] = "object"
+    schema.setdefault("title", name)
+    schema.setdefault("properties", {})
+    return schema
+
+
+def _langchain_tool_parameter_names(tool: Any) -> tuple[str, ...]:
+    properties = _langchain_tool_parameters_schema(tool, _langchain_tool_name(tool) or "_").get(
+        "properties"
+    )
+    if not isinstance(properties, Mapping):
+        return ()
+    return tuple(str(name) for name in properties)
+
+
+def _langchain_search_schema(
+    tool_defs: Mapping[str, ToolDefinition],
+    *,
+    query: str | None = None,
+    names: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    selected = _langchain_select_tool_defs(tool_defs, query=query, names=names)
+    return {
+        "available_tools": sorted(tool_defs),
+        "matches": [
+            {
+                "name": name,
+                "description": tool_def.description,
+                "signature": tool_def.render_signature("...", is_async=False),
+                "parameters_json_schema": tool_def.parameters_json_schema,
+            }
+            for name, tool_def in selected.items()
+        ],
+    }
+
+
+def _langchain_select_tool_defs(
+    tool_defs: Mapping[str, ToolDefinition],
+    *,
+    query: str | None = None,
+    names: Sequence[str] | None = None,
+) -> dict[str, ToolDefinition]:
+    if names:
+        wanted = set(names)
+        return {name: tool_def for name, tool_def in tool_defs.items() if name in wanted}
+    if query:
+        lowered = query.lower()
+        return {
+            name: tool_def
+            for name, tool_def in tool_defs.items()
+            if lowered in name.lower()
+            or (tool_def.description is not None and lowered in tool_def.description.lower())
+        }
+    return dict(tool_defs)
+
+
+def _langchain_code_mode_system_prompt(
+    *,
+    base: str | None,
+    tool_defs: Mapping[str, ToolDefinition],
+    monty_context: str | None = None,
+) -> str:
+    names = ", ".join(sorted(tool_defs)) if tool_defs else "none"
+    monty_context = monty_compat_prompt_context() if monty_context is None else monty_context
+    code_mode_prompt = (
+        "LangChain code mode is active. The only exposed tools are `search_schema` and "
+        "`run_code`. Do not ask for or rely on native tool calls for the underlying "
+        "application tools.\n"
+        f"Available run_code function names: {names}.\n"
+        "Use `search_schema` when you need a function's arguments, JSON schema, or exact "
+        "signature. After inspecting the schema, call `run_code` with Python that invokes "
+        "the selected function directly by name. Prefer keyword arguments exactly as shown "
+        "in the schema, e.g. `tool_name(arg_name=value)`, and do not guess argument names "
+        "for tools whose schema you have not inspected. Keep code small and task-focused; "
+        "do not assume third-party packages are installed in the sandbox; prefer available "
+        "tools and Python standard-library parsing. Code passed to `run_code` must be "
+        "Monty-compatible; follow the Monty capability context below before choosing "
+        "imports, builtins, exceptions, or language constructs. Use `restart=True` only "
+        "when previous sandbox state could interfere."
+    )
+    if monty_context:
+        code_mode_prompt = f"{code_mode_prompt}\n\n{monty_context}"
+    if base:
+        return f"{base}\n\n{code_mode_prompt}"
+    return code_mode_prompt
+
+
+def _sanitize_python_identifier(name: str) -> str:
+    sanitized = _INVALID_IDENT_CHARS.sub("_", name)
+    if sanitized and sanitized[0].isdigit():
+        sanitized = f"_{sanitized}"
+    if keyword.iskeyword(sanitized):
+        sanitized = f"{sanitized}_"
+    return sanitized or "_"
+
+
+def _monty_class() -> type[Any]:
+    try:
+        from pydantic_monty import Monty
+    except ImportError as exc:
+        raise RuntimeError(
+            "LangChainAdapter code mode requires pydantic-monty. Install it with "
+            '`uv add "pydantic-ai-harness[code-mode]>=0.4.0"`.'
+        ) from exc
+    return cast(type[Any], Monty)
+
+
+def _single_python_definition_name(code: str) -> str | None:
+    import ast
+
+    try:
+        module = ast.parse(code)
+    except SyntaxError:
+        return None
+    if len(module.body) != 1:
+        return None
+    node = module.body[0]
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name
+    return None
+
+
+def _join_python_blocks(blocks: Sequence[str]) -> str:
+    return "\n\n".join(block for block in blocks if block.strip())
 
 
 def _langchain_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -519,6 +907,7 @@ class DSPyAdapter:
         temperature: float = 1.0,
         provider: dspy.Provider | None = None,
         model_settings: dict[str, Any] | None = None,
+        codemode: bool = False,
         **kwargs,
     ):
         model = normalize_for_litellm(model)
@@ -528,6 +917,7 @@ class DSPyAdapter:
         self._lm_temperature = temperature
         self._lm_settings = dspy_lm_settings(model_settings or {})
         self._lm_extra_kwargs = dict(kwargs)
+        self._codemode = codemode
         self._tool_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_dspy_profile_stack_{id(self)}",
@@ -643,8 +1033,22 @@ class DSPyAdapter:
         with self._produce_lm_context():
             if self.active_profile.mcp_servers:
                 return run_sync(self._produce_with_mcp(sig, tools, template, kwargs))
-            prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+            prediction = self._prediction_for_tools(sig, tools)
             return prediction(**kwargs, user_prompt=template)
+
+    def _code_mode_active(self) -> bool:
+        return bool(
+            getattr(self, "_codemode", False) or code_mode_enabled(self.active_profile.settings)
+        )
+
+    def _prediction_for_tools(
+        self,
+        sig: type[dspy.Signature],
+        tools: list[Callable[..., Any]],
+    ) -> Any:
+        if self._code_mode_active():
+            return dspy_code_act(sig, tools)
+        return dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
 
     def _produce_lm_context(self) -> AbstractContextManager[Any]:
         """Make the active LM authoritative for one produce call.
@@ -690,7 +1094,7 @@ class DSPyAdapter:
                 mcp_tools.extend(
                     dspy.Tool.from_mcp_tool(session, tool) for tool in listed_tools.tools
                 )
-            prediction = dspy.ReAct(sig, tools=[*tools, *mcp_tools])
+            prediction = self._prediction_for_tools(sig, [*tools, *mcp_tools])
             return await prediction.acall(**kwargs, user_prompt=template)
 
     def default_model(self) -> str | None:

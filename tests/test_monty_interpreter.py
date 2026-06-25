@@ -79,6 +79,15 @@ def test_monty_interpreter_returns_empty_for_empty_code() -> None:
     assert MontyInterpreter()(" \n ") == ""
 
 
+def test_monty_interpreter_skips_registered_bridge_sources(
+    fake_monty_module: type[FakeMonty],
+) -> None:
+    interpreter = MontyInterpreter(skip_sources={"def lookup(**kwargs):\n    pass"})
+
+    assert interpreter("def lookup(**kwargs):\n    pass") == ""
+    assert fake_monty_module.calls == []
+
+
 def test_monty_interpreter_persists_non_tool_definitions(
     fake_monty_module: type[FakeMonty],
 ) -> None:

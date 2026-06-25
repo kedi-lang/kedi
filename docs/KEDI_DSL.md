@@ -731,7 +731,8 @@ procedures as agent tools.
       extra_body: `{"mode": "json"}`
   ```
   `codemode: on` enables Pydantic AI Harness CodeMode for Pydantic AI adapter
-  runs. `codemode: off` disables it for that profile. Other adapters currently
+  runs and the equivalent `search_schema` + `run_code` mode for LangChain
+  adapter runs. `codemode: off` disables it for that profile. Other adapters currently
   ignore this capability setting.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python

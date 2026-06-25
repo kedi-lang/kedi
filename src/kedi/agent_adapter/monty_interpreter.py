@@ -20,9 +20,11 @@ class MontyInterpreter:
         self,
         *,
         tools: Mapping[str, Callable[..., Any]] | None = None,
+        skip_sources: set[str] | None = None,
         monty_kwargs: Mapping[str, Any] | None = None,
     ) -> None:
         self.tools = dict(tools or {})
+        self.skip_sources = set(skip_sources or ())
         self.monty_kwargs = dict(monty_kwargs or {})
         self._prelude: list[str] = []
 
@@ -38,6 +40,8 @@ class MontyInterpreter:
     def execute(self, code: str, variables: dict[str, Any] | None = None) -> Any:
         code = textwrap.dedent(code).strip()
         if not code:
+            return ""
+        if code in self.skip_sources:
             return ""
 
         definition_name = _single_definition_name(code)
