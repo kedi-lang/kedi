@@ -8,6 +8,7 @@ import dspy
 
 from ...lang.ast import OptimizeSpan
 from ...lang.compiler.environment import KediRuntime
+from ...promise import force
 from ...reporter import NullReporter, Reporter
 
 
@@ -164,7 +165,10 @@ class DSPyExampleFormatter:
                 if final_env is not None:
                     for input_name in span_input_names:
                         if input_name in final_env:
-                            span_input_values[input_name] = str(final_env[input_name])
+                            # force(): in parallel mode a template output is a KediPromise; resolve
+                            # it instead of letting str() raise KediPromiseLeak into the except below
+                            # (which would silently optimize against the truncated proc_inputs).
+                            span_input_values[input_name] = str(force(final_env[input_name]))
 
                 if span_input_values:
                     return span_input_values

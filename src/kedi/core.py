@@ -1,15 +1,95 @@
 from __future__ import annotations
 
+import atexit
+import os
+from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from threading import Lock
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 from pydantic import BaseModel, TypeAdapter
 
 from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
 from .executors.base import DefaultExecutor, Executor
+from .promise import KediPromise, force
+
+
+_SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
+_SHARED_PARALLEL_LOCK = Lock()
+
+_PARALLEL_TRUE = frozenset({"1", "true", "yes", "on"})
+_PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
+
+
+def shared_thread_engine(max_workers: int = 8) -> Any:
+    """Return a process-wide shared ``ThreadEngine``, one bounded pool per distinct worker count.
+
+    A fresh engine per runtime would spawn a thread pool per program run; sharing a pool per size
+    keeps concurrency capped while still honoring a different ``max_workers`` request (the engine's
+    own ``__init__`` runs the interpreter routing self-check).
+    """
+    with _SHARED_PARALLEL_LOCK:
+        engine = _SHARED_PARALLEL_ENGINES.get(max_workers)
+        if engine is None:
+            from .engine import ThreadEngine
+
+            engine = ThreadEngine(max_workers=max_workers)
+            _SHARED_PARALLEL_ENGINES[max_workers] = engine
+        return engine
+
+
+@atexit.register
+def _shutdown_shared_engines() -> None:
+    """Shut down every cached parallel engine's thread pool at interpreter exit.
+
+    The cache holds one bounded pool per distinct worker count for the process lifetime; this
+    releases their worker threads on exit instead of leaning solely on interpreter teardown.
+    """
+    with _SHARED_PARALLEL_LOCK:
+        engines = list(_SHARED_PARALLEL_ENGINES.values())
+        _SHARED_PARALLEL_ENGINES.clear()
+    for engine in engines:
+        engine.shutdown()
+
+
+def _default_engine() -> Any:
+    """Default engine: sequential unless parallel is explicitly opted into via ``KEDI_PARALLEL``.
+
+    ``0/false/no/off`` (or unset) -> sequential; ``1/true/yes/on`` -> parallel (default workers);
+    a positive integer -> parallel with that many workers; anything else raises (no silent flip).
+    """
+    from .engine import SequentialEngine
+
+    raw = (os.getenv("KEDI_PARALLEL") or "").strip()
+    low = raw.lower()
+    if low in _PARALLEL_FALSE:
+        return SequentialEngine()
+    if low in _PARALLEL_TRUE:
+        return shared_thread_engine(max_workers=8)
+    try:
+        workers = int(raw)
+    except ValueError:
+        raise RuntimeError(
+            f"Invalid KEDI_PARALLEL value {raw!r}: use 0/1/true/false/on/off or a worker count."
+        ) from None
+    if workers <= 0:
+        return SequentialEngine()
+    return shared_thread_engine(max_workers=workers)
+
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
@@ -64,9 +144,17 @@ class KediRuntime:
         *,
         adapter: AgentAdapter[Any] | None = None,
         executor: Executor | None = None,
+        engine: Any | None = None,
     ) -> None:
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
+        self._engine = engine if engine is not None else _default_engine()
+        # Outstanding produce Futures (parallel mode) so the end-of-run drain awaits every
+        # scheduled template — even unconsumed ones — and surfaces their errors. Lock-guarded
+        # because workers add/remove concurrently.
+        self._outstanding: list[Any] = []
+        self._outstanding_lock = Lock()
+        self._origin_counter_lock = Lock()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
@@ -76,6 +164,9 @@ class KediRuntime:
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
         )
+        # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
+        # outermost invocation, regardless of entry point (run_main / query / direct invoke).
+        self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
         self._initial_globals_env: ValueEnv = {}
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
@@ -125,7 +216,11 @@ class KediRuntime:
     def run_main(self) -> Any:
         if self._main is None:
             return None
-        return self._invoke_procedure(self._main, [])
+        result = self._invoke_procedure(self._main, [])
+        # Drain awaits every scheduled template (parallel mode) so side effects fire and errors
+        # surface; force resolves a promise result before handing it to the caller.
+        self.drain()
+        return force(result)
 
     def set_initial_globals(self, values: ValueEnv) -> None:
         self._initial_globals_env = dict(values)
@@ -171,29 +266,41 @@ class KediRuntime:
 
     def _evaluate_expression(
         self, expr: Expression, env: ValueEnv
-    ) -> Tuple[Optional[str], Optional[OutputExpr]]:
+    ) -> Tuple[Any, Optional[OutputExpr]]:
         if isinstance(expr, str):
             return expr, None
         if isinstance(expr, InputExpr):
-            return str(self._lookup_value(expr.key, env)), None
+            value = self._lookup_value(expr.key, env)
+            # Defer: a promise input becomes a dependency edge; the prompt is built (in the
+            # produce job) only after it resolves. ``.map(str)`` makes the deferred value resolve
+            # to a STRING — matching the sequential path's eager ``str(value)`` so a non-str typed
+            # output (list/model/int) chained into a prompt renders identically in both modes.
+            if isinstance(value, KediPromise):
+                return value.map(str), None
+            return str(value), None
         if isinstance(expr, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
             callee = self._get_proc(expr.func_name)
-            return str(self._invoke_procedure(callee, evaluated_args)), None
+            # _invoke_procedure force-joins its result, so a cross-procedure call never yields a
+            # promise here. If one ever does, str() raising KediPromiseLeak is the correct loud
+            # failure — better than silently deferring an unsupported cross-proc dataflow.
+            result = self._invoke_procedure(callee, evaluated_args)
+            return str(result), None
         if isinstance(expr, OutputExpr):
             return f"[{expr.key}]", expr
         return str(expr), None
 
     def _evaluate_value(self, value: Any, env: ValueEnv) -> Any:
+        # Procedure arguments are forced to concrete values at the call boundary.
         if isinstance(value, InputExpr):
-            return self._lookup_value(value.key, env)
+            return force(self._lookup_value(value.key, env))
         if isinstance(value, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in value.args]
             callee = self._get_proc(value.func_name)
-            return self._invoke_procedure(callee, evaluated_args)
+            return force(self._invoke_procedure(callee, evaluated_args))
         if isinstance(value, OutputExpr):
             raise ValueError("Output expressions are not allowed as arguments")
-        return value
+        return force(value)
 
     def _invoke_procedure(self, fn: Callable[..., Any], args: Sequence[Any]) -> Any:
         import inspect
@@ -214,7 +321,10 @@ class KediRuntime:
         proc_name = metadata.name if metadata is not None else callable_display_name(fn)
         should_trace_procedure = not (fn is self._main and metadata is None)
 
+        depth = self._invoke_depth.get()
+        depth_token = self._invoke_depth.set(depth + 1)
         token = self._current_env.set(local_env)
+        primary_exc: BaseException | None = None
         try:
             frame_ctx = (
                 self.trace_frame(
@@ -230,14 +340,37 @@ class KediRuntime:
             )
             with frame_ctx:
                 result = fn(*args)
+            final = (
+                self._evaluate_value(result, local_env)
+                if isinstance(result, (InputExpr, CallExpr))
+                else result
+            )
+        except BaseException as exc:
+            primary_exc = exc
+            raise
         finally:
             self._current_env.reset(token)
+            self._invoke_depth.reset(depth_token)
+            # Outermost invocation: drain scheduled template jobs — even on the EXCEPTIONAL exit —
+            # so unconsumed templates run, background jobs don't leak, and their errors surface.
+            # Nested calls (depth > 0, incl. worker threads) never drain. A drain failure becomes
+            # the error only if the body didn't already raise; otherwise it's logged, not masked.
+            if depth == 0:
+                self._drain_outermost(primary_exc)
 
-        return (
-            self._evaluate_value(result, local_env)
-            if isinstance(result, (InputExpr, CallExpr))
-            else result
-        )
+        return final
+
+    def _drain_outermost(self, primary_exc: BaseException | None) -> None:
+        try:
+            self.drain()
+        except BaseException:
+            if primary_exc is None:
+                raise
+            import logging
+
+            logging.getLogger("kedi").error(
+                "Template failure during drain after a primary error", exc_info=True
+            )
 
     @contextmanager
     def trace_frame(self, frame: KediTraceFrame):
@@ -297,11 +430,13 @@ class KediRuntime:
     ) -> str:
         import linecache
 
-        self._python_origin_counter += 1
+        with self._origin_counter_lock:
+            self._python_origin_counter += 1
+            counter = self._python_origin_counter
         origin_span = span
         # Unique virtual filename per snippet so snippets sharing a .kedi file don't
         # collide; the real source path lives on origin_span for rendering.
-        filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+        filename = f"<kedi-python:{kind}:{counter}>"
         if span is not None and span.source_path is not None:
             origin_span = span
         elif (
@@ -350,16 +485,20 @@ class KediRuntime:
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
-        prompt_parts: List[str] = []
+        # Prompt parts may include unresolved promises (dependency edges); collect their Futures
+        # so the produce job is scheduled only after they resolve.
+        parts: List[Any] = []
         outputs: List[OutputExpr] = []
+        deps: List[Any] = []
         for expr in expressions:
             text, out = self._evaluate_expression(expr, env)
             if out is not None:
                 outputs.append(out)
             if text is not None:
-                prompt_parts.append(text)
+                parts.append(text)
+                if isinstance(text, KediPromise):
+                    deps.append(text._future)
 
-        description = "".join(prompt_parts)
         required = [out.key for out in outputs]
 
         # If there are no required outputs, there's nothing to ask the LLM.
@@ -378,21 +517,134 @@ class KediRuntime:
             if len(required) == 1
             else f"Fill in the fields: [{', '.join(required)}]."
         )
-        # Provide the full description as guidance for better tool performance
-        question = base_q + "\n" + description
 
         if self.adapter is None:
             raise RuntimeError("No adapter provided to KediRuntime")
 
-        from .agent_adapter.profile_override import SupportsProfileOverride
-        from .agent_profile import AgentProfileOverrideUnsupported, current_block_agent_profile
+        adapter = self.adapter
+        parallel = bool(getattr(self._engine, "parallel", False))
 
-        profile = current_block_agent_profile()
-        override_ctx = nullcontext()
-        if isinstance(self.adapter, SupportsProfileOverride):
-            if profile.needs_adapter_override(self.adapter.default_model()):
-                override_ctx = self.adapter.profile_override(profile)
-        elif (
+        # Resolve tool specs NOW, on the main thread, while the lexical scope is correct. A
+        # deferred job runs after the defining scope (e.g. a nested-procedure tool) has exited, so
+        # re-resolving by name from rt._procedures then would bind the wrong procedure. Building
+        # the spec here captures the compiled procedure fn for both registration AND invocation.
+        from .agent_profile import current_block_agent_profile
+
+        block_profile = current_block_agent_profile()
+        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        # Validate the profile override on the main thread too, so it raises synchronously at the
+        # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
+        # at drain (wrapped, differently typed) when _produce runs on a parallel worker.
+        self._assert_profile_override_supported(block_profile, adapter)
+
+        def _produce() -> Dict[str, Any]:
+            # Resolve any promise prompt parts (already complete by the time this job runs in the
+            # parallel engine; concrete already in sequential), then build the prompt + call the
+            # model + validate — all inside the captured context so profile/tools are correct.
+            resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
+            question = base_q + "\n" + "".join(resolved_parts)
+
+            from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_profile import current_block_agent_profile
+
+            # Support was already validated synchronously on the main thread
+            # (_assert_profile_override_supported); here we only enter the override scope.
+            profile = current_block_agent_profile()
+            override_ctx = nullcontext()
+            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
+                adapter.default_model()
+            ):
+                override_ctx = adapter.profile_override(profile)
+
+            # Register the pre-resolved (scope-correct) tool specs inside the adapter's per-call
+            # tool scope (ToolScope's ContextVar — isolated per worker by copy_context).
+            # tool_adapter is typed Any: _resolve_tool_specs already verified SupportsToolRegistration.
+            tool_adapter: Any = None
+            tool_ctx: Any = nullcontext()
+            if captured_tool_specs:
+                tool_adapter = cast(Any, adapter)  # _resolve_tool_specs verified tool support
+                tool_ctx = tool_adapter.tool_scope()
+            with tool_ctx:
+                if tool_adapter is not None:
+                    for spec in captured_tool_specs:
+                        tool_adapter.register_tool(spec)
+                run_kwargs: dict[str, Any] = {}
+                if profile.system is not None:
+                    run_kwargs["instructions"] = profile.system
+
+                with override_ctx:
+                    result = adapter.produce_sync(
+                        template=question,
+                        output_schema=typed_fields,
+                        **run_kwargs,
+                    )
+
+            out_map: Dict[str, Any] = {}
+            for key in required:
+                value = getattr(result, key, NotFound)  # Ensure result has the attribute
+                if value is NotFound:
+                    raise ValueError(f"LLM did not return required key: {key}")
+                out_map[key] = self._validate_adapter_output(
+                    value,
+                    typed_fields[key],
+                    explicit_type=key in explicit_typed_fields,
+                )
+            return out_map
+
+        # Sequential default: run inline on the main thread and return concrete values. This is the
+        # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
+        if not parallel:
+            result_map = _produce()  # raises on the main thread, wrapped by the trace frame
+            for key in required:
+                env[key] = result_map[key]
+            return {k: env[k] for k in required}
+
+        # Parallel path. Snapshot the value-env by VALUE so the deferred worker sees the env as of
+        # schedule time; copy_context() snapshots only the contextvar binding, leaving the dict
+        # shared by reference, which would let later main-thread writes leak into a scheduled job.
+        # Every per-call adapter scope (tool/profile ContextVars) is isolated per worker by the
+        # copy_context() snapshot, so even tool-using templates pipeline safely.
+        env_snapshot = dict(env)
+
+        def _job() -> Dict[str, Any]:
+            # The job runs on a worker AFTER the originating template's trace frame has exited on the
+            # main thread; attribute failures to the captured frames (carried via copy_context) so
+            # errors still point at the template line.
+            token = self._current_env.set(env_snapshot)
+            try:
+                return _produce()
+            except KediExecutionError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # build_execution_error keeps the provider error on `.original`, so the job-manager
+                # retry policy can still classify it (a 429/timeout stays retryable) even though the
+                # job surfaces the wrapped KediExecutionError. `from None` avoids re-chaining it.
+                raise self.build_execution_error(exc) from None
+            finally:
+                self._current_env.reset(token)
+
+        future = self._engine.schedule(deps, _job)
+        self._register_outstanding(future)
+        views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
+        for key in required:
+            env[key] = views[key]
+        return dict(views)
+
+    @staticmethod
+    def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
+        """Raise if the adapter can't honor a requested model/effort/mcp/settings override.
+
+        Called on the main thread at the template call site so the error surfaces synchronously in
+        both modes — symmetric with the tool guard in :meth:`_resolve_tool_specs`. ``_produce`` then
+        only has to enter the override scope, never re-validate (which would defer the error to a
+        worker in parallel mode).
+        """
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile import AgentProfileOverrideUnsupported
+
+        if isinstance(adapter, SupportsProfileOverride):
+            return
+        if (
             profile.model is not None
             or profile.effort is not None
             or profile.mcp_servers
@@ -404,54 +656,74 @@ class KediRuntime:
                 f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
             )
 
-        from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_profile import AgentToolOverrideUnsupported
+    def _resolve_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
+        """Resolve a template's tools to fully-bound ToolSpecs (on the main thread, in scope).
 
-        tool_ctx = nullcontext()
+        Returns () when the template has no tools. Raises if the adapter cannot register tools or
+        a named tool is unknown — surfaced synchronously at the call site, not deferred.
+        """
         tool_names = tuple(profile.tools)
-        if tool_names:
-            if isinstance(self.adapter, SupportsToolRegistration):
-                tool_ctx = self.adapter.tool_scope()
-            else:
-                raise AgentToolOverrideUnsupported(
-                    f"Active adapter does not support tool registration (requested tools={tool_names!r})"
-                )
+        if not tool_names:
+            return ()
 
-        with tool_ctx:
-            if tool_names:
-                from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
-                from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+        from .agent_profile import AgentToolOverrideUnsupported
+        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
 
-                assert isinstance(self.adapter, SupportsToolRegistration)
-                for tool_name in tool_names:
-                    proc = procedure_def_for_tool(self, tool_name)
-                    if proc is not None:
-                        self.adapter.register_tool(kedi_procedure_tool_spec(self, proc))
-                        continue
-
-                    tool_fn = python_callable_for_tool(self, tool_name)
-                    if tool_fn is None:
-                        raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
-                    self.adapter.register_tool(python_callable_tool_spec(tool_name, tool_fn))
-            run_kwargs: dict[str, Any] = {}
-            if profile.system is not None:
-                run_kwargs["instructions"] = profile.system
-
-            with override_ctx:
-                result = self.adapter.produce_sync(
-                    template=question,
-                    output_schema=typed_fields,
-                    **run_kwargs,
-                )
-
-        for key in required:
-            value = getattr(result, key, NotFound)  # Ensure result has the attribute
-            if value is NotFound:
-                raise ValueError(f"LLM did not return required key: {key}")
-            value = self._validate_adapter_output(
-                value,
-                typed_fields[key],
-                explicit_type=key in explicit_typed_fields,
+        if not isinstance(adapter, SupportsToolRegistration):
+            raise AgentToolOverrideUnsupported(
+                "Active adapter does not support tool registration "
+                f"(requested tools={tool_names!r})"
             )
-            env[key] = value
-        return {k: env[k] for k in required}
+
+        specs: list[Any] = []
+        for tool_name in tool_names:
+            proc = procedure_def_for_tool(self, tool_name)
+            if proc is not None:
+                specs.append(kedi_procedure_tool_spec(self, proc))
+                continue
+            tool_fn = python_callable_for_tool(self, tool_name)
+            if tool_fn is None:
+                raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
+            specs.append(python_callable_tool_spec(tool_name, tool_fn))
+        return tuple(specs)
+
+    def _register_outstanding(self, future: Any) -> None:
+        with self._outstanding_lock:
+            self._outstanding.append(future)
+
+    def drain(self) -> None:
+        """Await every scheduled produce Future (parallel mode) at end of run.
+
+        Guarantees that even unconsumed templates execute (their side effects) and that any
+        failure surfaces. Fail-fast on the first error (matching today's behavior); additional
+        failures are logged loudly, never silently swallowed. Loops until no new work appears
+        (a drained template may have scheduled more).
+        """
+        import logging
+
+        first_exc: BaseException | None = None
+        extra: list[BaseException] = []
+        while True:
+            with self._outstanding_lock:
+                pending = list(self._outstanding)
+                self._outstanding.clear()
+            if not pending:
+                break
+            for fut in pending:
+                try:
+                    exc = fut.exception()  # blocks until the Future completes
+                except CancelledError as cancelled:
+                    exc = cancelled  # a cancelled job surfaces as an error, not a hang
+                if exc is not None:
+                    if first_exc is None:
+                        first_exc = exc
+                    else:
+                        extra.append(exc)
+        for exc in extra:
+            logging.getLogger("kedi").error(
+                "Suppressed additional template failure during drain: %r", exc
+            )
+        if first_exc is not None:
+            raise first_exc

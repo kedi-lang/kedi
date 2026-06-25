@@ -47,6 +47,8 @@ class _APIConfig:
     profile: AgentProfile = field(default_factory=AgentProfile.empty)
     tools: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
     env: Mapping[str, Any] = field(default_factory=dict)
+    parallel: bool = False
+    max_workers: int = 8
 
 
 @dataclass(frozen=True)
@@ -271,10 +273,16 @@ def _decorate_kedi_program(
             **env,
         }
         profile = config.profile.merge(profile_override)
+        engine = None
+        if config.parallel:
+            from .core import shared_thread_engine
+
+            engine = shared_thread_engine(max_workers=config.max_workers)
         runtime = compile_program(
             active_program,
             adapter=adapter,
             runtime_globals=runtime_globals,
+            engine=engine,
         )
         with block_agent_profile_scope(profile):
             if use_main:
@@ -338,9 +346,16 @@ def _build_config(
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     adapter_kwargs: Mapping[str, Any],
+    parallel: bool | None = None,
+    max_workers: int | None = None,
 ) -> _APIConfig:
     if load_env:
         dotenv.load_dotenv()
+
+    base_parallel = False if base is None else base.parallel
+    base_max_workers = 8 if base is None else base.max_workers
+    resolved_parallel = base_parallel if parallel is None else parallel
+    resolved_max_workers = base_max_workers if max_workers is None else max_workers
 
     if base is None:
         adapter_default: AdapterName | AgentAdapter[Any] | LazyAdapter = (
@@ -399,6 +414,8 @@ def _build_config(
         profile=profile,
         tools=tool_map,
         env=merged_env,
+        parallel=resolved_parallel,
+        max_workers=resolved_max_workers,
     )
 
 
@@ -418,9 +435,15 @@ def configure(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    parallel: bool | None = None,
+    max_workers: int | None = None,
     **adapter_kwargs: Any,
 ) -> None:
-    """Set the default Python API configuration for the current context."""
+    """Set the default Python API configuration for the current context.
+
+    ``parallel=True`` runs independent template calls concurrently (promise pipelining); it is
+    opt-in. ``max_workers`` bounds the shared worker pool.
+    """
     _config_var.set(
         _build_config(
             base=None,
@@ -434,6 +457,8 @@ def configure(
             env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
+            parallel=parallel,
+            max_workers=max_workers,
         )
     )
 
@@ -474,6 +499,8 @@ def context(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    parallel: bool | None = None,
+    max_workers: int | None = None,
     **adapter_kwargs: Any,
 ) -> _KediContext:
     return _KediContext(
@@ -489,8 +516,21 @@ def context(
             env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
+            parallel=parallel,
+            max_workers=max_workers,
         )
     )
+
+
+def parallel(*, max_workers: int = 8) -> _KediContext:
+    """Context manager enabling concurrent (pipelined) template execution within its scope.
+
+    Sugar for ``context(parallel=True, max_workers=...)``::
+
+        with kedi.parallel():
+            result = my_query(...)
+    """
+    return context(parallel=True, max_workers=max_workers)
 
 
 @overload
@@ -701,6 +741,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "parallel",
     "query",
     "reset_config",
     "tool",
