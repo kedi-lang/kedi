@@ -171,6 +171,20 @@ def _stable_repr(value: Any) -> str:
     return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
 
 
+def _isolate_cached(value: Any) -> Any:
+    """Deep-copy a cached value so callers can't mutate the shared entry.
+
+    Falls back to the value itself when it isn't deep-copyable (e.g. it wraps a file handle, lock,
+    or DB connection) — that restores stable's by-reference behavior for those exotic results
+    instead of turning a previously-working ``cache=True`` call into a crash. JSON / pydantic /
+    dict / list results copy cleanly and stay fully isolated.
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 - non-copyable result: degrade to by-reference, don't crash
+        return value
+
+
 def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
     """Everything about a resolved profile that changes the model's answer."""
     return (
@@ -277,6 +291,10 @@ def _decorate_kedi_program(
         if reload_program is not None:
             active_program, active_source_hash = reload_program()
         profile = config.profile.merge(profile_override)
+        tool_namespace = {
+            *config.tools,
+            *tool_map,
+        }  # single source for the cache key + shadow guard
         cache_key = _response_cache_key(
             kind=kind,
             inner=inner,
@@ -290,16 +308,16 @@ def _decorate_kedi_program(
             model=config.model,
             adapter_kwargs=config.adapter_kwargs,
             profile=profile,
-            tool_names=sorted({*config.tools, *tool_map}),
+            tool_names=sorted(tool_namespace),
         )
         if cache and cache_key in _RESPONSE_CACHE:
             # Hand back a copy: the cache holds mutable results (dict/list/pydantic model) by value,
             # so a caller mutating a returned object must not corrupt the shared cached entry.
-            return cast(R, copy.deepcopy(_RESPONSE_CACHE[cache_key]))
+            return cast(R, _isolate_cached(_RESPONSE_CACHE[cache_key]))
 
         adapter = _build_adapter(config)
         bound_globals = _bound_runtime_globals(inner, args, kwargs)
-        tool_collisions = {*config.tools, *tool_map} & set(bound_globals)
+        tool_collisions = tool_namespace & set(bound_globals)
         if tool_collisions:
             from .errors import KediExecutionError
 
@@ -336,8 +354,8 @@ def _decorate_kedi_program(
                 )
         if cache:
             # Store a copy so the caller's later mutation of `result` can't reach back into the
-            # cache (and so every future hit is isolated via the deepcopy on the hit path above).
-            _RESPONSE_CACHE[cache_key] = copy.deepcopy(result)
+            # cache (and so every future hit is isolated via the copy on the hit path above).
+            _RESPONSE_CACHE[cache_key] = _isolate_cached(result)
         return result
 
     if _is_async_callable(inner):

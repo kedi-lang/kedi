@@ -331,6 +331,35 @@ def test_internal_filesystem_remove_directory_allows_subdir(
     assert not victim.exists()
 
 
+def test_internal_filesystem_remove_file_refuses_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Review #4: the destructive guard now lives at the _safe_path chokepoint, so remove_file is
+    # protected symmetrically — remove_file(".") refuses the sandbox root with a clear error.
+    monkeypatch.chdir(tmp_path)
+    main = _compile_fs_module_with_call(tmp_path, '= <remove_file(`"."`)>')
+    rt = _compile_file(main)
+
+    with pytest.raises(Exception, match="protected root directory"):
+        rt.run_main()
+
+
+def test_internal_filesystem_remove_file_deletes_a_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A genuine file removal still works through the for_delete chokepoint.
+    monkeypatch.chdir(tmp_path)
+    victim = tmp_path / "f.txt"
+    victim.write_text("x", encoding="utf-8")
+    main = _compile_fs_module_with_call(tmp_path, '= <remove_file(`"f.txt"`)>')
+    rt = _compile_file(main)
+
+    assert rt.run_main() == str(victim.resolve())
+    assert not victim.exists()
+
+
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
     main = tmp_path / "main.kedi"
     main.write_text(

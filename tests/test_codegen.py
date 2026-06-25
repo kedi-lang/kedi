@@ -151,7 +151,12 @@ def test_codegen_translator_rejects_def_wrapper() -> None:
         python_impl_to_kedi_impl("def foo(x):\n    return x + 1\n", "@foo(x: int) -> int:")
     with pytest.raises(ValueError, match="function body only"):
         python_impl_to_kedi_impl("async def foo(x):\n    return x\n", "@foo(x: int) -> int:")
-    # A body that merely *contains* a nested helper def plus top-level usage is still a valid body.
+    # A def wrapper followed by an unrelated trailing statement is still the silent-None bug: the
+    # def is never referenced, so it is defined but never called (the single-statement check missed
+    # this; the reference check catches it).
+    with pytest.raises(ValueError, match="never called"):
+        python_impl_to_kedi_impl("def foo(x):\n    return x + 1\ny = 5\n", "@foo(x: int) -> int:")
+    # A body that defines a helper AND calls it (helper name referenced) is a valid body.
     assert python_impl_to_kedi_impl(
         "def helper(v):\n    return v * 2\nreturn helper(x)\n", "@f(x: int) -> int:"
     ) == (
@@ -166,6 +171,10 @@ def test_codegen_signature_parser_keeps_generic_commas() -> None:
     ) == ("def f(data: dict[str, int], n: str) -> list[tuple[int, str]]")
     # Defensive: empty segments from a malformed double comma are skipped, not turned into params.
     assert kedi_signature_to_python_signature("@f(x,, y)") == "def f(x: str, y: str) -> str"
+    # String-aware: a comma or bracket inside a string-literal default must not mis-split the params.
+    assert kedi_signature_to_python_signature('@f(sep: str = ",", x: str = "a]b") -> str') == (
+        'def f(sep: str = ",", x: str = "a]b") -> str'
+    )
 
 
 def test_codegen_renders_backtick_python_types_cleanly() -> None:

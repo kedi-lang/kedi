@@ -356,6 +356,19 @@ def test_query_cache_returns_isolated_copy(adapter: ApiAdapter) -> None:
     assert second is not first
 
 
+def test_isolate_cached_falls_back_for_non_copyable() -> None:
+    # Review #1: deep-copying a non-copyable cached result must degrade to by-reference, not crash a
+    # previously-working cache=True call. Copyable results are still isolated (a distinct copy).
+    import threading
+
+    lock = threading.Lock()  # not deep-copyable
+    assert api_module._isolate_cached(lock) is lock
+
+    data = {"a": [1, 2]}
+    copied = api_module._isolate_cached(data)
+    assert copied == data and copied is not data
+
+
 def test_query_argument_name_shadowing_tool_is_rejected(adapter: ApiAdapter) -> None:
     # B5: a query parameter whose name collides with a registered tool would overwrite the tool
     # callable in runtime globals, making the tool uncallable. Reject the collision loudly.

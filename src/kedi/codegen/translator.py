@@ -107,11 +107,25 @@ def kedi_signature_to_python_signature(kedi_sig: str) -> str:
 
 
 def _split_top_level_commas(text: str) -> list[str]:
-    """Split on commas that are not nested inside [], (), or {} (e.g. ``dict[str, int]``)."""
+    """Split on commas not nested inside [], (), {}, or a string literal.
+
+    Bracket-depth aware so ``dict[str, int]`` stays intact, and string-aware so a comma or bracket
+    inside a default like ``sep: str = ","`` doesn't mis-split or skew the depth count.
+    """
     parts: list[str] = []
     depth = 0
+    quote = ""  # the open string delimiter, or "" when not inside a string literal
     current: list[str] = []
     for ch in text:
+        if quote:
+            current.append(ch)
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "'\"":
+            quote = ch
+            current.append(ch)
+            continue
         if ch in "[({":
             depth += 1
         elif ch in "])}":
@@ -212,21 +226,28 @@ def python_impl_to_kedi_impl(python_impl: str, kedi_sig: str) -> str:
     """
     # The impl prompt asks for ONLY the function body (no `def` line). An LLM that returns a full
     # `def name(...): ...` wrapper would be embedded verbatim into the value block and only DEFINED,
-    # never called, so the procedure silently returns None. Reject it so the generator retries with
-    # a clear signal instead of caching a None-returning procedure.
+    # never called, so the procedure silently returns None. Reject any top-level function that is
+    # never referenced in the body — this catches a bare wrapper AND a wrapper followed by unrelated
+    # trailing statements, while keeping the legitimate "define a helper and call it" body (whose
+    # helper name IS referenced). Retries with a clear signal instead of caching a dead procedure.
     try:
         tree = ast.parse(python_impl)
     except SyntaxError:
         tree = None
-    if (
-        tree is not None
-        and len(tree.body) == 1
-        and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
-    ):
-        raise ValueError(
-            "Generated implementation must be the function body only, not a 'def' wrapper "
-            f"(got a top-level definition of {tree.body[0].name!r}). Provide just the body."
-        )
+    if tree is not None:
+        top_defs = {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        if top_defs:
+            referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+            unused = sorted(top_defs - referenced)
+            if unused:
+                raise ValueError(
+                    "Generated implementation must be the function body only, not a 'def' wrapper "
+                    f"(defined but never called: {unused}). Provide just the body."
+                )
 
     # Clean up the implementation and normalize indentation
     impl_lines = python_impl.split("\n")
