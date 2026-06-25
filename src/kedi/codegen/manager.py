@@ -42,7 +42,10 @@ class CodegenManager:
         if not cache.exists():
             return False
         text = cache.read_text(encoding="utf-8")
-        return f"@{proc_name}(" in text
+        # Match the proc's own cache block (comment-marker delimited), not a bare `@name(` substring
+        # — generated bodies routinely *call* other procedures, so a substring scan reports a
+        # never-generated procedure as cached. Reuse the same block matcher write/replace/remove use.
+        return self._split_block(text, proc_name) is not None
 
     @staticmethod
     def _block_markers(proc_name: str) -> tuple[str, str]:
@@ -271,8 +274,17 @@ class CodegenManager:
                     python_sig, prompt, context, python_tests, impl_error_feedback
                 )
 
-                # Translate implementation to Kedi
-                kedi_impl = python_impl_to_kedi_impl(python_impl, proc_header)
+                # Translate implementation to Kedi. A rejected translation (e.g. a `def` wrapper
+                # instead of a bare body) feeds back as an error so this attempt regenerates rather
+                # than caching a broken procedure.
+                try:
+                    kedi_impl = python_impl_to_kedi_impl(python_impl, proc_header)
+                except ValueError as translate_error:
+                    impl_error_feedback = (
+                        f"Previous Python implementation:\n{python_impl}\n\n"
+                        f"Translation error: {translate_error}"
+                    )
+                    continue
 
                 self.write_cache(source_path, name, kedi_tests, kedi_impl)
 

@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
+import ast
 import re
 
 from ..lang.ast import ProcedureDef, TypeDef
-
-
-def kedi_type_to_python(type_str: str) -> str:
-    """Convert Kedi type annotation to Python type annotation.
-
-    Examples:
-        list[City] -> list[City]
-        str -> str
-        City -> City
-    """
-    return type_str  # Most types are compatible
+from ..lang.type_render import (
+    procedure_param_type_to_python,
+    procedure_return_type_to_python,
+    type_expr_to_python,
+)
 
 
 def kedi_typedef_to_python_class(typedef: TypeDef) -> str:
@@ -36,9 +31,9 @@ def kedi_typedef_to_python_class(typedef: TypeDef) -> str:
         lines.append("    pass")
     else:
         for field in typedef.fields:
-            type_hint = (
-                kedi_type_to_python(field.type_annotation) if field.type_annotation else "str"
-            )
+            # Prefer the structured type_expr (falls back to the legacy string) so a backtick
+            # Python type like `dict[str, int]` renders as clean Python, not leaked backticks.
+            type_hint = type_expr_to_python(field.type_expr, field.type_annotation, default="str")
             default = f" = {field.default_expr}" if field.default_expr is not None else ""
             lines.append(f"    {field.name}: {type_hint}{default}")
 
@@ -55,25 +50,18 @@ def kedi_procedure_to_python_signature(proc: ProcedureDef) -> str:
             '''Available procedure: get_city_info'''
             ...
     """
-    # Build parameter list with type hints
+    # Build parameter list with type hints. Render from the structured type_expr (legacy string
+    # fallback) so backtick Python types become clean Python rather than leaked backticks.
     param_list = []
     for param_name in proc.params:
-        if proc.param_type_annotations and param_name in proc.param_type_annotations:
-            type_hint = proc.param_type_annotations[param_name]
-            if type_hint:
-                piece = f"{param_name}: {kedi_type_to_python(type_hint)}"
-            else:
-                piece = f"{param_name}: str"
-        else:
-            piece = f"{param_name}: str"
+        type_hint = procedure_param_type_to_python(proc, param_name, default="str")
+        piece = f"{param_name}: {type_hint}"
         default = (proc.param_defaults or {}).get(param_name)
         if default is not None:
             piece += f" = {default}"
         param_list.append(piece)
 
-    return_type = (
-        kedi_type_to_python(proc.return_type_annotation) if proc.return_type_annotation else "str"
-    )
+    return_type = procedure_return_type_to_python(proc, default="str")
 
     lines = [
         f"def {proc.name}({', '.join(param_list)}) -> {return_type}:",
@@ -101,19 +89,41 @@ def kedi_signature_to_python_signature(kedi_sig: str) -> str:
     params_str = match.group(2).strip()
     return_type = match.group(3).strip() if match.group(3) else "str"
 
-    # Parse parameters
+    # Parse parameters, splitting only on top-level commas so a generic annotation like
+    # `dict[str, int]` is not torn apart at the comma inside its brackets.
     param_list = []
-    if params_str:
-        for param in params_str.split(","):
-            param = param.strip()
-            if ":" in param:
-                # Has type annotation
-                param_list.append(param)
-            else:
-                # No type, default to str
-                param_list.append(f"{param}: str")
+    for param in _split_top_level_commas(params_str):
+        param = param.strip()
+        if not param:
+            continue
+        if ":" in param:
+            # Has type annotation
+            param_list.append(param)
+        else:
+            # No type, default to str
+            param_list.append(f"{param}: str")
 
     return f"def {name}({', '.join(param_list)}) -> {return_type}"
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    """Split on commas that are not nested inside [], (), or {} (e.g. ``dict[str, int]``)."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in text:
+        if ch in "[({":
+            depth += 1
+        elif ch in "])}":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current))
+    return parts
 
 
 def python_tests_to_kedi_tests(python_tests: str, procedure_name: str) -> str:
@@ -200,6 +210,24 @@ def python_impl_to_kedi_impl(python_impl: str, kedi_sig: str) -> str:
           return markdown
           ```
     """
+    # The impl prompt asks for ONLY the function body (no `def` line). An LLM that returns a full
+    # `def name(...): ...` wrapper would be embedded verbatim into the value block and only DEFINED,
+    # never called, so the procedure silently returns None. Reject it so the generator retries with
+    # a clear signal instead of caching a None-returning procedure.
+    try:
+        tree = ast.parse(python_impl)
+    except SyntaxError:
+        tree = None
+    if (
+        tree is not None
+        and len(tree.body) == 1
+        and isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        raise ValueError(
+            "Generated implementation must be the function body only, not a 'def' wrapper "
+            f"(got a top-level definition of {tree.body[0].name!r}). Provide just the body."
+        )
+
     # Clean up the implementation and normalize indentation
     impl_lines = python_impl.split("\n")
 

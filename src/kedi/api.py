@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import copy
 import dataclasses
 import functools
 import hashlib
@@ -292,13 +293,24 @@ def _decorate_kedi_program(
             tool_names=sorted({*config.tools, *tool_map}),
         )
         if cache and cache_key in _RESPONSE_CACHE:
-            return cast(R, _RESPONSE_CACHE[cache_key])
+            # Hand back a copy: the cache holds mutable results (dict/list/pydantic model) by value,
+            # so a caller mutating a returned object must not corrupt the shared cached entry.
+            return cast(R, copy.deepcopy(_RESPONSE_CACHE[cache_key]))
 
         adapter = _build_adapter(config)
+        bound_globals = _bound_runtime_globals(inner, args, kwargs)
+        tool_collisions = {*config.tools, *tool_map} & set(bound_globals)
+        if tool_collisions:
+            from .errors import KediExecutionError
+
+            raise KediExecutionError(
+                f"Kedi argument name(s) shadow registered tool(s): {sorted(tool_collisions)}. "
+                "Rename the parameter or the tool so the tool stays callable."
+            )
         runtime_globals = {
             **config.tools,
             **tool_map,
-            **_bound_runtime_globals(inner, args, kwargs),
+            **bound_globals,
             **_auto_type_env(inner),
             **config.env,
             **env,
@@ -323,7 +335,9 @@ def _decorate_kedi_program(
                     runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
                 )
         if cache:
-            _RESPONSE_CACHE[cache_key] = result
+            # Store a copy so the caller's later mutation of `result` can't reach back into the
+            # cache (and so every future hit is isolated via the deepcopy on the hit path above).
+            _RESPONSE_CACHE[cache_key] = copy.deepcopy(result)
         return result
 
     if _is_async_callable(inner):

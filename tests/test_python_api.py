@@ -27,6 +27,7 @@ from kedi import (
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
+from kedi.errors import KediExecutionError
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
@@ -333,6 +334,40 @@ def test_query_env_overrides_bound_runtime_globals(adapter: ApiAdapter) -> None:
 
     assert result == Person(name="John", age=30)
     assert adapter.schemas[0] == {"output": Person}
+
+
+def test_query_cache_returns_isolated_copy(adapter: ApiAdapter) -> None:
+    # B2: cached results are mutable (e.g. a pydantic model); a caller mutating a returned object
+    # must not corrupt the shared cache entry for later identical calls.
+    @query(cache=True)
+    def extract(*, template: str, output_type: type[T]) -> T:
+        """kedi
+        >> Extract [output: `output_type`] from <template>.
+        = `output`
+        """
+
+    first = extract(template="John is 30.", output_type=Person)
+    assert first == Person(name="John", age=30)
+    first.name = "MUTATED"  # corrupt the returned object in place
+
+    second = extract(template="John is 30.", output_type=Person)  # identical args → cache hit
+    assert len(adapter.templates) == 1  # genuinely a cache hit, not a re-run
+    assert second == Person(name="John", age=30)  # not corrupted by the earlier mutation
+    assert second is not first
+
+
+def test_query_argument_name_shadowing_tool_is_rejected(adapter: ApiAdapter) -> None:
+    # B5: a query parameter whose name collides with a registered tool would overwrite the tool
+    # callable in runtime globals, making the tool uncallable. Reject the collision loudly.
+    @query(tools=[lookup])
+    def ask(*, lookup: str) -> str:
+        """kedi
+        >> Answer the question [answer].
+        = <answer>
+        """
+
+    with pytest.raises(KediExecutionError, match="shadow registered tool"):
+        ask(lookup="value")
 
 
 def test_kedi_type_transforms_bare_class_and_auto_injects(adapter: ApiAdapter) -> None:
