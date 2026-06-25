@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
 import dataclasses
 import functools
@@ -169,6 +170,18 @@ def _stable_repr(value: Any) -> str:
     return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
 
 
+def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
+    """Everything about a resolved profile that changes the model's answer."""
+    return (
+        profile.model,
+        profile.effort,
+        profile.system,
+        tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),
+        tuple(profile.tools),
+        tuple(_stable_repr(server) for server in profile.mcp_servers),
+    )
+
+
 def _response_cache_key(
     *,
     kind: str,
@@ -179,6 +192,11 @@ def _response_cache_key(
     kwargs: Mapping[str, Any],
     config_env: Mapping[str, Any],
     env: Mapping[str, Any],
+    adapter_name: str,
+    model: str | None,
+    adapter_kwargs: Mapping[str, Any],
+    profile: AgentProfile,
+    tool_names: Sequence[str],
 ) -> str:
     payload = (
         kind,
@@ -190,6 +208,13 @@ def _response_cache_key(
         tuple((key, _stable_repr(value)) for key, value in sorted(kwargs.items())),
         tuple((key, _stable_repr(value)) for key, value in sorted(config_env.items())),
         tuple((key, _stable_repr(value)) for key, value in sorted(env.items())),
+        # The resolved backend + profile + tools decide the answer; omitting them returns a stale
+        # cached response across kedi.context(model=...)/configure(...)/different system or tools.
+        adapter_name,
+        model,
+        tuple((key, _stable_repr(value)) for key, value in sorted(adapter_kwargs.items())),
+        _profile_identity(profile),
+        tuple(tool_names),
     )
     return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
@@ -250,6 +275,7 @@ def _decorate_kedi_program(
         active_source_hash = source_hash
         if reload_program is not None:
             active_program, active_source_hash = reload_program()
+        profile = config.profile.merge(profile_override)
         cache_key = _response_cache_key(
             kind=kind,
             inner=inner,
@@ -259,6 +285,11 @@ def _decorate_kedi_program(
             kwargs=kwargs,
             config_env=config.env,
             env=env,
+            adapter_name=config.adapter_name,
+            model=config.model,
+            adapter_kwargs=config.adapter_kwargs,
+            profile=profile,
+            tool_names=sorted({*config.tools, *tool_map}),
         )
         if cache and cache_key in _RESPONSE_CACHE:
             return cast(R, _RESPONSE_CACHE[cache_key])
@@ -272,7 +303,6 @@ def _decorate_kedi_program(
             **config.env,
             **env,
         }
-        profile = config.profile.merge(profile_override)
         engine = None
         if config.parallel:
             from .core import shared_thread_engine
@@ -300,7 +330,10 @@ def _decorate_kedi_program(
 
         @functools.wraps(inner)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            return run(*args, **kwargs)
+            # run() does blocking model I/O; offload it to a worker thread so an async caller's
+            # event loop keeps serving other coroutines. to_thread copies the context, so the
+            # active kedi config/profile contextvars still reach run().
+            return await asyncio.to_thread(run, *args, **kwargs)
 
         return cast(Callable[P, R], async_wrapper)
 

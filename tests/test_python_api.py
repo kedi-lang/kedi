@@ -243,6 +243,13 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
     kwargs_a = {"value": AddressReprValue("same")}
     kwargs_b = {"value": AddressReprValue("same")}
 
+    identity: dict[str, Any] = {
+        "adapter_name": "pydantic",
+        "model": None,
+        "adapter_kwargs": {},
+        "profile": AgentProfile.empty(),
+        "tool_names": (),
+    }
     assert repr(kwargs_a["value"]) != repr(kwargs_b["value"])
     assert api_module._response_cache_key(
         kind="query",
@@ -253,6 +260,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         kwargs=kwargs_a,
         config_env={},
         env={},
+        **identity,
     ) == api_module._response_cache_key(
         kind="query",
         inner=sample,
@@ -262,7 +270,25 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         kwargs=kwargs_b,
         config_env={},
         env={},
+        **identity,
     )
+
+
+def test_query_response_cache_splits_by_model(adapter: ApiAdapter) -> None:
+    # B1: a cached query must not return a stale answer when the resolved model changes.
+    @query(cache=True)
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize("Kedi") == "short summary"
+    with context(model="other:model"):
+        assert summarize("Kedi") == "short summary"
+    # Different resolved model → a fresh model call, not a stale cache hit.
+    assert len(adapter.templates) == 2
+    assert adapter.models == ["configured:model", "other:model"]
 
 
 def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -> None:
@@ -401,6 +427,47 @@ def test_async_query_decorates_async_functions(adapter: ApiAdapter) -> None:
         """
 
     assert asyncio.run(answer()) == "ok"
+
+
+def test_async_query_yields_event_loop_while_blocked() -> None:
+    # B4: the async query must offload blocking model I/O to a thread so the event loop keeps
+    # serving other coroutines instead of freezing for the duration of the model call.
+    import threading
+
+    api_module._PARSE_CACHE.clear()
+    api_module._RESPONSE_CACHE.clear()
+    in_produce = threading.Event()
+    release = threading.Event()
+
+    class BlockingAdapter(ApiAdapter):
+        def produce_sync(self, *, template: str, output_schema: Any = None, **kwargs: Any) -> Any:
+            in_produce.set()
+            release.wait(2)
+            return super().produce_sync(template=template, output_schema=output_schema, **kwargs)
+
+    configure(model="m", adapter=BlockingAdapter())
+
+    @query
+    async def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    async def scenario() -> str:
+        task = asyncio.create_task(answer())
+        for _ in range(2000):
+            if in_produce.is_set():
+                break
+            await asyncio.sleep(0.001)
+        # The worker is parked inside produce_sync; if the loop had been blocked by run(), the
+        # task would already be finished by the time control returns here.
+        assert in_produce.is_set()
+        assert not task.done()
+        release.set()
+        return await task
+
+    assert asyncio.run(scenario()) == "ok"
 
 
 def test_query_runs_under_parallel_context(adapter: ApiAdapter) -> None:

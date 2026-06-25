@@ -14,6 +14,14 @@ def _safe_path(raw_path: str) -> Path:
     if not resolved.is_relative_to(_ROOT):
         raise PermissionError(f"path escapes filesystem root: {raw_path}")
     return resolved
+
+def _assert_removable(path: Path) -> None:
+    # `_safe_path` keeps `path` inside _ROOT, but "." / "" resolve to _ROOT itself — deleting that
+    # (or an anchor/home that _ROOT happens to coincide with) would wipe the whole sandbox. Refuse
+    # destructive ops on those roots; reads/lists of the root remain allowed.
+    protected = {_ROOT, Path(path.anchor).resolve(), Path.home().resolve()}
+    if path in protected:
+        raise PermissionError(f"refusing to delete a protected root directory: {path}")
 ```
 
 @read_text_file(file_path: str) -> str:
@@ -173,6 +181,7 @@ def _safe_path(raw_path: str) -> Path:
     ###
     = ```
     path = _safe_path(dir_path)
+    _assert_removable(path)
     shutil.rmtree(path)
     return str(path)
     ```

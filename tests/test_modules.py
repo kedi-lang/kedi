@@ -291,6 +291,46 @@ def test_internal_filesystem_rejects_out_of_root_path(
         rt.run_main()
 
 
+def _compile_fs_module_with_call(tmp_path: Path, call: str) -> Path:
+    # remove_directory is intentionally not exported / not in the default profile, so exercise the
+    # real module code by compiling the actual filesystem.kedi source with an appended return.
+    src = Path(internal_module_path("filesystem")).read_text(encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text(f"{src}\n{call}\n", encoding="utf-8")
+    return main
+
+
+def test_internal_filesystem_remove_directory_refuses_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # B15: remove_directory(".") resolves to the sandbox root; deleting it would wipe the tree.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "keep.txt").write_text("important", encoding="utf-8")
+    main = _compile_fs_module_with_call(tmp_path, '= <remove_directory(`"."`)>')
+    rt = _compile_file(main)
+
+    with pytest.raises(Exception, match="protected root directory"):
+        rt.run_main()
+    assert (tmp_path / "keep.txt").exists()  # the root tree is untouched
+
+
+def test_internal_filesystem_remove_directory_allows_subdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A genuine subdirectory removal still works — the guard only protects the roots.
+    monkeypatch.chdir(tmp_path)
+    victim = tmp_path / "scratch"
+    victim.mkdir()
+    (victim / "f.txt").write_text("x", encoding="utf-8")
+    main = _compile_fs_module_with_call(tmp_path, '= <remove_directory(`"scratch"`)>')
+    rt = _compile_file(main)
+
+    assert rt.run_main() == str(victim.resolve())
+    assert not victim.exists()
+
+
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
     main = tmp_path / "main.kedi"
     main.write_text(

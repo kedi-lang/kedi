@@ -260,6 +260,11 @@ class KediRuntime:
             and isinstance(expected_type, type)
             and issubclass(expected_type, BaseModel)
         ):
+            # Duck-typed by design: a DSL-defined model class and the adapter's structurally-equal
+            # model are different classes by identity, so any BaseModel is accepted as-is and its
+            # methods/type are preserved (see tests/test_type_coercion.py). A genuinely wrong model
+            # fails loudly at the use site (attribute access), not silently — so this is not the
+            # "wrong class accepted" bug the general report claimed; left intentionally lenient.
             return value
         return TypeAdapter(expected_type).validate_python(value)
 

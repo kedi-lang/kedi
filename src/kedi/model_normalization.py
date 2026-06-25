@@ -28,7 +28,13 @@ def normalize_for_litellm(model: str) -> str:
     si = model.find("/")
     if si != -1 and si < ci:
         return model
-    return model[:ci] + "/" + model[ci + 1 :]
+    provider = model[:ci]
+    rest = model[ci + 1 :]
+    # LiteLLM's canonical OpenAI provider is "openai"; map back the Pydantic-AI-specific
+    # "openai-chat"/"openai-responses" so a pydantic→litellm round-trip stays "openai/...".
+    if provider in ("openai-chat", "openai-responses"):
+        provider = "openai"
+    return provider + "/" + rest
 
 
 def normalize_for_pydantic_ai(model: str) -> str:
