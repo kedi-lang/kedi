@@ -20,6 +20,15 @@ def test_slash_form_unchanged_for_litellm() -> None:
     assert normalize_for_litellm("acme/foo:bar-baz") == "acme/foo:bar-baz"
 
 
+def test_openai_chat_maps_back_to_openai_for_litellm() -> None:
+    # B16: LiteLLM's canonical provider is "openai", so a Pydantic-AI "openai-chat:"/"openai-responses:"
+    # id must normalize to "openai/...", not the unrecognized "openai-chat/...".
+    assert normalize_for_litellm("openai-chat:gpt-4o") == "openai/gpt-4o"
+    assert normalize_for_litellm("openai-responses:gpt-4o") == "openai/gpt-4o"
+    # Round-trips with the Pydantic-AI normalization.
+    assert normalize_for_litellm(normalize_for_pydantic_ai("openai/gpt-4o")) == "openai/gpt-4o"
+
+
 def test_slash_to_colon_for_pydantic() -> None:
     assert normalize_for_pydantic_ai("acme/foo/bar-baz") == "acme:foo/bar-baz"
     assert normalize_for_pydantic_ai("groq/qwen/qwen3-32b") == "groq:qwen/qwen3-32b"

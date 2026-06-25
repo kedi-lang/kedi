@@ -144,6 +144,61 @@ def test_codegen_translator_covers_signature_type_test_and_impl_shapes() -> None
     )
 
 
+def test_codegen_translator_rejects_def_wrapper() -> None:
+    # B8: a full `def` wrapper would be embedded verbatim and only defined, never called, so the
+    # procedure would silently return None. Reject it so the generator retries.
+    with pytest.raises(ValueError, match="function body only"):
+        python_impl_to_kedi_impl("def foo(x):\n    return x + 1\n", "@foo(x: int) -> int:")
+    with pytest.raises(ValueError, match="function body only"):
+        python_impl_to_kedi_impl("async def foo(x):\n    return x\n", "@foo(x: int) -> int:")
+    # A def wrapper followed by an unrelated trailing statement is still the silent-None bug: the
+    # def is never referenced, so it is defined but never called (the single-statement check missed
+    # this; the reference check catches it).
+    with pytest.raises(ValueError, match="never called"):
+        python_impl_to_kedi_impl("def foo(x):\n    return x + 1\ny = 5\n", "@foo(x: int) -> int:")
+    # A body that defines a helper AND calls it (helper name referenced) is a valid body.
+    assert python_impl_to_kedi_impl(
+        "def helper(v):\n    return v * 2\nreturn helper(x)\n", "@f(x: int) -> int:"
+    ) == (
+        "@f(x: int) -> int:\n  = ```\n  def helper(v):\n      return v * 2\n  return helper(x)\n  ```"
+    )
+
+
+def test_codegen_signature_parser_keeps_generic_commas() -> None:
+    # B11: splitting params on every comma tears `dict[str, int]` apart. Split only top-level commas.
+    assert kedi_signature_to_python_signature(
+        "@f(data: dict[str, int], n) -> list[tuple[int, str]]"
+    ) == ("def f(data: dict[str, int], n: str) -> list[tuple[int, str]]")
+    # Defensive: empty segments from a malformed double comma are skipped, not turned into params.
+    assert kedi_signature_to_python_signature("@f(x,, y)") == "def f(x: str, y: str) -> str"
+    # String-aware: a comma or bracket inside a string-literal default must not mis-split the params.
+    assert kedi_signature_to_python_signature('@f(sep: str = ",", x: str = "a]b") -> str') == (
+        'def f(sep: str = ",", x: str = "a]b") -> str'
+    )
+
+
+def test_codegen_renders_backtick_python_types_cleanly() -> None:
+    # B14: codegen must render the structured type_expr, not leak backticks from a `dict[str,int]`
+    # python-type annotation into invalid Python.
+    from kedi.lang import parse_program
+    from kedi.lang.ast import Program
+
+    prog = parse_program(
+        "~City(meta: `dict[str, int]`)\n@get(tags: `list[str]`) -> `dict[str, int]`:\n  = nope\n"
+    )
+    assert isinstance(prog, Program)
+    typedef = next(td for td in prog.type_defs if td.name == "City")
+    proc = next(pd for pd in prog.procedures if pd.name == "get")
+
+    assert kedi_typedef_to_python_class(typedef) == (
+        "class City(BaseModel):\n    meta: dict[str, int]"
+    )
+    sig = kedi_procedure_to_python_signature(proc)
+    assert "tags: list[str]" in sig
+    assert "-> dict[str, int]:" in sig
+    assert "`" not in sig  # no leaked backticks
+
+
 def test_codegen_manager_context_and_cache_parsing(tmp_path: Path) -> None:
     src = tmp_path / "context.kedi"
     src.write_text(
@@ -337,6 +392,57 @@ def test_codegen_orchestrator_cached_and_failure_paths(
     monkeypatch.setattr(no_cache_mgr, "verify_compilation", lambda _: "compile failed")
     assert not no_cache_mgr.orchestrate_generation(src, "@f():", "prompt", "spec")
     assert not no_cache_mgr.cache_path_for(src).exists()
+
+
+def test_codegen_orchestration_retries_on_def_wrapper_translation(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    # B8 wiring: a `def`-wrapper impl raises in translation; the manager must feed the rejection
+    # back and retry, never caching a broken (None-returning) procedure.
+    from kedi.codegen import manager as manager_module
+
+    src = tmp_path / "p.kedi"
+    src.write_text("= ok\n", encoding="utf-8")
+
+    class DefWrapperAgent(MockPassingAgent):
+        def __init__(self) -> None:
+            self.impl_feedbacks: list[str | None] = []
+
+        def generate_tests(
+            self,
+            python_signature: str,
+            prompt: str,
+            context: ProgramContext,
+            previous_error: str | None = None,
+        ) -> str:
+            return "def test_generated():\n    assert True\n"
+
+        def generate_impl(
+            self,
+            python_signature: str,
+            prompt: str,
+            context: ProgramContext,
+            python_tests: str,
+            previous_error: str | None = None,
+        ) -> str:
+            self.impl_feedbacks.append(previous_error)
+            return "def f():\n    return 'x'\n"  # a def-wrapper → rejected by the real translator
+
+    monkeypatch.setattr(
+        manager_module, "kedi_signature_to_python_signature", lambda header: "def f() -> str:"
+    )
+    monkeypatch.setattr(manager_module, "python_tests_to_kedi_tests", lambda tests, name: tests)
+    # Intentionally do NOT patch python_impl_to_kedi_impl — we want the real def-wrapper rejection.
+
+    agent = DefWrapperAgent()
+    mgr = CodegenManager(agent, CodegenConfig(max_retries=2))
+    # Tests "compile" so the impl loop is reached; the impl then fails in translation.
+    monkeypatch.setattr(mgr, "verify_compilation", lambda _: None)
+    monkeypatch.setattr(mgr, "run_tests_and_get_errors", lambda _: None)
+    assert not mgr.orchestrate_generation(src, "@f():", "prompt", "spec")
+    # A later attempt receives the translation rejection as feedback (and nothing was cached).
+    assert any(fb and "Translation error" in fb for fb in agent.impl_feedbacks)
+    assert not mgr.cache_path_for(src).exists()
 
 
 def test_codegen_orchestrator_happy_path(tmp_path: Path) -> None:

@@ -70,3 +70,16 @@ def test_write_cache_handles_prefix_named_procedures(tmp_path: Path) -> None:
     assert "ab-result" in cache_text
     assert mgr.is_cached(src, "a")
     assert mgr.is_cached(src, "ab")
+
+
+def test_is_cached_ignores_calls_to_other_procedures(tmp_path: Path) -> None:
+    # B10: is_cached must match a procedure's own cache block, not a bare `@name(` substring —
+    # a generated body that *calls* @foo() must not make is_cached report @foo as already generated.
+    src = tmp_path / "prog.kedi"
+    src.write_text("= ok\n", encoding="utf-8")
+    mgr = CodegenManager(MockPassingAgent())
+
+    mgr.write_cache(src, "bar", "@test: bar\n  = ok\n", "@bar():\n  = @foo(1)\n")
+
+    assert mgr.is_cached(src, "bar") is True  # bar has its own block
+    assert mgr.is_cached(src, "foo") is False  # foo only appears as a call inside bar's body
