@@ -163,6 +163,13 @@ class OptimizationDataLoader:
                 if len(item) == 2:
                     # Use tuple as-is: first element is input, second is expected output
                     formatted_data.append(item)
+                elif len(item) == 0:
+                    # An empty tuple has no input; surface a clear error instead of a raw IndexError
+                    # from item[0] below. (A 3+ tuple keeps its lenient (item[0], None) normalization.)
+                    raise ValueError(
+                        "Eval data rows must be a value, a 1-tuple, or an (input, expected) pair; "
+                        "got an empty tuple"
+                    )
                 else:
                     # Single value in tuple - make it (value, None)
                     formatted_data.append((item[0], None))

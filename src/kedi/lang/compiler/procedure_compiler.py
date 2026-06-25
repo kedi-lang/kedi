@@ -116,6 +116,11 @@ class ProcedureCompiler:
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
+        from ...promise import force
+
+        # A procedure return is a join point: resolve a promise to a concrete value before
+        # type-enforcing or stringifying it.
+        last_return = force(last_return)
         kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
 
         if kedi_type.is_none():

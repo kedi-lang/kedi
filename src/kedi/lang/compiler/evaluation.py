@@ -6,6 +6,7 @@ from typing import Any
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
+from ...promise import force
 from ..ast import (
     CallArg,
     CallSegment,
@@ -31,11 +32,27 @@ from .environment import lookup_value
 from .type_system import KediType
 
 
-def evaluate_call(rt: KediRuntime, seg: CallSegment, local_env: dict[str, Any]) -> Any:
-    """Evaluate a call segment with arguments."""
+def evaluate_call(
+    rt: KediRuntime,
+    seg: CallSegment,
+    local_env: dict[str, Any],
+    *,
+    cache: dict[int, Any] | None = None,
+) -> Any:
+    """Evaluate a call segment with arguments.
+
+    ``cache`` memoizes the result per CallSegment within a single ``render_expression`` pass so a
+    call that co-occurs with an output isn't evaluated twice (once to build the prompt and again
+    to render the result) — which would otherwise invoke the procedure, and its LLM calls, twice.
+    """
+    if cache is not None and id(seg) in cache:
+        return cache[id(seg)]
     eval_args = [_evaluate_arg(rt, arg, local_env) for arg in seg.args]
     callee = rt._get_proc(seg.name)
-    return rt._invoke_procedure(callee, eval_args)
+    result = rt._invoke_procedure(callee, eval_args)
+    if cache is not None:
+        cache[id(seg)] = result
+    return result
 
 
 def evaluate_python_inline(
@@ -139,6 +156,7 @@ def prepare_segments(
     kwargs: dict[str, Any],
     *,
     context: str = "template",
+    call_cache: dict[int, Any] | None = None,
 ) -> tuple[list[Any], str]:
     """Prepare segments for rt.m() call, building expression and string parts."""
     expr: list[Any] = []
@@ -153,10 +171,10 @@ def prepare_segments(
                 expr.append(rt.i(seg.name))
                 parts.append("")
             else:
-                value = lookup_value(rt, seg.name, kwargs)
+                value = force(lookup_value(rt, seg.name, kwargs))
                 parts.append(str(value))
         elif isinstance(seg, CallSegment):
-            value = evaluate_call(rt, seg, kwargs)
+            value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             expr.append(str(value))
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
@@ -166,7 +184,7 @@ def prepare_segments(
             pytype = kedi_type.resolve_required(rt, kwargs)
             expr.append(rt.o(seg.name, pytype))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
+            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
             expr.append(str(value))
             parts.append(str(value))
 
@@ -178,7 +196,10 @@ def render_expression(
 ) -> str:
     """Render segments to string, invoking rt.m() only if outputs present."""
     if _has_outputs(segments):
-        expr, _ = prepare_segments(rt, segments, kwargs, context=context)
+        # Memoize call evaluation across the two passes (prompt build + result render) so a
+        # CallSegment co-occurring with an output is evaluated exactly once.
+        call_cache: dict[int, Any] = {}
+        expr, _ = prepare_segments(rt, segments, kwargs, context=context, call_cache=call_cache)
         token = rt._current_env.set(kwargs)
         try:
             rt.m(expr)
@@ -187,7 +208,7 @@ def render_expression(
                 kwargs.update(env)
         finally:
             rt._current_env.reset(token)
-        return _stringify_segments(rt, segments, kwargs, context=context)
+        return _stringify_segments(rt, segments, kwargs, context=context, call_cache=call_cache)
 
     return _stringify_segments(rt, segments, kwargs, context=context)
 
@@ -202,10 +223,10 @@ def evaluate_assignment_rhs(
     if len(non_ws) == 1:
         seg = non_ws[0]
         if isinstance(seg, PythonExprNativeSegment):
-            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
+            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
             return value, str(value)
         if isinstance(seg, CallSegment):
-            value = evaluate_call(rt, seg, kwargs)
+            value = force(evaluate_call(rt, seg, kwargs))
             return value, str(value)
 
     # Fallback to rendered string
@@ -244,7 +265,12 @@ def _has_outputs(segments: list[Segment]) -> bool:
 
 
 def _stringify_segments(
-    rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any], *, context: str
+    rt: KediRuntime,
+    segments: list[Segment],
+    kwargs: dict[str, Any],
+    *,
+    context: str,
+    call_cache: dict[int, Any] | None = None,
 ) -> str:
     """Convert segments to string, resolving all values."""
     parts: list[str] = []
@@ -272,22 +298,22 @@ def _stringify_segments(
                 # Internal TextSegment, keep as-is
                 parts.append(seg.text)
         elif isinstance(seg, InputSegment):
-            value = lookup_value(rt, seg.name, kwargs)
+            value = force(lookup_value(rt, seg.name, kwargs))
             parts.append(str(value))
         elif isinstance(seg, CallSegment):
-            value = evaluate_call(rt, seg, kwargs)
+            value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
             if seg.name in kwargs:
-                parts.append(str(kwargs[seg.name]))
+                parts.append(str(force(kwargs[seg.name])))
             else:
                 env = rt._current_env.get()
                 if env and seg.name in env:
-                    parts.append(str(env[seg.name]))
+                    parts.append(str(force(env[seg.name])))
                 else:
                     parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
-            value = evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc)
+            value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
             parts.append(str(value))
 
     return "".join(parts)

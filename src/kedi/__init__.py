@@ -6,6 +6,7 @@ from .api import (
     clear_cache,
     configure,
     context,
+    parallel,
     query,
     reset_config,
     tool,
@@ -19,6 +20,7 @@ from .executors.debug import (
     MarkdownDebugExporter,
     default_debug_export_path,
 )
+from .promise import KediPromise, KediPromiseLeak, force
 
 __all__ = [
     "__version__",
@@ -28,11 +30,15 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "parallel",
     "query",
     "reset_config",
     "tool",
     "type",
     "KediRuntime",
+    "force",
+    "KediPromise",
+    "KediPromiseLeak",
     "Executor",
     "DefaultExecutor",
     "ExecutorDebugEvent",

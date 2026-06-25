@@ -87,6 +87,7 @@ target-version = "py311"
 
 [tool.coverage.run]
 branch = true
+concurrency = ["thread"]
 source = ["src/kedi"]
 omit = [
     "tree-sitter-kedi/**",

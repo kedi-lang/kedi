@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Dict, Iterator, List, Sequence
 
@@ -17,6 +18,9 @@ _PREV_WORD_RE = re.compile(r"last letter of (\S+)", re.IGNORECASE)
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
     def __init__(self, *, default_model: str | None = None) -> None:
         self._tool_scope = ToolScope()
+        # Recording lists are shared instance state appended from worker threads under the
+        # parallel engine; guard the grouped appends so concurrent calls don't interleave.
+        self._record_lock = threading.Lock()
         self.default_model_value = default_model
         self.last_effective_model: str | None = default_model
         self.last_effective_effort: str | None = None
@@ -86,12 +90,13 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         output_schema: dict[str, ResolvedKediType] | None = None,
         **kwargs: Any,
     ) -> AttrDict[str, Any]:
-        self.model_calls.append(self.last_effective_model)
-        self.effort_calls.append(self.last_effective_effort)
-        self.settings_calls.append(dict(self.last_effective_settings))
-        self.instruction_calls.append(kwargs.get("instructions"))
-        self.tool_calls.append(tuple(tool.name for tool in self.scoped_tools))
-        self.mcp_calls.append(self.last_effective_mcp_commands)
+        with self._record_lock:
+            self.model_calls.append(self.last_effective_model)
+            self.effort_calls.append(self.last_effective_effort)
+            self.settings_calls.append(dict(self.last_effective_settings))
+            self.instruction_calls.append(kwargs.get("instructions"))
+            self.tool_calls.append(tuple(tool.name for tool in self.scoped_tools))
+            self.mcp_calls.append(self.last_effective_mcp_commands)
         keys: List[str] = []
         seen: set[str] = set()
         for match in _OUTPUT_KEY_RE.finditer(template):

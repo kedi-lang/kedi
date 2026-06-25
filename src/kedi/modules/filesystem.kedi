@@ -6,13 +6,18 @@ _ROOT = Path.cwd().resolve()
 _MAX_READ_BYTES = 1_000_000
 _MAX_DIRECTORY_ENTRIES = 1_000
 
-def _safe_path(raw_path: str) -> Path:
+def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = _ROOT / path
     resolved = path.resolve()
     if not resolved.is_relative_to(_ROOT):
         raise PermissionError(f"path escapes filesystem root: {raw_path}")
+    # Destructive ops only: "." / "" resolve to _ROOT itself — deleting that (or an anchor/home that
+    # _ROOT happens to coincide with) would wipe the whole sandbox. Guarding at this single chokepoint
+    # protects every delete op symmetrically; reads/lists/writes of the root remain allowed.
+    if for_delete and resolved in {_ROOT, Path(resolved.anchor).resolve(), Path.home().resolve()}:
+        raise PermissionError(f"refusing to delete a protected root directory: {resolved}")
     return resolved
 ```
 
@@ -156,7 +161,7 @@ def _safe_path(raw_path: str) -> Path:
         str: The deleted file path.
     ###
     = ```
-    path = _safe_path(file_path)
+    path = _safe_path(file_path, for_delete=True)
     path.unlink()
     return str(path)
     ```
@@ -172,7 +177,7 @@ def _safe_path(raw_path: str) -> Path:
         str: The deleted directory path.
     ###
     = ```
-    path = _safe_path(dir_path)
+    path = _safe_path(dir_path, for_delete=True)
     shutil.rmtree(path)
     return str(path)
     ```

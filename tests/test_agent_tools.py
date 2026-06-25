@@ -218,7 +218,10 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
 
     rt.run_main()
 
-    assert adapter.tool_calls == [("bar:7",), ("bar:1",)]
+    # Each prompt is scoped to exactly its own tool (inner bar:7 for foo, outer bar:1 for the
+    # top level). Compared order-independently: under the parallel engine these two independent
+    # templates may execute in either order, but each must still see only its correct tool.
+    assert sorted(adapter.tool_calls) == [("bar:1",), ("bar:7",)]
 
 
 def test_profile_body_use_registers_tools() -> None:

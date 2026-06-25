@@ -181,6 +181,16 @@ def test_data_loader_errors_inline_data_and_tuple_normalization():
         loader._convert_to_list(123, "number")
 
 
+def test_data_loader_empty_tuple_raises_clear_error():
+    # B13: an empty-tuple row must surface a clear ValueError, not a raw IndexError from item[0].
+    rt = compile_program(parse_program("= ok\n"), adapter=None)
+    loader = OptimizationDataLoader(rt)
+    with pytest.raises(ValueError, match="empty tuple"):
+        loader._format_data_as_tuples([()])
+    # The lenient 3+ tuple normalization is unchanged (intentional, test-locked behavior).
+    assert loader._format_data_as_tuples([(1, 2), (3, 4, 5), 6]) == [(1, 2), (3, None), (6, None)]
+
+
 # ==================== MetricFactory Tests ====================
 
 

@@ -27,6 +27,7 @@ from kedi import (
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
+from kedi.errors import KediExecutionError
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
@@ -243,6 +244,13 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
     kwargs_a = {"value": AddressReprValue("same")}
     kwargs_b = {"value": AddressReprValue("same")}
 
+    identity: dict[str, Any] = {
+        "adapter_name": "pydantic",
+        "model": None,
+        "adapter_kwargs": {},
+        "profile": AgentProfile.empty(),
+        "tool_names": (),
+    }
     assert repr(kwargs_a["value"]) != repr(kwargs_b["value"])
     assert api_module._response_cache_key(
         kind="query",
@@ -253,6 +261,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         kwargs=kwargs_a,
         config_env={},
         env={},
+        **identity,
     ) == api_module._response_cache_key(
         kind="query",
         inner=sample,
@@ -262,7 +271,25 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         kwargs=kwargs_b,
         config_env={},
         env={},
+        **identity,
     )
+
+
+def test_query_response_cache_splits_by_model(adapter: ApiAdapter) -> None:
+    # B1: a cached query must not return a stale answer when the resolved model changes.
+    @query(cache=True)
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    assert summarize("Kedi") == "short summary"
+    with context(model="other:model"):
+        assert summarize("Kedi") == "short summary"
+    # Different resolved model → a fresh model call, not a stale cache hit.
+    assert len(adapter.templates) == 2
+    assert adapter.models == ["configured:model", "other:model"]
 
 
 def test_query_response_cache_ignores_repr_memory_address(adapter: ApiAdapter) -> None:
@@ -307,6 +334,53 @@ def test_query_env_overrides_bound_runtime_globals(adapter: ApiAdapter) -> None:
 
     assert result == Person(name="John", age=30)
     assert adapter.schemas[0] == {"output": Person}
+
+
+def test_query_cache_returns_isolated_copy(adapter: ApiAdapter) -> None:
+    # B2: cached results are mutable (e.g. a pydantic model); a caller mutating a returned object
+    # must not corrupt the shared cache entry for later identical calls.
+    @query(cache=True)
+    def extract(*, template: str, output_type: type[T]) -> T:
+        """kedi
+        >> Extract [output: `output_type`] from <template>.
+        = `output`
+        """
+
+    first = extract(template="John is 30.", output_type=Person)
+    assert first == Person(name="John", age=30)
+    first.name = "MUTATED"  # corrupt the returned object in place
+
+    second = extract(template="John is 30.", output_type=Person)  # identical args → cache hit
+    assert len(adapter.templates) == 1  # genuinely a cache hit, not a re-run
+    assert second == Person(name="John", age=30)  # not corrupted by the earlier mutation
+    assert second is not first
+
+
+def test_isolate_cached_falls_back_for_non_copyable() -> None:
+    # Review #1: deep-copying a non-copyable cached result must degrade to by-reference, not crash a
+    # previously-working cache=True call. Copyable results are still isolated (a distinct copy).
+    import threading
+
+    lock = threading.Lock()  # not deep-copyable
+    assert api_module._isolate_cached(lock) is lock
+
+    data = {"a": [1, 2]}
+    copied = api_module._isolate_cached(data)
+    assert copied == data and copied is not data
+
+
+def test_query_argument_name_shadowing_tool_is_rejected(adapter: ApiAdapter) -> None:
+    # B5: a query parameter whose name collides with a registered tool would overwrite the tool
+    # callable in runtime globals, making the tool uncallable. Reject the collision loudly.
+    @query(tools=[lookup])
+    def ask(*, lookup: str) -> str:
+        """kedi
+        >> Answer the question [answer].
+        = <answer>
+        """
+
+    with pytest.raises(KediExecutionError, match="shadow registered tool"):
+        ask(lookup="value")
 
 
 def test_kedi_type_transforms_bare_class_and_auto_injects(adapter: ApiAdapter) -> None:
@@ -401,6 +475,61 @@ def test_async_query_decorates_async_functions(adapter: ApiAdapter) -> None:
         """
 
     assert asyncio.run(answer()) == "ok"
+
+
+def test_async_query_yields_event_loop_while_blocked() -> None:
+    # B4: the async query must offload blocking model I/O to a thread so the event loop keeps
+    # serving other coroutines instead of freezing for the duration of the model call.
+    import threading
+
+    api_module._PARSE_CACHE.clear()
+    api_module._RESPONSE_CACHE.clear()
+    in_produce = threading.Event()
+    release = threading.Event()
+
+    class BlockingAdapter(ApiAdapter):
+        def produce_sync(self, *, template: str, output_schema: Any = None, **kwargs: Any) -> Any:
+            in_produce.set()
+            release.wait(2)
+            return super().produce_sync(template=template, output_schema=output_schema, **kwargs)
+
+    configure(model="m", adapter=BlockingAdapter())
+
+    @query
+    async def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    async def scenario() -> str:
+        task = asyncio.create_task(answer())
+        for _ in range(2000):
+            if in_produce.is_set():
+                break
+            await asyncio.sleep(0.001)
+        # The worker is parked inside produce_sync; if the loop had been blocked by run(), the
+        # task would already be finished by the time control returns here.
+        assert in_produce.is_set()
+        assert not task.done()
+        release.set()
+        return await task
+
+    assert asyncio.run(scenario()) == "ok"
+
+
+def test_query_runs_under_parallel_context(adapter: ApiAdapter) -> None:
+    # kedi.parallel() opts the query into the threaded engine; a single-template query still
+    # returns its concrete result (drained + forced at the API boundary).
+    @kedi.query
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    with kedi.parallel(max_workers=2):
+        assert answer() == "ok"
 
 
 def test_configure_is_available_on_namespace() -> None:

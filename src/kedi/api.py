@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import builtins
+import copy
 import dataclasses
 import functools
 import hashlib
@@ -47,6 +49,8 @@ class _APIConfig:
     profile: AgentProfile = field(default_factory=AgentProfile.empty)
     tools: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
     env: Mapping[str, Any] = field(default_factory=dict)
+    parallel: bool = False
+    max_workers: int = 8
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,32 @@ def _stable_repr(value: Any) -> str:
     return _MEMORY_ADDRESS_RE.sub(" at 0x<addr>", repr(value))
 
 
+def _isolate_cached(value: Any) -> Any:
+    """Deep-copy a cached value so callers can't mutate the shared entry.
+
+    Falls back to the value itself when it isn't deep-copyable (e.g. it wraps a file handle, lock,
+    or DB connection) — that restores stable's by-reference behavior for those exotic results
+    instead of turning a previously-working ``cache=True`` call into a crash. JSON / pydantic /
+    dict / list results copy cleanly and stay fully isolated.
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 - non-copyable result: degrade to by-reference, don't crash
+        return value
+
+
+def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
+    """Everything about a resolved profile that changes the model's answer."""
+    return (
+        profile.model,
+        profile.effort,
+        profile.system,
+        tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),
+        tuple(profile.tools),
+        tuple(_stable_repr(server) for server in profile.mcp_servers),
+    )
+
+
 def _response_cache_key(
     *,
     kind: str,
@@ -177,6 +207,11 @@ def _response_cache_key(
     kwargs: Mapping[str, Any],
     config_env: Mapping[str, Any],
     env: Mapping[str, Any],
+    adapter_name: str,
+    model: str | None,
+    adapter_kwargs: Mapping[str, Any],
+    profile: AgentProfile,
+    tool_names: Sequence[str],
 ) -> str:
     payload = (
         kind,
@@ -188,6 +223,13 @@ def _response_cache_key(
         tuple((key, _stable_repr(value)) for key, value in sorted(kwargs.items())),
         tuple((key, _stable_repr(value)) for key, value in sorted(config_env.items())),
         tuple((key, _stable_repr(value)) for key, value in sorted(env.items())),
+        # The resolved backend + profile + tools decide the answer; omitting them returns a stale
+        # cached response across kedi.context(model=...)/configure(...)/different system or tools.
+        adapter_name,
+        model,
+        tuple((key, _stable_repr(value)) for key, value in sorted(adapter_kwargs.items())),
+        _profile_identity(profile),
+        tuple(tool_names),
     )
     return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
 
@@ -248,6 +290,11 @@ def _decorate_kedi_program(
         active_source_hash = source_hash
         if reload_program is not None:
             active_program, active_source_hash = reload_program()
+        profile = config.profile.merge(profile_override)
+        tool_namespace = {
+            *config.tools,
+            *tool_map,
+        }  # single source for the cache key + shadow guard
         cache_key = _response_cache_key(
             kind=kind,
             inner=inner,
@@ -257,24 +304,45 @@ def _decorate_kedi_program(
             kwargs=kwargs,
             config_env=config.env,
             env=env,
+            adapter_name=config.adapter_name,
+            model=config.model,
+            adapter_kwargs=config.adapter_kwargs,
+            profile=profile,
+            tool_names=sorted(tool_namespace),
         )
         if cache and cache_key in _RESPONSE_CACHE:
-            return cast(R, _RESPONSE_CACHE[cache_key])
+            # Hand back a copy: the cache holds mutable results (dict/list/pydantic model) by value,
+            # so a caller mutating a returned object must not corrupt the shared cached entry.
+            return cast(R, _isolate_cached(_RESPONSE_CACHE[cache_key]))
 
         adapter = _build_adapter(config)
+        bound_globals = _bound_runtime_globals(inner, args, kwargs)
+        tool_collisions = tool_namespace & set(bound_globals)
+        if tool_collisions:
+            from .errors import KediExecutionError
+
+            raise KediExecutionError(
+                f"Kedi argument name(s) shadow registered tool(s): {sorted(tool_collisions)}. "
+                "Rename the parameter or the tool so the tool stays callable."
+            )
         runtime_globals = {
             **config.tools,
             **tool_map,
-            **_bound_runtime_globals(inner, args, kwargs),
+            **bound_globals,
             **_auto_type_env(inner),
             **config.env,
             **env,
         }
-        profile = config.profile.merge(profile_override)
+        engine = None
+        if config.parallel:
+            from .core import shared_thread_engine
+
+            engine = shared_thread_engine(max_workers=config.max_workers)
         runtime = compile_program(
             active_program,
             adapter=adapter,
             runtime_globals=runtime_globals,
+            engine=engine,
         )
         with block_agent_profile_scope(profile):
             if use_main:
@@ -285,14 +353,19 @@ def _decorate_kedi_program(
                     runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
                 )
         if cache:
-            _RESPONSE_CACHE[cache_key] = result
+            # Store a copy so the caller's later mutation of `result` can't reach back into the
+            # cache (and so every future hit is isolated via the copy on the hit path above).
+            _RESPONSE_CACHE[cache_key] = _isolate_cached(result)
         return result
 
     if _is_async_callable(inner):
 
         @functools.wraps(inner)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            return run(*args, **kwargs)
+            # run() does blocking model I/O; offload it to a worker thread so an async caller's
+            # event loop keeps serving other coroutines. to_thread copies the context, so the
+            # active kedi config/profile contextvars still reach run().
+            return await asyncio.to_thread(run, *args, **kwargs)
 
         return cast(Callable[P, R], async_wrapper)
 
@@ -338,9 +411,16 @@ def _build_config(
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     adapter_kwargs: Mapping[str, Any],
+    parallel: bool | None = None,
+    max_workers: int | None = None,
 ) -> _APIConfig:
     if load_env:
         dotenv.load_dotenv()
+
+    base_parallel = False if base is None else base.parallel
+    base_max_workers = 8 if base is None else base.max_workers
+    resolved_parallel = base_parallel if parallel is None else parallel
+    resolved_max_workers = base_max_workers if max_workers is None else max_workers
 
     if base is None:
         adapter_default: AdapterName | AgentAdapter[Any] | LazyAdapter = (
@@ -399,6 +479,8 @@ def _build_config(
         profile=profile,
         tools=tool_map,
         env=merged_env,
+        parallel=resolved_parallel,
+        max_workers=resolved_max_workers,
     )
 
 
@@ -418,9 +500,15 @@ def configure(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    parallel: bool | None = None,
+    max_workers: int | None = None,
     **adapter_kwargs: Any,
 ) -> None:
-    """Set the default Python API configuration for the current context."""
+    """Set the default Python API configuration for the current context.
+
+    ``parallel=True`` runs independent template calls concurrently (promise pipelining); it is
+    opt-in. ``max_workers`` bounds the shared worker pool.
+    """
     _config_var.set(
         _build_config(
             base=None,
@@ -434,6 +522,8 @@ def configure(
             env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
+            parallel=parallel,
+            max_workers=max_workers,
         )
     )
 
@@ -474,6 +564,8 @@ def context(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    parallel: bool | None = None,
+    max_workers: int | None = None,
     **adapter_kwargs: Any,
 ) -> _KediContext:
     return _KediContext(
@@ -489,8 +581,21 @@ def context(
             env=env,
             mcp_servers=mcp_servers,
             adapter_kwargs=adapter_kwargs,
+            parallel=parallel,
+            max_workers=max_workers,
         )
     )
+
+
+def parallel(*, max_workers: int = 8) -> _KediContext:
+    """Context manager enabling concurrent (pipelined) template execution within its scope.
+
+    Sugar for ``context(parallel=True, max_workers=...)``::
+
+        with kedi.parallel():
+            result = my_query(...)
+    """
+    return context(parallel=True, max_workers=max_workers)
 
 
 @overload
@@ -701,6 +806,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "parallel",
     "query",
     "reset_config",
     "tool",
