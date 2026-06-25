@@ -27,7 +27,6 @@ from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
-
 _SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
 
