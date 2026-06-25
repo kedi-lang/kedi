@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import os
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
@@ -49,6 +50,20 @@ def shared_thread_engine(max_workers: int = 8) -> Any:
             engine = ThreadEngine(max_workers=max_workers)
             _SHARED_PARALLEL_ENGINES[max_workers] = engine
         return engine
+
+
+@atexit.register
+def _shutdown_shared_engines() -> None:
+    """Shut down every cached parallel engine's thread pool at interpreter exit.
+
+    The cache holds one bounded pool per distinct worker count for the process lifetime; this
+    releases their worker threads on exit instead of leaning solely on interpreter teardown.
+    """
+    with _SHARED_PARALLEL_LOCK:
+        engines = list(_SHARED_PARALLEL_ENGINES.values())
+        _SHARED_PARALLEL_ENGINES.clear()
+    for engine in engines:
+        engine.shutdown()
 
 
 def _default_engine() -> Any:
@@ -266,9 +281,10 @@ class KediRuntime:
         if isinstance(expr, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
             callee = self._get_proc(expr.func_name)
+            # _invoke_procedure force-joins its result, so a cross-procedure call never yields a
+            # promise here. If one ever does, str() raising KediPromiseLeak is the correct loud
+            # failure — better than silently deferring an unsupported cross-proc dataflow.
             result = self._invoke_procedure(callee, evaluated_args)
-            if isinstance(result, KediPromise):  # pragma: no cover - dead until cross-proc defer
-                return result.map(str), None
             return str(result), None
         if isinstance(expr, OutputExpr):
             return f"[{expr.key}]", expr
@@ -514,7 +530,12 @@ class KediRuntime:
         # the spec here captures the compiled procedure fn for both registration AND invocation.
         from .agent_profile import current_block_agent_profile
 
-        captured_tool_specs = self._resolve_tool_specs(current_block_agent_profile(), adapter)
+        block_profile = current_block_agent_profile()
+        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        # Validate the profile override on the main thread too, so it raises synchronously at the
+        # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
+        # at drain (wrapped, differently typed) when _produce runs on a parallel worker.
+        self._assert_profile_override_supported(block_profile, adapter)
 
         def _produce() -> Dict[str, Any]:
             # Resolve any promise prompt parts (already complete by the time this job runs in the
@@ -524,27 +545,16 @@ class KediRuntime:
             question = base_q + "\n" + "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
-            from .agent_profile import (
-                AgentProfileOverrideUnsupported,
-                current_block_agent_profile,
-            )
+            from .agent_profile import current_block_agent_profile
 
+            # Support was already validated synchronously on the main thread
+            # (_assert_profile_override_supported); here we only enter the override scope.
             profile = current_block_agent_profile()
             override_ctx = nullcontext()
-            if isinstance(adapter, SupportsProfileOverride):
-                if profile.needs_adapter_override(adapter.default_model()):
-                    override_ctx = adapter.profile_override(profile)
-            elif (
-                profile.model is not None
-                or profile.effort is not None
-                or profile.mcp_servers
-                or profile.settings
+            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
+                adapter.default_model()
             ):
-                raise AgentProfileOverrideUnsupported(
-                    "Active adapter does not support agent profile override "
-                    f"(requested model={profile.model!r}, effort={profile.effort!r}, "
-                    f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
-                )
+                override_ctx = adapter.profile_override(profile)
 
             # Register the pre-resolved (scope-correct) tool specs inside the adapter's per-call
             # tool scope (ToolScope's ContextVar — isolated per worker by copy_context).
@@ -581,15 +591,25 @@ class KediRuntime:
                 )
             return out_map
 
-        # Snapshot the value-env by VALUE so the deferred worker sees the env as of schedule time;
-        # copy_context() snapshots only the contextvar binding, leaving the dict shared by
-        # reference, which would let later main-thread writes leak into an already-scheduled job.
+        # Sequential default: run inline on the main thread and return concrete values. This is the
+        # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
+        if not parallel:
+            result_map = _produce()  # raises on the main thread, wrapped by the trace frame
+            for key in required:
+                env[key] = result_map[key]
+            return {k: env[k] for k in required}
+
+        # Parallel path. Snapshot the value-env by VALUE so the deferred worker sees the env as of
+        # schedule time; copy_context() snapshots only the contextvar binding, leaving the dict
+        # shared by reference, which would let later main-thread writes leak into a scheduled job.
+        # Every per-call adapter scope (tool/profile ContextVars) is isolated per worker by the
+        # copy_context() snapshot, so even tool-using templates pipeline safely.
         env_snapshot = dict(env)
 
         def _job() -> Dict[str, Any]:
-            # In the parallel engine the job runs on a worker AFTER the originating template's
-            # trace frame has exited on the main thread; attribute failures to the captured
-            # frames (carried via copy_context) so errors still point at the template line.
+            # The job runs on a worker AFTER the originating template's trace frame has exited on the
+            # main thread; attribute failures to the captured frames (carried via copy_context) so
+            # errors still point at the template line.
             token = self._current_env.set(env_snapshot)
             try:
                 return _produce()
@@ -603,22 +623,38 @@ class KediRuntime:
             finally:
                 self._current_env.reset(token)
 
-        # Every per-call adapter scope (tool registration via ToolScope's ContextVar, profile
-        # override via the adapter's profile-stack ContextVar) is isolated per worker by the
-        # copy_context() snapshot, so even tool-using templates pipeline safely. Only the
-        # sequential engine runs inline.
-        if not parallel:
-            result_map = _produce()  # raises on the main thread, wrapped by the trace frame
-            for key in required:
-                env[key] = result_map[key]
-            return {k: env[k] for k in required}
-
         future = self._engine.schedule(deps, _job)
         self._register_outstanding(future)
         views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
         for key in required:
             env[key] = views[key]
         return dict(views)
+
+    @staticmethod
+    def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
+        """Raise if the adapter can't honor a requested model/effort/mcp/settings override.
+
+        Called on the main thread at the template call site so the error surfaces synchronously in
+        both modes — symmetric with the tool guard in :meth:`_resolve_tool_specs`. ``_produce`` then
+        only has to enter the override scope, never re-validate (which would defer the error to a
+        worker in parallel mode).
+        """
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile import AgentProfileOverrideUnsupported
+
+        if isinstance(adapter, SupportsProfileOverride):
+            return
+        if (
+            profile.model is not None
+            or profile.effort is not None
+            or profile.mcp_servers
+            or profile.settings
+        ):
+            raise AgentProfileOverrideUnsupported(
+                "Active adapter does not support agent profile override "
+                f"(requested model={profile.model!r}, effort={profile.effort!r}, "
+                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
+            )
 
     def _resolve_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve a template's tools to fully-bound ToolSpecs (on the main thread, in scope).

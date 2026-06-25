@@ -24,7 +24,7 @@ from kedi.engine import (
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.compiler.environment import assert_kedienv_routing
-from kedi.promise import KediPromise, KediPromiseLeak, lazy_join
+from kedi.promise import KediPromise, KediPromiseLeak
 from tests.mock_adapter import MockAdapter
 
 
@@ -107,21 +107,18 @@ def test_map_propagates_source_and_fn_errors() -> None:
         _promise().map(bad).resolve()
 
 
-def test_lazy_join_deferred_combine_error() -> None:
-    fut: Future = Future()
-    p = KediPromise(fut, "x")
-
-    def combine(_parts: list[object]) -> str:
-        raise ValueError("join-error")
-
-    joined = lazy_join(["a", p], combine)
-    assert isinstance(joined, KediPromise)
-    fut.set_result({"x": "b"})
-    with pytest.raises(ValueError):
-        joined.resolve()
-
-
 # --- Engine edge paths ----------------------------------------------------------------------
+
+
+def test_shutdown_shared_engines_clears_cache_and_stops_pools() -> None:
+    # The atexit handler also runs at interpreter exit (when coverage is no longer recording), so
+    # exercise it directly: it must clear the per-worker-count cache and shut each pool down.
+    eng = core.shared_thread_engine(max_workers=3)
+    assert core._SHARED_PARALLEL_ENGINES  # at least the one just created is cached
+    core._shutdown_shared_engines()
+    assert core._SHARED_PARALLEL_ENGINES == {}
+    with pytest.raises(RuntimeError):
+        eng._pool.submit(lambda: None)  # pool was shut down → rejects new work
 
 
 def test_sequential_engine_exception_and_shutdown() -> None:

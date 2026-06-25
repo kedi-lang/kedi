@@ -16,7 +16,7 @@ import pytest
 
 from kedi.engine import SequentialEngine, ThreadEngine
 from kedi.lang import compile_program, parse_program
-from kedi.promise import KediPromise, KediPromiseLeak, force, lazy_join, when_all
+from kedi.promise import KediPromise, KediPromiseLeak, force, when_all
 from tests.mock_adapter import MockAdapter
 
 
@@ -110,16 +110,6 @@ def test_when_all_empty_fires_immediately() -> None:
     calls = []
     when_all([], lambda: calls.append(1))
     assert calls == [1]
-
-
-def test_lazy_join_concrete_and_deferred() -> None:
-    assert lazy_join(["a", "b"], lambda parts: "".join(parts)) == "ab"
-    fut: Future = Future()
-    p = KediPromise(fut, "x")
-    joined = lazy_join(["a", p], lambda parts: "".join(parts))
-    assert isinstance(joined, KediPromise)
-    fut.set_result({"x": "b"})
-    assert joined.resolve() == "ab"
 
 
 # --------------------------------------------------------------------------------------------

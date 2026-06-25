@@ -341,7 +341,14 @@ class DefaultExecutor:
     ) -> Any:
         """Run ``code`` as a block. Existing Kedi vars are exposed as ``global`` so reads route
         through ``KediEnv.__getitem__`` (lazy promise resolution) and mutations sync back; new
-        Python names stay local and don't leak."""
+        Python names stay local and don't leak.
+
+        Note: exposing Kedi vars as module globals (rather than the prior ``nonlocal`` + params
+        wrapper) is a deliberate, cross-cutting scoping choice that applies in BOTH sequential and
+        parallel mode — a nested ``def``/``lambda`` rebinding a Kedi var must use ``global x`` (not
+        ``nonlocal x``), and reflection must read the bare name / ``globals()`` (not ``locals()``).
+        Documented for users in docs/KEDI_DSL.md ("Kedi variables are Python globals"). Recommended
+        CI hardening: a Python 3.11/3.12 matrix to guard the interpreter routing this depends on."""
         env = self._build_python_env(rt, local_env)
         names = list(local_env.keys())
         # A function wrapper is needed so ``return`` is legal; declaring the Kedi vars ``global``

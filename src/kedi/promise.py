@@ -26,7 +26,6 @@ __all__ = [
     "KediPromiseLeak",
     "force",
     "when_all",
-    "lazy_join",
 ]
 
 # Slot names that must never be treated as value-use by ``__getattr__``.
@@ -254,31 +253,3 @@ def when_all(deps: Sequence[Future], then: Callable[[], Any]) -> None:
 
     for dep in pending:
         dep.add_done_callback(_cb)
-
-
-def lazy_join(
-    parts: Sequence[Any],
-    combine: Callable[[list[Any]], Any],
-) -> Any:
-    """Combine ``parts`` (a mix of concrete values and promises) via ``combine``.
-
-    If no part is a promise, ``combine`` runs immediately and the concrete result is returned.
-    Otherwise a derived promise is returned whose value is ``combine([resolved parts...])``,
-    computed after the promise parts resolve. ``combine`` must encapsulate the exact join/strip
-    logic of the caller so deferred and immediate paths produce byte-identical output.
-    """
-    promise_futures = [p._future for p in parts if isinstance(p, KediPromise)]
-    if not promise_futures:
-        return combine(list(parts))
-
-    derived: Future = Future()
-
-    def _build() -> None:
-        try:
-            resolved = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
-            derived.set_result(combine(resolved))  # bare value; resolved via key=None
-        except BaseException as exc:  # noqa: BLE001 - propagate to the derived promise
-            derived.set_exception(exc)
-
-    when_all(promise_futures, _build)
-    return KediPromise(derived, None)

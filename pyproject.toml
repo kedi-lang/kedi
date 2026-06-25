@@ -9,7 +9,7 @@ description = "Kedi Language"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "groq", 
+    "groq",
     "dspy",
     "click",
     "pytest>=8.2",
