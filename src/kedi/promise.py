@@ -18,7 +18,7 @@ loudly instead of silently serializing or producing a wrong result.
 from __future__ import annotations
 
 import threading
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from typing import Any, Callable, NoReturn, Sequence
 
 __all__ = [
@@ -87,7 +87,13 @@ class KediPromise:
         key = self._key
 
         def _cb(f: Future) -> None:
-            exc = f.exception()
+            try:
+                exc = f.exception()
+            except CancelledError as cancelled:
+                # A cancelled source raises from .exception(); settle the derived promise instead
+                # of letting the callback raise and leave it forever pending.
+                derived.set_exception(cancelled)
+                return
             if exc is not None:
                 derived.set_exception(exc)
                 return

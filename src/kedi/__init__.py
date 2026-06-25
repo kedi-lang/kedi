@@ -14,6 +14,7 @@ from .api import (
 )
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
+from .promise import KediPromise, KediPromiseLeak, force
 from .executors.debug import (
     ExecutorDebugEvent,
     ExecutorDebugExporter,
@@ -35,6 +36,9 @@ __all__ = [
     "tool",
     "type",
     "KediRuntime",
+    "force",
+    "KediPromise",
+    "KediPromiseLeak",
     "Executor",
     "DefaultExecutor",
     "ExecutorDebugEvent",

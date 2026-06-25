@@ -179,7 +179,21 @@ def test_retry_after_of_variants() -> None:
 
 @pytest.mark.parametrize(
     "value,parallel",
-    [(None, False), ("0", False), ("-1", False), ("1", True), ("4", True), ("notint", True)],
+    [
+        (None, False),
+        ("", False),
+        ("0", False),
+        ("-1", False),
+        ("false", False),
+        ("FALSE", False),
+        ("no", False),
+        ("off", False),
+        ("1", True),
+        ("4", True),
+        ("true", True),
+        ("YES", True),
+        ("on", True),
+    ],
 )
 def test_default_engine_selection(monkeypatch: pytest.MonkeyPatch, value, parallel) -> None:
     if value is None:
@@ -188,6 +202,14 @@ def test_default_engine_selection(monkeypatch: pytest.MonkeyPatch, value, parall
         monkeypatch.setenv("KEDI_PARALLEL", value)
     eng = core._default_engine()
     assert bool(getattr(eng, "parallel", False)) is parallel
+
+
+@pytest.mark.parametrize("value", ["notint", "maybe", "2x", "true!"])
+def test_default_engine_rejects_garbage(monkeypatch: pytest.MonkeyPatch, value) -> None:
+    # A1: an unrecognized KEDI_PARALLEL value must raise loudly, never silently flip parallel on.
+    monkeypatch.setenv("KEDI_PARALLEL", value)
+    with pytest.raises(RuntimeError, match="Invalid KEDI_PARALLEL"):
+        core._default_engine()
 
 
 def test_shared_thread_engine_and_self_check() -> None:

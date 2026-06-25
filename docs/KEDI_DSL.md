@@ -368,6 +368,26 @@ Rules:
 - Variables in scope are injected, and reassignments to those **existing** Kedi variables reflect back. New names created inside the block stay local to the block and do **not** leak into Kedi scope — assign to an existing Kedi variable (or use a value-returning block) to surface a result.
 - The code is dedented relative to its indentation level before execution
 
+#### Kedi variables are Python *globals*
+
+Inside a Python block, Kedi variables are exposed as **module globals**, not locals. This is invisible most of the time — a bare `x` reads the Kedi variable `x` exactly as you'd expect — but it matters in two specific cases:
+
+- **Reflection.** Read names dynamically with the bare name or `globals()["x"]`, **not** `locals()`. A Kedi variable is not a local of the block, so `locals().get("x")` will not find it.
+- **Nested functions and comprehensions.** A `def`/`lambda` nested inside a block that needs to *rebind* a Kedi variable must declare `global x`, **not** `nonlocal x` — there is no enclosing function scope to close over.
+
+````kedi
+@counter():
+  [n: int] = `0`
+  ```
+  def bump():
+      global n        # ✅ rebinds the Kedi variable; `nonlocal n` would be a SyntaxError
+      n = n + 1
+  bump()
+  bump()
+  ```
+  = <`str(n)`>        # "2"
+````
+
 ### Value-Returning Python Blocks
 
 ````kedi
@@ -535,6 +555,34 @@ Notes:
 - Inside `<...>` substitutions and `[...]` outputs, use the same `\` escapes for literal delimiters.
 - A lone `\` before a non-escapable character is an error.
 - **Whitespace preservation**: Regular whitespace (spaces) at the beginning and end of template strings are trimmed, but escaped whitespace characters (`\t`, `\n`, and `\s`) are preserved even at the boundaries. For example, `= \tTab at start\n` will preserve the leading tab and trailing newline.
+
+## Concurrency and Non-Blocking Templates
+
+By default Kedi runs **sequentially**: every template (`>>`) call blocks until the model responds, exactly as before. Concurrency is **opt-in** and requires **no syntax changes** — the same program runs faster when you enable it.
+
+### Enabling parallel execution
+
+Opt in with any one of:
+
+- `KEDI_PARALLEL=1` (environment variable) — `1/true/yes/on` enable it, `0/false/no/off` (or unset) keep sequential, a positive integer sets the worker count. Any other value is rejected loudly rather than silently flipping a mode.
+- `kedi.parallel(max_workers=N)` / `kedi.configure(parallel=True)` in the Python API.
+
+When parallel mode is on, independent template calls run concurrently and dependency chains pipeline automatically: in `A → B` and `C → D`, both chains run at once and each `B`/`D` starts the instant its input is ready. There is no new operator — the interpreter discovers the dataflow from how outputs feed into later inputs.
+
+### How it works (and what you can observe)
+
+Each template output becomes an opaque **promise** until its value is actually needed. The interpreter threads promises through the environment and resolves them lazily — when a Python block reads the value, or at end-of-run. You normally never see a promise.
+
+- **Promises are loud, never silent.** If an unresolved promise ever reaches a value context unexpectedly (it is stringified, indexed, compared, …), it raises `KediPromiseLeak` rather than producing a wrong result. This indicates an interpreter bug, not user error.
+- **Advanced: passing promises around.** Reading a Kedi variable by **bare name** (or `globals()["x"]`) inside a Python block resolves the promise to its concrete value. The non-resolving dict APIs — `globals().get("x")`, `.items()`, `.values()`, `dict(globals())` — intentionally return the **raw promise** so you can forward a still-pending value without forcing it. To collapse a raw promise to its value yourself, call `kedi.force(x)` (a no-op on non-promises). This laziness is deliberate; resolving on every dict access would defeat pipelining.
+
+### Things to know
+
+- **Sequential and parallel results are identical.** The value-environment is snapshotted by value when a template is scheduled, so a later write on the main thread can't change what an already-scheduled job sees. If you ever observe a difference, report it — it's a bug, not a tuning knob.
+- **Failures are never swallowed.** Even unconsumed templates run, and any failure surfaces at end-of-run (the first error is raised; additional concurrent failures are logged). A procedure that raises still drains its scheduled jobs before the error propagates.
+- **Adapters must be thread-safe.** In parallel mode an adapter's `produce_sync` is called concurrently across worker threads. A custom adapter must be safe under concurrent calls (or serialize internally). The built-in adapters already are.
+- **`max_workers` is process-global per size.** The thread pool is shared across runs and cached by worker count; the first `parallel(max_workers=N)` for a given `N` creates that pool and subsequent requests for the same `N` reuse it.
+- **Adaptive job manager (opt-in, advanced).** `JobManagerEngine` layers AIMD concurrency, transient-error retry with backoff + jitter, and a circuit breaker on top of the thread engine for real rate-limited backends. It is not wired through the public `parallel()` surface yet — construct it explicitly via `compile_program(engine=...)` if you need it.
 
 ## Testing and Evaluation
 

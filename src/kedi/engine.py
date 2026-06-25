@@ -73,12 +73,32 @@ class SequentialEngine(Engine):
         return None
 
 
+_ROUTING_CHECKED = False
+
+
+def _settle(fut: Future, job: Job) -> None:
+    """Run ``job`` and mirror its result/exception onto ``fut``."""
+    try:
+        fut.set_result(job())
+    except BaseException as exc:  # noqa: BLE001
+        fut.set_exception(exc)
+
+
 class ThreadEngine(Engine):
     """Run produce jobs concurrently on a bounded pool, gated on their dependency Futures."""
 
     parallel = True
 
     def __init__(self, max_workers: int = 8) -> None:
+        global _ROUTING_CHECKED
+        if not _ROUTING_CHECKED:
+            # Refuse parallel mode loudly if lazy promise resolution can't work on this interpreter.
+            # Runs once for ANY parallel engine — including ones constructed directly or passed via
+            # compile_program(engine=...) — not just shared_thread_engine().
+            from .lang.compiler.environment import assert_kedienv_routing
+
+            assert_kedienv_routing()
+            _ROUTING_CHECKED = True
         self._pool = ThreadPoolExecutor(
             max_workers=max(1, max_workers), thread_name_prefix="kedi-llm"
         )
@@ -88,21 +108,22 @@ class ThreadEngine(Engine):
         return getattr(self._local, "on_worker", False)
 
     def schedule(self, deps: Sequence[Future], job: Job) -> Future:
-        # Re-entrant (a tool on a worker issued this template): run inline so we never wait on a
-        # pool slot from within a pool worker (which would risk starvation/deadlock). Deps are
-        # already resolved on this path, so inline execution is correct.
+        dep_list = list(deps)
+        result: Future = Future()
+
+        # Re-entrant (a tool on a worker issued this template). Run inline ONLY when every dep is
+        # already resolved; otherwise schedule it as a continuation so we neither run before deps
+        # are ready nor block this worker waiting on a pool Future (which would risk deadlock).
         if self._on_worker():
-            fut: Future = Future()
-            try:
-                fut.set_result(job())
-            except BaseException as exc:  # noqa: BLE001
-                fut.set_exception(exc)
-            return fut
+            if all(d.done() for d in dep_list):
+                _settle(result, job)
+            else:
+                when_all(dep_list, lambda: _settle(result, job))
+            return result
 
         # Capture the submitting context NOW (carries _current_env, _trace_stack, agent profile,
         # dspy.context, tool scope) so the worker runs with the right contextvars.
         ctx = contextvars.copy_context()
-        result: Future = Future()
 
         def _run() -> None:
             prev = getattr(self._local, "on_worker", False)
@@ -114,9 +135,15 @@ class ThreadEngine(Engine):
             finally:
                 self._local.on_worker = prev
 
+        def _submit() -> None:
+            try:
+                self._pool.submit(_run)
+            except BaseException as exc:  # noqa: BLE001 - a shut-down pool surfaces, never hangs
+                result.set_exception(exc)
+
         # Submit to the pool only once every dependency has completed — a continuation, never a
         # blocking wait inside a worker.
-        when_all(list(deps), lambda: self._pool.submit(_run))
+        when_all(dep_list, _submit)
         return result
 
     def shutdown(self) -> None:
@@ -164,9 +191,13 @@ class RetryPolicy:
         self.deadline = deadline
 
     def is_retryable(self, exc: BaseException) -> bool:
-        # Our own validation / unsupported-feature errors are terminal — never retry them.
         from .errors import KediExecutionError
 
+        # Core wraps provider errors in KediExecutionError before the engine sees them; classify on
+        # the ORIGINAL provider exception (kept on `.original`) so a 429/timeout still retries.
+        if isinstance(exc, KediExecutionError) and isinstance(exc.original, BaseException):
+            exc = exc.original
+        # Our own validation / unsupported-feature errors are terminal — never retry them.
         if isinstance(exc, (KediExecutionError, ValueError, TypeError, KeyError)):
             return False
         # Only the standard HTTP ``status_code`` is treated as a status (not ``.code``, which many

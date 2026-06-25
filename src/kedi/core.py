@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -26,46 +27,53 @@ from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
 
-_SHARED_PARALLEL_ENGINE: Any = None
+_SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
+
+_PARALLEL_TRUE = frozenset({"1", "true", "yes", "on"})
+_PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
 
 
 def shared_thread_engine(max_workers: int = 8) -> Any:
-    """Return a process-wide shared ``ThreadEngine`` (one bounded pool reused by all runtimes).
+    """Return a process-wide shared ``ThreadEngine``, one bounded pool per distinct worker count.
 
-    A fresh engine per runtime would spawn a thread pool per program run; a shared bounded pool
-    keeps concurrency capped and avoids resource exhaustion.
+    A fresh engine per runtime would spawn a thread pool per program run; sharing a pool per size
+    keeps concurrency capped while still honoring a different ``max_workers`` request (the engine's
+    own ``__init__`` runs the interpreter routing self-check).
     """
-    global _SHARED_PARALLEL_ENGINE
     with _SHARED_PARALLEL_LOCK:
-        if _SHARED_PARALLEL_ENGINE is None:
+        engine = _SHARED_PARALLEL_ENGINES.get(max_workers)
+        if engine is None:
             from .engine import ThreadEngine
-            from .lang.compiler.environment import assert_kedienv_routing
 
-            # Refuse parallel mode loudly if lazy promise resolution can't work on this interpreter.
-            assert_kedienv_routing()
-            _SHARED_PARALLEL_ENGINE = ThreadEngine(max_workers=max_workers)
-        return _SHARED_PARALLEL_ENGINE
+            engine = ThreadEngine(max_workers=max_workers)
+            _SHARED_PARALLEL_ENGINES[max_workers] = engine
+        return engine
 
 
 def _default_engine() -> Any:
-    """Default engine: sequential unless parallel is explicitly opted into via env.
+    """Default engine: sequential unless parallel is explicitly opted into via ``KEDI_PARALLEL``.
 
-    ``KEDI_PARALLEL=1`` (or a worker count, e.g. ``KEDI_PARALLEL=8``) selects the shared threaded
-    engine. Parallel is opt-in; sequential reproduces today's behavior exactly.
+    ``0/false/no/off`` (or unset) -> sequential; ``1/true/yes/on`` -> parallel (default workers);
+    a positive integer -> parallel with that many workers; anything else raises (no silent flip).
     """
     from .engine import SequentialEngine
 
-    raw = os.getenv("KEDI_PARALLEL")
-    if not raw or raw == "0":
+    raw = (os.getenv("KEDI_PARALLEL") or "").strip()
+    low = raw.lower()
+    if low in _PARALLEL_FALSE:
         return SequentialEngine()
+    if low in _PARALLEL_TRUE:
+        return shared_thread_engine(max_workers=8)
     try:
         workers = int(raw)
     except ValueError:
-        workers = 8
-    if workers <= 1 and raw not in ("1", "true", "True"):
+        raise RuntimeError(
+            f"Invalid KEDI_PARALLEL value {raw!r}: use 0/1/true/false/on/off or a worker count."
+        ) from None
+    if workers <= 0:
         return SequentialEngine()
-    return shared_thread_engine(max_workers=workers if workers > 1 else 8)
+    return shared_thread_engine(max_workers=workers)
 
 
 if TYPE_CHECKING:
@@ -300,6 +308,7 @@ class KediRuntime:
         depth = self._invoke_depth.get()
         depth_token = self._invoke_depth.set(depth + 1)
         token = self._current_env.set(local_env)
+        primary_exc: BaseException | None = None
         try:
             frame_ctx = (
                 self.trace_frame(
@@ -320,16 +329,32 @@ class KediRuntime:
                 if isinstance(result, (InputExpr, CallExpr))
                 else result
             )
+        except BaseException as exc:
+            primary_exc = exc
+            raise
         finally:
             self._current_env.reset(token)
             self._invoke_depth.reset(depth_token)
+            # Outermost invocation: drain scheduled template jobs — even on the EXCEPTIONAL exit —
+            # so unconsumed templates run, background jobs don't leak, and their errors surface.
+            # Nested calls (depth > 0, incl. worker threads) never drain. A drain failure becomes
+            # the error only if the body didn't already raise; otherwise it's logged, not masked.
+            if depth == 0:
+                self._drain_outermost(primary_exc)
 
-        # Outermost invocation: drain scheduled template jobs so even unconsumed templates run
-        # and any failure surfaces — whether entered via run_main, the query path, or a direct
-        # _invoke_procedure. Nested calls (depth > 0, including on worker threads) never drain.
-        if depth == 0:
-            self.drain()
         return final
+
+    def _drain_outermost(self, primary_exc: BaseException | None) -> None:
+        try:
+            self.drain()
+        except BaseException:
+            if primary_exc is None:
+                raise
+            import logging
+
+            logging.getLogger("kedi").error(
+                "Template failure during drain after a primary error", exc_info=True
+            )
 
     @contextmanager
     def trace_frame(self, frame: KediTraceFrame):
@@ -556,16 +581,27 @@ class KediRuntime:
                 )
             return out_map
 
+        # Snapshot the value-env by VALUE so the deferred worker sees the env as of schedule time;
+        # copy_context() snapshots only the contextvar binding, leaving the dict shared by
+        # reference, which would let later main-thread writes leak into an already-scheduled job.
+        env_snapshot = dict(env)
+
         def _job() -> Dict[str, Any]:
             # In the parallel engine the job runs on a worker AFTER the originating template's
             # trace frame has exited on the main thread; attribute failures to the captured
             # frames (carried via copy_context) so errors still point at the template line.
+            token = self._current_env.set(env_snapshot)
             try:
                 return _produce()
             except KediExecutionError:
                 raise
             except Exception as exc:  # noqa: BLE001
+                # build_execution_error keeps the provider error on `.original`, so the job-manager
+                # retry policy can still classify it (a 429/timeout stays retryable) even though the
+                # job surfaces the wrapped KediExecutionError. `from None` avoids re-chaining it.
                 raise self.build_execution_error(exc) from None
+            finally:
+                self._current_env.reset(token)
 
         # Every per-call adapter scope (tool registration via ToolScope's ContextVar, profile
         # override via the adapter's profile-stack ContextVar) is isolated per worker by the
@@ -640,7 +676,10 @@ class KediRuntime:
             if not pending:
                 break
             for fut in pending:
-                exc = fut.exception()  # blocks until the Future completes
+                try:
+                    exc = fut.exception()  # blocks until the Future completes
+                except CancelledError as cancelled:
+                    exc = cancelled  # a cancelled job surfaces as an error, not a hang
                 if exc is not None:
                     if first_exc is None:
                         first_exc = exc
