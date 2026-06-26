@@ -8,6 +8,7 @@ import importlib
 import keyword
 import linecache
 import re
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache, wraps
 from importlib import metadata as importlib_metadata
@@ -218,36 +219,51 @@ def dspy_code_act_tools(
     bridge_tools: list[Any] = []
     host_tools: dict[str, Callable[..., Any]] = {}
     skip_sources: set[str] = set()
+    used_names: set[str] = set()
     for tool in tools:
-        bridge_tool, source = dspy_code_act_bridge_tool(tool)
+        bridge_name = unique_python_identifier(str(tool.name), used_names)
+        bridge_tool, source = dspy_code_act_bridge_tool(
+            bridge_name,
+            _dspy_code_act_parameter_names(tool),
+        )
         bridge_tools.append(bridge_tool)
         host_tools[bridge_tool.name] = dspy_sync_tool_function(cast(Callable[..., Any], tool.func))
         skip_sources.add(source.strip())
     return bridge_tools, host_tools, skip_sources
 
 
-def dspy_code_act_bridge_tool(tool: Any) -> tuple[Any, str]:
-    name = _sanitize_python_identifier(str(tool.name))
-    source = dspy_code_act_bridge_source(name)
+def dspy_code_act_bridge_tool(
+    name: str, parameter_names: Sequence[str] | None = None
+) -> tuple[Any, str]:
+    source = dspy_code_act_bridge_source(name, parameter_names=parameter_names)
     func = compile_dspy_code_act_bridge(name, source)
-    return (
-        dspy.Tool(
-            func=func,
-            name=name,
-            desc=getattr(tool, "desc", None),
-            args=getattr(tool, "args", None),
-            arg_types=getattr(tool, "arg_types", None),
-        ),
-        source,
-    )
+    return (dspy.Tool(func=func, name=name), source)
 
 
-def dspy_code_act_bridge_source(name: str) -> str:
-    return (
-        f"def {name}(**kwargs):\n"
-        '    """Bridge stub; the host runtime provides this tool."""\n'
-        "    pass\n"
-    )
+def dspy_code_act_bridge_source(
+    name: str,
+    *,
+    parameter_names: Sequence[str] | None = None,
+) -> str:
+    signature = _dspy_code_act_bridge_signature(parameter_names)
+    return f'def {name}({signature}):\n    """Runtime tool bridge."""\n    pass\n'
+
+
+def _dspy_code_act_parameter_names(tool: Any) -> tuple[str, ...] | None:
+    args = getattr(tool, "args", None)
+    if not isinstance(args, Mapping):
+        return None
+    return tuple(str(name) for name in args)
+
+
+def _dspy_code_act_bridge_signature(parameter_names: Sequence[str] | None) -> str:
+    if parameter_names is None:
+        return "**kwargs"
+    if not parameter_names:
+        return ""
+    if all(sanitize_python_identifier(name) == name for name in parameter_names):
+        return "*, " + ", ".join(parameter_names)
+    return "**kwargs"
 
 
 def compile_dspy_code_act_bridge(name: str, source: str) -> Callable[..., Any]:
@@ -359,13 +375,24 @@ def _callable_description(fn: Callable[..., Any]) -> str | None:
     return inspect.getdoc(fn)
 
 
-def _sanitize_python_identifier(name: str) -> str:
+def sanitize_python_identifier(name: str) -> str:
     sanitized = _INVALID_IDENT_CHARS.sub("_", name)
     if sanitized and sanitized[0].isdigit():
         sanitized = f"_{sanitized}"
     if keyword.iskeyword(sanitized):
         sanitized = f"{sanitized}_"
     return sanitized or "_"
+
+
+def unique_python_identifier(name: str, used: set[str]) -> str:
+    base = sanitize_python_identifier(name)
+    candidate = base
+    index = 2
+    while candidate in used:
+        candidate = f"{base}_{index}"
+        index += 1
+    used.add(candidate)
+    return candidate
 
 
 def _get_or_compile_proc_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., Any]:

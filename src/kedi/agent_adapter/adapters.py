@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import keyword
-import re
 import textwrap
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
@@ -34,7 +32,12 @@ from ..model_normalization import (
 )
 from ..resolved_types import ResolvedKediType
 from .tool_override import ToolScope, ToolSpec
-from .utils import dspy_code_act, monty_compat_prompt_context
+from .utils import (
+    dspy_code_act,
+    monty_compat_prompt_context,
+    sanitize_python_identifier,
+    unique_python_identifier,
+)
 
 if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
@@ -499,8 +502,6 @@ _SEARCH_SCHEMA_ARGS_SCHEMA: dict[str, Any] = {
 
 _SEARCH_SCHEMA_DESCRIPTION = "Look up schemas for functions callable from run_code."
 
-_INVALID_IDENT_CHARS = re.compile(r"[^a-zA-Z0-9_]")
-
 
 class _LangChainCodeModeRunner:
     def __init__(self) -> None:
@@ -595,11 +596,7 @@ def _langchain_code_mode_tools(
 
 def _langchain_code_mode_functions(tools: Sequence[Any]) -> dict[str, Callable[..., Any]]:
     functions: dict[str, Callable[..., Any]] = {}
-    for tool in tools:
-        name = _langchain_tool_name(tool)
-        if name is None:
-            continue
-        function_name = _sanitize_python_identifier(name)
+    for function_name, tool in _langchain_code_mode_named_tools(tools):
         parameter_names = _langchain_tool_parameter_names(tool)
         functions[function_name] = _langchain_tool_callable(tool, function_name, parameter_names)
     return functions
@@ -607,11 +604,7 @@ def _langchain_code_mode_functions(tools: Sequence[Any]) -> dict[str, Callable[.
 
 def _langchain_code_mode_tool_definitions(tools: Sequence[Any]) -> dict[str, ToolDefinition]:
     tool_defs: dict[str, ToolDefinition] = {}
-    for tool in tools:
-        name = _langchain_tool_name(tool)
-        if name is None:
-            continue
-        function_name = _sanitize_python_identifier(name)
+    for function_name, tool in _langchain_code_mode_named_tools(tools):
         tool_defs[function_name] = ToolDefinition(
             name=function_name,
             description=_langchain_tool_description(tool),
@@ -619,6 +612,17 @@ def _langchain_code_mode_tool_definitions(tools: Sequence[Any]) -> dict[str, Too
             sequential=True,
         )
     return tool_defs
+
+
+def _langchain_code_mode_named_tools(tools: Sequence[Any]) -> list[tuple[str, Any]]:
+    named_tools: list[tuple[str, Any]] = []
+    used_names: set[str] = set()
+    for tool in tools:
+        name = _langchain_tool_name(tool)
+        if name is None:
+            continue
+        named_tools.append((unique_python_identifier(name, used_names), tool))
+    return named_tools
 
 
 def _langchain_tool_name(tool: Any) -> str | None:
@@ -781,12 +785,7 @@ def _langchain_code_mode_system_prompt(
 
 
 def _sanitize_python_identifier(name: str) -> str:
-    sanitized = _INVALID_IDENT_CHARS.sub("_", name)
-    if sanitized and sanitized[0].isdigit():
-        sanitized = f"_{sanitized}"
-    if keyword.iskeyword(sanitized):
-        sanitized = f"{sanitized}_"
-    return sanitized or "_"
+    return sanitize_python_identifier(name)
 
 
 def _monty_class() -> type[Any]:

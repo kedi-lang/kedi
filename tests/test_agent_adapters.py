@@ -27,6 +27,7 @@ from kedi.agent_adapter.utils import (
     monty_compat_capabilities,
     monty_compat_prompt_context,
     python_callable_tool_spec,
+    unique_python_identifier,
 )
 from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_profile import AgentProfile
@@ -621,6 +622,30 @@ def test_langchain_code_mode_helper_edges(monkeypatch: pytest.MonkeyPatch) -> No
     assert adapters_module._langchain_tool_name(object()) is None
     assert adapters_module._langchain_code_mode_functions([object()]) == {}
     assert adapters_module._langchain_code_mode_tool_definitions([object()]) == {}
+
+    first_colliding_tool = SimpleNamespace(
+        name="search-docs",
+        description=None,
+        args_schema={"type": "object", "properties": {}},
+        invoke=lambda _args: "first",
+    )
+    second_colliding_tool = SimpleNamespace(
+        name="search_docs",
+        description=None,
+        args_schema={"type": "object", "properties": {}},
+        invoke=lambda _args: "second",
+    )
+    colliding_functions = adapters_module._langchain_code_mode_functions(
+        [first_colliding_tool, second_colliding_tool]
+    )
+    colliding_tool_defs = adapters_module._langchain_code_mode_tool_definitions(
+        [first_colliding_tool, second_colliding_tool]
+    )
+    assert list(colliding_functions) == ["search_docs", "search_docs_2"]
+    assert list(colliding_tool_defs) == ["search_docs", "search_docs_2"]
+    assert colliding_functions["search_docs"]() == "first"
+    assert colliding_functions["search_docs_2"]() == "second"
+
     assert (
         adapters_module._langchain_tool_callable(
             plain_callable,
@@ -713,6 +738,9 @@ def test_langchain_code_mode_helper_edges(monkeypatch: pytest.MonkeyPatch) -> No
     assert adapters_module._sanitize_python_identifier("1-search") == "_1_search"
     assert adapters_module._sanitize_python_identifier("class") == "class_"
     assert adapters_module._sanitize_python_identifier("") == "_"
+    used_identifiers: set[str] = set()
+    assert unique_python_identifier("1-search", used_identifiers) == "_1_search"
+    assert unique_python_identifier("1 search", used_identifiers) == "_1_search_2"
     assert adapters_module._single_python_definition_name("def ok():\n    return 1") == "ok"
     assert adapters_module._single_python_definition_name("@") is None
     assert adapters_module._single_python_definition_name("x = 1\ny = 2") is None
@@ -1201,10 +1229,10 @@ def test_dspy_adapter_codemode_uses_codeact_with_bridge_tools(
     assert "## Monty Sandbox — Supported Python Features" in events["signature"].instructions
     bridge_tool = events["tools"][0]
     assert bridge_tool.name == "lookup"
-    assert bridge_tool.desc == "Lookup docs."
-    assert bridge_tool.args == {"query": {"type": "string"}}
+    assert bridge_tool.desc == "Runtime tool bridge."
+    assert bridge_tool.args == {"query": {}}
     bridge_source = inspect.getsource(bridge_tool.func)
-    assert "def lookup(**kwargs):" in bridge_source
+    assert "def lookup(*, query):" in bridge_source
     assert bridge_source.strip() in events["interpreter"].skip_sources
     assert events["interpreter"].tools["lookup"] is adapter.scoped_tools[0].func
 
@@ -1253,18 +1281,48 @@ def test_dspy_code_act_tool_helpers_sanitize_and_preserve_host_tools() -> None:
         arg_types={},
         func=lambda: "keyword",
     )
+    colliding_tool = SimpleNamespace(
+        name="1 search",
+        desc="Should not leak.",
+        args={"query": {"type": "string"}},
+        arg_types={"query": str},
+        func=lambda **kwargs: f"colliding:{kwargs['query']}",
+    )
+    unknown_args_tool = SimpleNamespace(
+        name="unknown-args",
+        desc=None,
+        args=None,
+        arg_types=None,
+        func=lambda **kwargs: kwargs["value"],
+    )
 
-    bridge_tools, host_tools, skip_sources = dspy_code_act_tools([tool, keyword_tool])
+    bridge_tools, host_tools, skip_sources = dspy_code_act_tools(
+        [tool, keyword_tool, colliding_tool, unknown_args_tool]
+    )
 
     assert bridge_tools[0].name == "_1_search"
     assert bridge_tools[1].name == "class_"
+    assert bridge_tools[2].name == "_1_search_2"
+    assert bridge_tools[3].name == "unknown_args"
+    assert bridge_tools[0].desc == "Runtime tool bridge."
+    assert bridge_tools[0].args == {"query": {}}
     assert host_tools["_1_search"](query="ok") == "ok"
     assert host_tools["class_"]() == "keyword"
+    assert host_tools["_1_search_2"](query="ok") == "colliding:ok"
+    assert host_tools["unknown_args"](value="ok") == "ok"
     assert skip_sources == {
-        dspy_code_act_bridge_source("_1_search").strip(),
-        dspy_code_act_bridge_source("class_").strip(),
+        dspy_code_act_bridge_source("_1_search", parameter_names=("query",)).strip(),
+        dspy_code_act_bridge_source("class_", parameter_names=()).strip(),
+        dspy_code_act_bridge_source("_1_search_2", parameter_names=("query",)).strip(),
+        dspy_code_act_bridge_source("unknown_args").strip(),
     }
-    assert "def _1_search(**kwargs):" in inspect.getsource(bridge_tools[0].func)
+    assert "def _1_search(*, query):" in inspect.getsource(bridge_tools[0].func)
+    assert "Should not leak." not in inspect.getsource(bridge_tools[2].func)
+    assert "def unknown(**kwargs):" in dspy_code_act_bridge_source("unknown")
+    assert "def invalid(**kwargs):" in dspy_code_act_bridge_source(
+        "invalid",
+        parameter_names=("bad-name",),
+    )
 
 
 def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
