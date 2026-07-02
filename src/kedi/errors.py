@@ -110,6 +110,10 @@ class KediKeyExecutionError(KediExecutionError, KeyError):
     pass
 
 
+class KediNameError(KediExecutionError, NameError):
+    pass
+
+
 def python_error_message(exc: BaseException, kind: str) -> str:
     prefix_map = {
         "inline": "Inline Python error",
@@ -163,7 +167,9 @@ def build_execution_error(
     else:
         message = str(exc) or type(exc).__name__
     error_cls: type[KediExecutionError] = KediExecutionError
-    if isinstance(exc, KeyError):
+    if isinstance(exc, NameError):
+        error_cls = KediNameError
+    elif isinstance(exc, KeyError):
         error_cls = KediKeyExecutionError
     elif isinstance(exc, TypeError):
         error_cls = KediTypeExecutionError

@@ -360,6 +360,25 @@ def test_internal_filesystem_remove_file_deletes_a_file(
     assert not victim.exists()
 
 
+def test_internal_sandbox_dependency_check_does_not_call_kedi_from_prelude(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name: None if name == "pydantic_monty" else find_spec(name),
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: sandbox\n\n= ok\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="requires package.*pydantic_monty"):
+        _compile_file(main)
+
+
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
     main = tmp_path / "main.kedi"
     main.write_text(

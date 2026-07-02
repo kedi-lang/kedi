@@ -249,7 +249,7 @@ class KediRuntime:
             if isinstance(layer, dict) and key in layer:
                 return layer[key]
 
-        raise KeyError(f"Value not found in environment: {key}")
+        raise NameError(f"Value not found in environment: {key}")
 
     @staticmethod
     def _validate_adapter_output(value: Any, expected_type: Any, *, explicit_type: bool) -> Any:

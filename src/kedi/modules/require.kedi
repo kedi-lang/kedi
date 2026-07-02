@@ -6,12 +6,14 @@ Module for managing package requirements.
 
 ```
 import importlib.util
+
+def package_is_installed(package_name: str) -> bool:
+    return importlib.util.find_spec(package_name) is not None
 ```
 
 @check_if_installed(package_name: str) -> bool:
     = ```
-    spec = importlib.util.find_spec(package_name)
-    return spec is not None
+    return package_is_installed(package_name)
     ```
 
 @require(
@@ -23,7 +25,7 @@ import importlib.util
     if isinstance(package_names, str):
         package_names = [package_names]
     for package_name in package_names:
-        if not check_if_installed(package_name):
+        if not package_is_installed(package_name):
             not_installed.append(package_name)
     if not_installed:
         raise ModuleNotInstalledError(package_names=not_installed, required_by=required_by)

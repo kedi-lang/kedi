@@ -20,6 +20,7 @@ from kedi.error_rendering import (
 from kedi.errors import (
     KediExecutionError,
     KediKeyExecutionError,
+    KediNameError,
     KediPythonOrigin,
     KediPythonTrace,
     KediTraceFrame,
@@ -60,6 +61,24 @@ def test_runtime_error_carries_kedi_frames(tmp_path: Path) -> None:
     assert err.python_traces[-1].python_lineno == 1
     assert err.python_traces[-1].span is not None
     assert err.python_traces[-1].span.source_path == str(srcp)
+
+
+def test_missing_template_name_is_rendered_as_name_error() -> None:
+    runtime = compile_program(
+        parse_program(
+            ">> <user>\n",
+            source_path="<playground>",
+        )
+    )
+
+    with pytest.raises(KediNameError) as info:
+        runtime.run_main()
+
+    rendered = str(info.value)
+    assert 'File "<playground>", line 1, in template block' in rendered
+    assert "Kedi error: NameError" in rendered
+    assert "Value not found in environment: user" in rendered
+    assert "KeyError" not in rendered
 
 
 def test_traceback_uses_source_map_path_when_span_has_no_path(tmp_path: Path) -> None:
@@ -308,6 +327,10 @@ def test_error_helpers_cover_message_subclasses_and_frame_labels() -> None:
     assert isinstance(
         build_execution_error(KeyError("missing"), frames=(), python_origins={}),
         KediKeyExecutionError,
+    )
+    assert isinstance(
+        build_execution_error(NameError("missing"), frames=(), python_origins={}),
+        KediNameError,
     )
     assert isinstance(
         build_execution_error(TypeError("bad type"), frames=(), python_origins={}),

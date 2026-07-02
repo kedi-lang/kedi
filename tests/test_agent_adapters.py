@@ -25,6 +25,7 @@ from kedi.agent_adapter.utils import (
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.lang import compile_program, parse_program
+from kedi.utils import AttrDict
 
 
 class DirectOutput(BaseModel):
@@ -78,7 +79,9 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         assert kwargs == {"metadata": "ok"}
         if output_type is DirectOutput:
             return SimpleNamespace(output=DirectOutput(value="direct"))
-        return SimpleNamespace(output=output_type(answer=3))
+        if output_type is int:
+            return SimpleNamespace(output=3)
+        return SimpleNamespace(output=output_type(answer=3, note="ok"))
 
     monkeypatch.setattr(adapter, "run", fake_run)
 
@@ -97,9 +100,19 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     direct_result = asyncio.run(
         adapter.produce("template", output_type=DirectOutput, metadata="ok")
     )
+    multi_result = asyncio.run(
+        adapter.produce(
+            "template",
+            output_schema={"answer": int, "note": str},
+            metadata="ok",
+        )
+    )
 
+    assert isinstance(schema_result, AttrDict)
     assert schema_result.answer == 3
     assert direct_result == DirectOutput(value="direct")
+    assert multi_result.answer == 3
+    assert multi_result.note == "ok"
     assert adapter.produce_sync(
         "template", output_type=DirectOutput, metadata="ok"
     ) == DirectOutput(value="direct")
@@ -667,6 +680,24 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
             },
         }
     ]
+
+
+def test_pydantic_adapter_uses_profile_system_as_default_instruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = PydanticAdapter("test")
+    captured: dict[str, Any] = {}
+
+    async def fake_run(*_: Any, **kwargs: Any) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(output="ok")
+
+    monkeypatch.setattr(adapter, "run", fake_run)
+    with adapter.profile_override(AgentProfile(system="Be exact.")):
+        result = asyncio.run(adapter.produce("template", output_type=str))
+
+    assert result == "ok"
+    assert captured["instructions"] == "Be exact."
 
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:

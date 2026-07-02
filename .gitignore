@@ -232,8 +232,11 @@ src/kedi/executors/experimental.py
 tmp
 /*.kedi
 kedi-docs/
-docs/*_PLAN.md
 
 # Optimizer
 kedi-optimizer
 features.md
+/kedicode
+/examples/webgpu_kedi_demo
+plans/
+playground/

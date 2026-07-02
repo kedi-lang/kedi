@@ -5,7 +5,16 @@ import inspect
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    Sequence,
+    cast,
+)
 
 import dspy
 from dspy import LM
@@ -29,6 +38,7 @@ from ..model_normalization import (
     normalize_for_pydantic_ai,
 )
 from ..resolved_types import ResolvedKediType
+from ..utils import AttrDict
 from .tool_override import ToolScope, ToolSpec
 
 if TYPE_CHECKING:
@@ -129,9 +139,16 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         if not output_schema and output_type is None:
             raise ValueError("Output spec must be provided.")
+        single_output_name: str | None = None
         if output_schema:
-            output_type = self.type_builder(output_schema)
+            if len(output_schema) == 1:
+                single_output_name, field_type = next(iter(output_schema.items()))
+                output_type = cast(Any, field_type)
+            else:
+                output_type = self.type_builder(output_schema)
         run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        if self.active_profile.system is not None and "instructions" not in run_kwargs:
+            run_kwargs["instructions"] = self.active_profile.system
         model_settings = pydantic_model_settings(self.active_profile.settings)
         if model_settings:
             existing_settings = run_kwargs.get("model_settings")
@@ -142,7 +159,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets = self._toolsets_for_run()
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
-        return (await self.run(template, **cast(Any, run_kwargs))).output
+        output = (await self.run(template, **cast(Any, run_kwargs))).output
+        if single_output_name is not None:
+            return cast(OutputDataT, AttrDict({single_output_name: output}))
+        return output
 
     def _toolsets_for_run(self) -> list[Any] | None:
         toolsets: list[Any] = []

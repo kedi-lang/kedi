@@ -282,7 +282,7 @@ def test_runtime_core_edge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     assert rt._get_proc("repeated")() == "second"
     with pytest.raises(RuntimeError, match="outside of a kedi procedure"):
         rt.m(["prompt"])
-    with pytest.raises(KeyError, match="Value not found"):
+    with pytest.raises(NameError, match="Value not found"):
         rt._evaluate_expression(i("missing"), {})
     assert rt._evaluate_expression(c("add_one", i("value")), {"value": 1}) == (
         "2",
@@ -290,7 +290,7 @@ def test_runtime_core_edge_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert rt._evaluate_expression(o("answer"), {})[0] == "[answer]"
     assert rt._evaluate_expression(cast(Any, object()), {})[1] is None
-    with pytest.raises(KeyError, match="Value not found"):
+    with pytest.raises(NameError, match="Value not found"):
         rt._evaluate_value(i("missing"), {})
     with pytest.raises(ValueError, match="Output expressions"):
         rt._evaluate_value(o("answer"), {})

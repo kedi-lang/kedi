@@ -185,7 +185,7 @@ RUNTIME_ERROR_CASES = [
     (
         # Unknown variable usage in a template line (triggered via rt.m)
         "@p():\n  >> using <missing> we need [x]\n  = done\n\n= <p()>\n",
-        KeyError,
+        NameError,
     ),
     # Note: Duplicate procedure definitions are now allowed (for cache merging); last wins
     (
