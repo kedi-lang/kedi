@@ -46,6 +46,11 @@ def test_webgpu_adapter_produces_schema_and_output_type() -> None:
     assert dynamic.answer == 42
     assert typed == NamedOutput(answer="done")
     assert bridge.payloads[0]["outputSchema"]["properties"]["answer"]["type"] == "integer"
+    output_prompt = bridge.payloads[0]["outputPrompt"]
+    assert "<answer>integer</answer>" in output_prompt
+    assert "properties" not in output_prompt
+    assert "required" not in output_prompt
+    assert "title" not in output_prompt
 
 
 def test_webgpu_adapter_validates_construction_and_output_contract() -> None:
@@ -384,9 +389,62 @@ def test_webgpu_adapter_formats_tool_catalog_as_xml() -> None:
     catalog = bridge.payloads[0]["toolsPrompt"]
     assert catalog.startswith("<Tools>\n  <Tool>")
     assert "<name>get_capital</name>" in catalog
-    assert "<country>" in catalog
-    assert "<item>country</item>" in catalog
+    assert "<arguments>" in catalog
+    assert "<country>string</country>" in catalog
+    assert "inputSchema" not in catalog
+    assert "properties" not in catalog
+    assert "required" not in catalog
+    assert "title" not in catalog
     assert catalog.endswith("</Tool>\n</Tools>")
+
+
+def test_webgpu_adapter_formats_schema_variants_as_xml() -> None:
+    output = webgpu_module._format_output_contract(
+        {
+            "type": "object",
+            "properties": {
+                "item": {"$ref": "#/$defs/Item"},
+                "status": {"enum": ["ready", "pending"]},
+                "ignored": "invalid",
+            },
+            "required": ["item"],
+        }
+    )
+    catalog = webgpu_module._format_tool_catalog(
+        (
+            {
+                "name": "inspect",
+                "description": "Inspect values",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "values": {"type": "array", "items": {"type": "integer"}},
+                        "filter": {
+                            "anyOf": [{"type": "string"}, {"type": "null"}],
+                        },
+                        "payload": {"type": "object", "title": "Payload"},
+                    },
+                    "required": ["values"],
+                },
+                "returnSchema": {
+                    "oneOf": [{"type": "boolean"}, {"type": "null"}],
+                },
+            },
+        )
+    )
+
+    assert "<item>Item</item>" in output
+    assert "<status>ready | pending</status>" in output
+    assert "<values>list[integer]</values>" in catalog
+    assert "<filter>string | null</filter>" in catalog
+    assert "<payload>Payload</payload>" in catalog
+    assert "<returns>boolean | null</returns>" in catalog
+    assert webgpu_module._format_output_contract({"type": ["string", "null"]}) == (
+        "<Output>\n  <type>string | null</type>\n</Output>"
+    )
+    assert webgpu_module._schema_type_name({"type": "array"}, {}) == "list[value]"
+    assert webgpu_module._schema_type_name({"type": "object"}, {}) == "object"
+    assert webgpu_module._schema_type_name({"title": "Untyped"}, {}) == "Untyped"
 
 
 @pytest.mark.parametrize(

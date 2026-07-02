@@ -165,6 +165,7 @@ class WebGPUAdapter:
                 "content": template,
             }
         ]
+        output_json_schema = output_adapter.json_schema()
 
         async with AsyncExitStack() as stack:
             tools = await self._runtime_tools(stack, profile)
@@ -178,7 +179,8 @@ class WebGPUAdapter:
                     "instructions": instructions or profile.system,
                     "effort": profile.effort,
                     "settings": settings,
-                    "outputSchema": output_adapter.json_schema(),
+                    "outputSchema": output_json_schema,
+                    "outputPrompt": _format_output_contract(output_json_schema),
                     "tools": tool_contracts,
                     "toolsPrompt": _format_tool_catalog(tool_contracts),
                     "requiredTools": sorted(required_tools - called_tools),
@@ -374,8 +376,96 @@ def _tool_contract(tool: BrowserTool) -> dict[str, Any]:
 def _format_tool_catalog(tools: Sequence[Mapping[str, Any]]) -> str:
     if not tools:
         return "<Tools />"
-    rendered = "\n".join(format_as_xml(tool, root_tag="Tool") for tool in tools)
+    rendered = "\n".join(
+        format_as_xml(_tool_prompt_contract(tool), root_tag="Tool") for tool in tools
+    )
     return f"<Tools>\n{indent(rendered, '  ')}\n</Tools>"
+
+
+def _format_output_contract(schema: Mapping[str, Any]) -> str:
+    return format_as_xml(_output_prompt_contract(schema), root_tag="Output")
+
+
+def _tool_prompt_contract(tool: Mapping[str, Any]) -> dict[str, Any]:
+    input_schema = tool.get("inputSchema")
+    schema = input_schema if isinstance(input_schema, Mapping) else {}
+    properties = schema.get("properties")
+    fields = properties if isinstance(properties, Mapping) else {}
+    required_value = schema.get("required")
+    required = set(required_value) if isinstance(required_value, list) else set()
+    arguments = {
+        name: _schema_type_name(field_schema, schema)
+        for name, field_schema in fields.items()
+        if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
+    }
+    optional_arguments = {
+        name: _schema_type_name(field_schema, schema)
+        for name, field_schema in fields.items()
+        if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
+    }
+    result: dict[str, Any] = {
+        "name": tool.get("name", ""),
+        "arguments": arguments,
+    }
+    if optional_arguments:
+        result["optional_arguments"] = optional_arguments
+    description = tool.get("description")
+    if isinstance(description, str) and description:
+        result["description"] = description
+    return_schema = tool.get("returnSchema")
+    if isinstance(return_schema, Mapping):
+        result["returns"] = _schema_type_name(return_schema, return_schema)
+    return result
+
+
+def _output_prompt_contract(schema: Mapping[str, Any]) -> dict[str, Any]:
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return {"type": _schema_type_name(schema, schema)}
+    required_value = schema.get("required")
+    required = set(required_value) if isinstance(required_value, list) else set()
+    fields = {
+        name: _schema_type_name(field_schema, schema)
+        for name, field_schema in properties.items()
+        if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
+    }
+    optional_fields = {
+        name: _schema_type_name(field_schema, schema)
+        for name, field_schema in properties.items()
+        if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
+    }
+    result: dict[str, Any] = {"fields": fields}
+    if optional_fields:
+        result["optional_fields"] = optional_fields
+    return result
+
+
+def _schema_type_name(schema: Mapping[str, Any], root_schema: Mapping[str, Any]) -> str:
+    reference = schema.get("$ref")
+    if isinstance(reference, str):
+        return reference.rsplit("/", 1)[-1]
+    enum = schema.get("enum")
+    if isinstance(enum, list):
+        return " | ".join(map(str, enum))
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if isinstance(variants, list):
+            return " | ".join(
+                _schema_type_name(item, root_schema)
+                for item in variants
+                if isinstance(item, Mapping)
+            )
+    schema_type = schema.get("type")
+    if schema_type == "array":
+        items = schema.get("items")
+        item_type = _schema_type_name(items, root_schema) if isinstance(items, Mapping) else "value"
+        return f"list[{item_type}]"
+    if schema_type == "object":
+        title = schema.get("title")
+        return str(title) if title else "object"
+    if isinstance(schema_type, list):
+        return " | ".join(map(str, schema_type))
+    return str(schema_type or schema.get("title") or "value")
 
 
 def _mentioned_tools(template: str, tools: Sequence[BrowserTool]) -> tuple[str, ...]:

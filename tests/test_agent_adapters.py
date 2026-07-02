@@ -25,7 +25,6 @@ from kedi.agent_adapter.utils import (
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.lang import compile_program, parse_program
-from kedi.utils import AttrDict
 
 
 class DirectOutput(BaseModel):
@@ -79,8 +78,10 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         assert kwargs == {"metadata": "ok"}
         if output_type is DirectOutput:
             return SimpleNamespace(output=DirectOutput(value="direct"))
-        if output_type is int:
-            return SimpleNamespace(output=3)
+        if set(output_type.model_fields) == {"summary"}:
+            return SimpleNamespace(output=output_type(summary="ok"))
+        if set(output_type.model_fields) == {"payload"}:
+            return SimpleNamespace(output=output_type(payload=DirectOutput(value="direct")))
         return SimpleNamespace(output=output_type(answer=3, note="ok"))
 
     monkeypatch.setattr(adapter, "run", fake_run)
@@ -100,6 +101,16 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     direct_result = asyncio.run(
         adapter.produce("template", output_type=DirectOutput, metadata="ok")
     )
+    string_result = asyncio.run(
+        adapter.produce("template", output_schema={"summary": str}, metadata="ok")
+    )
+    custom_schema_result = asyncio.run(
+        adapter.produce(
+            "template",
+            output_schema={"payload": DirectOutput},
+            metadata="ok",
+        )
+    )
     multi_result = asyncio.run(
         adapter.produce(
             "template",
@@ -108,9 +119,13 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         )
     )
 
-    assert isinstance(schema_result, AttrDict)
+    assert isinstance(schema_result, BaseModel)
     assert schema_result.answer == 3
     assert direct_result == DirectOutput(value="direct")
+    assert isinstance(string_result, BaseModel)
+    assert string_result.summary == "ok"
+    assert isinstance(custom_schema_result, BaseModel)
+    assert custom_schema_result.payload == DirectOutput(value="direct")
     assert multi_result.answer == 3
     assert multi_result.note == "ok"
     assert adapter.produce_sync(

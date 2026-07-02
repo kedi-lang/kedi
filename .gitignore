@@ -239,4 +239,4 @@ features.md
 /kedicode
 /examples/webgpu_kedi_demo
 plans/
-playground/
+*.py

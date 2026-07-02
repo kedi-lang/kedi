@@ -775,7 +775,12 @@ def test_bind_file_exposes_kedi_source_as_python_callable(
 
     assert summarize("Kedi") == "short summary"
     assert adapter.templates == [
-        "Fill in the fields: [summary].\nSummarize Kedi. Return [summary]."
+        "The template string must maintain grammatical and semantic integrity once the output "
+        "fields are substituted into their corresponding locations in the template after the "
+        "final construction.\n"
+        "Fields to be substituted into the template string for final construction: (summary).\n\n"
+        "The template string:\n"
+        "Summarize Kedi. Return [summary]."
     ]
 
 

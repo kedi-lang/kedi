@@ -11,7 +11,7 @@ import typing_extensions
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from ..promise import KediPromise, force
 from .debug import ExecutorDebugEvent, ExecutorDebugExporter
@@ -349,7 +349,36 @@ def _decode_type_descriptor(descriptor: Mapping[str, Any]) -> Any:
     if kind == "literal":
         values = tuple(_descriptor_list(descriptor, "values"))
         return cast(Any, typing.Literal)[values]
+    if kind == "pydantic_model":
+        return _decode_pydantic_model(descriptor)
     raise TypeError(f"Unsupported Pyodide type descriptor: {kind!r}")
+
+
+def _decode_pydantic_model(descriptor: Mapping[str, Any]) -> type[BaseModel]:
+    name = descriptor.get("name")
+    if not isinstance(name, str) or not name:
+        raise TypeError("Pyodide Pydantic model name must be a non-empty string")
+    fields: dict[str, tuple[Any, Any]] = {}
+    for item in _descriptor_list(descriptor, "fields"):
+        field = _require_mapping(item, "Pydantic model field")
+        field_name = field.get("name")
+        if not isinstance(field_name, str) or not field_name:
+            raise TypeError("Pyodide Pydantic field name must be a non-empty string")
+        annotation = _decode_type_descriptor(_descriptor_mapping(field, "annotation"))
+        required = field.get("required")
+        if not isinstance(required, bool):
+            raise TypeError("Pyodide Pydantic field required flag must be a boolean")
+        field_kwargs: dict[str, Any] = {}
+        description = field.get("description")
+        if isinstance(description, str) and description:
+            field_kwargs["description"] = description
+        examples = field.get("examples")
+        if isinstance(examples, list):
+            field_kwargs["examples"] = examples
+        default = ... if required else field.get("default")
+        fields[field_name] = (annotation, Field(default, **field_kwargs))
+    factory = cast(Callable[..., type[BaseModel]], create_model)
+    return factory(name, **fields)
 
 
 def _descriptor_mapping(descriptor: Mapping[str, Any], name: str) -> Mapping[str, Any]:

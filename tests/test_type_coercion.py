@@ -51,12 +51,7 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
         output_schema: dict[str, ResolvedKediType] | None = None,
         **_: Any,
     ) -> Any:
-        # Extract keys from template
-        start = template.find("[")
-        end = template.find("]", start + 1)
-        keys: List[str] = []
-        if start != -1 and end != -1:
-            keys = [k.strip() for k in template[start + 1 : end].split(",") if k.strip()]
+        keys = list((output_schema or {}).keys())
 
         # Return predefined responses as an object with attributes
         class MockResult:

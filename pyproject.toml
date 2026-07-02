@@ -73,7 +73,6 @@ path = "src/kedi/_version.py"
 include = [
     "/src/kedi",
     "/src/kedi/modules/*.kedi",
-    # "/playground/src/playground",
     "/README.md",
     "/LICENSE",
 ]
@@ -82,7 +81,6 @@ include = [
 [tool.hatch.build.targets.wheel]
 packages = [
     "src/kedi",
-    # "playground/src/playground",
 ]
 
 [tool.uv.sources]

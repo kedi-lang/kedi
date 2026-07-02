@@ -45,8 +45,9 @@ def test_pydantic_adapter_produce_sync_inside_running_loop(
     adapter = PydanticAdapter(model="openai/gpt-4o-mini")
 
     async def fake_run(template: str, *, output_type: type[Any], **_: Any) -> Any:
-        assert output_type is str
-        return type("R", (), {"output": "ok"})()
+        assert output_type is not str
+        assert output_type.model_fields["answer"].annotation is str
+        return type("R", (), {"output": output_type(answer="ok")})()
 
     monkeypatch.setattr(adapter, "run", fake_run)
 

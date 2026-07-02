@@ -22,6 +22,8 @@ from kedi.executors.pyodide import (
 )
 from kedi.promise import KediPromise
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import TypeRef
+from kedi.lang.compiler.type_system import KediType
 
 
 class QueueBridge:
@@ -294,6 +296,71 @@ def test_decode_pyodide_union_and_literal_descriptors() -> None:
     assert get_args(literal) == ("a", 1)
 
 
+def test_decode_pyodide_pydantic_model_descriptor() -> None:
+    model = _decode_type_descriptor(
+        {
+            "kind": "pydantic_model",
+            "name": "LiteralOutput",
+            "fields": [
+                {
+                    "name": "capital",
+                    "annotation": {"kind": "builtin", "name": "str"},
+                    "required": True,
+                    "description": "Generate literal output.",
+                    "examples": ["Ankara"],
+                },
+                {
+                    "name": "confidence",
+                    "annotation": {"kind": "builtin", "name": "float"},
+                    "required": False,
+                    "default": 1.0,
+                },
+            ],
+        }
+    )
+
+    assert issubclass(model, BaseModel)
+    assert model.__name__ == "LiteralOutput"
+    assert model.model_fields["capital"].description == "Generate literal output."
+    assert model.model_fields["capital"].examples == ["Ankara"]
+    assert model(capital="Ankara").model_dump() == {
+        "capital": "Ankara",
+        "confidence": 1.0,
+    }
+
+
+def test_kedi_type_resolves_browser_owned_pydantic_model_reference() -> None:
+    bridge = QueueBridge(
+        {
+            "ok": True,
+            "type": {
+                "kind": "pydantic_model",
+                "name": "LiteralOutput",
+                "fields": [
+                    {
+                        "name": "capital",
+                        "annotation": {"kind": "builtin", "name": "str"},
+                        "required": True,
+                    }
+                ],
+            },
+            "env": {},
+        }
+    )
+    executor = PyodideExecutor(bridge)
+    runtime = KediRuntime(executor=executor)
+
+    resolved = KediType(TypeRef(name="LiteralOutput")).resolve(
+        runtime,
+        {"LiteralOutput": PyodideReference("literal-output")},
+    )
+
+    assert isinstance(resolved, type)
+    assert issubclass(resolved, BaseModel)
+    assert resolved(capital="Ankara").capital == "Ankara"
+    assert bridge.requests[0]["env"]["LiteralOutput"] == {"__kedi_pyodide_ref__": "literal-output"}
+
+
 @pytest.mark.parametrize(
     ("descriptor", "message"),
     [
@@ -303,6 +370,32 @@ def test_decode_pyodide_union_and_literal_descriptors() -> None:
         ({"kind": "generic", "origin": None, "args": []}, "origin must be an object"),
         ({"kind": "union", "args": [None]}, "union argument must be an object"),
         ({"kind": "literal", "values": None}, "values must be a list"),
+        (
+            {"kind": "pydantic_model", "name": "", "fields": []},
+            "model name must be a non-empty string",
+        ),
+        (
+            {
+                "kind": "pydantic_model",
+                "name": "Output",
+                "fields": [{"name": "", "annotation": {"kind": "builtin", "name": "str"}}],
+            },
+            "field name must be a non-empty string",
+        ),
+        (
+            {
+                "kind": "pydantic_model",
+                "name": "Output",
+                "fields": [
+                    {
+                        "name": "value",
+                        "annotation": {"kind": "builtin", "name": "str"},
+                        "required": "yes",
+                    }
+                ],
+            },
+            "required flag must be a boolean",
+        ),
         ({"kind": "custom"}, "Unsupported Pyodide type descriptor"),
     ],
 )
