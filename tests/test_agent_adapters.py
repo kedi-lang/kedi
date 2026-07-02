@@ -774,7 +774,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
             "cache": False,
         }
     ]
-    assert configure_calls and isinstance(configure_calls[0]["lm"], FakeLM)
+    assert configure_calls and isinstance(configure_calls[0]["lm"].wrapped, FakeLM)
 
     signature = DSPyAdapter.type_builder({"answer": int})
     assert issubclass(signature, adapters_module.dspy.Signature)

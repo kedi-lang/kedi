@@ -73,7 +73,7 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
         == service.config.get_optimizer_max_tokens()
     )
     reflection_lm = service.configure_reflection_lm()
-    assert isinstance(reflection_lm, FakeLM)
+    assert isinstance(reflection_lm.wrapped, FakeLM)
     assert reflection_lm.kwargs["timeout"] == 300
 
     class PatchedLM(FakeLM):

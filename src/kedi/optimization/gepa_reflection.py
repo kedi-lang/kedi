@@ -5,6 +5,7 @@ from typing import Any
 import dspy
 
 from ..model_normalization import normalize_for_litellm
+from ..agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ..reporter import Reporter
 from .config import OptimizerConfig
 
@@ -28,12 +29,12 @@ def build_reflection_lm(
     reporter.emit(f"   Max tokens: {max_tokens}")
     reporter.emit("   Temperature: 1.0")
 
-    base_lm = dspy.LM(
+    base_lm = ThinkingStrippingLM(dspy.LM(
         model=normalize_for_litellm(config.reflection_model),
         temperature=1.0,
         max_tokens=max_tokens,
         timeout=300,
-    )
+    ))
 
     reflection_call_count = {"count": 0}
 
