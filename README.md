@@ -20,8 +20,11 @@ Typed outputs and Python can live in the same procedure:
   return len([line for line in code.splitlines() if line.strip()])
   ```
 
-  Review this <language> snippet with <`line_count`> non-empty lines.
-  Return a structured review as [review: Review].
+  >> Review this <language> snippet with <`line_count`> non-empty lines.
+  The code: 
+  <code>
+  The review:
+  [review: Review]
 
   = `review`
 ````
@@ -43,8 +46,10 @@ Kedi files can also behave like modules:
 > import: reviews
 
 @summarize_review(review: Review) -> str:
-  Write a release-note style summary for <review>.
-  Summary: [summary]
+  Write a release-note style summary for the review: 
+  <review>.
+  Summary of the review above: [summary]
+
   = `summary`
 ````
 
@@ -98,7 +103,7 @@ def review_snippet(language: str, code: str) -> Review:
     """kedi
     > use: search_docs
     >> Review this <language> snippet for <audience>.
-    Return [review: Review].
+    Review: [review: Review].
     = `review`
     """
     ...
@@ -130,15 +135,15 @@ change earlier procedures.
         command: vsh
         args: `["run", "--mcp"]`
 
-> use: fast
 @draft(prompt: str) -> str:
+  > use: fast
   >> Summarize: <prompt>
   Summary: [summary]
   = `summary`
 
-> use: quality
 @polish(text: str) -> str:
-  >> Improve: <text>
+  > use: quality
+  >> Improve the prompt: <text>
   Polished: [polished]
   = `polished`
 ````
