@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+import dspy
+
 # Matches [[ ## field_name ## ]] with flexible whitespace.
 # Multi-word field names (e.g. "first name") are supported.
 _THINKING_MARKER_RE = re.compile(r"\[\[\s*##\s+\w+(?:\s+\w+)*\s*##\s*\]\]")
@@ -12,8 +14,7 @@ _THINKING_MARKER_RE = re.compile(r"\[\[\s*##\s+\w+(?:\s+\w+)*\s*##\s*\]\]")
 # XML-style thinking blocks: ``  thinking ...  ``  (DeepSeek, o-series, Anthropic).
 # Also handles ``  thought ...  `` and ``  reasoning ...  `` variants.
 # The closing tag may optionally have a ``/`` prefix.
-# Trailing whitespace stops BEFORE the ``  `` that starts a response/next tag
-# so the response-stripping pass can see the ``  response`` prefix.
+# Trailing newlines only so the response-stripping pass keeps the ``  response`` prefix.
 _XML_THINKING_RE = re.compile(
     r"  (?:think(?:ing)?|thought|reason(?:ing)?)"
     r".*?"
@@ -29,16 +30,15 @@ _XML_RESPONSE_TAG_RE = re.compile(
 )
 
 
-class ThinkingStrippingLM:
-    """Wraps a dspy.LM to strip thinking blocks before DSPy parsing.
+class ThinkingStrippingLM(dspy.LM):
+    """A dspy.LM subclass that strips thinking blocks from model output.
 
     Reasoning models emit ``  thinking ...  `` blocks
     that can contain text matching DSPy's structured output markers
-    (e.g. ``[[ ## field_name ## ]]``).  This wrapper strips those blocks
-    and returns only the cleaned output to DSPy.
+    (e.g. ``[[ ## field_name ## ]]``).  This LM strips those blocks
+    before DSPy's parser sees the output.
 
     Attributes:
-        wrapped: The underlying dspy.LM instance.
         last_thinking_traces: Thinking traces from the most recent call
                               (one per completion string).  Empty list
                               if no traces were stripped.
@@ -46,30 +46,34 @@ class ThinkingStrippingLM:
                           recent call, for debugging.
     """
 
-    def __init__(self, lm: Any) -> None:
-        self._wrapped = lm
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.last_thinking_traces: list[str] = []
         self.last_raw_outputs: list[str] = []
 
-    @property
-    def wrapped(self) -> Any:
-        return self._wrapped
+    def __call__(
+        self,
+        prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> list[dict[str, Any] | str]:
+        completions = super().__call__(prompt=prompt, messages=messages, **kwargs)
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._wrapped, name)
-
-    def __call__(self, prompt: Any, **kwargs: Any) -> list[str]:
-        completions: list[str] = self._wrapped(prompt, **kwargs)
-
-        self.last_raw_outputs = list(completions)
+        self.last_raw_outputs = []
         self.last_thinking_traces = []
 
-        cleaned: list[str] = []
-        for text in completions:
-            stripped = _strip_thinking(text)
-            if stripped.thinking:
-                self.last_thinking_traces.append(stripped.thinking)
-            cleaned.append(stripped.output)
+        cleaned: list[dict[str, Any] | str] = []
+        for item in completions:
+            if isinstance(item, str):
+                self.last_raw_outputs.append(item)
+                stripped = _strip_thinking(item)
+                if stripped.thinking:
+                    self.last_thinking_traces.append(stripped.thinking)
+                cleaned.append(stripped.output)
+            else:
+                # Dict completions — pass through unchanged
+                self.last_raw_outputs.append(repr(item))
+                cleaned.append(item)
 
         return cleaned
 

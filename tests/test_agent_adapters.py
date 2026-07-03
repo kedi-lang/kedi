@@ -16,6 +16,7 @@ from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter, make_repr
+from kedi.agent_adapter.llm_wrapper import ThinkingStrippingLM
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
@@ -752,7 +753,8 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
     lm_calls: list[dict[str, Any]] = []
     configure_calls: list[dict[str, Any]] = []
 
-    class FakeLM:
+    class FakeTSLM:
+        """Stand-in for ThinkingStrippingLM that records init args."""
         def __init__(self, **kwargs: Any) -> None:
             lm_calls.append(kwargs)
 
@@ -760,7 +762,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
         def configure(self, **kwargs: Any) -> None:
             configure_calls.append(kwargs)
 
-    monkeypatch.setattr(adapters_module, "LM", FakeLM)
+    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeTSLM)
     monkeypatch.setattr(adapters_module.dspy, "settings", FakeSettings())
 
     DSPyAdapter(model="openai:gpt-4o-mini", max_tokens=12, temperature=0.25, provider=None)
@@ -774,7 +776,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
             "cache": False,
         }
     ]
-    assert configure_calls and isinstance(configure_calls[0]["lm"].wrapped, FakeLM)
+    assert configure_calls and isinstance(configure_calls[0]["lm"], FakeTSLM)
 
     signature = DSPyAdapter.type_builder({"answer": int})
     assert issubclass(signature, adapters_module.dspy.Signature)

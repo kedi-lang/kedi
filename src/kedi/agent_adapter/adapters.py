@@ -535,7 +535,7 @@ class DSPyAdapter:
 
     def _default_lm(self) -> ThinkingStrippingLM:
         provider, kwargs = self._lm_kwargs()
-        return ThinkingStrippingLM(LM(model=self._lm_model, provider=provider, **kwargs))
+        return ThinkingStrippingLM(model=self._lm_model, provider=provider, **kwargs)
 
     def _lm_kwargs(
         self,
@@ -706,11 +706,11 @@ class DSPyAdapter:
                     raise RuntimeError("Profile requires a model override but no model is set.")
                 model = normalize_for_litellm(profile.model)
             provider, lm_kwargs = self._lm_kwargs(dict(profile.settings), effort=profile.effort)
-            lm = ThinkingStrippingLM(LM(
+            lm = ThinkingStrippingLM(
                 model=model,
                 provider=provider,
                 **lm_kwargs,
-            ))
+            )
             with dspy.context(lm=lm):
                 yield
         finally:

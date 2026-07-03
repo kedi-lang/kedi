@@ -154,13 +154,13 @@ class DSPyConfigurationService:
 
         # Create LM with configured settings
         # Enable JSON mode for more reliable structured outputs
-        main_lm = ThinkingStrippingLM(LM(
+        main_lm = ThinkingStrippingLM(
             model=model,
             max_tokens=max_tokens,
             temperature=1.0,
             response_format={"type": "json_object"},
             timeout=300,
-        ))
+        )
 
         # Configure DSPy with this LM and our adaptive adapter, disable cache
         dspy.settings.configure(
@@ -205,11 +205,11 @@ class DSPyConfigurationService:
 
         # Create LM with configured settings
         # Note: Reflection LM generates natural language instructions, NOT JSON
-        return ThinkingStrippingLM(LM(
+        return ThinkingStrippingLM(
             model=model,
             max_tokens=max_tokens,
             timeout=300,
-        ))
+        )
 
     def verify_configured(self) -> None:
         """Verify DSPy LM is configured and cache is disabled.

@@ -29,12 +29,12 @@ def build_reflection_lm(
     reporter.emit(f"   Max tokens: {max_tokens}")
     reporter.emit("   Temperature: 1.0")
 
-    base_lm = ThinkingStrippingLM(dspy.LM(
+    base_lm = ThinkingStrippingLM(
         model=normalize_for_litellm(config.reflection_model),
         temperature=1.0,
         max_tokens=max_tokens,
         timeout=300,
-    ))
+    )
 
     reflection_call_count = {"count": 0}
 
