@@ -56,6 +56,13 @@ Tracker = "https://github.com/kedi-lang/kedi/issues"
 kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
 
+[project.optional-dependencies]
+playground = [
+    "basedpyright>=1.39.6",
+    "fastapi>=0.138.1",
+    "uvicorn>=0.30",
+]
+
 [tool.hatch.build]
 include-package-data = true
 
@@ -72,7 +79,9 @@ include = [
 
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kedi"]
+packages = [
+    "src/kedi",
+]
 
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }

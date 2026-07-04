@@ -6,4 +6,10 @@
     that preserves key information while reducing length by approximately 75%.
     The summary should capture the main points and essential details.
 
-= <summarize_text("This is a very long document...")>
+[readme_contents: str] = ```
+#read file contents from README.md
+with open("README.md", "r") as file:
+    readme_contents = file.read()
+return readme_contents
+```
+= <summarize_text(`readme_contents`)>

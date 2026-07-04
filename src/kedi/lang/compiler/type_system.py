@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
 from ...errors import KediTypeExecutionError
+from ...resolved_types import is_resolved_kedi_type
 from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
 from ..type_introspection import make_type_init
 from .environment import build_type_env
@@ -39,7 +40,9 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
     enumerating every supported source.
     """
     if name in type_env:
-        return type_env[name]
+        value = type_env[name]
+        if is_resolved_kedi_type(value):
+            return value
     try:
         return rt.executor.evaluate_type_expression(rt, name, type_env)
     except Exception:

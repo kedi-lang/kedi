@@ -5,7 +5,7 @@ RESET := \033[0m
 UV ?= uv
 PYTHON_VERSIONS ?= 3.11 3.12
 
-.PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix prod
+.PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix playground-tree-sitter prod
 
 all: format check tests
 
@@ -25,12 +25,12 @@ lint:
 	@printf "$(GREEN)✔ Ruff check complete.$(RESET)\n"
 
 ty:
-	@printf "$(BLUE)==>$(RESET) Type checking src with ty...\n"
+	@printf "$(BLUE)==>$(RESET) Type checking source packages with ty...\n"
 	@$(UV) run --group dev ty check src
 	@printf "$(GREEN)✔ ty check complete.$(RESET)\n"
 
 basedpyright:
-	@printf "$(BLUE)==>$(RESET) Type checking src with basedpyright...\n"
+	@printf "$(BLUE)==>$(RESET) Type checking source packages with basedpyright...\n"
 	@$(UV) run --group dev basedpyright src
 	@printf "$(GREEN)✔ basedpyright check complete.$(RESET)\n"
 
@@ -46,6 +46,11 @@ check-release:
 	@printf "$(BLUE)==>$(RESET) Running release surface checks...\n"
 	@bash scripts/check_release_surfaces.sh
 	@printf "$(GREEN)✔ Release surface checks complete.$(RESET)\n"
+
+playground-tree-sitter:
+	@printf "$(BLUE)==>$(RESET) Building browser Tree-sitter assets...\n"
+	@bash scripts/build_playground_tree_sitter.sh
+	@printf "$(GREEN)✔ Browser Tree-sitter assets built.$(RESET)\n"
 
 tests:
 	@printf "$(BLUE)==>$(RESET) Running pytest...\n"

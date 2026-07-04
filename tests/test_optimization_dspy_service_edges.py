@@ -63,6 +63,7 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     if hasattr(FakeLM, "_kedi_patched"):
         delattr(FakeLM, "_kedi_patched")
     monkeypatch.setattr(dspy_config_module, "LM", FakeLM)
+    monkeypatch.setattr(dspy_config_module, "ThinkingStrippingLM", FakeLM)
     monkeypatch.setattr(dspy_config_module.dspy, "configure_cache", lambda **kwargs: None)
     service = DSPyConfigurationService(
         OptimizerConfig(optimizer_model="openai/gpt-4o", reflection_model="openai/gpt-4o-mini")
@@ -86,6 +87,7 @@ def test_dspy_config_branches(monkeypatch: pytest.MonkeyPatch) -> None:
             return None
 
     monkeypatch.setattr(dspy_config_module, "LM", PatchedLM)
+    monkeypatch.setattr(dspy_config_module, "ThinkingStrippingLM", PatchedLM)
     monkeypatch.setattr(dspy_config_module.dspy, "settings", QuietSettings())
     DSPyConfigurationService(OptimizerConfig(optimizer_model="openai/gpt-4o")).configure_main_lm()
 

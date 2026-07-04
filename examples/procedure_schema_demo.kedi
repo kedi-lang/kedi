@@ -11,6 +11,7 @@
     str: The search results.
   ###
   [query_count: int] = ```
-return len(request.queries)
-```
+  return len(request.queries)
+  ```
+    
   = `f"queries={request.queries}|limit={request.limit}|include={include_snippets}|count={query_count}"`

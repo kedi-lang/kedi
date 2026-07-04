@@ -10,6 +10,8 @@ import pytest
 from dspy import BaseLM
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter import adapters as adapters_module
+from kedi.optimization import gepa_reflection as gepa_reflection_module
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 
@@ -377,6 +379,8 @@ def install_mock_dspy(monkeypatch: pytest.MonkeyPatch) -> None:
     def mock_lm_factory(model: str, **kwargs: Any):
         return MockLM(model=model, **kwargs)
 
+    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", mock_lm_factory)
+    monkeypatch.setattr(gepa_reflection_module, "ThinkingStrippingLM", mock_lm_factory)
     monkeypatch.setattr(dspy, "LM", mock_lm_factory, raising=True)
 
     dspy.settings.configure(lm=optimizer_lm, cache=False)

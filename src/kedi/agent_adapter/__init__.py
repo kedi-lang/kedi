@@ -2,6 +2,7 @@ from typing import Any
 
 from .meta import AgentAdapter, T
 from .tool_override import SupportsToolRegistration, ToolSpec
+from .webgpu import BrowserModelBridge, WebGPUAdapter
 
 
 def kedi_procedure_to_pydantic_tool(*args: Any, **kwargs: Any) -> Any:
@@ -18,9 +19,11 @@ def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
 
 __all__ = [
     "AgentAdapter",
+    "BrowserModelBridge",
     "SupportsToolRegistration",
     "T",
     "ToolSpec",
+    "WebGPUAdapter",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
 ]

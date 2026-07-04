@@ -1,27 +1,30 @@
 > import: require
 
-```
-# Check for required packages before importing
-require("pydantic_monty", required_by="Sandbox")
+[__sandbox_ready: bool] = <require("pydantic_monty", "Sandbox")>
 
-from pydantic_monty import Monty
-```
-
-@execute_code(code: str, inputs: dict[str, Any]) -> Any:
+@execute_code(code: str, inputs: dict[str, Any], fail_fast: bool = `True`) -> Any:
     ###
     Executes the given code in a sandboxed environment with the provided inputs.
 
     Args:
         code (str): The code to execute.
         inputs (dict[str, Any]): The inputs to provide to the code.
+        fail_fast (bool, optional): Whether to fail fast on exceptions. Defaults to `True`.
 
     Returns:
         Any: The result of executing the code.
     ###
     = ```
+    from pydantic_monty import Monty
+
     sandbox = Monty(code, inputs=list(inputs.keys()))
-    result = sandbox.run(inputs=inputs)
-    return result
+    try:
+        result = sandbox.run(inputs=inputs)
+        return result
+    except Exception as e:
+        if fail_fast:
+            raise RuntimeError("Sandbox execution failed: " + str(e))
+        return str(e)
     ```
 
 > profile: sandbox:

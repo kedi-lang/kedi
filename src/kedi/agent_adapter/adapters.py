@@ -5,10 +5,18 @@ import inspect
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    Sequence,
+    cast,
+)
 
 import dspy
-from dspy import LM
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
@@ -29,6 +37,7 @@ from ..model_normalization import (
     normalize_for_pydantic_ai,
 )
 from ..resolved_types import ResolvedKediType
+from .llm_wrapper import ThinkingStrippingLM
 from .tool_override import ToolScope, ToolSpec
 
 if TYPE_CHECKING:
@@ -132,6 +141,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if output_schema:
             output_type = self.type_builder(output_schema)
         run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        if self.active_profile.system is not None and "instructions" not in run_kwargs:
+            run_kwargs["instructions"] = self.active_profile.system
         model_settings = pydantic_model_settings(self.active_profile.settings)
         if model_settings:
             existing_settings = run_kwargs.get("model_settings")
@@ -521,9 +532,9 @@ class DSPyAdapter:
         # ``produce_sync`` / ``profile_override`` (innermost context wins).
         dspy.settings.configure(lm=self._default_lm())
 
-    def _default_lm(self) -> LM:
+    def _default_lm(self) -> ThinkingStrippingLM:
         provider, kwargs = self._lm_kwargs()
-        return LM(model=self._lm_model, provider=provider, **kwargs)
+        return ThinkingStrippingLM(model=self._lm_model, provider=provider, **kwargs)
 
     def _lm_kwargs(
         self,
@@ -694,7 +705,7 @@ class DSPyAdapter:
                     raise RuntimeError("Profile requires a model override but no model is set.")
                 model = normalize_for_litellm(profile.model)
             provider, lm_kwargs = self._lm_kwargs(dict(profile.settings), effort=profile.effort)
-            lm = LM(
+            lm = ThinkingStrippingLM(
                 model=model,
                 provider=provider,
                 **lm_kwargs,

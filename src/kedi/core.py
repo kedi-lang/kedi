@@ -249,7 +249,7 @@ class KediRuntime:
             if isinstance(layer, dict) and key in layer:
                 return layer[key]
 
-        raise KeyError(f"Value not found in environment: {key}")
+        raise NameError(f"Value not found in environment: {key}")
 
     @staticmethod
     def _validate_adapter_output(value: Any, expected_type: Any, *, explicit_type: bool) -> Any:
@@ -516,10 +516,13 @@ class KediRuntime:
         }
         explicit_typed_fields = {out.key for out in outputs if out.pytype is not None}
         # Keep question format stable for tests; append description after to preserve key parsing
+        prompt_template = (
+            "Fields to be substituted into the template string for final construction: ({})."
+        )
         base_q = (
-            f"Fill in the fields: [{required[0]}]."
+            prompt_template.format(required[0])
             if len(required) == 1
-            else f"Fill in the fields: [{', '.join(required)}]."
+            else prompt_template.format(", ".join(required))
         )
 
         if self.adapter is None:
@@ -546,7 +549,11 @@ class KediRuntime:
             # parallel engine; concrete already in sequential), then build the prompt + call the
             # model + validate — all inside the captured context so profile/tools are correct.
             resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
-            question = base_q + "\n" + "".join(resolved_parts)
+            instruction = (
+                "The template string must maintain grammatical and semantic integrity once the output fields are substituted into"
+                " their corresponding locations in the template after the final construction.\n"
+            )
+            question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
             from .agent_profile import current_block_agent_profile

@@ -12,6 +12,7 @@ from dspy.adapters.json_adapter import JSONAdapter, _get_structured_outputs_resp
 
 from ...model_normalization import normalize_for_litellm
 from ...reporter import CliReporter, Reporter
+from ...agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ..config import OptimizerConfig
 
 logger = logging.getLogger(__name__)
@@ -153,7 +154,7 @@ class DSPyConfigurationService:
 
         # Create LM with configured settings
         # Enable JSON mode for more reliable structured outputs
-        main_lm = LM(
+        main_lm = ThinkingStrippingLM(
             model=model,
             max_tokens=max_tokens,
             temperature=1.0,
@@ -182,7 +183,7 @@ class DSPyConfigurationService:
             enable_memory_cache=False,
         )
 
-    def configure_reflection_lm(self, model: str | None = None) -> LM:
+    def configure_reflection_lm(self, model: str | None = None) -> ThinkingStrippingLM:
         """Configure reflection LM for GEPA.
 
         Creates and returns an LM instance configured for reflection.
@@ -204,7 +205,7 @@ class DSPyConfigurationService:
 
         # Create LM with configured settings
         # Note: Reflection LM generates natural language instructions, NOT JSON
-        return LM(
+        return ThinkingStrippingLM(
             model=model,
             max_tokens=max_tokens,
             timeout=300,
