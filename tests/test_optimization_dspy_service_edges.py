@@ -23,7 +23,6 @@ from kedi.optimization.services.dspy_config import AdaptiveJSONAdapter, DSPyConf
 from kedi.optimization.services.dspy_example_formatter import DSPyExampleFormatter
 from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder, _KediRuntimeRef
 from kedi.optimization.services.dspy_prompt_extractor import DSPyPromptExtractor
-from kedi.agent_adapter.llm_wrapper import ThinkingStrippingLM
 from kedi.optimization.services.dspy_score_calculator import DSPyScoreCalculator
 from kedi.optimization.services.prompt_loader import OptimizedPromptLoader
 from tests.optimization_helpers import make_optimize_span

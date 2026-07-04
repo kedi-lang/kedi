@@ -282,7 +282,7 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
         def __exit__(self, *_args: object) -> None:
             return None
 
-    monkeypatch.setattr(adapters_module, "LM", FakeLM)
+    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeLM)
     monkeypatch.setattr(adapters_module.dspy, "context", lambda **kwargs: FakeContext(**kwargs))
     monkeypatch.setattr(
         adapters_module.dspy, "settings", SimpleNamespace(configure=lambda **_: None)

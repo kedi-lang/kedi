@@ -326,7 +326,7 @@ def test_gepa_optimizer_reflection_and_proc_helpers(
         GEPA=lambda **kwargs: SimpleNamespace(compile=lambda **_: SimpleNamespace()),
         settings=SimpleNamespace(lm=SimpleNamespace(model="main", kwargs={"x": 1})),
     )
-    monkeypatch.setattr(gepa_reflection_module, "dspy", fake_dspy)
+    monkeypatch.setattr(gepa_reflection_module, "ThinkingStrippingLM", fake_dspy.LM)
     monkeypatch.setattr(gepa_session_module, "dspy", fake_dspy)
 
     runtime = KediRuntime()

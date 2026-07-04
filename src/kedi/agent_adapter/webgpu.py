@@ -393,16 +393,16 @@ def _tool_prompt_contract(tool: Mapping[str, Any]) -> dict[str, Any]:
     fields = properties if isinstance(properties, Mapping) else {}
     required_value = schema.get("required")
     required = set(required_value) if isinstance(required_value, list) else set()
-    arguments = {
-        name: _schema_type_name(field_schema, schema)
+    arguments = [
+        {"name": name, "type": _schema_type_name(field_schema, schema)}
         for name, field_schema in fields.items()
         if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
-    }
-    optional_arguments = {
-        name: _schema_type_name(field_schema, schema)
+    ]
+    optional_arguments = [
+        {"name": name, "type": _schema_type_name(field_schema, schema)}
         for name, field_schema in fields.items()
         if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
-    }
+    ]
     result: dict[str, Any] = {
         "name": tool.get("name", ""),
         "arguments": arguments,
@@ -424,16 +424,16 @@ def _output_prompt_contract(schema: Mapping[str, Any]) -> dict[str, Any]:
         return {"type": _schema_type_name(schema, schema)}
     required_value = schema.get("required")
     required = set(required_value) if isinstance(required_value, list) else set()
-    fields = {
-        name: _schema_type_name(field_schema, schema)
+    fields = [
+        {"name": name, "type": _schema_type_name(field_schema, schema)}
         for name, field_schema in properties.items()
         if isinstance(name, str) and name in required and isinstance(field_schema, Mapping)
-    }
-    optional_fields = {
-        name: _schema_type_name(field_schema, schema)
+    ]
+    optional_fields = [
+        {"name": name, "type": _schema_type_name(field_schema, schema)}
         for name, field_schema in properties.items()
         if isinstance(name, str) and name not in required and isinstance(field_schema, Mapping)
-    }
+    ]
     result: dict[str, Any] = {"fields": fields}
     if optional_fields:
         result["optional_fields"] = optional_fields

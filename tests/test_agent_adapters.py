@@ -16,7 +16,6 @@ from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter, make_repr
-from kedi.agent_adapter.llm_wrapper import ThinkingStrippingLM
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
@@ -755,6 +754,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
 
     class FakeTSLM:
         """Stand-in for ThinkingStrippingLM that records init args."""
+
         def __init__(self, **kwargs: Any) -> None:
             lm_calls.append(kwargs)
 

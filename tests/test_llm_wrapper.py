@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 from kedi.agent_adapter.llm_wrapper import ThinkingStrippingLM, _strip_thinking
 
 
@@ -31,27 +30,13 @@ class TestStripThinking:
         assert "[[ ## completed ## ]]" in result.output
 
     def test_xml_thinking_strips_thought_tag(self) -> None:
-        raw = (
-            "  thought\n"
-            "reasoning...\n"
-            "  thought\n\n"
-            "  output\n"
-            "result: 42\n"
-            "  output\n"
-        )
+        raw = "  thought\nreasoning...\n  thought\n\n  output\nresult: 42\n  output\n"
         result = _strip_thinking(raw)
         assert "reasoning" in result.thinking
         assert result.output == "result: 42"
 
     def test_xml_thinking_strips_reasoning_tag(self) -> None:
-        raw = (
-            "  reasoning\n"
-            "deep thought\n"
-            "  reasoning\n\n"
-            "  response\n"
-            "answer: yes\n"
-            "  response\n"
-        )
+        raw = "  reasoning\ndeep thought\n  reasoning\n\n  response\nanswer: yes\n  response\n"
         result = _strip_thinking(raw)
         assert "deep thought" in result.thinking
         assert result.output == "answer: yes"
@@ -113,6 +98,12 @@ class TestStripThinking:
         assert result.thinking == ""
         assert result.output == ""
 
+    def test_only_completed_marker_returns_as_is(self) -> None:
+        raw = "[[ ## completed ## ]]\n"
+        result = _strip_thinking(raw)
+        assert result.thinking == ""
+        assert result.output == raw
+
 
 class TestThinkingStrippingLM:
     """Tests for ThinkingStrippingLM.__call__ stripping behavior.
@@ -123,9 +114,14 @@ class TestThinkingStrippingLM:
     """
 
     def test_call_strips_thinking(self) -> None:
-        with _mock_lm_init(), _mock_lm_call(
-            ["  thinking\nreasoning\n  thinking\n\n"
-             "  response\n[[ ## result ## ]]\n42\n  response\n"]
+        with (
+            _mock_lm_init(),
+            _mock_lm_call(
+                [
+                    "  thinking\nreasoning\n  thinking\n\n"
+                    "  response\n[[ ## result ## ]]\n42\n  response\n"
+                ]
+            ),
         ):
             lm = ThinkingStrippingLM(model="test/model")
             result = lm("hello")
@@ -146,16 +142,31 @@ class TestThinkingStrippingLM:
         assert lm.last_raw_outputs == ["Clean output with no thinking."]
 
     def test_call_multiple_completions(self) -> None:
-        with _mock_lm_init(), _mock_lm_call([
-            "  thinking\nt1\n  thinking\n\n  response\n[[ ## a ## ]]\n1\n  response\n",
-            "[[ ## a ## ]]\n2\n",
-        ]):
+        with (
+            _mock_lm_init(),
+            _mock_lm_call(
+                [
+                    "  thinking\nt1\n  thinking\n\n  response\n[[ ## a ## ]]\n1\n  response\n",
+                    "[[ ## a ## ]]\n2\n",
+                ]
+            ),
+        ):
             lm = ThinkingStrippingLM(model="test/model")
             result = lm("hello")
 
         assert result == ["[[ ## a ## ]]\n1", "[[ ## a ## ]]\n2\n"]
         assert len(lm.last_thinking_traces) == 1
         assert "t1" in lm.last_thinking_traces[0]
+
+    def test_call_dict_completion_passthrough(self) -> None:
+        completion = {"text": "structured"}
+        with _mock_lm_init(), _mock_lm_call([completion]):
+            lm = ThinkingStrippingLM(model="test/model")
+            result = lm("hello")
+
+        assert result == [completion]
+        assert lm.last_thinking_traces == []
+        assert lm.last_raw_outputs == [repr(completion)]
 
     def test_responds_to_lm_interface(self) -> None:
         """ThinkingStrippingLM is a dspy.LM subclass."""
@@ -173,12 +184,10 @@ class TestThinkingStrippingLM:
 
 def _mock_lm_init() -> Any:
     """Mock dspy.LM.__init__ to be a no-op."""
-    return patch.object(
-        ThinkingStrippingLM.__bases__[0], "__init__", lambda self, **kw: None
-    )
+    return patch.object(ThinkingStrippingLM.__bases__[0], "__init__", lambda self, **kw: None)
 
 
-def _mock_lm_call(return_value: list[str]) -> Any:
+def _mock_lm_call(return_value: list[dict[str, Any] | str]) -> Any:
     """Mock the parent __call__ to return canned completions."""
     return patch.object(
         ThinkingStrippingLM.__bases__[0],

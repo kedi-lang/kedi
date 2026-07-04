@@ -17,7 +17,6 @@ from typing import (
 )
 
 import dspy
-from dspy import LM
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT

@@ -47,7 +47,9 @@ def test_webgpu_adapter_produces_schema_and_output_type() -> None:
     assert typed == NamedOutput(answer="done")
     assert bridge.payloads[0]["outputSchema"]["properties"]["answer"]["type"] == "integer"
     output_prompt = bridge.payloads[0]["outputPrompt"]
-    assert "<answer>integer</answer>" in output_prompt
+    assert "<name>answer</name>" in output_prompt
+    assert "<type>integer</type>" in output_prompt
+    assert "<answer>integer</answer>" not in output_prompt
     assert "properties" not in output_prompt
     assert "required" not in output_prompt
     assert "title" not in output_prompt
@@ -390,7 +392,9 @@ def test_webgpu_adapter_formats_tool_catalog_as_xml() -> None:
     assert catalog.startswith("<Tools>\n  <Tool>")
     assert "<name>get_capital</name>" in catalog
     assert "<arguments>" in catalog
-    assert "<country>string</country>" in catalog
+    assert "<name>country</name>" in catalog
+    assert "<type>string</type>" in catalog
+    assert "<country>string</country>" not in catalog
     assert "inputSchema" not in catalog
     assert "properties" not in catalog
     assert "required" not in catalog
@@ -433,11 +437,16 @@ def test_webgpu_adapter_formats_schema_variants_as_xml() -> None:
         )
     )
 
-    assert "<item>Item</item>" in output
-    assert "<status>ready | pending</status>" in output
-    assert "<values>list[integer]</values>" in catalog
-    assert "<filter>string | null</filter>" in catalog
-    assert "<payload>Payload</payload>" in catalog
+    assert "<name>item</name>" in output
+    assert "<type>Item</type>" in output
+    assert "<name>status</name>" in output
+    assert "<type>ready | pending</type>" in output
+    assert "<name>values</name>" in catalog
+    assert "<type>list[integer]</type>" in catalog
+    assert "<name>filter</name>" in catalog
+    assert "<type>string | null</type>" in catalog
+    assert "<name>payload</name>" in catalog
+    assert "<type>Payload</type>" in catalog
     assert "<returns>boolean | null</returns>" in catalog
     assert webgpu_module._format_output_contract({"type": ["string", "null"]}) == (
         "<Output>\n  <type>string | null</type>\n</Output>"

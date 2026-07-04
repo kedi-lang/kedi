@@ -10,4 +10,3 @@
 [submodule "playground"]
 	path = playground
 	url = https://github.com/kedi-lang/playground
-	branch = v0

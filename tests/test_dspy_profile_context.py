@@ -43,7 +43,7 @@ def _record_dspy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Any]]:
         def __call__(self, **kwargs: Any) -> dict[str, Any]:
             return dict(kwargs)
 
-    monkeypatch.setattr(adapters_module, "LM", FakeLM)
+    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeLM)
     monkeypatch.setattr(adapters_module.dspy, "settings", FakeSettings())
     monkeypatch.setattr(adapters_module.dspy, "context", fake_context)
     monkeypatch.setattr(adapters_module.dspy, "Predict", FakePredict)
