@@ -20,10 +20,10 @@ from kedi.executors.pyodide import (
     _response_env,
     _serialize_env,
 )
-from kedi.promise import KediPromise
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import TypeRef
 from kedi.lang.compiler.type_system import KediType
+from kedi.promise import KediPromise
 
 
 class QueueBridge:

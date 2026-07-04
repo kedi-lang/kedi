@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-
-from ..model_normalization import normalize_for_litellm
 from ..agent_adapter.llm_wrapper import ThinkingStrippingLM
+from ..model_normalization import normalize_for_litellm
 from ..reporter import Reporter
 from .config import OptimizerConfig
 

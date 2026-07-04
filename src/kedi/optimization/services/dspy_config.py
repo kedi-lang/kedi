@@ -10,9 +10,9 @@ from dspy import LM
 from dspy.adapters.chat_adapter import ChatAdapter
 from dspy.adapters.json_adapter import JSONAdapter, _get_structured_outputs_response_format
 
+from ...agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ...model_normalization import normalize_for_litellm
 from ...reporter import CliReporter, Reporter
-from ...agent_adapter.llm_wrapper import ThinkingStrippingLM
 from ..config import OptimizerConfig
 
 logger = logging.getLogger(__name__)

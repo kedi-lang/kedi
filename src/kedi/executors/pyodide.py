@@ -7,10 +7,10 @@ import inspect
 import operator
 import symtable
 import typing
-import typing_extensions
 from functools import reduce
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, cast
 
+import typing_extensions
 from pydantic import BaseModel, Field, create_model
 
 from ..promise import KediPromise, force
