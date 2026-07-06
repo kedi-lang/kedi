@@ -111,7 +111,7 @@ def test_pyodide_execution_layers_runtime_environment_without_syncing_it_back() 
 
     assert executor.evaluate_inline(runtime, "helper(local)", local_env) == "ok"
     assert bridge.requests[0]["env"] == {
-        "helper": {"__kedi_pyodide_ref__": "helper-function"},
+        "helper": {"__kedi_playground_ref__": "helper-function"},
         "local": "before",
     }
     assert bridge.requests[0]["syncNames"] == ["local"]
@@ -214,7 +214,7 @@ def test_pyodide_prelude_exports_keep_browser_owned_objects_opaque() -> None:
     assert runtime.run_main() is None
     assert "require" in runtime._procedures
     assert bridge.requests[2]["env"]["ModuleNotInstalledError"] == {
-        "__kedi_pyodide_ref__": "error-class"
+        "__kedi_playground_ref__": "error-class"
     }
 
 
@@ -358,14 +358,16 @@ def test_kedi_type_resolves_browser_owned_pydantic_model_reference() -> None:
     assert isinstance(resolved, type)
     assert issubclass(resolved, BaseModel)
     assert resolved(capital="Ankara").capital == "Ankara"
-    assert bridge.requests[0]["env"]["LiteralOutput"] == {"__kedi_pyodide_ref__": "literal-output"}
+    assert bridge.requests[0]["env"]["LiteralOutput"] == {
+        "__kedi_playground_ref__": "literal-output"
+    }
 
 
 @pytest.mark.parametrize(
     ("descriptor", "message"),
     [
-        ({"kind": "builtin", "name": "missing"}, "Unknown Pyodide builtin"),
-        ({"kind": "typing", "name": "missing"}, "Unknown Pyodide typing"),
+        ({"kind": "builtin", "name": "missing"}, "Unknown playground builtin"),
+        ({"kind": "typing", "name": "missing"}, "Unknown playground typing"),
         ({"kind": "union", "args": []}, "at least one"),
         ({"kind": "generic", "origin": None, "args": []}, "origin must be an object"),
         ({"kind": "union", "args": [None]}, "union argument must be an object"),
@@ -396,7 +398,7 @@ def test_kedi_type_resolves_browser_owned_pydantic_model_reference() -> None:
             },
             "required flag must be a boolean",
         ),
-        ({"kind": "custom"}, "Unsupported Pyodide type descriptor"),
+        ({"kind": "custom"}, "Unsupported playground type descriptor"),
     ],
 )
 def test_decode_pyodide_type_descriptor_errors(
@@ -463,7 +465,7 @@ def test_pyodide_serialization_is_json_safe_and_promise_aware() -> None:
     assert _serialize_env({"Literal": typing.Literal}, {"Literal"}) == {}
     assert _serialize_env({"typing": typing}, {"typing"}) == {}
     assert _serialize_env({"typing_alias": typing}, set()) == {}
-    assert _json_value(PyodideReference("opaque")) == {"__kedi_pyodide_ref__": "opaque"}
+    assert _json_value(PyodideReference("opaque")) == {"__kedi_playground_ref__": "opaque"}
 
 
 def test_pyodide_response_and_name_analysis_validation() -> None:

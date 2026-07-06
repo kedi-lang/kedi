@@ -60,6 +60,7 @@ kedi-lsp = "kedi.lsp.server:main"
 playground = [
     "basedpyright>=1.39.6",
     "fastapi>=0.138.1",
+    "pydantic-monty>=0.0.18",
     "uvicorn>=0.30",
 ]
 
