@@ -367,16 +367,24 @@ def test_internal_sandbox_dependency_check_does_not_call_kedi_from_prelude(
     import importlib.util
 
     find_spec = importlib.util.find_spec
+    checked_names: list[str] = []
+
+    def fake_find_spec(name: str):
+        checked_names.append(name)
+        return None if name == "pydantic_monty" else find_spec(name)
+
     monkeypatch.setattr(
         importlib.util,
         "find_spec",
-        lambda name: None if name == "pydantic_monty" else find_spec(name),
+        fake_find_spec,
     )
     main = tmp_path / "main.kedi"
     main.write_text("> import: sandbox\n\n= ok\n", encoding="utf-8")
 
     with pytest.raises(Exception, match="requires package.*pydantic_monty"):
         _compile_file(main)
+    assert "pydantic_monty" in checked_names
+    assert '"pydantic_monty"' not in checked_names
 
 
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
