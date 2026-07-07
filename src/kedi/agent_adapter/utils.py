@@ -4,8 +4,8 @@ import asyncio
 import contextvars
 import copy
 import inspect
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Callable, Coroutine, Iterator, TypeVar, cast
 
