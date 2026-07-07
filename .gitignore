@@ -240,3 +240,4 @@ features.md
 /examples/webgpu_kedi_demo
 plans/
 /*.py
+.uv-cache
