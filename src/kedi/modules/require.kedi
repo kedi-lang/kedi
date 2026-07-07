@@ -9,29 +9,17 @@ import importlib.util
 
 def package_is_installed(package_name: str) -> bool:
     return importlib.util.find_spec(package_name) is not None
-```
 
-@check_if_installed(package_name: str) -> bool:
-    = ```
-    return package_is_installed(package_name)
-    ```
-
-@require(
-    package_names: Union[str, Sequence[str]],
-    required_by: Union[str, None] = `None`
-) -> `Literal[True]`:
-    = ```
-    not_installed = []
-    if isinstance(package_names, str):
-        package_names = [package_names]
-    for package_name in package_names:
-        if not package_is_installed(package_name):
-            not_installed.append(package_name)
+def require(
+    package_names: str | list[str],
+    required_by: str | None = None,
+) -> bool:
+    names = [package_names] if isinstance(package_names, str) else list(package_names)
+    not_installed = [name for name in names if not package_is_installed(name)]
     if not_installed:
         raise ModuleNotInstalledError(package_names=not_installed, required_by=required_by)
     return True
-    ```
+```
 
 > export:
     require
-    check_if_installed

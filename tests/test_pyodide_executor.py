@@ -191,16 +191,10 @@ def test_pyodide_prelude_exports_keep_browser_owned_objects_opaque() -> None:
             "ok": True,
             "result": None,
             "env": {
-                "importlib": {
-                    "__kedi_pyodide_ref__": "importlib-module",
-                }
+                "require": {
+                    "__kedi_pyodide_ref__": "require-function",
+                },
             },
-        },
-        {"ok": True, "result": None, "env": {}},
-        {
-            "ok": True,
-            "type": {"kind": "literal", "values": [True]},
-            "env": {},
         },
     )
     executor = PyodideExecutor(bridge)
@@ -212,8 +206,8 @@ def test_pyodide_prelude_exports_keep_browser_owned_objects_opaque() -> None:
     )
 
     assert runtime.run_main() is None
-    assert "require" in runtime._procedures
-    assert bridge.requests[2]["env"]["ModuleNotInstalledError"] == {
+    assert runtime._import_env["require"] == PyodideReference("require-function")
+    assert bridge.requests[1]["env"]["ModuleNotInstalledError"] == {
         "__kedi_playground_ref__": "error-class"
     }
 

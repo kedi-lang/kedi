@@ -181,6 +181,66 @@ def test_load_imported_surface_edges(tmp_path: Path) -> None:
     assert module_surface.load_imported_surface(missing_export_module, set()).procedures == {}
 
 
+def test_load_imported_surface_reads_python_prelude_exports(tmp_path: Path) -> None:
+    module = tmp_path / "helpers.kedi"
+    module.write_text(
+        "```\n"
+        "def require(package_names: str | list[str], required_by: str | None = None) -> bool:\n"
+        "    return True\n"
+        "\n"
+        "async def fetch_one(url: str) -> str:\n"
+        "    return url\n"
+        "\n"
+        "class Helper:\n"
+        "    pass\n"
+        "\n"
+        "answer: int = 42\n"
+        "left, right = 1, 2\n"
+        "nested, holder.attr = 3, 4\n"
+        "\n"
+        "def no_return(value):\n"
+        "    return value\n"
+        "```\n"
+        "\n"
+        "> export:\n"
+        "  require\n"
+        "  fetch_one\n"
+        "  Helper\n"
+        "  answer\n"
+        "  left\n"
+        "  right\n"
+        "  nested\n"
+        "  no_return\n",
+        encoding="utf-8",
+    )
+
+    surface = module_surface.load_imported_surface(module, set(), "helpers")
+
+    assert surface.values["require"].python_stub == (
+        "def require(package_names: str | list[str], required_by: str | None=None) -> bool: ..."
+    )
+    assert surface.values["fetch_one"].python_stub == ("async def fetch_one(url: str) -> str: ...")
+    assert surface.values["Helper"].python_stub == "class Helper: ..."
+    assert surface.values["answer"].python_stub == "answer: int = ..."
+    assert surface.values["left"].python_stub == "left: object = ..."
+    assert surface.values["right"].python_stub == "right: object = ..."
+    assert surface.values["nested"].python_stub == "nested: object = ..."
+    assert surface.values["no_return"].python_stub == "def no_return(value): ..."
+    assert module_surface._unparse_or_any(None) == "Any"
+    assert surface.values["require"].declaration_span.start_line == 2
+    assert surface.values["answer"].declaration_span.start_line == 11
+
+
+def test_load_imported_surface_ignores_invalid_python_prelude_exports(tmp_path: Path) -> None:
+    module = tmp_path / "broken_python.kedi"
+    module.write_text(
+        "```\ndef broken(\n```\n\n> export:\n  broken\n",
+        encoding="utf-8",
+    )
+
+    assert module_surface.load_imported_surface(module, set(), "broken_python").values == {}
+
+
 def test_missing_import_diagnostics_and_unresolved_surface(tmp_path: Path) -> None:
     from kedi.lang.ast import ModuleImport, Program
     from kedi.lang.parser import parse_program

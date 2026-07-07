@@ -225,6 +225,64 @@ def test_virtual_document_exposes_runtime_args_as_attrdict():
     assert "args.debug" in virtual["text"]
 
 
+def test_python_virtual_document_exposes_imported_python_exports_in_python_blocks(tmp_path):
+    source_path = tmp_path / "main.kedi"
+    src = "> import: require\n\n```\nrequire('pydantic_monty', required_by='Sandbox')\n```\n"
+
+    virtual = compute_python_virtual_document(src, str(source_path))
+
+    ast.parse(virtual["text"])
+    assert "def require(package_names: str | list[str]," in virtual["text"]
+    assert "required_by: str | None=None) -> bool: ..." in virtual["text"]
+    assert "require('pydantic_monty', required_by='Sandbox')" in virtual["text"]
+
+
+def test_python_virtual_document_exposes_imported_kedi_and_python_symbols(tmp_path):
+    module_path = tmp_path / "profiles.kedi"
+    module_path.write_text(
+        "```\n"
+        "async def fetch_profile_id() -> int:\n"
+        "    return 1\n"
+        "\n"
+        "class Helper:\n"
+        "    pass\n"
+        "```\n"
+        "\n"
+        "~Profile(name: str)\n"
+        "@make_profile(name: str) -> Profile:\n"
+        "  = `Profile(name)`\n"
+        "[profile_id: int] = `1`\n"
+        "\n"
+        "> export:\n"
+        "  fetch_profile_id\n"
+        "  Helper\n"
+        "  Profile\n"
+        "  make_profile\n"
+        "  profile_id\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    src = (
+        "> import: profiles\n\n"
+        "```\n"
+        'profile = make_profile("Ada")\n'
+        "pid = profile_id\n"
+        "helper = Helper()\n"
+        "```\n"
+    )
+
+    virtual = compute_python_virtual_document(src, str(source_path))
+
+    ast.parse(virtual["text"])
+    assert "async def fetch_profile_id() -> int: ..." in virtual["text"]
+    assert "class Helper: ..." in virtual["text"]
+    assert "class Profile:" in virtual["text"]
+    assert "def make_profile(name: str) -> Profile: ..." in virtual["text"]
+    assert "profile_id: int = ..." in virtual["text"]
+    assert 'profile = make_profile("Ada")' in virtual["text"]
+    assert any(symbol["kind"] == "imported_value" for symbol in virtual["symbols"])
+
+
 def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
     src = (
         "```\n"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast as py_ast
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -49,6 +50,7 @@ class ImportedValueInfo:
     declaration_span: Span
     type_expr: Optional[TypeExpr] = None
     module_name: Optional[str] = None
+    python_stub: Optional[str] = None
 
 
 @dataclass
@@ -180,6 +182,11 @@ def load_imported_surface(
 
     local_procedures = {proc.name: proc for proc in prog.procedures}
     local_types = {td.name: td for td in prog.type_defs}
+    prelude_values = _python_value_infos(
+        prog.prelude,
+        prog.prelude_loc,
+        module_name=module_name,
+    )
     local_values = {
         stmt.name: ImportedValueInfo(
             name=stmt.name,
@@ -192,6 +199,7 @@ def load_imported_surface(
         for span in [assignment_name_span(stmt)]
         if span is not None
     }
+    local_values = {**prelude_values, **local_values}
 
     combined_procedures = dict(nested_surface.procedures)
     combined_procedures.update(local_procedures)
@@ -228,3 +236,113 @@ def load_imported_surface(
         elif name in combined_profiles:
             resolved.profiles[name] = combined_profiles[name]
     return resolved
+
+
+def _python_value_infos(
+    code: str | None,
+    loc: Span | None,
+    *,
+    module_name: Optional[str],
+) -> dict[str, ImportedValueInfo]:
+    if code is None or loc is None:
+        return {}
+    try:
+        module = py_ast.parse(code)
+    except SyntaxError:
+        return {}
+
+    values: dict[str, ImportedValueInfo] = {}
+    for stmt in module.body:
+        for name, stub, name_line, name_col in _python_stmt_exports(stmt):
+            values[name] = ImportedValueInfo(
+                name=name,
+                declaration_span=_python_name_span(loc, name, name_line, name_col),
+                module_name=module_name,
+                python_stub=stub,
+            )
+    return values
+
+
+def _python_stmt_exports(stmt: py_ast.stmt) -> list[tuple[str, str, int, int]]:
+    if isinstance(stmt, py_ast.FunctionDef):
+        return [
+            (
+                stmt.name,
+                _python_function_stub(stmt),
+                stmt.lineno,
+                stmt.col_offset + len("def "),
+            )
+        ]
+    if isinstance(stmt, py_ast.AsyncFunctionDef):
+        return [
+            (
+                stmt.name,
+                _python_function_stub(stmt),
+                stmt.lineno,
+                stmt.col_offset + len("async def "),
+            )
+        ]
+    if isinstance(stmt, py_ast.ClassDef):
+        return [
+            (
+                stmt.name,
+                f"class {stmt.name}: ...",
+                stmt.lineno,
+                stmt.col_offset + len("class "),
+            )
+        ]
+    if isinstance(stmt, py_ast.AnnAssign) and isinstance(stmt.target, py_ast.Name):
+        typ = _unparse_or_any(stmt.annotation)
+        return [
+            (
+                stmt.target.id,
+                f"{stmt.target.id}: {typ} = ...",
+                stmt.target.lineno,
+                stmt.target.col_offset,
+            )
+        ]
+    if isinstance(stmt, py_ast.Assign):
+        exports: list[tuple[str, str, int, int]] = []
+        for target in stmt.targets:
+            for name, line, col in _python_target_names(target):
+                exports.append((name, f"{name}: object = ...", line, col))
+        return exports
+    return []
+
+
+def _python_target_names(expr: py_ast.expr) -> list[tuple[str, int, int]]:
+    if isinstance(expr, py_ast.Name):
+        return [(expr.id, expr.lineno, expr.col_offset)]
+    if isinstance(expr, (py_ast.Tuple, py_ast.List)):
+        names: list[tuple[str, int, int]] = []
+        for item in expr.elts:
+            names.extend(_python_target_names(item))
+        return names
+    return []
+
+
+def _python_function_stub(stmt: py_ast.FunctionDef | py_ast.AsyncFunctionDef) -> str:
+    prefix = "async def" if isinstance(stmt, py_ast.AsyncFunctionDef) else "def"
+    args = py_ast.unparse(stmt.args)
+    ret = f" -> {_unparse_or_any(stmt.returns)}" if stmt.returns is not None else ""
+    return f"{prefix} {stmt.name}({args}){ret}: ..."
+
+
+def _unparse_or_any(expr: py_ast.AST | None) -> str:
+    if expr is None:
+        return "Any"
+    return py_ast.unparse(expr)
+
+
+def _python_name_span(loc: Span, name: str, lineno: int, col_offset: int) -> Span:
+    start_line = loc.start_line + lineno
+    start_col = col_offset + 1
+    return Span(
+        start_byte=loc.start_byte,
+        end_byte=loc.start_byte,
+        start_line=start_line,
+        start_col=start_col,
+        end_line=start_line,
+        end_col=start_col + len(name),
+        source_path=loc.source_path,
+    )

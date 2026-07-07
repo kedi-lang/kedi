@@ -80,6 +80,7 @@ def test_runtime_isinstance_validates_generic_arguments() -> None:
 def test_resolve_required_distinguishes_none_from_unresolvable() -> None:
     rt = KediRuntime()
     assert KediType(None).resolve_required(rt, {}) is None
+    assert KediType(TypeRef(name="None")).resolve_required(rt, {}) is type(None)
     assert KediType(TypeRef(name="int")).resolve_required(rt, {}) is int
     with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
         KediType(TypeRef(name="MissingType")).resolve_required(rt, {})

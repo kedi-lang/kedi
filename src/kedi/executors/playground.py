@@ -92,10 +92,13 @@ class PlaygroundExecutor:
         )
 
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]:
+        from ..lang.compiler.environment import build_python_env
+
+        execution_env = build_python_env(rt, {})
         response = self._request(
             "execute_prelude",
             code,
-            {},
+            execution_env,
             sync_names=_prelude_names(code),
         )
         return _response_env(response)

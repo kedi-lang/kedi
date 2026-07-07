@@ -49,6 +49,7 @@ from ..lang.ast import (
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
 from .features import _known_lsp_type_origin, compute_header_python_ranges, compute_python_ranges
+from .module_surface import ImportedSurface, ImportedValueInfo, imported_surface_for_program
 
 Position = dict[str, int]
 Range = dict[str, Position]
@@ -266,6 +267,9 @@ def compute_python_virtual_document(
     _emit_runtime_args_stub(builder)
     builder.add("")
 
+    imported_surface = imported_surface_for_program(program)
+    _emit_imported_surface_stubs(builder, imported_surface)
+
     for typedef in program.type_defs:
         _emit_type_stub(builder, typedef, header_defaults)
     if program.type_defs:
@@ -365,6 +369,43 @@ def _emit_runtime_args_stub(builder: VirtualBuilder) -> None:
     builder.add("class AttrDict(dict[_K, _V], Generic[_K, _V]):")
     builder.add("    def __getattr__(self, key: _K) -> _V: ...")
     builder.add("args: AttrDict[str, ArgType] = ...")
+
+
+def _emit_imported_surface_stubs(
+    builder: VirtualBuilder,
+    imported_surface: ImportedSurface,
+) -> None:
+    emitted = False
+    for typedef in imported_surface.types.values():
+        _emit_type_stub(builder, typedef, {})
+        emitted = True
+    for proc in imported_surface.procedures.values():
+        _emit_proc_stub(builder, proc)
+        emitted = True
+    for value in imported_surface.values.values():
+        _emit_imported_value_stub(builder, value)
+        emitted = True
+    if emitted:
+        builder.add("")
+
+
+def _emit_imported_value_stub(
+    builder: VirtualBuilder,
+    value: ImportedValueInfo,
+) -> None:
+    line_text = value.python_stub
+    if line_text is None:
+        typ = _type_to_python(value.type_expr, None)
+        line_text = f"{value.name}: {typ} = ..."
+    line = builder.add(line_text)
+    builder.add_symbol(
+        kind="imported_value",
+        name=value.name,
+        source_range=_span_range(value.declaration_span),
+        virtual_range=_line_range(
+            line, _imported_value_name_start(line_text, value.name), value.name
+        ),
+    )
 
 
 def _find_focused_procedure(
@@ -1006,6 +1047,21 @@ def _line_range(line: int, start: int, text: str) -> Range:
         "start": {"line": line, "character": start},
         "end": {"line": line, "character": start + len(text)},
     }
+
+
+def _span_range(span: Span) -> Range:
+    return {
+        "start": {"line": span.start_line - 1, "character": span.start_col - 1},
+        "end": {"line": span.end_line - 1, "character": max(span.end_col - 1, 0)},
+    }
+
+
+def _imported_value_name_start(line_text: str, name: str) -> int:
+    for prefix in ("def ", "async def ", "class "):
+        if line_text.startswith(prefix):
+            return len(prefix)
+    start = line_text.find(name)
+    return max(start, 0)
 
 
 def _range_within_span(range_: Range, span: Span) -> bool:
