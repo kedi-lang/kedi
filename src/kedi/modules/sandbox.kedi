@@ -1,6 +1,8 @@
 > import: require
 
-[__sandbox_ready: bool] = <require(`"pydantic_monty"`, `"Sandbox"`)>
+```
+require("pydantic_monty", "Sandbox")
+```
 
 @execute_code(code: str, inputs: dict[str, Any], fail_fast: bool = `True`) -> Any:
     ###

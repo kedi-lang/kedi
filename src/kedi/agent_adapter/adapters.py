@@ -75,7 +75,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             default=(),
         )
         if isinstance(model, str):
-            model = normalize_for_pydantic_ai(model) if model is not None else None
+            model = normalize_for_pydantic_ai(model)
+        self._agent_model_arg = model
+        self._default_model = model if isinstance(model, str) else None
         if model_settings:
             filtered_settings = pydantic_model_settings(model_settings)
             if filtered_settings:
@@ -151,7 +153,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["model_settings"] = {**existing_settings, **model_settings}
             else:
                 run_kwargs["model_settings"] = model_settings
-        toolsets = self._toolsets_for_run()
+        from .utils import inside_kedi_tool_call
+
+        toolsets = self._toolsets_for_run(include_scoped_tools=not inside_kedi_tool_call())
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
         agent = self._agent_for_produce()
@@ -164,11 +168,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
         if not inside_kedi_tool_call():
             return self
-        return Agent(self.model, **self._agent_init_kwargs)
+        return Agent(self._agent_model_arg, **self._agent_init_kwargs)
 
-    def _toolsets_for_run(self) -> list[Any] | None:
+    def _toolsets_for_run(self, *, include_scoped_tools: bool = True) -> list[Any] | None:
         toolsets: list[Any] = []
-        scoped_tools = self.scoped_tools
+        scoped_tools = self.scoped_tools if include_scoped_tools else ()
         if scoped_tools:
             from pydantic_ai.toolsets import FunctionToolset
 
@@ -225,7 +229,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         )
 
     def default_model(self) -> str | None:
-        model = self.model
+        default_model = getattr(self, "_default_model", None)
+        if isinstance(default_model, str):
+            return default_model
+        model = getattr(self, "_model", None)
         return model if isinstance(model, str) else None
 
     @contextmanager
