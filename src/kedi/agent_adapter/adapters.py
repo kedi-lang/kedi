@@ -80,6 +80,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             filtered_settings = pydantic_model_settings(model_settings)
             if filtered_settings:
                 kwargs["model_settings"] = filtered_settings
+        self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -153,7 +154,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets = self._toolsets_for_run()
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
-        return (await self.run(template, **cast(Any, run_kwargs))).output
+        agent = self._agent_for_produce()
+        if agent is not self:
+            run_kwargs.update(self._profile_override_kwargs(self.active_profile))
+        return (await agent.run(template, **cast(Any, run_kwargs))).output
+
+    def _agent_for_produce(self) -> Agent[Any, Any]:
+        from .utils import inside_kedi_tool_call
+
+        if not inside_kedi_tool_call():
+            return self
+        return Agent(self.model, **self._agent_init_kwargs)
 
     def _toolsets_for_run(self) -> list[Any] | None:
         toolsets: list[Any] = []
@@ -219,6 +230,19 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+        override_kwargs = self._profile_override_kwargs(profile)
+        stack_var = self._profile_stack_var
+        token = stack_var.set((*stack_var.get(), profile))
+        try:
+            if not override_kwargs:
+                yield
+                return
+            with self.override(**override_kwargs):
+                yield
+        finally:
+            stack_var.reset(token)
+
+    def _profile_override_kwargs(self, profile: AgentProfile) -> dict[str, Any]:
         override_kwargs: dict[str, Any] = {}
         if profile.needs_model_override(self.default_model()):
             if profile.model is None:
@@ -233,16 +257,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                     }
                 ]
             }
-        stack_var = self._profile_stack_var
-        token = stack_var.set((*stack_var.get(), profile))
-        try:
-            if not override_kwargs:
-                yield
-                return
-            with self.override(**override_kwargs):
-                yield
-        finally:
-            stack_var.reset(token)
+        return override_kwargs
 
 
 class LangChainAdapter:

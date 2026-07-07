@@ -4,9 +4,10 @@ import asyncio
 import contextvars
 import copy
 import inspect
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable, Coroutine, TypeVar, cast
+from typing import Any, Callable, Coroutine, Iterator, TypeVar, cast
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
@@ -24,6 +25,10 @@ from ..lang.procedure_schema import (
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
+_KEDI_TOOL_CALL_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "kedi_tool_call_depth",
+    default=0,
+)
 
 _T = TypeVar("_T")
 
@@ -44,6 +49,19 @@ def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
     with ThreadPoolExecutor(max_workers=1) as executor:
         # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().
         return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, coro)).result())
+
+
+def inside_kedi_tool_call() -> bool:
+    return _KEDI_TOOL_CALL_DEPTH.get() > 0
+
+
+@contextmanager
+def kedi_tool_call_context() -> Iterator[None]:
+    token = _KEDI_TOOL_CALL_DEPTH.set(_KEDI_TOOL_CALL_DEPTH.get() + 1)
+    try:
+        yield
+    finally:
+        _KEDI_TOOL_CALL_DEPTH.reset(token)
 
 
 def kedi_procedure_tool_spec(
@@ -199,7 +217,8 @@ def _make_tool_function(rt: KediRuntime, proc: ProcedureDef) -> Callable[..., An
 
     @wraps(proc_fn)
     def _tool_function(**kwargs: Any) -> Any:
-        return _invoke_procedure_with_kwargs(rt, proc, proc_fn, kwargs)
+        with kedi_tool_call_context():
+            return _invoke_procedure_with_kwargs(rt, proc, proc_fn, kwargs)
 
     _tool_function.__name__ = proc.name
     _tool_function.__doc__ = getattr(proc_fn, "__doc__", None)

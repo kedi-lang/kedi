@@ -138,6 +138,37 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         asyncio.run(adapter.produce("template"))
 
 
+def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = PydanticAdapter(model=TestModel())
+    src = "@lesser_known_city(country):\n  >> [x] is a less known city in <country>.\n  = <x>\n"
+    prog = parse_program(src)
+    rt = compile_program(prog, adapter=adapter)
+    tool = kedi_procedure_tool_spec(rt, prog.procedures[0])
+
+    async def reused_agent_run(*_: Any, **__: Any) -> Any:
+        raise AssertionError("nested Kedi tool template reused the outer adapter agent")
+
+    monkeypatch.setattr(adapter, "run", reused_agent_run)
+
+    created_agents: list[dict[str, Any]] = []
+
+    class FreshAgent:
+        def __init__(self, model: Any = None, **kwargs: Any) -> None:
+            created_agents.append({"model": model, "kwargs": kwargs})
+
+        async def run(self, template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
+            assert "less known city" in template
+            assert kwargs == {}
+            return SimpleNamespace(output=output_type(x="Konya"))
+
+    monkeypatch.setattr(adapters_module, "Agent", FreshAgent)
+
+    assert tool.fn(country="Turkey") == "Konya"
+    assert created_agents
+
+
 def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     events: dict[str, Any] = {
         "models": [],
