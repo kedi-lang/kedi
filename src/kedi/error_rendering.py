@@ -94,7 +94,7 @@ def _render_parse_diagnostic(
     path = span.source_path or "<source>"
     console.print(
         Text(
-            f"Kedi parse error: {diagnostic.message}",
+            "Kedi parse error:",
             style=_role_style(style, "error_title"),
         )
     )
@@ -109,6 +109,9 @@ def _render_parse_diagnostic(
             style=style,
             caret=_span_caret(span, snippet),
         )
+    console.print()
+    console.print(Text("Kedi error: ParseError", style=_role_style(style, "error_title")))
+    console.print(Text(f"  {diagnostic.message}", style=_role_style(style, "error_detail")))
 
 
 def _render_trace_frame(

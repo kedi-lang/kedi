@@ -852,7 +852,28 @@ class _Walker:
             lines.append(self._template_line_from_expr(head))
         for cont in node.children_by_field_name("continuation"):
             lines.append(self._template_line_from_expr(cont))
+        self._validate_template_block_scope(lines)
         return TemplateBlock(lines=lines, loc=self._span(node))
+
+    def _validate_template_block_scope(self, lines: List[TemplateLine]) -> None:
+        produced_names: set[str] = set()
+        for line in lines:
+            for seg in line.segments:
+                if isinstance(seg, InputSegment) and seg.name in produced_names:
+                    self.diagnostics.append(
+                        KediDiagnostic(
+                            severity="error",
+                            message=(
+                                f"Template block cannot read LLM output '{seg.name}' "
+                                "before the block has finished. Start a new `>>` block "
+                                "before using it as a substitution."
+                            ),
+                            span=seg.loc or line.loc or Span(0, 0, 1, 1, 1, 1),
+                            code="K-TEMPLATE-BLOCK-FORWARD-OUTPUT",
+                        )
+                    )
+                elif isinstance(seg, OutputSegment):
+                    produced_names.add(seg.name)
 
     def _walk_template_line(self, node: Node, *, deprecated: bool = False) -> TemplateLine:
         if deprecated:

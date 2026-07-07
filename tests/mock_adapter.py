@@ -141,14 +141,14 @@ class WordChainMockAdapter(MockAdapter):
         output_schema: dict[str, ResolvedKediType] | None = None,
         **kwargs: Any,
     ) -> AttrDict[str, Any]:
-        if output_schema and "word" in output_schema:
+        if output_schema and (output_name := next(iter(output_schema), None)):
             match = _PREV_WORD_RE.search(template)
             if match is not None:
                 previous = match.group(1).rstrip(".,;:")
                 chain_word = previous[-1] * 2
                 self.model_calls.append(self.last_effective_model)
                 self.instruction_calls.append(kwargs.get("instructions"))
-                return AttrDict({"word": chain_word})
+                return AttrDict({output_name: chain_word})
         return super().produce_sync(
             template=template,
             output_schema=output_schema,

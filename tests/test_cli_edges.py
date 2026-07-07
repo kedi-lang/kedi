@@ -79,7 +79,9 @@ def test_cli_command_renders_parse_error() -> None:
     result = CliRunner().invoke(cli_module.main, ["-c", "@boom(\n  = nope"])
 
     assert result.exit_code == 1
-    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert "Kedi parse error:" in result.output
+    assert "Kedi error: ParseError" in result.output
+    assert "unexpected source at top level" in result.output
     assert 'File "<command>", line 1, column 1' in result.output
 
 
@@ -114,7 +116,9 @@ def test_cli_parse_command_renders_kedi_parse_error(tmp_path: Path) -> None:
     result = CliRunner().invoke(cli_module.main, ["parse", str(source)])
 
     assert result.exit_code == 1
-    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert "Kedi parse error:" in result.output
+    assert "Kedi error: ParseError" in result.output
+    assert "unexpected source at top level" in result.output
     assert f'File "{source}", line 1, column 1' in result.output
     assert "@boom(" in result.output
     assert "^" in result.output

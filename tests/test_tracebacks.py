@@ -202,7 +202,8 @@ def test_cli_renders_parse_error_with_location(tmp_path: Path) -> None:
     result = runner.invoke(cli_main, [str(srcp)])
 
     assert result.exit_code == 1
-    assert "Kedi parse error: unexpected source at top level" in result.output
+    assert "Kedi parse error:" in result.output
+    assert "Kedi error: ParseError" in result.output
     assert f'File "{srcp}", line 1, column 1' in result.output
     assert "unexpected source at top level" in result.output
     assert "@boom(" in result.output
@@ -514,8 +515,10 @@ def test_render_parse_error_handles_multiple_diagnostics_and_linecache(
 
     output = render_parse_error(KediParseError(diagnostics), use_color=False)
 
-    assert "Kedi parse error: first error" in output
-    assert "Kedi parse error: second error" in output
+    assert output.count("Kedi parse error:") == 2
+    assert "Kedi error: ParseError" in output
+    assert "first error" in output
+    assert "second error" in output
     assert "@boom(" in output
     assert 'File "<source>", line 2, column 1' in output
 

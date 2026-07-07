@@ -113,21 +113,11 @@ def merge_template_block_lines(
             loc=loc,
         )
 
-    output_names: set[str] = set()
-    for line in lines:
-        for seg in line.segments:
-            if isinstance(seg, OutputSegment):
-                output_names.add(seg.name)
-
     merged_segments: list[Segment] = []
     for index, line in enumerate(lines):
         if index > 0:
             merged_segments.append(TextSegment(text="\n"))
-        for seg in line.segments:
-            if isinstance(seg, InputSegment) and seg.name in output_names:
-                merged_segments.append(TextSegment(text=f"<{seg.name}>"))
-            else:
-                merged_segments.append(seg)
+        merged_segments.extend(line.segments)
 
     merged_override: dict[str, Any] | None = None
     for line in lines:

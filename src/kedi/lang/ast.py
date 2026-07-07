@@ -192,9 +192,9 @@ class TemplateLine(Stmt):
 class TemplateBlock(Stmt):
     """Multiline template run opened by ``>>``.
 
-    Rows are newline-joined and executed as a single LLM prompt. Within the
-    block, ``<name>`` references to outputs declared on earlier rows are kept
-    as literal placeholders in the merged prompt.
+    Rows are newline-joined and executed as a single LLM prompt. Outputs become
+    available only after that prompt completes, so a block cannot read its own
+    ``[name]`` fields with ``<name>`` continuation substitutions.
     """
 
     lines: List[TemplateLine] = field(default_factory=list)

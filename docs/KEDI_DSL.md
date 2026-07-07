@@ -26,7 +26,7 @@ The capital of France is [capital].
 After execution, `[capital]` is filled by the LLM (e.g., "Paris") and the variable `capital` becomes available in scope:
 ```kedi
 >> The capital of <country> is [capital].
-<capital> is a beautiful city.
+= <capital> is a beautiful city.
 ```
 
 Multiple inputs and outputs can appear on the same line:
@@ -117,12 +117,13 @@ Public names are names that do not start with `_`. If a module has no export dir
 
 Template prompts are opened with `>>`. Continuation lines at the same indent
 belong to the same block and are **newline-joined into one LLM run**. Outputs
-from earlier rows appear as `[name]` placeholders in the merged prompt; later
-rows may reference them with `<name>` (left as literal text for the model).
+from the block become available only after that single LLM run finishes. A
+continuation row cannot read a field produced earlier in the same block with
+`<name>`; start a new `>>` block if the next prompt needs that value.
 
 ```kedi
 >> What's the [capital] of Turkey?
-What's the [population: int] of <capital>?
+>> What's the [population: int] of <capital>?
 ```
 
 Inside procedures, multiple blocks are separated by blank lines or a new `>>`:
@@ -501,7 +502,14 @@ same indent are newline-joined into one LLM run:
 
 ```kedi
 >> What's the [capital] of Turkey?
-What's the [population: int] of <capital>?
+This same prompt can ask for [population: int] too.
+```
+
+To use an output from the first prompt, start a new block:
+
+```kedi
+>> What's the [capital] of Turkey?
+>> What's the [population: int] of <capital>?
 ```
 
 **Returns** may still use backslash continuation to stitch a single return value

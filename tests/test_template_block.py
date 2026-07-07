@@ -32,7 +32,7 @@ def _run(src: str) -> str:
 
 
 def test_parse_template_block_multiline() -> None:
-    src = ">> What's the [capital] of Turkey?\nWhat's the [population: int] of <capital>?\n= done\n"
+    src = ">> What's the [capital] of Turkey?\nWhat's the [population: int] of Ankara?\n= done\n"
     prog = parse_program(src)
     assert len(prog.toplevel_body) == 1
     block = prog.toplevel_body[0]
@@ -42,7 +42,7 @@ def test_parse_template_block_multiline() -> None:
 
 
 def test_merge_template_block_lines_joins_with_newline() -> None:
-    block = parse_program(">> line one [x]\nline two <x>\n").toplevel_body[0]
+    block = parse_program(">> line one [x]\nline two <seed>\n").toplevel_body[0]
     assert isinstance(block, TemplateBlock)
     merged = merge_template_block_lines(block.lines)
     assert any(isinstance(seg, TextSegment) and seg.text == "\n" for seg in merged.segments)
@@ -79,7 +79,19 @@ def test_merge_template_block_lines_edge_cases() -> None:
         ]
     )
     assert merged.optimized_output_override == {"a": 1, "b": 2}
-    assert any(isinstance(seg, TextSegment) and seg.text == "<a>" for seg in merged.segments)
+    assert any(isinstance(seg, InputSegment) and seg.name == "a" for seg in merged.segments)
+
+
+def test_template_block_cannot_substitute_output_from_same_block() -> None:
+    src = (
+        ">> [city] is a city in Europe.\n"
+        "Based on delivery result. Delivery estimate for <city> is [estimate: int] days.\n"
+    )
+    with pytest.raises(KediParseError) as exc:
+        parse_program(src)
+    assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in exc.value.diagnostics)
+    diagnostics = compute_diagnostics(src, None)
+    assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in diagnostics)
 
 
 def test_template_block_single_agent_run() -> None:
@@ -148,7 +160,7 @@ def test_bare_template_line_inside_block_is_continuation() -> None:
 
 
 def test_template_block_hover_and_diagnostics() -> None:
-    src = ">> What's the [capital] of Turkey?\nWhat's the [population: int] of <capital>?\n"
+    src = ">> What's the [capital] of Turkey?\nWhat's the [population: int] of Ankara?\n"
     hover = compute_hover(src, None, position_of(src, ">>"))
     assert hover is not None
     assert "Template block" in hover_value(hover)
@@ -169,13 +181,13 @@ def test_template_block_disambiguates_assign_stmt() -> None:
 
 
 def test_top_level_template_block_executes() -> None:
-    src = ">> line one [x]\nline two <x>\n= <x>\n"
+    src = ">> line one [x]\nline two is static\n= <x>\n"
     out = _run(src)
     assert out == "x-value"
 
 
 def test_template_block_lsp_semantic_tokens_and_virtual_python() -> None:
-    src = "@p():\n  >> first [a]\n  second <a>\n  = <a>\n"
+    src = "@p(seed):\n  >> first [a]\n  second <seed>\n  = <a>\n"
     tokens = compute_semantic_tokens_full(src, "/tmp/tb.kedi")
     assert tokens.data
     virtual = compute_python_virtual_document(src, "/tmp/tb.kedi", focus_line=1)
@@ -201,7 +213,7 @@ def test_top_level_template_block_semantic_tokens_match_screenshot_shape() -> No
 
 
 def test_multiple_template_blocks_in_procedure() -> None:
-    src = "@p():\n  >> first [a]\n  second <a>\n\n  >> other [b]\n  = <b>\n\n= <p()>\n"
+    src = "@p(seed):\n  >> first [a]\n  second <seed>\n\n  >> other [b]\n  = <b>\n\n= <p(x)>\n"
     prog = parse_program(src)
     blocks = [s for s in prog.procedures[0].body if isinstance(s, TemplateBlock)]
     assert len(blocks) == 2
