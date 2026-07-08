@@ -223,7 +223,9 @@ def test_a7_env_snapshot_isolates_worker_from_later_writes() -> None:
 # --- A8: the routing self-check runs once in ThreadEngine.__init__ --------------------------
 
 
-def test_a8_thread_engine_runs_routing_check_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a8_thread_engine_runs_routing_check_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import kedi.lang.compiler.environment as env_mod
 
     monkeypatch.setattr(engine_mod, "_ROUTING_CHECKED", False)

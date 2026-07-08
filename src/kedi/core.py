@@ -23,7 +23,12 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
-from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
+from .errors import (
+    KediExecutionError,
+    KediPythonOrigin,
+    KediTraceFrame,
+    build_execution_error,
+)
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
@@ -678,9 +683,15 @@ class KediRuntime:
             return ()
 
         from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+        from .agent_adapter.utils import (
+            kedi_procedure_tool_spec,
+            python_callable_tool_spec,
+        )
         from .agent_profile import AgentToolOverrideUnsupported
-        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+        from .agent_profile.tools import (
+            procedure_def_for_tool,
+            python_callable_for_tool,
+        )
 
         if not isinstance(adapter, SupportsToolRegistration):
             raise AgentToolOverrideUnsupported(

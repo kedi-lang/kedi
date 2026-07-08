@@ -131,7 +131,10 @@ def test_type_class_source_omits_new_stub() -> None:
 
 
 def test_python_interop_wrapper_preserves_procedure_metadata() -> None:
-    from kedi.lang.procedure_introspection import get_procedure_def, get_procedure_metadata
+    from kedi.lang.procedure_introspection import (
+        get_procedure_def,
+        get_procedure_metadata,
+    )
 
     src = (
         "@kedi_proc(x: str) -> str:\n"

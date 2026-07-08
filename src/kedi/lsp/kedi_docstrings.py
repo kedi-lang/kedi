@@ -454,7 +454,9 @@ def _position_to_dict(pos: lsp.Position) -> dict[str, int]:
     return {"line": pos.line, "character": pos.character}
 
 
-def _decode_semantic_tokens(data: Sequence[int]) -> list[tuple[int, int, int, int, int]]:
+def _decode_semantic_tokens(
+    data: Sequence[int],
+) -> list[tuple[int, int, int, int, int]]:
     out: list[tuple[int, int, int, int, int]] = []
     line = 0
     col = 0

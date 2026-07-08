@@ -55,7 +55,13 @@ def test_cli_command_runs_inline_source() -> None:
 def test_cli_command_passes_extra_args_to_program_env() -> None:
     result = CliRunner().invoke(
         cli_module.main,
-        ["-c", '= `f"{args.id}:{args.enabled}:{args.missing}"`', "--id", "1", "--enabled"],
+        [
+            "-c",
+            '= `f"{args.id}:{args.enabled}:{args.missing}"`',
+            "--id",
+            "1",
+            "--enabled",
+        ],
     )
 
     assert result.exit_code == 0

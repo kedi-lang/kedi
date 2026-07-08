@@ -17,7 +17,11 @@ from kedi.lang.ast import (
 from kedi.lang.compiler.evaluation import merge_template_block_lines
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp import features
-from kedi.lsp.features import compute_diagnostics, compute_hover, compute_semantic_tokens_full
+from kedi.lsp.features import (
+    compute_diagnostics,
+    compute_hover,
+    compute_semantic_tokens_full,
+)
 from kedi.lsp.python_virtual import compute_python_virtual_document
 from kedi.resolved_types import ResolvedKediType
 from tests.lsp_helpers import decode_semantic_tokens, hover_at, hover_value, position_of

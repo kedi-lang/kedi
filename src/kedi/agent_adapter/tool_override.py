@@ -3,7 +3,15 @@ from __future__ import annotations
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Protocol, Sequence, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 if TYPE_CHECKING:
     from kedi.lang.ast import ProcedureDef

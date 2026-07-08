@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
+from contextlib import (
+    AbstractContextManager,
+    AsyncExitStack,
+    contextmanager,
+    nullcontext,
+)
 from contextvars import ContextVar
 from functools import wraps
 from typing import (
@@ -429,7 +434,10 @@ class LangChainAdapter:
         )
 
     async def _tools_for_run(self) -> list[Any]:
-        return [*self.scoped_tools, *await self._mcp_tools_for_profile(self.active_profile)]
+        return [
+            *self.scoped_tools,
+            *await self._mcp_tools_for_profile(self.active_profile),
+        ]
 
     async def _mcp_tools_for_profile(self, profile: AgentProfile) -> list[Any]:
         if not profile.mcp_servers:

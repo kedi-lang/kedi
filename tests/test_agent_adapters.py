@@ -15,7 +15,12 @@ from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import adapters as adapters_module
-from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter, make_repr
+from kedi.agent_adapter.adapters import (
+    DSPyAdapter,
+    LangChainAdapter,
+    PydanticAdapter,
+    make_repr,
+)
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
@@ -242,7 +247,11 @@ def test_langchain_adapter_produces_with_structured_output_and_profile(
     events = _install_fake_langchain_modules(monkeypatch)
     adapter = LangChainAdapter(
         model="openrouter/google/gemini-3-flash-preview",
-        model_settings={"temperature": 0.1, "parallel_tool_calls": False, "num_retries": 2},
+        model_settings={
+            "temperature": 0.1,
+            "parallel_tool_calls": False,
+            "num_retries": 2,
+        },
     )
     adapter.register_tool(
         python_callable_tool_spec(

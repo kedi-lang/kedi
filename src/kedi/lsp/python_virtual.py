@@ -48,8 +48,16 @@ from ..lang.ast import (
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
-from .features import _known_lsp_type_origin, compute_header_python_ranges, compute_python_ranges
-from .module_surface import ImportedSurface, ImportedValueInfo, imported_surface_for_program
+from .features import (
+    _known_lsp_type_origin,
+    compute_header_python_ranges,
+    compute_python_ranges,
+)
+from .module_surface import (
+    ImportedSurface,
+    ImportedValueInfo,
+    imported_surface_for_program,
+)
 
 Position = dict[str, int]
 Range = dict[str, Position]

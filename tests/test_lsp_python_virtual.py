@@ -225,7 +225,9 @@ def test_virtual_document_exposes_runtime_args_as_attrdict():
     assert "args.debug" in virtual["text"]
 
 
-def test_python_virtual_document_exposes_imported_python_exports_in_python_blocks(tmp_path):
+def test_python_virtual_document_exposes_imported_python_exports_in_python_blocks(
+    tmp_path,
+):
     source_path = tmp_path / "main.kedi"
     src = "> import: require\n\n```\nrequire('pydantic_monty', required_by='Sandbox')\n```\n"
 

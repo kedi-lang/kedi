@@ -4,7 +4,12 @@ import asyncio
 import inspect
 import json
 import re
-from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
+from contextlib import (
+    AbstractContextManager,
+    AsyncExitStack,
+    contextmanager,
+    nullcontext,
+)
 from contextvars import ContextVar
 from dataclasses import dataclass
 from textwrap import indent

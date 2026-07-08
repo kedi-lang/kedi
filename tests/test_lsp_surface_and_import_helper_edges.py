@@ -231,7 +231,9 @@ def test_load_imported_surface_reads_python_prelude_exports(tmp_path: Path) -> N
     assert surface.values["answer"].declaration_span.start_line == 11
 
 
-def test_load_imported_surface_ignores_invalid_python_prelude_exports(tmp_path: Path) -> None:
+def test_load_imported_surface_ignores_invalid_python_prelude_exports(
+    tmp_path: Path,
+) -> None:
     module = tmp_path / "broken_python.kedi"
     module.write_text(
         "```\ndef broken(\n```\n\n> export:\n  broken\n",

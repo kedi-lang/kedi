@@ -123,7 +123,9 @@ def test_span_input_values_are_computed_correctly(monkeypatch: pytest.MonkeyPatc
     )
 
 
-def test_span_input_from_template_resolved_under_parallel(monkeypatch: pytest.MonkeyPatch):
+def test_span_input_from_template_resolved_under_parallel(
+    monkeypatch: pytest.MonkeyPatch,
+):
     # Review #1: under KEDI_PARALLEL the intermediate span input is a KediPromise in the runtime
     # env. The formatter must force() it; otherwise str() raises KediPromiseLeak, the surrounding
     # except swallows it, and it silently falls back to PROC-input keys (here "a", not "p").

@@ -23,7 +23,15 @@ from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
 from ...errors import KediTypeExecutionError
 from ...resolved_types import is_resolved_kedi_type
-from ..ast import TypeApply, TypeDef, TypeExpr, TypeLiteral, TypePython, TypeRef, TypeUnion
+from ..ast import (
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypeLiteral,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
 from ..type_introspection import make_type_init
 from .environment import build_type_env
 
@@ -453,7 +461,12 @@ def assign_value_from_native(
 
 def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
     """Detect the kind of RHS expression."""
-    from ..ast import CallSegment, PythonExprNativeSegment, PythonExprSegment, TextSegment
+    from ..ast import (
+        CallSegment,
+        PythonExprNativeSegment,
+        PythonExprSegment,
+        TextSegment,
+    )
 
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
 

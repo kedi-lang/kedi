@@ -26,7 +26,9 @@ from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder
 from kedi.optimization.services.dspy_prompt_extractor import DSPyPromptExtractor
 from kedi.optimization.services.dspy_score_calculator import DSPyScoreCalculator
 from kedi.optimization.services.gepa_metric_wrapper import GEPAMetricWrapper
-from kedi.optimization.services.program_loader import load_program_with_optimized_prompts
+from kedi.optimization.services.program_loader import (
+    load_program_with_optimized_prompts,
+)
 from kedi.optimization.services.type_handler import StructuredTypeHandler
 from kedi.optimization.utils import extract_output_fields
 from tests.optimization_helpers import parse_validation_program
@@ -188,7 +190,11 @@ def test_data_loader_empty_tuple_raises_clear_error():
     with pytest.raises(ValueError, match="empty tuple"):
         loader._format_data_as_tuples([()])
     # The lenient 3+ tuple normalization is unchanged (intentional, test-locked behavior).
-    assert loader._format_data_as_tuples([(1, 2), (3, 4, 5), 6]) == [(1, 2), (3, None), (6, None)]
+    assert loader._format_data_as_tuples([(1, 2), (3, 4, 5), 6]) == [
+        (1, 2),
+        (3, None),
+        (6, None),
+    ]
 
 
 # ==================== MetricFactory Tests ====================

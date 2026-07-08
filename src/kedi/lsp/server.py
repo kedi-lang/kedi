@@ -349,7 +349,10 @@ def make_server() -> LanguageServer:
         if uri is None:
             return {"uri": "", "data": []}
         source = _request_source(server, uri, params)
-        return {"uri": uri, **kedi_docstrings.compute_kedi_docstring_semantic_tokens(source)}
+        return {
+            "uri": uri,
+            **kedi_docstrings.compute_kedi_docstring_semantic_tokens(source),
+        }
 
     return server
 

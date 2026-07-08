@@ -35,7 +35,11 @@ from kedi.lang.ast import (
     VarArg,
 )
 from kedi.lang.compiler import environment as compiler_env
-from kedi.lang.compiler.environment import build_python_env, build_type_env, lookup_value
+from kedi.lang.compiler.environment import (
+    build_python_env,
+    build_type_env,
+    lookup_value,
+)
 from kedi.lang.compiler.evaluation import (
     _evaluate_arg,
     _stringify_segments,

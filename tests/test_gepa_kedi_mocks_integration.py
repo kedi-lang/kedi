@@ -20,7 +20,12 @@ from kedi.lang.ast import ProgramWithValidation
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.gepa import GEPAOptimizer
 from kedi.optimization.services import MetricFactory, TypeResolver
-from tests.dspy_mocks import RangeAwareAdapter, Recorder, dist_to_target, install_mock_dspy
+from tests.dspy_mocks import (
+    RangeAwareAdapter,
+    Recorder,
+    dist_to_target,
+    install_mock_dspy,
+)
 
 
 @pytest.fixture(autouse=True)

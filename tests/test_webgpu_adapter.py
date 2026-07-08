@@ -460,7 +460,10 @@ def test_webgpu_adapter_formats_schema_variants_as_xml() -> None:
     ("response", "message"),
     [
         ({"kind": "tool_call", "name": 1}, "name must be a string"),
-        ({"kind": "tool_call", "name": "tool", "arguments": []}, "arguments must be an object"),
+        (
+            {"kind": "tool_call", "name": "tool", "arguments": []},
+            "arguments must be an object",
+        ),
         ({"kind": "tool_call", "name": "missing"}, "unknown tool"),
     ],
 )

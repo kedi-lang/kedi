@@ -240,7 +240,10 @@ class AIMDLimiter:
         self.max_concurrency = max(1, max_concurrency)
         self.minimum = max(1, minimum)
         self._limit = float(
-            min(self.max_concurrency, initial or max(self.minimum, min(4, self.max_concurrency)))
+            min(
+                self.max_concurrency,
+                initial or max(self.minimum, min(4, self.max_concurrency)),
+            )
         )
         self._inflight = 0
         self._cv = threading.Condition()

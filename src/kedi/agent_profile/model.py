@@ -69,7 +69,10 @@ def eval_system_value(
     env: dict[str, Any],
 ) -> str:
     if template_lines:
-        from kedi.lang.compiler.evaluation import merge_template_block_lines, render_expression
+        from kedi.lang.compiler.evaluation import (
+            merge_template_block_lines,
+            render_expression,
+        )
 
         merged = merge_template_block_lines(list(template_lines))
         return render_expression(rt, merged.segments, env, context="system").strip()
