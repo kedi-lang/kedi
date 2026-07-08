@@ -173,6 +173,9 @@ Outputs are placeholders filled by the LLM using `[...]`:
 # Typed output with inline Python type annotation
 >> Top cities: [cities: `list[str]`]
 
+# Typed output with field description metadata
+>> Capital of Turkey is [capital: Annotated[str, "Canonical city name"]].
+
 # Multiple outputs on one line
 >> [first_name] [last_name] lives in [city: str]
 ```
@@ -180,6 +183,22 @@ Outputs are placeholders filled by the LLM using `[...]`:
 Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`
 
 Backtick-wrapped type expressions in outputs are evaluated at runtime, giving you access to dynamic types from the prelude or computed values.
+
+`Annotated[type, "description"]` can attach schema descriptions to output fields without
+using inline Python. The description must be a single-line string literal inside the
+`Annotated[...]` arguments; standalone string literals are not valid type annotations.
+Adapters that expose JSON schema, such as Pydantic AI and LangChain, pass this metadata
+as the field description:
+
+```kedi
+>> Extract the customer as [name: Annotated[str, "Full customer name"]].
+```
+
+Use backticks only when the type itself must come from runtime Python state:
+
+```kedi
+>> Extract [value: `output_type`].
+```
 
 ### Variable Assignment
 

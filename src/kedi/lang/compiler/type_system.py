@@ -23,7 +23,7 @@ from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
 from ...errors import KediTypeExecutionError
 from ...resolved_types import is_resolved_kedi_type
-from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
+from ..ast import TypeApply, TypeDef, TypeExpr, TypeLiteral, TypePython, TypeRef, TypeUnion
 from ..type_introspection import make_type_init
 from .environment import build_type_env
 
@@ -98,6 +98,9 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         if not _is_valid_type(result):
             raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
         return result
+
+    if isinstance(expr, TypeLiteral):
+        return expr.value
 
     return None
 
@@ -281,6 +284,8 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
         return f"{_typeexpr_to_str(e.left)} | {_typeexpr_to_str(e.right)}"
     if isinstance(e, TypePython):
         return f"`{e.code}`"
+    if isinstance(e, TypeLiteral):
+        return e.source or repr(e.value)
     return repr(e)
 
 

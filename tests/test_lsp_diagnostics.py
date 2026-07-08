@@ -22,6 +22,11 @@ def test_diagnostics_empty_for_valid_program():
     assert features.compute_diagnostics(src, "example.kedi") == []
 
 
+def test_diagnostics_accept_annotated_output_description():
+    src = '@p():\n  >> Capital is [capital: Annotated[str, "City name"]].\n'
+    assert features.compute_diagnostics(src, "example.kedi") == []
+
+
 def test_diagnostics_accept_tools_fixture() -> None:
     path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")

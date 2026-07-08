@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Callable,
     Coroutine,
@@ -14,10 +15,12 @@ from typing import (
     Mapping,
     Sequence,
     cast,
+    get_args,
+    get_origin,
 )
 
 import dspy
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
@@ -47,6 +50,16 @@ if TYPE_CHECKING:
 def make_repr(cls: type) -> str:
     _type_repr = repr(cls)
     return _type_repr if not _type_repr.startswith("<class") else cls.__name__
+
+
+def _output_field_definition(type_: ResolvedKediType) -> tuple[Any, Any]:
+    if get_origin(type_) is Annotated:
+        args = get_args(type_)
+        if args:
+            description = next((item for item in args[1:] if isinstance(item, str)), None)
+            if description is not None:
+                return args[0], Field(description=description)
+    return type_, ...
 
 
 def _mcp_toolset_from_config(name: str, server_config: dict[str, object]) -> Any:
@@ -125,7 +138,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         if not output_schema:
             raise ValueError("Output schema cannot be empty.")
-        field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
+        field_definitions = {
+            field: _output_field_definition(type_) for field, type_ in output_schema.items()
+        }
         model = build_dynamic_model("_OutputModel", BaseModel, field_definitions)
         return cast(type[OutputDataT], model)
 
@@ -305,7 +320,9 @@ class LangChainAdapter:
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
         if not output_schema:
             raise ValueError("Output schema cannot be empty.")
-        field_definitions = {field: (type_, ...) for field, type_ in output_schema.items()}
+        field_definitions = {
+            field: _output_field_definition(type_) for field, type_ in output_schema.items()
+        }
         return build_dynamic_model("_OutputModel", BaseModel, field_definitions)
 
     async def produce(

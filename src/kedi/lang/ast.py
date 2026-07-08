@@ -96,6 +96,14 @@ class TypePython(TypeExpr):
     code: str = ""
 
 
+@dataclass
+class TypeLiteral(TypeExpr):
+    """A literal value inside a type expression, e.g. Annotated[str, "description"]."""
+
+    value: Any = None
+    source: str = ""
+
+
 # =====================================================================
 # Segments used inside template / return expressions
 # =====================================================================

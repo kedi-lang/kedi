@@ -29,6 +29,7 @@ method per relevant CST node type, plus a small dispatcher
 
 from __future__ import annotations
 
+import ast as py_ast
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
@@ -88,6 +89,7 @@ from ..ast import (
     TypeDefStmt,
     TypeExpr,
     TypeField,
+    TypeLiteral,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -908,9 +910,9 @@ class _Walker:
             assert name_node is not None
             name = _identifier_name(self.source, name_node)
             args = [
-                self._walk_type_expr(arg)
+                self._walk_type_arg(arg)
                 for arg in _named_children(target)
-                if arg.type == "type_expr"
+                if arg.type == "type_arg"
             ]
             args = [a for a in args if a is not None]
             return TypeApply(name=name, args=args, loc=self._span(target))
@@ -928,6 +930,19 @@ class _Walker:
         self._error(target, f"unexpected type_expr inner {target.type!r}")
         return None
 
+    def _walk_type_arg(self, node: Node) -> Optional[TypeExpr]:
+        """Walk a ``type_arg`` wrapper inside generic type applications."""
+        target = _named_children(node)[0]
+        if target.type == "type_python":
+            body_node = _field(target, "code")
+            code = _decode_type_python_body(self.source, body_node) if body_node is not None else ""
+            return TypePython(code=code, loc=self._span(target))
+        if target.type == "type_string":
+            source = _src_text(self.source, target).strip()
+            value = py_ast.literal_eval(source)
+            return TypeLiteral(value=value, source=source, loc=self._span(target))
+        return self._walk_type_term(target)
+
     def _walk_type_term(self, node: Node) -> Optional[TypeExpr]:
         """Walk a node that is a `_type_expr_term` alternative (no `type_expr` wrapper)."""
         t = node.type
@@ -939,9 +954,7 @@ class _Walker:
             assert name_node is not None
             name = _identifier_name(self.source, name_node)
             args = [
-                self._walk_type_expr(arg)
-                for arg in _named_children(node)
-                if arg.type == "type_expr"
+                self._walk_type_arg(arg) for arg in _named_children(node) if arg.type == "type_arg"
             ]
             args = [a for a in args if a is not None]
             return TypeApply(name=name, args=args, loc=self._span(node))

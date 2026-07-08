@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import pytest
 
@@ -599,3 +599,19 @@ def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
             asyncio.run(adapter.produce("go", output_type=str))
     assert fake_run.await_args is not None
     assert fake_run.await_args.kwargs.get("toolsets") is not None
+
+
+def test_pydantic_adapter_output_schema_uses_annotated_description() -> None:
+    from kedi.agent_adapter.adapters import PydanticAdapter
+
+    model = PydanticAdapter.type_builder(
+        {"capital": Annotated[str, "Canonical city name returned by the model."]}
+    )
+
+    schema = model.model_json_schema()
+    assert schema["properties"]["capital"]["type"] == "string"
+    assert (
+        schema["properties"]["capital"]["description"]
+        == "Canonical city name returned by the model."
+    )
+    assert schema["required"] == ["capital"]

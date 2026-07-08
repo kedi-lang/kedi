@@ -30,6 +30,7 @@ from kedi.lang import (
     ProgramWithValidation,
     Span,
     TypeApply,
+    TypeLiteral,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -886,6 +887,37 @@ def test_type_apply_nested():
     inner = g.args[0]
     assert isinstance(inner, TypeApply) and inner.name == "list"
     assert isinstance(inner.args[0], TypeRef) and inner.args[0].name == "int"
+
+
+def test_type_apply_accepts_string_literal_metadata():
+    prog = parse_program('@p():\n  >> Capital is [capital: Annotated[str, "City name"]].\n')
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    out = next(s for s in block.lines[0].segments if isinstance(s, OutputSegment))
+    assert isinstance(out.type_expr, TypeApply)
+    assert out.type_expr.name == "Annotated"
+    assert isinstance(out.type_expr.args[0], TypeRef)
+    assert out.type_expr.args[0].name == "str"
+    assert isinstance(out.type_expr.args[1], TypeLiteral)
+    assert out.type_expr.args[1].value == "City name"
+    assert out.type_annotation == 'Annotated[str, "City name"]'
+
+
+def test_type_apply_accepts_inline_python_args():
+    prog = parse_program("@p():\n  >> Values: [values: list[`str`]].\n")
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    out = next(s for s in block.lines[0].segments if isinstance(s, OutputSegment))
+    assert isinstance(out.type_expr, TypeApply)
+    assert out.type_expr.name == "list"
+    assert isinstance(out.type_expr.args[0], TypePython)
+    assert out.type_expr.args[0].code == "str"
+    assert out.type_annotation == "list[`str`]"
+
+
+def test_string_literal_is_not_a_standalone_type_expr():
+    with pytest.raises(KediParseError):
+        parse_program('@p():\n  >> Capital is [capital: "City name"].\n')
 
 
 def test_type_union():
