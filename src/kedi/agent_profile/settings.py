@@ -92,11 +92,26 @@ CLAUDE_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
+CODEX_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "approval_policy",
+        "config",
+        "cwd",
+        "model_provider",
+        "personality",
+        "sandbox",
+        "service_tier",
+        "summary",
+        "timeout",
+    }
+)
+
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
     PYDANTIC_MODEL_SETTING_KEYS
     | DSPY_LM_SETTING_KEYS
     | LANGCHAIN_MODEL_SETTING_KEYS
     | CLAUDE_AGENT_SETTING_KEYS
+    | CODEX_AGENT_SETTING_KEYS
 )
 
 
@@ -141,3 +156,7 @@ def langchain_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
 
 def claude_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
     return {key: value for key, value in settings.items() if key in CLAUDE_AGENT_SETTING_KEYS}
+
+
+def codex_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
+    return {key: value for key, value in settings.items() if key in CODEX_AGENT_SETTING_KEYS}

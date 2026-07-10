@@ -5,6 +5,7 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from kedi.agent_adapter.adapters.claude import ClaudeAdapter
+from kedi.agent_adapter.adapters.codex import CodexAdapter
 from kedi.agent_adapter.adapters.dspy import DSPyAdapter
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from ...agent_profile import AgentProfile
     from ..tool_override import ToolSpec
 
-AvailableAdapter = ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter
+AvailableAdapter = CodexAdapter | ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter
 
 
 class LazyAdapter:

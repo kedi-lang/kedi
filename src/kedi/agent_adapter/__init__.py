@@ -4,6 +4,7 @@ from . import adapters
 from .adapters import (
     BrowserModelBridge,
     ClaudeAdapter,
+    CodexAdapter,
     DSPyAdapter,
     LangChainAdapter,
     LazyAdapter,
@@ -39,6 +40,7 @@ __all__ = [
     "AgentAdapterKind",
     "BrowserModelBridge",
     "ClaudeAdapter",
+    "CodexAdapter",
     "DSPyAdapter",
     "LangChainAdapter",
     "LazyAdapter",

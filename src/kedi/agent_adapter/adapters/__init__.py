@@ -4,13 +4,14 @@ from __future__ import annotations
 from pydantic_ai import Agent
 
 from .._schema import make_repr, output_field_definition as _output_field_definition
-from . import claude, dspy, langchain, lazy, pydantic, webgpu
+from . import claude, codex, dspy, langchain, lazy, pydantic, webgpu
 from .claude import (
     ClaudeAdapter,
     _claude_external_mcp_servers,
     _claude_sdk_tool,
     _output_json_schema,
 )
+from .codex import CodexAdapter
 from .dspy import DSPyAdapter
 from .langchain import (
     LangChainAdapter,
@@ -28,6 +29,7 @@ __all__ = [
     "Agent",
     "BrowserModelBridge",
     "ClaudeAdapter",
+    "CodexAdapter",
     "DSPyAdapter",
     "LangChainAdapter",
     "LazyAdapter",
@@ -44,6 +46,7 @@ __all__ = [
     "_output_json_schema",
     "_output_field_definition",
     "claude",
+    "codex",
     "dspy",
     "langchain",
     "lazy",
