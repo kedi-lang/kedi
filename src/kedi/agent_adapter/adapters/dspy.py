@@ -7,14 +7,14 @@ from typing import Any, Callable, Iterator, Sequence, cast
 
 import dspy
 
-from ..agent_profile import AgentProfile
-from ..agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
-from ..dynamic_models import build_dynamic_model
-from ..model_normalization import normalize_for_litellm
-from ..resolved_types import ResolvedKediType
-from .llm_wrapper import ThinkingStrippingLM
-from .meta import AdapterCapabilities, AgentAdapterKind
-from .tool_override import ToolScope, ToolSpec
+from ...agent_profile import AgentProfile
+from ...agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
+from ...dynamic_models import build_dynamic_model
+from ...model_normalization import normalize_for_litellm
+from ...resolved_types import ResolvedKediType
+from ..llm_wrapper import ThinkingStrippingLM
+from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..tool_override import ToolScope, ToolSpec
 
 
 class DSPyAdapter:
@@ -88,7 +88,7 @@ class DSPyAdapter:
         return self._tool_scope.tool_scope(tools)
 
     def register_tool(self, tool: ToolSpec) -> None:
-        from .utils import dspy_sync_tool_function, dspy_tool_arg_desc, dspy_tool_args
+        from ..utils import dspy_sync_tool_function, dspy_tool_arg_desc, dspy_tool_args
 
         kwargs: dict[str, Any] = {
             "func": dspy_sync_tool_function(tool.fn),
@@ -158,7 +158,7 @@ class DSPyAdapter:
         """
         if not output_schema:
             raise ValueError("Output spec must be provided.")
-        from .utils import run_sync
+        from ..utils import run_sync
 
         kwargs.pop("user_prompt", None)
         sig = self.type_builder(output_schema)

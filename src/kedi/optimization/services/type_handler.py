@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from ...agent_adapter.dspy import DSPyAdapter
+from ...agent_adapter.adapters.dspy import DSPyAdapter
 from ...agent_adapter.utils import run_sync
 from ...lang.compiler.environment import KediRuntime
 from ...lang.compiler.type_system import KediType

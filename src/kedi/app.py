@@ -6,11 +6,11 @@ import sys
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.claude import ClaudeAdapter
-from .agent_adapter.dspy import DSPyAdapter
-from .agent_adapter.langchain import LangChainAdapter
-from .agent_adapter.pydantic import PydanticAdapter
-from .agent_adapter.lazy import LazyAdapter
+from .agent_adapter.adapters.claude import ClaudeAdapter
+from .agent_adapter.adapters.dspy import DSPyAdapter
+from .agent_adapter.adapters.langchain import LangChainAdapter
+from .agent_adapter.adapters.pydantic import PydanticAdapter
+from .agent_adapter.adapters.lazy import LazyAdapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError

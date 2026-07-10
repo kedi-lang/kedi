@@ -20,12 +20,12 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic_ai import format_as_xml
 from pydantic_core import to_jsonable_python
 
-from ..agent_profile import AgentProfile, McpServerSpec, McpTransport
-from ..agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
-from ..dynamic_models import build_dynamic_model
-from ..resolved_types import ResolvedKediType
-from .meta import AdapterCapabilities, AgentAdapterKind
-from .tool_override import ToolScope, ToolSpec
+from ...agent_profile import AgentProfile, McpServerSpec, McpTransport
+from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
+from ...dynamic_models import build_dynamic_model
+from ...resolved_types import ResolvedKediType
+from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..tool_override import ToolScope, ToolSpec
 
 
 class BrowserModelBridge(Protocol):
@@ -274,7 +274,7 @@ class WebGPUAdapter:
         instructions: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        from .utils import run_sync
+        from ..utils import run_sync
 
         return run_sync(
             self.produce(

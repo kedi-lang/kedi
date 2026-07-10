@@ -444,7 +444,7 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
         assert output_schema == {"x": str}
         return FakeSignature()
 
-    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.dspy.ReAct", FakeReAct)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
@@ -540,7 +540,7 @@ async def fetch(url: str) -> str:
         assert output_schema == {"x": str}
         return FakeSignature()
 
-    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.dspy.ReAct", FakeReAct)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)

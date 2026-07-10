@@ -11,14 +11,14 @@ from typing import Any, Coroutine, Iterator, Mapping, Sequence, cast
 
 from pydantic import BaseModel
 
-from ..agent_profile import AgentProfile
-from ..agent_profile.settings import CLAUDE_AGENT_SETTING_KEYS, claude_agent_settings
-from ..dynamic_models import build_dynamic_model
-from ..effort import pydantic_effort_value
-from ..resolved_types import ResolvedKediType
-from ._schema import output_field_definition
-from .meta import AdapterCapabilities, AgentAdapterKind
-from .tool_override import ToolScope, ToolSpec
+from ...agent_profile import AgentProfile
+from ...agent_profile.settings import CLAUDE_AGENT_SETTING_KEYS, claude_agent_settings
+from ...dynamic_models import build_dynamic_model
+from ...effort import pydantic_effort_value
+from ...resolved_types import ResolvedKediType
+from .._schema import output_field_definition
+from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..tool_override import ToolScope, ToolSpec
 
 OutputDataT = Any
 
@@ -122,7 +122,7 @@ class ClaudeAdapter:
         output_type: type[OutputDataT] | None = None,
         **kwargs: Any,
     ) -> OutputDataT:
-        from .utils import run_sync
+        from ..utils import run_sync
 
         return run_sync(
             self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)

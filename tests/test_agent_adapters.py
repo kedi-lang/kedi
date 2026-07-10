@@ -23,9 +23,9 @@ from kedi.agent_adapter import (
     WebGPUAdapter,
     adapters as adapters_module,
 )
-from kedi.agent_adapter import claude as claude_adapter_module
-from kedi.agent_adapter import dspy as dspy_adapter_module
-from kedi.agent_adapter import pydantic as pydantic_adapter_module
+from kedi.agent_adapter.adapters import claude as claude_adapter_module
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.adapters import (
     ClaudeAdapter,
     DSPyAdapter,
@@ -1159,7 +1159,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
             configure_calls.append(kwargs)
 
     monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeTSLM)
-    monkeypatch.setattr(adapters_module.dspy, "settings", FakeSettings())
+    monkeypatch.setattr(dspy_adapter_module.dspy, "settings", FakeSettings())
 
     DSPyAdapter(model="openai:gpt-4o-mini", max_tokens=12, temperature=0.25, provider=None)
 
@@ -1175,7 +1175,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
     assert configure_calls and isinstance(configure_calls[0]["lm"], FakeTSLM)
 
     signature = DSPyAdapter.type_builder({"answer": int})
-    assert issubclass(signature, adapters_module.dspy.Signature)
+    assert issubclass(signature, dspy_adapter_module.dspy.Signature)
 
     with pytest.raises(ValueError, match="Output schema must be provided"):
         DSPyAdapter.type_builder({})
@@ -1229,7 +1229,7 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         assert output_schema == {"answer": str}
         return FakeSignature()
 
-    monkeypatch.setattr(adapters_module.dspy, "Predict", FakePredict)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
@@ -1323,8 +1323,8 @@ def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
         async def acall(self, **kwargs: Any) -> dict[str, Any]:
             return {"tools": self.tools, **kwargs}
 
-    monkeypatch.setattr(adapters_module.dspy, "Tool", FakeTool)
-    monkeypatch.setattr(adapters_module.dspy, "ReAct", FakeReAct)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "Tool", FakeTool)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "ReAct", FakeReAct)
 
     adapter = object.__new__(DSPyAdapter)
     adapter._tool_scope = ToolScope()

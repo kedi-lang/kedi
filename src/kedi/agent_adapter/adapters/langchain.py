@@ -9,15 +9,15 @@ from typing import Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
 
-from ..agent_profile import AgentProfile
-from ..agent_profile.settings import LANGCHAIN_MODEL_SETTING_KEYS, langchain_model_settings
-from ..dynamic_models import build_dynamic_model
-from ..effort import pydantic_effort_value
-from ..model_normalization import normalize_for_langchain
-from ..resolved_types import ResolvedKediType
-from ._schema import output_field_definition
-from .meta import AdapterCapabilities, AgentAdapterKind
-from .tool_override import ToolScope, ToolSpec
+from ...agent_profile import AgentProfile
+from ...agent_profile.settings import LANGCHAIN_MODEL_SETTING_KEYS, langchain_model_settings
+from ...dynamic_models import build_dynamic_model
+from ...effort import pydantic_effort_value
+from ...model_normalization import normalize_for_langchain
+from ...resolved_types import ResolvedKediType
+from .._schema import output_field_definition
+from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..tool_override import ToolScope, ToolSpec
 
 
 class LangChainAdapter:
@@ -109,7 +109,7 @@ class LangChainAdapter:
         output_type: type[OutputDataT] | None = None,
         **kwargs: Any,
     ) -> OutputDataT:
-        from .utils import run_sync
+        from ..utils import run_sync
 
         return run_sync(
             self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
@@ -221,7 +221,7 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
 def _langchain_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
     @wraps(fn)
     def _tool(*args: Any, **kwargs: Any) -> Any:
-        from .utils import run_sync
+        from ..utils import run_sync
 
         result = fn(*args, **kwargs)
         if inspect.isawaitable(result):

@@ -20,7 +20,7 @@ import dotenv
 from typing_extensions import Sentinel
 
 from .agent_adapter import AgentAdapter
-from .agent_adapter.lazy import LazyAdapter
+from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .effort import EffortValue
 from .lang import compile_program, parse_program
@@ -379,24 +379,24 @@ def _decorate_kedi_program(
 def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: Mapping[str, Any]):
     def factory() -> AgentAdapter[Any]:
         if adapter_name == "pydantic":
-            from .agent_adapter.pydantic import PydanticAdapter
+            from .agent_adapter.adapters.pydantic import PydanticAdapter
 
             return PydanticAdapter(model, **dict(adapter_kwargs))
 
         if adapter_name == "langchain":
-            from .agent_adapter.langchain import LangChainAdapter
+            from .agent_adapter.adapters.langchain import LangChainAdapter
 
             return LangChainAdapter(model, **dict(adapter_kwargs))
 
         if adapter_name == "claude":
-            from .agent_adapter.claude import ClaudeAdapter
+            from .agent_adapter.adapters.claude import ClaudeAdapter
 
             return ClaudeAdapter(model, **dict(adapter_kwargs))
 
         if model is None:
             raise ValueError("DSPy adapter requires an explicit model.")
 
-        from .agent_adapter.dspy import DSPyAdapter
+        from .agent_adapter.adapters.dspy import DSPyAdapter
 
         return DSPyAdapter(model, **dict(adapter_kwargs))
 

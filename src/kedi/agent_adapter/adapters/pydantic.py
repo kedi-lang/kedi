@@ -10,15 +10,15 @@ from pydantic_ai._run_context import AgentDepsT
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
 
-from ..agent_profile import AgentProfile
-from ..agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS, pydantic_model_settings
-from ..dynamic_models import build_dynamic_model
-from ..effort import pydantic_effort_value
-from ..model_normalization import normalize_for_pydantic_ai
-from ..resolved_types import ResolvedKediType
-from ._schema import output_field_definition
-from .meta import AdapterCapabilities, AgentAdapterKind
-from .tool_override import ToolScope, ToolSpec
+from ...agent_profile import AgentProfile
+from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS, pydantic_model_settings
+from ...dynamic_models import build_dynamic_model
+from ...effort import pydantic_effort_value
+from ...model_normalization import normalize_for_pydantic_ai
+from ...resolved_types import ResolvedKediType
+from .._schema import output_field_definition
+from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..tool_override import ToolScope, ToolSpec
 
 if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
@@ -143,7 +143,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["model_settings"] = {**existing_settings, **model_settings}
             else:
                 run_kwargs["model_settings"] = model_settings
-        from .utils import inside_kedi_tool_call
+        from ..utils import inside_kedi_tool_call
 
         toolsets = self._toolsets_for_run(include_scoped_tools=not inside_kedi_tool_call())
         if toolsets is not None:
@@ -154,7 +154,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         return (await agent.run(template, **cast(Any, run_kwargs))).output
 
     def _agent_for_produce(self) -> Agent[Any, Any]:
-        from .utils import inside_kedi_tool_call
+        from ..utils import inside_kedi_tool_call
 
         if not inside_kedi_tool_call():
             return self
@@ -212,7 +212,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         """
         Synchronous version of produce method.
         """
-        from .utils import run_sync
+        from ..utils import run_sync
 
         return run_sync(
             self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)

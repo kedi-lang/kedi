@@ -4,15 +4,15 @@ from contextlib import AbstractContextManager
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from kedi.agent_adapter.claude import ClaudeAdapter
-from kedi.agent_adapter.dspy import DSPyAdapter
-from kedi.agent_adapter.langchain import LangChainAdapter
+from kedi.agent_adapter.adapters.claude import ClaudeAdapter
+from kedi.agent_adapter.adapters.dspy import DSPyAdapter
+from kedi.agent_adapter.adapters.langchain import LangChainAdapter
+from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
-from kedi.agent_adapter.pydantic import PydanticAdapter
 
 if TYPE_CHECKING:
-    from ..agent_profile import AgentProfile
-    from .tool_override import ToolSpec
+    from ...agent_profile import AgentProfile
+    from ..tool_override import ToolSpec
 
 AvailableAdapter = ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter
 

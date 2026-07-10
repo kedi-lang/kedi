@@ -7,8 +7,8 @@ from typing import Any, cast
 
 import pytest
 
-from kedi.agent_adapter import dspy as dspy_adapter_module
-from kedi.agent_adapter import pydantic as pydantic_adapter_module
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compile import (

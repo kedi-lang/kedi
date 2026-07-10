@@ -10,7 +10,7 @@ import pytest
 from dspy import BaseLM
 
 from kedi.agent_adapter import AgentAdapter
-from kedi.agent_adapter import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.optimization import gepa_reflection as gepa_reflection_module
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict

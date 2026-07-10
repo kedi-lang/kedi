@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 
 import kedi.app as app
-from kedi.agent_adapter.lazy import LazyAdapter
+from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.app import run_program_cli
 from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
