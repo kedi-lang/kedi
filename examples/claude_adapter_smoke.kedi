@@ -1,0 +1,42 @@
+```
+from typing import Annotated
+```
+
+~CityRecommendation(
+  city: str,
+  country: str,
+  timezone: str,
+  landmark: str,
+  travel_note: str
+)
+
+> model: claude-haiku-4-5-20251001
+> effort: low
+> settings:
+  max_turns: 6
+> system:
+  You are a concise travel planner.
+  You must call lookup_city_facts before producing the recommendation.
+  Ground every returned field in the tool result.
+
+@lookup_city_facts(city: str) -> str:
+  ###
+  Return a compact fact record for a known city.
+
+  Args:
+      city: City name to look up.
+  ###
+  = ```
+  facts = {
+      "Kyoto": "city=Kyoto; country=Japan; timezone=Asia/Tokyo; landmark=Fushimi Inari; note=Best for temples and quiet walking routes.",
+      "Lisbon": "city=Lisbon; country=Portugal; timezone=Europe/Lisbon; landmark=Belem Tower; note=Best for hills, trams, and Atlantic food.",
+      "Reykjavik": "city=Reykjavik; country=Iceland; timezone=Atlantic/Reykjavik; landmark=Hallgrimskirkja; note=Best for northern lights day trips.",
+  }
+  return facts.get(city, f"city={city}; country=Unknown; timezone=Unknown; landmark=Unknown; note=No curated note.")
+  ```
+
+> use: lookup_city_facts
+
+>> Pick one city from Kyoto, Lisbon, or Reykjavik for a two-day culture trip. Use lookup_city_facts for the chosen city, then return [recommendation: Annotated[CityRecommendation, "Tool-grounded city recommendation"]].
+
+= <recommendation>

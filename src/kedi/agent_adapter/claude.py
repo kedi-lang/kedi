@@ -113,7 +113,7 @@ class ClaudeAdapter:
         structured_output = getattr(result, "structured_output", None)
         if structured_output is None:
             raise ValueError("Claude Agent SDK did not return structured_output.")
-        return cast(OutputDataT, _structured_output_value(structured_output, resolved_output_type))
+        return _structured_output_value(structured_output, resolved_output_type)
 
     def produce_sync(
         self,
@@ -256,8 +256,8 @@ def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
     json_schema = tool.json_schema or {"type": "object", "properties": {}}
     description = tool.description or tool.name
 
-    async def _call(**kwargs: Any) -> dict[str, Any]:
-        result = tool.fn(**kwargs)
+    async def _call(args: dict[str, Any]) -> dict[str, Any]:
+        result = tool.fn(**args)
         if inspect.isawaitable(result):
             result = await cast(Coroutine[Any, Any, Any], result)
         return {

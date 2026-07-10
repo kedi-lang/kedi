@@ -724,7 +724,7 @@ def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
     assert options["mcp_servers"]["kedi"] == events["servers"][0]
     assert options["allowed_tools"] == ["existing-tool", "mcp__kedi__lookup"]
 
-    tool_result = asyncio.run(events["tools"][0](query="docs"))
+    tool_result = asyncio.run(events["tools"][0]({"query": "docs"}))
     assert tool_result == {"content": [{"type": "text", "text": '{"found": "docs"}'}]}
 
 
@@ -748,7 +748,7 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
         assert adapter.scoped_tools == (spec,)
         assert adapter.produce_sync("template", output_type=str) == "plain"
     assert adapter.scoped_tools == ()
-    assert asyncio.run(events["tools"][-1]()) == {"content": [{"type": "text", "text": "ok"}]}
+    assert asyncio.run(events["tools"][-1]({})) == {"content": [{"type": "text", "text": "ok"}]}
 
 
 def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
