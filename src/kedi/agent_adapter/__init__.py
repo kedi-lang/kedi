@@ -1,6 +1,16 @@
 from typing import Any
 
-from .meta import AgentAdapter, T
+from .claude import ClaudeAdapter
+from .dspy import DSPyAdapter
+from .langchain import LangChainAdapter
+from .meta import (
+    AdapterCapabilities,
+    AdapterCapability,
+    AgentAdapter,
+    AgentAdapterKind,
+    T,
+)
+from .pydantic import PydanticAdapter
 from .tool_override import SupportsToolRegistration, ToolSpec
 from .webgpu import BrowserModelBridge, WebGPUAdapter
 
@@ -19,7 +29,14 @@ def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
 
 __all__ = [
     "AgentAdapter",
+    "AdapterCapabilities",
+    "AdapterCapability",
+    "AgentAdapterKind",
     "BrowserModelBridge",
+    "ClaudeAdapter",
+    "DSPyAdapter",
+    "LangChainAdapter",
+    "PydanticAdapter",
     "SupportsToolRegistration",
     "T",
     "ToolSpec",

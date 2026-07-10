@@ -33,7 +33,7 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 )
 @click.option(
     "--adapter",
-    type=click.Choice(["pydantic", "dspy", "langchain"]),
+    type=click.Choice(["pydantic", "dspy", "langchain", "claude"]),
     envvar="KEDI_ADAPTER",
     default="pydantic",
     help="Backend adapter for template execution",

@@ -4,16 +4,24 @@ from contextlib import AbstractContextManager
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
+from kedi.agent_adapter.claude import ClaudeAdapter
+from kedi.agent_adapter.dspy import DSPyAdapter
+from kedi.agent_adapter.langchain import LangChainAdapter
+from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
+from kedi.agent_adapter.pydantic import PydanticAdapter
 
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile
     from .tool_override import ToolSpec
 
-AvailableAdapter = DSPyAdapter | LangChainAdapter | PydanticAdapter
+AvailableAdapter = ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter
 
 
 class LazyAdapter:
+    kind: AgentAdapterKind = "agent-framework"
+    shortname = "lazy"
+    capabilities = AdapterCapabilities()
+
     """Builds the real adapter on first LLM use so the program runs exactly once.
 
     Programs fully covered by generated/native code never construct an adapter (no

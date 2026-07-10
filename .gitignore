@@ -241,3 +241,4 @@ features.md
 plans/
 /*.py
 .uv-cache
+/kedi-mcp

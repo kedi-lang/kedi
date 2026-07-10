@@ -5,7 +5,7 @@ from typing import Any, Iterator
 
 import pytest
 
-from kedi.agent_adapter import adapters as adapters_module
+from kedi.agent_adapter import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import DSPyAdapter
 from kedi.agent_profile import AgentProfile
 
@@ -43,10 +43,10 @@ def _record_dspy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Any]]:
         def __call__(self, **kwargs: Any) -> dict[str, Any]:
             return dict(kwargs)
 
-    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeLM)
-    monkeypatch.setattr(adapters_module.dspy, "settings", FakeSettings())
-    monkeypatch.setattr(adapters_module.dspy, "context", fake_context)
-    monkeypatch.setattr(adapters_module.dspy, "Predict", FakePredict)
+    monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeLM)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "settings", FakeSettings())
+    monkeypatch.setattr(dspy_adapter_module.dspy, "context", fake_context)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(lambda _schema: FakeSignature()))
     yield contexts
 

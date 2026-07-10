@@ -29,7 +29,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
-AdapterName = Literal["pydantic", "dspy", "langchain"]
+AdapterName = Literal["pydantic", "dspy", "langchain", "claude"]
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
@@ -379,19 +379,24 @@ def _decorate_kedi_program(
 def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: Mapping[str, Any]):
     def factory() -> AgentAdapter[Any]:
         if adapter_name == "pydantic":
-            from .agent_adapter.adapters import PydanticAdapter
+            from .agent_adapter.pydantic import PydanticAdapter
 
             return PydanticAdapter(model, **dict(adapter_kwargs))
 
         if adapter_name == "langchain":
-            from .agent_adapter.adapters import LangChainAdapter
+            from .agent_adapter.langchain import LangChainAdapter
 
             return LangChainAdapter(model, **dict(adapter_kwargs))
+
+        if adapter_name == "claude":
+            from .agent_adapter.claude import ClaudeAdapter
+
+            return ClaudeAdapter(model, **dict(adapter_kwargs))
 
         if model is None:
             raise ValueError("DSPy adapter requires an explicit model.")
 
-        from .agent_adapter.adapters import DSPyAdapter
+        from .agent_adapter.dspy import DSPyAdapter
 
         return DSPyAdapter(model, **dict(adapter_kwargs))
 
@@ -448,9 +453,10 @@ def _build_config(
     adapter_obj: AgentAdapter[Any] | LazyAdapter | None
     adapter_name: AdapterName
     if isinstance(adapter_default, str):
-        if adapter_default not in ("pydantic", "dspy", "langchain"):
+        if adapter_default not in ("pydantic", "dspy", "langchain", "claude"):
             raise ValueError(
-                "adapter must be 'pydantic', 'dspy', 'langchain', or an AgentAdapter instance"
+                "adapter must be 'pydantic', 'dspy', 'langchain', 'claude', "
+                "or an AgentAdapter instance"
             )
         adapter_name = cast(AdapterName, adapter_default)
         merged_kwargs = {**dict(base_adapter_kwargs), **dict(adapter_kwargs)}

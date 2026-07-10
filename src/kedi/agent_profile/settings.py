@@ -79,8 +79,24 @@ LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
+CLAUDE_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "allowed_tools",
+        "cwd",
+        "disallowed_tools",
+        "env",
+        "fallback_model",
+        "max_budget_usd",
+        "max_turns",
+        "permission_mode",
+    }
+)
+
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
-    PYDANTIC_MODEL_SETTING_KEYS | DSPY_LM_SETTING_KEYS | LANGCHAIN_MODEL_SETTING_KEYS
+    PYDANTIC_MODEL_SETTING_KEYS
+    | DSPY_LM_SETTING_KEYS
+    | LANGCHAIN_MODEL_SETTING_KEYS
+    | CLAUDE_AGENT_SETTING_KEYS
 )
 
 
@@ -121,3 +137,7 @@ def dspy_lm_settings(settings: SettingsMap) -> dict[str, SettingValue]:
 
 def langchain_model_settings(settings: SettingsMap) -> dict[str, SettingValue]:
     return {key: value for key, value in settings.items() if key in LANGCHAIN_MODEL_SETTING_KEYS}
+
+
+def claude_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
+    return {key: value for key, value in settings.items() if key in CLAUDE_AGENT_SETTING_KEYS}

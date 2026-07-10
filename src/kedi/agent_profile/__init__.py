@@ -22,9 +22,11 @@ from .registry import (
     ProfileToolMember,
 )
 from .settings import (
+    CLAUDE_AGENT_SETTING_KEYS,
     DSPY_LM_SETTING_KEYS,
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
+    claude_agent_settings,
     dspy_lm_settings,
     is_valid_model_setting_key,
     parse_plain_setting_value,
@@ -37,6 +39,7 @@ __all__ = [
     "AgentProfile",
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",
+    "CLAUDE_AGENT_SETTING_KEYS",
     "McpServerSpec",
     "McpTransport",
     "ProfileDefinition",
@@ -50,6 +53,7 @@ __all__ = [
     "MODEL_SETTING_KEYS",
     "PYDANTIC_MODEL_SETTING_KEYS",
     "block_agent_profile_scope",
+    "claude_agent_settings",
     "current_block_agent_profile",
     "dspy_lm_settings",
     "eval_effort_directive",

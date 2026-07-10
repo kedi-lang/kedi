@@ -57,6 +57,9 @@ kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
 
 [project.optional-dependencies]
+claude = [
+    "claude-agent-sdk",
+]
 playground = [
     "basedpyright>=1.39.6",
     "fastapi>=0.138.1",

@@ -14,8 +14,20 @@ import pytest
 from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
-from kedi.agent_adapter import adapters as adapters_module
+from kedi.agent_adapter import (
+    AdapterCapabilities,
+    ClaudeAdapter as ExportedClaudeAdapter,
+    DSPyAdapter as ExportedDSPyAdapter,
+    LangChainAdapter as ExportedLangChainAdapter,
+    PydanticAdapter as ExportedPydanticAdapter,
+    WebGPUAdapter,
+    adapters as adapters_module,
+)
+from kedi.agent_adapter import claude as claude_adapter_module
+from kedi.agent_adapter import dspy as dspy_adapter_module
+from kedi.agent_adapter import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.adapters import (
+    ClaudeAdapter,
     DSPyAdapter,
     LangChainAdapter,
     PydanticAdapter,
@@ -55,6 +67,53 @@ def test_make_repr_uses_class_name_for_standard_class_repr() -> None:
     assert make_repr(Custom) == "Custom"
 
 
+def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
+    expected = [
+        (PydanticAdapter, ExportedPydanticAdapter, "pydantic"),
+        (LangChainAdapter, ExportedLangChainAdapter, "langchain"),
+        (DSPyAdapter, ExportedDSPyAdapter, "dspy"),
+    ]
+    for adapter_cls, exported_cls, shortname in expected:
+        assert adapter_cls is exported_cls
+        assert adapter_cls.kind == "agent-framework"
+        assert adapter_cls.shortname == shortname
+        assert isinstance(adapter_cls.capabilities, AdapterCapabilities)
+        assert adapter_cls.capabilities.supports("structured_output")
+
+    assert WebGPUAdapter.kind == "agent-framework"
+    assert WebGPUAdapter.shortname == "webgpu"
+    assert WebGPUAdapter.capabilities.supports("tool_registration")
+    assert ClaudeAdapter is ExportedClaudeAdapter
+    assert ClaudeAdapter.kind == "agent-harness"
+    assert ClaudeAdapter.shortname == "claude"
+    assert ClaudeAdapter.capabilities.supports("mcp")
+
+
+def test_adapter_capabilities_support_boolean_fields() -> None:
+    empty = AdapterCapabilities()
+    assert not empty.supports("structured_output")
+
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_mcp=True,
+        supports_profile_override=True,
+        supports_model_override=True,
+        supports_effort=True,
+        supports_settings=True,
+        supports_codemode=True,
+    )
+
+    assert capabilities.supports("structured_output")
+    assert capabilities.supports("tool_registration")
+    assert capabilities.supports("mcp")
+    assert capabilities.supports("profile_override")
+    assert capabilities.supports("model_override")
+    assert capabilities.supports("effort")
+    assert capabilities.supports("settings")
+    assert capabilities.supports("codemode")
+
+
 def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -65,7 +124,7 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         initialized_models.append(model)
         initialized_kwargs.append(kwargs)
 
-    monkeypatch.setattr(adapters_module.Agent, "__init__", fake_agent_init)
+    monkeypatch.setattr(pydantic_adapter_module.Agent, "__init__", fake_agent_init)
 
     adapter = cast(Any, PydanticAdapter(model="openai/gpt-4o-mini"))
     PydanticAdapter(model=TestModel())
@@ -169,7 +228,7 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
             assert kwargs == {}
             return SimpleNamespace(output=output_type(x="Konya"))
 
-    monkeypatch.setattr(adapters_module, "Agent", FreshAgent)
+    monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
     assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
@@ -226,10 +285,10 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
     langchain_mcp_adapters = ModuleType("langchain_mcp_adapters")
     langchain_mcp_client = ModuleType("langchain_mcp_adapters.client")
 
-    chat_models.init_chat_model = fake_init_chat_model  # type: ignore[attr-defined]
-    agents.create_agent = fake_create_agent  # type: ignore[attr-defined]
-    langchain_core_tools.StructuredTool = FakeStructuredTool  # type: ignore[attr-defined]
-    langchain_mcp_client.MultiServerMCPClient = FakeMCPClient  # type: ignore[attr-defined]
+    setattr(chat_models, "init_chat_model", fake_init_chat_model)
+    setattr(agents, "create_agent", fake_create_agent)
+    setattr(langchain_core_tools, "StructuredTool", FakeStructuredTool)
+    setattr(langchain_mcp_client, "MultiServerMCPClient", FakeMCPClient)
 
     monkeypatch.setitem(sys.modules, "langchain", langchain)
     monkeypatch.setitem(sys.modules, "langchain.chat_models", chat_models)
@@ -278,7 +337,7 @@ def test_langchain_adapter_produces_with_structured_output_and_profile(
             )
         )
 
-    assert result.answer == "ok"
+    assert cast(Any, result).answer == "ok"
     assert events["models"] == [
         {
             "model": "openai:gpt-4o-mini",
@@ -547,6 +606,302 @@ def test_langchain_adapter_dependency_errors(monkeypatch: pytest.MonkeyPatch) ->
     assert asyncio.run(adapter._mcp_tools_for_profile(AgentProfile.empty())) == []
 
 
+def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    events: dict[str, Any] = {
+        "options": [],
+        "prompts": [],
+        "tools": [],
+        "servers": [],
+        "prefix_message": object(),
+        "structured_output": {"answer": "ok"},
+    }
+
+    class FakeClaudeAgentOptions:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            events["options"].append(kwargs)
+
+    class FakeResultMessage:
+        def __init__(self, structured_output: Any = None, *, is_error: bool = False) -> None:
+            self.structured_output = structured_output
+            self.is_error = is_error
+            self.result = "failed"
+
+    async def fake_query(*, prompt: str, options: Any) -> Any:
+        events["prompts"].append({"prompt": prompt, "options": options})
+        prefix_message = events.get("prefix_message")
+        if prefix_message is not None:
+            yield prefix_message
+        yield FakeResultMessage(events["structured_output"])
+
+    def fake_tool(*, name: str, description: str, input_schema: dict[str, Any]) -> Any:
+        def _decorate(fn: Any) -> Any:
+            fn.name = name
+            fn.description = description
+            fn.input_schema = input_schema
+            events["tools"].append(fn)
+            return fn
+
+        return _decorate
+
+    def fake_create_sdk_mcp_server(*, name: str, tools: list[Any]) -> dict[str, Any]:
+        server = {"name": name, "tools": tools}
+        events["servers"].append(server)
+        return server
+
+    sdk = ModuleType("claude_agent_sdk")
+    setattr(sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
+    setattr(sdk, "ResultMessage", FakeResultMessage)
+    setattr(sdk, "query", fake_query)
+    setattr(sdk, "tool", fake_tool)
+    setattr(sdk, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", sdk)
+    return events
+
+
+def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+
+    async def lookup(query: str) -> dict[str, str]:
+        return {"found": query}
+
+    adapter = ClaudeAdapter(
+        model="claude-sonnet-4",
+        model_settings={"max_turns": 3, "temperature": 0.2},
+    )
+    adapter.register_tool(
+        ToolSpec(
+            fn=lookup,
+            name="lookup",
+            description="Look up docs.",
+            json_schema={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+            metadata={"source": "kedi"},
+        )
+    )
+
+    with adapter.profile_override(
+        AgentProfile(
+            model="claude-opus-4",
+            effort="max",
+            system="Profile system.",
+            settings={"cwd": "/tmp/project", "max_tokens": 99},
+            mcp_servers=(McpServerSpec(transport="http", url="http://localhost/mcp"),),
+        )
+    ):
+        result = asyncio.run(
+            adapter.produce(
+                "template",
+                output_schema={"answer": str},
+                instructions="Runtime instructions.",
+                allowed_tools=["existing-tool"],
+                mcp_servers={"existing": {"type": "stdio", "command": "existing"}},
+            )
+        )
+
+    assert cast(Any, result).answer == "ok"
+    assert adapter.default_model() == "claude-sonnet-4"
+    assert events["prompts"][0]["prompt"] == "template"
+    options = events["options"][0]
+    assert options["model"] == "claude-opus-4"
+    assert options["max_turns"] == 3
+    assert options["cwd"] == "/tmp/project"
+    assert options["effort"] == "xhigh"
+    assert options["system_prompt"] == "Runtime instructions."
+    assert options["output_format"]["type"] == "json_schema"
+    assert set(options["output_format"]["schema"]["properties"]) == {"answer"}
+    assert "temperature" not in options
+    assert options["mcp_servers"]["existing"] == {"type": "stdio", "command": "existing"}
+    assert options["mcp_servers"]["kedi_mcp_0"] == {
+        "type": "http",
+        "url": "http://localhost/mcp",
+    }
+    assert options["mcp_servers"]["kedi"] == events["servers"][0]
+    assert options["allowed_tools"] == ["existing-tool", "mcp__kedi__lookup"]
+
+    tool_result = asyncio.run(events["tools"][0](query="docs"))
+    assert tool_result == {"content": [{"type": "text", "text": '{"found": "docs"}'}]}
+
+
+def test_claude_adapter_supports_output_type_sync_and_tool_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    events["structured_output"] = DirectAnswer(answer="sync")
+    adapter = ClaudeAdapter(model=None)
+
+    assert adapter.default_model() is None
+    assert adapter.produce_sync("template", output_type=DirectAnswer).answer == "sync"
+    assert events["options"][0]["output_format"]["schema"]["title"] == "DirectAnswer"
+    assert "model" not in events["options"][0]
+
+    events["structured_output"] = "plain"
+    assert adapter.produce_sync("template", output_type=str) == "plain"
+
+    spec = ToolSpec(fn=lambda: "ok", name="manual")
+    with adapter.tool_scope((spec,)):
+        assert adapter.scoped_tools == (spec,)
+        assert adapter.produce_sync("template", output_type=str) == "plain"
+    assert adapter.scoped_tools == ()
+    assert asyncio.run(events["tools"][-1]()) == {"content": [{"type": "text", "text": "ok"}]}
+
+
+def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(model="claude")
+
+    with pytest.raises(ValueError, match="Output schema cannot be empty"):
+        ClaudeAdapter.type_builder({})
+    with pytest.raises(ValueError, match="Output spec must be provided"):
+        asyncio.run(adapter.produce("template"))
+
+    sdk = sys.modules["claude_agent_sdk"]
+
+    async def no_result_query(*, prompt: str, options: Any) -> Any:
+        if False:
+            yield prompt, options
+
+    setattr(sdk, "query", no_result_query)
+    with pytest.raises(RuntimeError, match="did not return a result"):
+        asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+
+    class ErrorMessage:
+        is_error = True
+        result = "bad run"
+        structured_output = None
+
+    async def error_query(*, prompt: str, options: Any) -> Any:
+        yield ErrorMessage()
+
+    setattr(sdk, "query", error_query)
+    with pytest.raises(RuntimeError, match="bad run"):
+        asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+
+    class MissingStructuredOutput:
+        is_error = False
+        structured_output = None
+
+    async def missing_output_query(*, prompt: str, options: Any) -> Any:
+        yield MissingStructuredOutput()
+
+    setattr(sdk, "query", missing_output_query)
+    with pytest.raises(ValueError, match="structured_output"):
+        asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+
+
+def test_claude_adapter_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delitem(sys.modules, "claude_agent_sdk", raising=False)
+    monkeypatch.setattr(claude_adapter_module, "find_spec", lambda name: None)
+
+    with pytest.raises(ModuleNotFoundError, match="claude-agent-sdk"):
+        asyncio.run(ClaudeAdapter(model="claude").produce("template", output_schema={"x": str}))
+
+
+def test_claude_sdk_import_uses_find_spec_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = object()
+    real_import = builtins.__import__
+
+    def fake_import(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if name == "claude_agent_sdk":
+            return sentinel
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "claude_agent_sdk", raising=False)
+    monkeypatch.setattr(claude_adapter_module, "find_spec", lambda name: object())
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    assert claude_adapter_module._claude_sdk() is sentinel
+
+
+def test_claude_helpers_cover_mcp_and_serialization() -> None:
+    configs = adapters_module._claude_external_mcp_servers(
+        AgentProfile(
+            mcp_servers=(
+                McpServerSpec(command="plain"),
+                McpServerSpec(command="vsh", args=("run",), env={"A": "B"}),
+                McpServerSpec(transport="sse", url="http://localhost/plain-sse"),
+                McpServerSpec(transport="sse", url="http://localhost/sse", headers={"S": "V"}),
+                McpServerSpec(transport="http", url="http://localhost/plain-mcp"),
+                McpServerSpec(transport="http", url="http://localhost/mcp", headers={"H": "V"}),
+            )
+        )
+    )
+
+    assert configs == {
+        "kedi_mcp_0": {
+            "type": "stdio",
+            "command": "plain",
+            "args": [],
+        },
+        "kedi_mcp_1": {
+            "type": "stdio",
+            "command": "vsh",
+            "args": ["run"],
+            "env": {"A": "B"},
+        },
+        "kedi_mcp_2": {"type": "sse", "url": "http://localhost/plain-sse"},
+        "kedi_mcp_3": {"type": "sse", "url": "http://localhost/sse", "headers": {"S": "V"}},
+        "kedi_mcp_4": {"type": "http", "url": "http://localhost/plain-mcp"},
+        "kedi_mcp_5": {"type": "http", "url": "http://localhost/mcp", "headers": {"H": "V"}},
+    }
+
+    assert adapters_module._output_json_schema(str) == {"type": "string"}
+    assert adapters_module._output_json_schema(int) == {"type": "integer"}
+    assert adapters_module._output_json_schema(float) == {"type": "number"}
+    assert adapters_module._output_json_schema(bool) == {"type": "boolean"}
+    assert adapters_module._output_json_schema(object) == {"type": "object"}
+
+    @dataclass
+    class Payload:
+        value: str
+
+    assert claude_adapter_module._tool_result_text("already text") == "already text"
+    assert claude_adapter_module._tool_result_text(DirectAnswer(answer="ok")) == '{"answer": "ok"}'
+    assert claude_adapter_module._tool_result_text(Payload("ok")) == '{"value": "ok"}'
+    assert claude_adapter_module._tool_result_text([DirectAnswer(answer="ok")]) == (
+        '[{"answer": "ok"}]'
+    )
+
+    with pytest.raises(ValueError, match="stdio transport requires a command"):
+        adapters_module._claude_external_mcp_servers(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="stdio"),))
+        )
+    with pytest.raises(ValueError, match="sse transport requires a url"):
+        adapters_module._claude_external_mcp_servers(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="sse"),))
+        )
+    with pytest.raises(ValueError, match="http transport requires a url"):
+        adapters_module._claude_external_mcp_servers(
+            AgentProfile(mcp_servers=(McpServerSpec(transport="http"),))
+        )
+    with pytest.raises(ValueError, match="Unsupported MCP transport"):
+        adapters_module._claude_external_mcp_servers(
+            AgentProfile(mcp_servers=(McpServerSpec(transport=cast(Any, "websocket")),))
+        )
+
+
+def test_claude_adapter_is_available_from_runtime_builders() -> None:
+    from kedi import api as api_module
+    from kedi import app as app_module
+
+    runtime_adapter = app_module._build_runtime_adapter("claude", "claude-sonnet-4")
+    assert isinstance(runtime_adapter, ClaudeAdapter)
+
+    lazy = api_module._lazy_adapter("claude", "claude-sonnet-4", {"max_turns": 2})
+    assert lazy.default_model() == "claude-sonnet-4"
+
+
 def test_pydantic_adapter_profile_stack_is_context_local() -> None:
     adapter = PydanticAdapter(model=None)
     seen: list[dict[str, Any]] = []
@@ -803,7 +1158,7 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
         def configure(self, **kwargs: Any) -> None:
             configure_calls.append(kwargs)
 
-    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeTSLM)
+    monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeTSLM)
     monkeypatch.setattr(adapters_module.dspy, "settings", FakeSettings())
 
     DSPyAdapter(model="openai:gpt-4o-mini", max_tokens=12, temperature=0.25, provider=None)

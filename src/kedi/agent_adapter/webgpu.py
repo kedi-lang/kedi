@@ -21,8 +21,10 @@ from pydantic_ai import format_as_xml
 from pydantic_core import to_jsonable_python
 
 from ..agent_profile import AgentProfile, McpServerSpec, McpTransport
+from ..agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ..dynamic_models import build_dynamic_model
 from ..resolved_types import ResolvedKediType
+from .meta import AdapterCapabilities, AgentAdapterKind
 from .tool_override import ToolScope, ToolSpec
 
 
@@ -79,6 +81,18 @@ BrowserTool = _RuntimeTool | _McpRuntimeTool
 
 
 class WebGPUAdapter:
+    kind: AgentAdapterKind = "agent-framework"
+    shortname = "webgpu"
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_profile_override=True,
+        supports_model_override=True,
+        supports_effort=True,
+        supports_settings=True,
+        settings=PYDANTIC_MODEL_SETTING_KEYS,
+    )
+
     """Route Kedi agent calls to a browser-hosted model through a small bridge."""
 
     _SETTING_KEYS = frozenset(
