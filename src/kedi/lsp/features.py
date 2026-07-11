@@ -63,6 +63,8 @@ from ..agent_profile.settings import (
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
 )
+from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
+from ..agent_adapter.registry import adapter_capabilities, adapter_factory
 from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
@@ -230,6 +232,7 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
     try:
         prog = parse_program(source, source_path=source_path)
         out = _missing_import_diagnostics(prog)
+        out.extend(_adapter_capability_diagnostics(prog))
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -511,6 +514,324 @@ def _missing_import_diagnostics(
             )
         )
     return diagnostics
+
+
+@dataclass(frozen=True)
+class _AdapterDiagnosticState:
+    shortname: str | None = None
+    kind: AgentAdapterKind | None = None
+
+
+def _adapter_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> list[lsp.Diagnostic]:
+    imported_surface = imported_surface_for_program(prog)
+    profile_defs = _merged_profile_defs(prog, imported_surface)
+    proc_names = {proc.name for proc in _all_procedures(prog)}
+    proc_names.update(imported_surface.procedures)
+    profile_states = {
+        name: _profile_adapter_state(profile) for name, profile in profile_defs.items()
+    }
+
+    diagnostics: list[lsp.Diagnostic] = []
+    for profile in prog.profile_defs.values():
+        diagnostics.extend(
+            _profile_capability_diagnostics(
+                prog,
+                profile,
+                _profile_adapter_state(profile),
+            )
+        )
+
+    diagnostics.extend(
+        _scan_capability_scope(
+            prog,
+            prog.ordered_toplevel or prog.toplevel_body,
+            _AdapterDiagnosticState(),
+            profile_defs,
+            profile_states,
+            proc_names,
+        )
+    )
+    return diagnostics
+
+
+def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
+    members: list[tuple[int, AgentAdapterKind, str | None]] = []
+    for member in profile.agent_members:
+        if member.loc is not None:
+            members.append((member.loc.start_byte, "agent-harness", member.plain_value))
+    for member in profile.adapter_members:
+        if member.loc is not None:
+            members.append((member.loc.start_byte, "agent-framework", member.plain_value))
+
+    state = _AdapterDiagnosticState()
+    for _, expected_kind, shortname in sorted(members):
+        selected = _adapter_state_from_plain_value(shortname, expected_kind)
+        if selected is not None:
+            state = selected
+    return state
+
+
+def _adapter_state_from_plain_value(
+    shortname: str | None,
+    expected_kind: AgentAdapterKind,
+) -> _AdapterDiagnosticState | None:
+    if shortname is None:
+        return None
+    try:
+        factory = adapter_factory(shortname)
+    except Exception:  # pragma: no cover - parser/compiler surfaces unknown adapters elsewhere
+        return None
+    if factory.kind != expected_kind:
+        return None
+    return _AdapterDiagnosticState(shortname=shortname, kind=factory.kind)
+
+
+def _merge_adapter_state(
+    outer: _AdapterDiagnosticState,
+    inner: _AdapterDiagnosticState,
+) -> _AdapterDiagnosticState:
+    return inner if inner.shortname is not None else outer
+
+
+def _adapter_supports(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+) -> bool | None:
+    if state.shortname is None:
+        return None
+    try:
+        capabilities = adapter_capabilities(state.shortname)
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        capabilities = AdapterCapabilities()
+    return capabilities.supports(feature)
+
+
+def _profile_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+    profile: ProfileDefStmt,
+    state: _AdapterDiagnosticState,
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for member in profile.mcp_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "mcp",
+                [_directive_keyword_span(prog, member.loc, "mcp") or member.loc],
+                "MCP server directives",
+            )
+        )
+    return diagnostics
+
+
+def _scan_capability_scope(
+    prog: Program | ProgramWithValidation,
+    statements: Sequence[object],
+    state: _AdapterDiagnosticState,
+    profile_defs: dict[str, ProfileDefStmt],
+    profile_states: dict[str, _AdapterDiagnosticState],
+    proc_names: set[str],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    active = state
+
+    for stmt in statements:
+        if isinstance(stmt, AgentDirectiveStmt):
+            selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-harness")
+            if selected is not None:
+                active = selected
+            continue
+        if isinstance(stmt, AdapterDirectiveStmt):
+            selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
+            if selected is not None:
+                active = selected
+            continue
+        if isinstance(stmt, McpDirectiveStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "mcp",
+                    [_directive_keyword_span(prog, stmt.loc, "mcp") or stmt.loc],
+                    "MCP server directives",
+                )
+            )
+            continue
+        if isinstance(stmt, UseDirectiveStmt):
+            diagnostics.extend(
+                _use_capability_diagnostics(
+                    prog,
+                    stmt,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                )
+            )
+            if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
+                active = _merge_adapter_state(active, profile_states.get(stmt.name, active))
+            continue
+        if isinstance(stmt, TemplateBlock):
+            diagnostics.extend(_template_capability_diagnostics(active, stmt))
+            continue
+        if isinstance(stmt, TemplateLine):
+            diagnostics.extend(_template_line_capability_diagnostics(active, stmt))
+            continue
+        if isinstance(stmt, ProcedureDef):
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                )
+            )
+            continue
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.proc.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                )
+            )
+            continue
+    return diagnostics
+
+
+def _use_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+    stmt: UseDirectiveStmt,
+    state: _AdapterDiagnosticState,
+    profile_defs: dict[str, ProfileDefStmt],
+    profile_states: dict[str, _AdapterDiagnosticState],
+    proc_names: set[str],
+) -> list[lsp.Diagnostic]:
+    if stmt.tool_names:
+        spans = [span for _, span in _use_tool_entry_spans(prog, stmt)]
+        return _unsupported_capability_diagnostics(
+            state,
+            "tool_registration",
+            spans or [stmt.loc],
+            "agent tool registration",
+        )
+    if not stmt.name:
+        return []
+
+    target_span = _use_single_target_span(prog, stmt) or stmt.loc
+    if stmt.name in proc_names:
+        return _unsupported_capability_diagnostics(
+            state,
+            "tool_registration",
+            [target_span],
+            "agent tool registration",
+        )
+
+    profile = profile_defs.get(stmt.name)
+    if profile is None:
+        return []
+    merged = _merge_adapter_state(state, profile_states.get(stmt.name, _AdapterDiagnosticState()))
+    diagnostics: list[lsp.Diagnostic] = []
+    if profile.tool_names:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "tool_registration",
+                [target_span],
+                "agent tool registration from this profile",
+            )
+        )
+    if profile.mcp_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "mcp",
+                [target_span],
+                "MCP server directives from this profile",
+            )
+        )
+    return diagnostics
+
+
+def _template_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    stmt: TemplateBlock,
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for line in stmt.lines:
+        diagnostics.extend(_template_line_capability_diagnostics(state, line))
+    return diagnostics
+
+
+def _template_line_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    line: TemplateLine,
+) -> list[lsp.Diagnostic]:
+    spans = [seg.loc for seg in line.segments if isinstance(seg, OutputSegment)]
+    return _unsupported_capability_diagnostics(
+        state,
+        "structured_output",
+        spans,
+        "structured template output fields",
+    )
+
+
+def _unsupported_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+    spans: Sequence[Span | None],
+    description: str,
+) -> list[lsp.Diagnostic]:
+    supported = _adapter_supports(state, feature)
+    if supported is not False or state.shortname is None:
+        return []
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(span),
+            severity=lsp.DiagnosticSeverity.Warning,
+            code="K-ADAPTER-CAPABILITY",
+            source="kedi",
+            message=(
+                f"Adapter '{state.shortname}' does not support {description}; "
+                "this construct will not be handled by that adapter."
+            ),
+        )
+        for span in spans
+        if span is not None
+    ]
+
+
+def _directive_keyword_span(
+    prog: Program | ProgramWithValidation,
+    loc: Span | None,
+    keyword: str,
+) -> Span | None:
+    if loc is None:
+        return None
+    line = _program_line_text(prog, loc.start_line, loc.source_path)
+    line_start = _line_start_byte(prog, loc.start_line)
+    if line is None or line_start is None:
+        return None
+    name_index = line.find(keyword)
+    if name_index < 0:
+        return None
+    start_byte = line_start + len(line[:name_index].encode("utf-8"))
+    start_col = name_index + 1
+    return Span(
+        start_byte=start_byte,
+        end_byte=start_byte + len(keyword.encode("utf-8")),
+        start_line=loc.start_line,
+        start_col=start_col,
+        end_line=loc.start_line,
+        end_col=start_col + len(keyword),
+        source_path=loc.source_path,
+    )
 
 
 def _resolve_symbol_at(

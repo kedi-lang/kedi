@@ -5,9 +5,11 @@ from typing import Any, cast
 import pytest
 
 import kedi.agent_adapter.registry as adapter_registry
+from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.meta import AgentAdapterKind
 from kedi.agent_adapter.registry import (
     AdapterFactory,
+    adapter_capabilities,
     adapter_factory,
     build_adapter,
     known_adapter_shortnames,
@@ -486,6 +488,11 @@ def test_adapter_directive_validation(
 def test_adapter_registry_helpers() -> None:
     assert "pydantic" in known_adapter_shortnames()
     assert adapter_factory("pydantic").kind == "agent-framework"
+    assert adapter_capabilities("pydantic").supports("structured_output")
+    assert adapter_capabilities("dspy").supports("tool_registration")
+    assert adapter_capabilities("langchain").supports("mcp")
+    assert adapter_capabilities("claude").supports("mcp")
+    assert not adapter_capabilities("codex").supports("mcp")
     assert build_adapter("pydantic").shortname == "pydantic"
     assert build_adapter("claude", "claude-model").shortname == "claude"
     assert build_adapter("codex", "codex-model").shortname == "codex"
@@ -493,6 +500,13 @@ def test_adapter_registry_helpers() -> None:
         build_adapter("dspy")
     with pytest.raises(Exception, match="Unknown agent adapter"):
         adapter_factory("missing")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(
+            adapter_registry._ADAPTERS,
+            "custom",
+            AdapterFactory("custom", "agent-framework", lambda *_args: cast(Any, object())),
+        )
+        assert adapter_capabilities("custom") == AdapterCapabilities()
 
 
 def test_agent_profile_adapter_selection_helper() -> None:

@@ -783,6 +783,12 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   `> agent:` and `> adapter:` because those select different adapter classes.
   Use `> agent:` only for `agent-harness` adapters and `> adapter:` only for
   `agent-framework` adapters.
+- Editor diagnostics use adapter capability metadata. If the selected adapter
+  does not currently support structured template outputs, `> use:` tool
+  registration, or `> mcp:` servers, the LSP reports warnings on the relevant
+  output field, tool name, or directive keyword. These are capability warnings:
+  when an adapter later advertises support for that feature, the same Kedi code
+  stops warning without syntax changes.
 
 ### `> mcp:` semantics
 

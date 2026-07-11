@@ -6,7 +6,7 @@ from typing import Any
 
 from kedi.errors import KediExecutionError
 
-from .meta import AgentAdapter, AgentAdapterKind
+from .meta import AdapterCapabilities, AgentAdapter, AgentAdapterKind
 
 
 @dataclass(frozen=True)
@@ -48,12 +48,50 @@ def _codex(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
     return CodexAdapter(model=model, **dict(kwargs))
 
 
+def _pydantic_capabilities() -> AdapterCapabilities:
+    from .adapters.pydantic import PydanticAdapter
+
+    return PydanticAdapter.capabilities
+
+
+def _dspy_capabilities() -> AdapterCapabilities:
+    from .adapters.dspy import DSPyAdapter
+
+    return DSPyAdapter.capabilities
+
+
+def _langchain_capabilities() -> AdapterCapabilities:
+    from .adapters.langchain import LangChainAdapter
+
+    return LangChainAdapter.capabilities
+
+
+def _claude_capabilities() -> AdapterCapabilities:
+    from .adapters.claude import ClaudeAdapter
+
+    return ClaudeAdapter.capabilities
+
+
+def _codex_capabilities() -> AdapterCapabilities:
+    from .adapters.codex import CodexAdapter
+
+    return CodexAdapter.capabilities
+
+
 _ADAPTERS: dict[str, AdapterFactory] = {
     "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
     "dspy": AdapterFactory("dspy", "agent-framework", _dspy),
     "langchain": AdapterFactory("langchain", "agent-framework", _langchain),
     "claude": AdapterFactory("claude", "agent-harness", _claude),
     "codex": AdapterFactory("codex", "agent-harness", _codex),
+}
+
+_CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
+    "pydantic": _pydantic_capabilities,
+    "dspy": _dspy_capabilities,
+    "langchain": _langchain_capabilities,
+    "claude": _claude_capabilities,
+    "codex": _codex_capabilities,
 }
 
 
@@ -79,6 +117,14 @@ def validate_adapter_kind(shortname: str, expected_kind: AgentAdapterKind) -> No
         raise KediExecutionError(
             f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter"
         )
+
+
+def adapter_capabilities(shortname: str) -> AdapterCapabilities:
+    adapter_factory(shortname)
+    loader = _CAPABILITY_LOADERS.get(shortname)
+    if loader is None:
+        return AdapterCapabilities()
+    return loader()
 
 
 def build_adapter(
