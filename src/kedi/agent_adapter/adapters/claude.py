@@ -115,6 +115,31 @@ class ClaudeAdapter:
             raise ValueError("Claude Agent SDK did not return structured_output.")
         return _structured_output_value(structured_output, resolved_output_type)
 
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        sdk = _claude_sdk()
+        instructions = cast(str | None, kwargs.pop("instructions", None))
+        options = self._options_for_run(
+            sdk,
+            output_type=None,
+            instructions=instructions,
+            run_kwargs=kwargs,
+        )
+        result = None
+        async for message in sdk.query(prompt=prompt, options=options):
+            if _is_result_message(sdk, message):
+                result = message
+
+        if result is None:
+            raise RuntimeError("Claude Agent SDK did not return a result message.")
+        if bool(getattr(result, "is_error", False)):
+            raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
+        return _claude_text_response(result)
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        from ..utils import run_sync
+
+        return run_sync(self.invoke(prompt=prompt, **kwargs))
+
     def produce_sync(
         self,
         template: str,
@@ -157,18 +182,19 @@ class ClaudeAdapter:
         self,
         sdk: Any,
         *,
-        output_type: type[Any],
+        output_type: type[Any] | None,
         instructions: str | None,
         run_kwargs: Mapping[str, Any],
     ) -> Any:
         options_kwargs = {
             **self._settings_for_run(),
             **dict(run_kwargs),
-            "output_format": {
+        }
+        if output_type is not None:
+            options_kwargs["output_format"] = {
                 "type": "json_schema",
                 "schema": _output_json_schema(output_type),
-            },
-        }
+            }
         model = self._model_for_run()
         if model is not None:
             options_kwargs["model"] = model
@@ -236,6 +262,20 @@ def _structured_output_value(value: Any, output_type: type[Any]) -> Any:
             return value
         return output_type.model_validate(value)
     return value
+
+
+def _claude_text_response(message: Any) -> str:
+    result = getattr(message, "result", None)
+    if isinstance(result, str):
+        return result
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(result, Mapping):
+        text = result.get("text")
+        if isinstance(text, str):
+            return text
+    raise ValueError("Claude Agent SDK did not return a text response.")
 
 
 def _is_result_message(sdk: Any, message: Any) -> bool:

@@ -698,19 +698,21 @@ Dataset items can follow two conventions:
 
 ## Agent Profiles and Tools
 
-Kedi routes LLM calls through agent adapters. Use `> model:`, `> effort:`,
-`> system:`, `> mcp:`, `> profile:`, and `> use:` to choose models, set
-reasoning effort, set agent instructions, load MCP tools, and expose Kedi
-procedures as agent tools.
+Kedi routes LLM calls through agent adapters. Use `> adapter:`, `> agent:`,
+`> model:`, `> effort:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
+to choose adapter implementations, choose models, set reasoning effort, set
+agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
 
 ### Model and profile directives
 
 ```kedi
+> adapter: pydantic
 > model: groq:qwen/qwen3-32b
 > effort: low
 > system: Answer concisely and avoid extra narration.
 
 > profile: fast:
+    > adapter: pydantic
     > model: groq:qwen/qwen3-32b
     > effort: minimal
     > settings:
@@ -720,6 +722,7 @@ procedures as agent tools.
         Prefer short direct answers.
         Adapt examples for <audience>.
 > profile: quality:
+    > agent: codex
     > model: openrouter/google/gemini-3-flash-preview
     > effort: high
     > system: Be precise and cite the relevant tool output.
@@ -732,6 +735,12 @@ procedures as agent tools.
     > use: web_search
 ```
 
+- `> adapter: name` — select an agent framework adapter for following LLM
+  calls in the current lexical scope. Built-in framework shortnames are
+  `pydantic`, `dspy`, and `langchain`.
+- `> agent: name` — select an agent harness adapter for following LLM calls
+  in the current lexical scope. Built-in harness shortnames are `claude` and
+  `codex`.
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``).
 - `> effort: level` — set active reasoning effort. Accepted values are
@@ -761,12 +770,19 @@ procedures as agent tools.
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
-- `> profile: name:` — define a reusable profile with nested `> model:`,
-  `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members.
+- `> profile: name:` — define a reusable profile with nested `> agent:`,
+  `> adapter:`, `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`,
+  and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
 - Profiles merge when applied: later members override earlier ones of the same kind.
+- Adapter selection follows normal lexical scoping. A direct source directive in
+  the current scope overrides an active profile, which overrides CLI defaults.
+  Nested scopes may switch adapters, but a single lexical scope cannot mix
+  `> agent:` and `> adapter:` because those select different adapter classes.
+  Use `> agent:` only for `agent-harness` adapters and `> adapter:` only for
+  `agent-framework` adapters.
 
 ### `> mcp:` semantics
 

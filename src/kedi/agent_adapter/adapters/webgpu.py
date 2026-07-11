@@ -174,22 +174,42 @@ class WebGPUAdapter:
         instructions: str | None = None,
         **_: Any,
     ) -> Any:
-        output_adapter = _output_adapter(output_schema, output_type)
+        return await self._run(
+            prompt=template,
+            output_adapter=_output_adapter(output_schema, output_type),
+            instructions=instructions,
+        )
+
+    async def invoke(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
+        return await self._run(prompt=prompt, output_adapter=None, instructions=instructions)
+
+    def invoke_sync(self, *, prompt: str, instructions: str | None = None, **kwargs: Any) -> str:
+        from ..utils import run_sync
+
+        return run_sync(self.invoke(prompt=prompt, instructions=instructions, **kwargs))
+
+    async def _run(
+        self,
+        *,
+        prompt: str,
+        output_adapter: TypeAdapter[Any] | None,
+        instructions: str | None,
+    ) -> Any:
         profile = self.active_profile
         settings = self._settings(profile)
         timeout = float(settings.pop("timeout", self._timeout))
         messages: list[dict[str, Any]] = [
             {
                 "role": "user",
-                "content": template,
+                "content": prompt,
             }
         ]
-        output_json_schema = output_adapter.json_schema()
+        output_json_schema = output_adapter.json_schema() if output_adapter is not None else None
 
         async with AsyncExitStack() as stack:
             tools = await self._runtime_tools(stack, profile)
             tool_contracts = [_tool_contract(tool) for tool in tools]
-            required_tools = set(_mentioned_tools(template, tools))
+            required_tools = set(_mentioned_tools(prompt, tools))
             called_tools: set[str] = set()
             for step in range(self._max_tool_steps):
                 payload = {
@@ -198,13 +218,16 @@ class WebGPUAdapter:
                     "instructions": instructions or profile.system,
                     "effort": profile.effort,
                     "settings": settings,
-                    "outputSchema": output_json_schema,
-                    "outputPrompt": _format_output_contract(output_json_schema),
                     "tools": tool_contracts,
                     "toolsPrompt": _format_tool_catalog(tool_contracts),
                     "requiredTools": sorted(required_tools - called_tools),
                     "step": step,
                 }
+                if output_json_schema is not None:
+                    payload["outputSchema"] = output_json_schema
+                    payload["outputPrompt"] = _format_output_contract(output_json_schema)
+                else:
+                    payload["responseMode"] = "text"
                 response = await asyncio.to_thread(
                     self._bridge.request,
                     payload,
@@ -225,6 +248,8 @@ class WebGPUAdapter:
                             }
                         )
                         continue
+                    if output_adapter is None:
+                        return _text_response(response)
                     data = response.get("data")
                     if not isinstance(data, dict):
                         raise TypeError("Browser model final response data must be an object")
@@ -390,6 +415,20 @@ def _tool_contract(tool: BrowserTool) -> dict[str, Any]:
         "inputSchema": tool.input_schema,
         "returnSchema": tool.return_schema,
     }
+
+
+def _text_response(response: Mapping[str, Any]) -> str:
+    text = response.get("text")
+    if isinstance(text, str):
+        return text
+    data = response.get("data")
+    if isinstance(data, str):
+        return data
+    if isinstance(data, Mapping):
+        value = data.get("text")
+        if isinstance(value, str):
+            return value
+    raise TypeError("Browser model final text response must be a string")
 
 
 def _format_tool_catalog(tools: Sequence[Mapping[str, Any]]) -> str:

@@ -19,6 +19,7 @@ from .langchain import (
     _langchain_mcp_server_configs,
     _langchain_structured_response,
     _langchain_sync_tool_function,
+    _langchain_text_response,
     _langchain_tool_from_spec,
 )
 from .lazy import LazyAdapter
@@ -41,6 +42,7 @@ __all__ = [
     "_langchain_mcp_server_configs",
     "_langchain_structured_response",
     "_langchain_sync_tool_function",
+    "_langchain_text_response",
     "_langchain_tool_from_spec",
     "_mcp_toolset_from_config",
     "_output_json_schema",

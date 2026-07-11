@@ -6,11 +6,10 @@ import sys
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.adapters.claude import ClaudeAdapter
-from .agent_adapter.adapters.dspy import DSPyAdapter
-from .agent_adapter.adapters.langchain import LangChainAdapter
-from .agent_adapter.adapters.pydantic import PydanticAdapter
+from .agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
+from .agent_adapter.meta import AgentAdapter
+from .agent_adapter.registry import build_adapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.parser.diagnostics import KediParseError
@@ -19,17 +18,15 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 
-def _build_runtime_adapter(
-    adapter: str, model: str | None
-) -> ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter[Any, Any]:
+def _build_runtime_adapter(adapter: str, model: str | None) -> AgentAdapter[Any]:
     """Create the adapter instance used for eval/test/program execution."""
-    if adapter == "claude":
-        return ClaudeAdapter(model=model)
+    if adapter == "pydantic":
+        return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
     if adapter == "dspy":
         return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
     if adapter == "langchain":
         return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
-    return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+    return build_adapter(adapter, model)
 
 
 CliArgs = AttrDict[str, ArgType]
@@ -159,7 +156,7 @@ def run_optimization_cli(
             main_model = config.optimizer_model or "openai/gpt-4o"
             config.optimizer_model = main_model
             dspy_config_service.configure_main_lm(main_model)
-            adapter_for_runtime = DSPyAdapter(model=main_model)
+            adapter_for_runtime = _build_runtime_adapter("dspy", main_model)
         except ImportError:
             return (
                 1,
@@ -169,14 +166,14 @@ def run_optimization_cli(
         model = adapter_model or "groq:qwen/qwen3-32b"
         if adapter == "dspy":
             try:
-                adapter_for_runtime = DSPyAdapter(model=model)
+                adapter_for_runtime = _build_runtime_adapter("dspy", model)
             except ImportError:
                 return (
                     1,
                     "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
                 )
         else:
-            adapter_for_runtime = PydanticAdapter(model=model)
+            adapter_for_runtime = _build_runtime_adapter(adapter, model)
 
     result_writer = OptimizationResultWriter(source_path)
 

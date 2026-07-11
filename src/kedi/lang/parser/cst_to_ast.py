@@ -39,6 +39,8 @@ from ...effort import EFFORT_VALUES, is_valid_effort
 from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 from ...source_loading import CompositeSourceMap
 from ..ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -61,6 +63,8 @@ from ..ast import (
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    ProfileAdapterEntry,
+    ProfileAgentEntry,
     ProfileEffortEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
@@ -268,6 +272,14 @@ class _Walker:
                 prog.ordered_toplevel.append(proc)
             elif t == "model_directive":
                 stmt = self._walk_model_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "agent_directive":
+                stmt = self._walk_agent_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "adapter_directive":
+                stmt = self._walk_adapter_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "effort_directive":
@@ -667,6 +679,10 @@ class _Walker:
             return None
         if t == "model_directive":
             return self._walk_model_directive(node)
+        if t == "agent_directive":
+            return self._walk_agent_directive(node)
+        if t == "adapter_directive":
+            return self._walk_adapter_directive(node)
         if t == "effort_directive":
             return self._walk_effort_directive(node)
         if t == "system_directive":
@@ -1257,17 +1273,25 @@ class _Walker:
         return AutoSpec(prompt=prompt, loc=self._span(node))
 
     def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        return ModelDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+    def _walk_agent_directive(self, node: Node) -> AgentDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        return AgentDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+    def _walk_adapter_directive(self, node: Node) -> AdapterDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        return AdapterDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+    def _walk_simple_directive_value(self, node: Node) -> tuple[str | None, str | None]:
         value_node = _field(node, "value")
         assert value_node is not None
         if value_node.type == "inline_python_expr":
             code_node = _field(value_node, "code")
             assert code_node is not None
-            return ModelDirectiveStmt(
-                backtick_code=_src_text(self.source, code_node),
-                loc=self._span(node),
-            )
-        plain = _src_text(self.source, value_node).strip()
-        return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
+            return None, _src_text(self.source, code_node)
+        return _src_text(self.source, value_node).strip(), None
 
     def _walk_effort_directive(self, node: Node) -> EffortDirectiveStmt:
         value_node = _field(node, "value")
@@ -1416,6 +1440,8 @@ class _Walker:
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         members: list[ProfileModelEntry] = []
+        agent_members: list[ProfileAgentEntry] = []
+        adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
@@ -1431,7 +1457,23 @@ class _Walker:
                 docstring = _decode_block_comment_body(_src_text(self.source, comment))
                 docstring_loc = self._span(comment)
             for child in body_children:
-                if child.type == "model_directive":
+                if child.type == "agent_directive":
+                    plain, code = self._walk_simple_directive_value(child)
+                    agent_members.append(
+                        ProfileAgentEntry(
+                            plain_value=plain, backtick_code=code, loc=self._span(child)
+                        )
+                    )
+                elif child.type == "adapter_directive":
+                    plain, code = self._walk_simple_directive_value(child)
+                    adapter_members.append(
+                        ProfileAdapterEntry(
+                            plain_value=plain,
+                            backtick_code=code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "model_directive":
                     value_node = _field(child, "value")
                     if value_node is None:
                         continue
@@ -1523,6 +1565,8 @@ class _Walker:
                     )
         if (
             not members
+            and not agent_members
+            and not adapter_members
             and not effort_members
             and not system_members
             and not mcp_members
@@ -1531,11 +1575,13 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
             name=name,
+            agent_members=agent_members,
+            adapter_members=adapter_members,
             model_members=members,
             effort_members=effort_members,
             system_members=system_members,

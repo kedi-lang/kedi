@@ -102,6 +102,24 @@ class LangChainAdapter:
         result = await agent.ainvoke(payload)
         return cast(OutputDataT, _langchain_structured_response(result))
 
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        instructions = cast(str | None, kwargs.pop("instructions", None))
+        model = self._chat_model_for_run()
+        tools = await self._tools_for_run()
+        agent = self._create_agent(
+            model=model,
+            tools=tools,
+            response_format=None,
+            system_prompt=instructions or self.active_profile.system,
+        )
+        payload = {"messages": [{"role": "user", "content": prompt}], **kwargs}
+        return _langchain_text_response(await agent.ainvoke(payload))
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        from ..utils import run_sync
+
+        return run_sync(self.invoke(prompt=prompt, **kwargs))
+
     def produce_sync(
         self,
         template: str,
@@ -163,7 +181,7 @@ class LangChainAdapter:
         *,
         model: Any,
         tools: Sequence[Any],
-        response_format: type[Any],
+        response_format: type[Any] | None,
         system_prompt: str | None,
     ) -> Any:
         try:
@@ -172,12 +190,14 @@ class LangChainAdapter:
             raise ModuleNotFoundError(
                 "LangChainAdapter requires langchain. Install with: uv add langchain"
             ) from exc
-        return create_agent(
-            model=model,
-            tools=list(tools),
-            response_format=response_format,
-            system_prompt=system_prompt,
-        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "tools": list(tools),
+            "system_prompt": system_prompt,
+        }
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+        return create_agent(**kwargs)
 
     async def _tools_for_run(self) -> list[Any]:
         return [
@@ -290,3 +310,30 @@ def _langchain_structured_response(result: Any) -> Any:
         return result.structured_response
     except AttributeError:
         raise ValueError("LangChain agent did not return structured_response.") from None
+
+
+def _langchain_text_response(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if isinstance(result, Mapping):
+        if isinstance(result.get("content"), str):
+            return result["content"]
+        if isinstance(result.get("output"), str):
+            return result["output"]
+        messages = result.get("messages")
+        if isinstance(messages, (list, tuple)) and messages:
+            return _langchain_message_text(messages[-1])
+    return _langchain_message_text(result)
+
+
+def _langchain_message_text(message: Any) -> str:
+    if isinstance(message, str):
+        return message
+    if isinstance(message, Mapping):
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content
+    raise ValueError("LangChain agent did not return a text response.")

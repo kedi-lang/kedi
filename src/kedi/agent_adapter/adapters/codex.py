@@ -34,7 +34,7 @@ class _CodexRun:
     turn_params: dict[str, Any]
     tools: dict[str, Any]
     timeout: float
-    output_type: type[Any]
+    output_type: type[Any] | None = None
 
 
 class CodexAdapter:
@@ -119,7 +119,18 @@ class CodexAdapter:
             tool_context=copy_context(),
             turn_timeout=run.timeout,
         )
-        return _parse_structured_result(result, run.output_type)
+        return _parse_structured_result(result, cast(type[Any], run.output_type))
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        run = self._prepare_invoke(prompt, kwargs)
+        result = await self._client.run_stateless_turn(
+            thread_params=run.thread_params,
+            turn_params=run.turn_params,
+            tools=run.tools,
+            tool_context=copy_context(),
+            turn_timeout=run.timeout,
+        )
+        return result.text
 
     def produce_sync(
         self,
@@ -136,7 +147,18 @@ class CodexAdapter:
             tool_context=copy_context(),
             turn_timeout=run.timeout,
         )
-        return _parse_structured_result(result, run.output_type)
+        return _parse_structured_result(result, cast(type[Any], run.output_type))
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        run = self._prepare_invoke(prompt, kwargs)
+        result = self._client.run_stateless_turn_sync(
+            thread_params=run.thread_params,
+            turn_params=run.turn_params,
+            tools=run.tools,
+            tool_context=copy_context(),
+            turn_timeout=run.timeout,
+        )
+        return result.text
 
     def close(self) -> None:
         self._client.close()
@@ -167,6 +189,28 @@ class CodexAdapter:
             resolved_output_type = self.type_builder(output_schema)
         if resolved_output_type is None:
             raise ValueError("Output spec must be provided.")
+        return self._prepare_turn(
+            template,
+            kwargs,
+            output_schema=_output_json_schema(resolved_output_type),
+            output_type=resolved_output_type,
+        )
+
+    def _prepare_invoke(
+        self,
+        prompt: str,
+        kwargs: Mapping[str, Any],
+    ) -> _CodexRun:
+        return self._prepare_turn(prompt, kwargs, output_schema=None, output_type=None)
+
+    def _prepare_turn(
+        self,
+        prompt: str,
+        kwargs: Mapping[str, Any],
+        *,
+        output_schema: dict[str, Any] | None,
+        output_type: type[Any] | None,
+    ) -> _CodexRun:
         if self.active_profile.mcp_servers:
             raise NotImplementedError(
                 "CodexAdapter does not yet support Kedi MCP server declarations."
@@ -205,9 +249,10 @@ class CodexAdapter:
         _copy_setting(settings, "config", thread_params, "config")
 
         turn_params: dict[str, Any] = {
-            "input": [{"type": "text", "text": template}],
-            "outputSchema": _output_json_schema(resolved_output_type),
+            "input": [{"type": "text", "text": prompt}],
         }
+        if output_schema is not None:
+            turn_params["outputSchema"] = output_schema
         if self.active_profile.effort is not None:
             turn_params["effort"] = pydantic_effort_value(self.active_profile.effort)
         _copy_setting(settings, "summary", turn_params, "summary")
@@ -219,7 +264,7 @@ class CodexAdapter:
             turn_params=turn_params,
             tools=tools,
             timeout=float(timeout),
-            output_type=resolved_output_type,
+            output_type=output_type,
         )
 
     @staticmethod

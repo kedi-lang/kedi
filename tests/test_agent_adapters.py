@@ -36,6 +36,7 @@ from kedi.agent_adapter.adapters import (
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
+    kedi_tool_call_context,
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
@@ -248,7 +249,9 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
 
         async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
             events["payload"] = payload
-            response_format = self.kwargs["response_format"]
+            response_format = self.kwargs.get("response_format")
+            if response_format is None:
+                return {"messages": [SimpleNamespace(content="plain langchain text")]}
             return {"structured_response": response_format(answer="ok")}
 
     class FakeStructuredTool:
@@ -379,6 +382,21 @@ def test_langchain_adapter_uses_output_type_and_sync_produce(
     with adapter.tool_scope(("manual-tool",)):
         assert adapter.scoped_tools == ("manual-tool",)
     assert adapter.scoped_tools == ()
+
+
+def test_langchain_adapter_invoke_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    adapter = LangChainAdapter(model="openai/gpt-4o-mini")
+
+    with adapter.profile_override(AgentProfile(system="Be terse.")):
+        assert adapter.invoke_sync(prompt="say hi", run_id="abc") == "plain langchain text"
+
+    assert events["agents"][0]["system_prompt"] == "Be terse."
+    assert "response_format" not in events["agents"][0]
+    assert events["payload"] == {
+        "messages": [{"role": "user", "content": "say hi"}],
+        "run_id": "abc",
+    }
 
 
 def test_langchain_adapter_requires_output_spec() -> None:
@@ -545,6 +563,21 @@ def test_langchain_structured_response_supports_mapping_and_object() -> None:
         adapters_module._langchain_structured_response({"output": answer})
     with pytest.raises(ValueError, match="did not return structured_response"):
         adapters_module._langchain_structured_response(SimpleNamespace(output=answer))
+    assert adapters_module._langchain_text_response("plain") == "plain"
+    assert adapters_module._langchain_text_response({"content": "content"}) == "content"
+    assert adapters_module._langchain_text_response({"output": "output"}) == "output"
+    assert adapters_module._langchain_text_response({"messages": [{"content": "message"}]}) == (
+        "message"
+    )
+    assert adapters_module._langchain_text_response({"messages": ["string message"]}) == (
+        "string message"
+    )
+    assert (
+        adapters_module._langchain_text_response(SimpleNamespace(content="object content"))
+        == "object content"
+    )
+    with pytest.raises(ValueError, match="text response"):
+        adapters_module._langchain_text_response({"messages": []})
 
 
 def _block_import(monkeypatch: pytest.MonkeyPatch, blocked_name: str) -> None:
@@ -614,6 +647,7 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "servers": [],
         "prefix_message": object(),
         "structured_output": {"answer": "ok"},
+        "text_result": "plain claude text",
     }
 
     class FakeClaudeAgentOptions:
@@ -622,16 +656,25 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             events["options"].append(kwargs)
 
     class FakeResultMessage:
-        def __init__(self, structured_output: Any = None, *, is_error: bool = False) -> None:
+        def __init__(
+            self,
+            structured_output: Any = None,
+            *,
+            is_error: bool = False,
+            result: str = "failed",
+        ) -> None:
             self.structured_output = structured_output
             self.is_error = is_error
-            self.result = "failed"
+            self.result = result
 
     async def fake_query(*, prompt: str, options: Any) -> Any:
         events["prompts"].append({"prompt": prompt, "options": options})
         prefix_message = events.get("prefix_message")
         if prefix_message is not None:
             yield prefix_message
+        if "output_format" not in options.kwargs:
+            yield FakeResultMessage(result=events["text_result"])
+            return
         yield FakeResultMessage(events["structured_output"])
 
     def fake_tool(*, name: str, description: str, input_schema: dict[str, Any]) -> Any:
@@ -750,6 +793,9 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
     assert adapter.scoped_tools == ()
     assert asyncio.run(events["tools"][-1]({})) == {"content": [{"type": "text", "text": "ok"}]}
 
+    assert adapter.invoke_sync(prompt="template") == "plain claude text"
+    assert "output_format" not in events["options"][-1]
+
 
 def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_claude_sdk(monkeypatch)
@@ -769,6 +815,8 @@ def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     setattr(sdk, "query", no_result_query)
     with pytest.raises(RuntimeError, match="did not return a result"):
         asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+    with pytest.raises(RuntimeError, match="did not return a result"):
+        asyncio.run(adapter.invoke(prompt="template"))
 
     class ErrorMessage:
         is_error = True
@@ -781,6 +829,8 @@ def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     setattr(sdk, "query", error_query)
     with pytest.raises(RuntimeError, match="bad run"):
         asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+    with pytest.raises(RuntimeError, match="bad run"):
+        asyncio.run(adapter.invoke(prompt="template"))
 
     class MissingStructuredOutput:
         is_error = False
@@ -872,6 +922,17 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
     assert claude_adapter_module._tool_result_text([DirectAnswer(answer="ok")]) == (
         '[{"answer": "ok"}]'
     )
+    assert claude_adapter_module._claude_text_response(SimpleNamespace(result="text")) == "text"
+    assert claude_adapter_module._claude_text_response(SimpleNamespace(content="content")) == (
+        "content"
+    )
+    assert claude_adapter_module._claude_text_response(
+        SimpleNamespace(result={"text": "dict"})
+    ) == ("dict")
+    with pytest.raises(ValueError, match="text response"):
+        claude_adapter_module._claude_text_response(SimpleNamespace(result=None))
+    with pytest.raises(ValueError, match="text response"):
+        claude_adapter_module._claude_text_response(SimpleNamespace(result={"text": 1}))
 
     with pytest.raises(ValueError, match="stdio transport requires a command"):
         adapters_module._claude_external_mcp_servers(
@@ -1110,6 +1171,36 @@ def test_pydantic_adapter_uses_profile_system_as_default_instruction(
     assert result == "ok"
     assert captured["instructions"] == "Be exact."
 
+    captured.clear()
+    with adapter.profile_override(AgentProfile(system="Raw system.")):
+        assert adapter.invoke_sync(prompt="raw") == "ok"
+    assert captured["instructions"] == "Raw system."
+
+
+def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = PydanticAdapter("openai:gpt-4o-mini")
+    created_agents: list[dict[str, Any]] = []
+
+    class FreshAgent:
+        def __init__(self, model: Any = None, **kwargs: Any) -> None:
+            created_agents.append({"model": model, "kwargs": kwargs})
+
+        async def run(self, prompt: str, **kwargs: Any) -> Any:
+            assert prompt == "raw"
+            assert kwargs["instructions"] == "Profile system."
+            assert kwargs["model"] == "openai-chat:gpt-4o"
+            return SimpleNamespace(output="fresh raw")
+
+    monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
+
+    with adapter.profile_override(AgentProfile(model="openai:gpt-4o", system="Profile system.")):
+        with kedi_tool_call_context():
+            assert adapter.invoke_sync(prompt="raw") == "fresh raw"
+
+    assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
+
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:
     adapter = object.__new__(PydanticAdapter)
@@ -1222,7 +1313,9 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         def __init__(self, signature: FakeSignature) -> None:
             self.signature = signature
 
-        def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        def __call__(self, **kwargs: Any) -> dict[str, Any] | SimpleNamespace:
+            if kwargs["user_prompt"] == "raw prompt":
+                return SimpleNamespace(response="raw response")
             return {"instructions": self.signature.instructions, **kwargs}
 
     def fake_type_builder(output_schema: dict[str, type], **_: Any) -> FakeSignature:
@@ -1231,6 +1324,7 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
+    monkeypatch.setattr(DSPyAdapter, "invoke_signature", staticmethod(FakeSignature))
 
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = None
@@ -1254,6 +1348,8 @@ def test_dspy_adapter_produce_and_sync_use_predict(
         "instructions": None,
         "user_prompt": "prompt",
     }
+    assert adapter.invoke_sync(prompt="raw prompt", user_prompt="ignored") == "raw response"
+    assert asyncio.run(adapter.invoke(prompt="raw prompt")) == "raw response"
 
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
@@ -1362,6 +1458,8 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
         template: str,
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
+        if template == "raw":
+            return {"response": "raw mcp"}
         return {"sig": sig, "tools": tools, "template": template, "kwargs": kwargs}
 
     class FakeSignature:
@@ -1378,6 +1476,7 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
     _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),)))
 
     result = adapter.produce_sync("prompt", {"answer": str}, user_prompt="ignored", extra=1)
+    raw = asyncio.run(adapter.invoke(prompt="raw"))
 
     assert result == {
         "sig": "sig",
@@ -1385,6 +1484,7 @@ def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
         "template": "prompt",
         "kwargs": {"extra": 1},
     }
+    assert raw == "raw mcp"
 
 
 def test_dspy_adapter_mcp_rejects_non_stdio() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Iterator, Sequence, cast
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
@@ -133,7 +133,26 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             raise ValueError("Output spec must be provided.")
         if output_schema:
             output_type = self.type_builder(output_schema)
-        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        run_kwargs = self._run_kwargs({"output_type": output_type, **kwargs})
+        agent = self._agent_for_produce()
+        if agent is not self:
+            run_kwargs.update(self._profile_override_kwargs(self.active_profile))
+        return (await agent.run(template, **cast(Any, run_kwargs))).output
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        run_kwargs = self._run_kwargs(kwargs)
+        agent = self._agent_for_produce()
+        if agent is not self:
+            run_kwargs.update(self._profile_override_kwargs(self.active_profile))
+        return str((await agent.run(prompt, **cast(Any, run_kwargs))).output)
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        from ..utils import run_sync
+
+        return run_sync(self.invoke(prompt=prompt, **kwargs))
+
+    def _run_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, object]:
+        run_kwargs: dict[str, object] = dict(kwargs)
         if self.active_profile.system is not None and "instructions" not in run_kwargs:
             run_kwargs["instructions"] = self.active_profile.system
         model_settings = pydantic_model_settings(self.active_profile.settings)
@@ -148,10 +167,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets = self._toolsets_for_run(include_scoped_tools=not inside_kedi_tool_call())
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
-        agent = self._agent_for_produce()
-        if agent is not self:
-            run_kwargs.update(self._profile_override_kwargs(self.active_profile))
-        return (await agent.run(template, **cast(Any, run_kwargs))).output
+        return run_kwargs
 
     def _agent_for_produce(self) -> Agent[Any, Any]:
         from ..utils import inside_kedi_tool_call

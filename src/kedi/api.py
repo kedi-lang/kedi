@@ -21,6 +21,7 @@ from typing_extensions import Sentinel
 
 from .agent_adapter import AgentAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
+from .agent_adapter.registry import build_adapter
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .effort import EffortValue
 from .lang import compile_program, parse_program
@@ -29,7 +30,7 @@ P = ParamSpec("P")
 R = TypeVar("R")
 ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
-AdapterName = Literal["pydantic", "dspy", "langchain", "claude"]
+AdapterName = Literal["pydantic", "dspy", "langchain", "claude", "codex"]
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
@@ -378,27 +379,7 @@ def _decorate_kedi_program(
 
 def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: Mapping[str, Any]):
     def factory() -> AgentAdapter[Any]:
-        if adapter_name == "pydantic":
-            from .agent_adapter.adapters.pydantic import PydanticAdapter
-
-            return PydanticAdapter(model, **dict(adapter_kwargs))
-
-        if adapter_name == "langchain":
-            from .agent_adapter.adapters.langchain import LangChainAdapter
-
-            return LangChainAdapter(model, **dict(adapter_kwargs))
-
-        if adapter_name == "claude":
-            from .agent_adapter.adapters.claude import ClaudeAdapter
-
-            return ClaudeAdapter(model, **dict(adapter_kwargs))
-
-        if model is None:
-            raise ValueError("DSPy adapter requires an explicit model.")
-
-        from .agent_adapter.adapters.dspy import DSPyAdapter
-
-        return DSPyAdapter(model, **dict(adapter_kwargs))
+        return build_adapter(adapter_name, model, **dict(adapter_kwargs))
 
     return LazyAdapter(factory)
 
@@ -453,9 +434,9 @@ def _build_config(
     adapter_obj: AgentAdapter[Any] | LazyAdapter | None
     adapter_name: AdapterName
     if isinstance(adapter_default, str):
-        if adapter_default not in ("pydantic", "dspy", "langchain", "claude"):
+        if adapter_default not in ("pydantic", "dspy", "langchain", "claude", "codex"):
             raise ValueError(
-                "adapter must be 'pydantic', 'dspy', 'langchain', 'claude', "
+                "adapter must be 'pydantic', 'dspy', 'langchain', 'claude', 'codex', "
                 "or an AgentAdapter instance"
             )
         adapter_name = cast(AdapterName, adapter_default)

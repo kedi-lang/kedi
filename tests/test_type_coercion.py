@@ -69,6 +69,12 @@ class TypeCoercionMockAdapter(AgentAdapter[Any]):
 
         return MockResult(data)
 
+    async def invoke(self, *, prompt: str, **_: Any) -> str:
+        return self.invoke_sync(prompt=prompt)
+
+    def invoke_sync(self, *, prompt: str, **_: Any) -> str:
+        return f"response:{prompt}"
+
 
 class EmptyMockAdapter(AgentAdapter[Any]):
     """Mock adapter that returns empty object to trigger missing key errors."""
@@ -90,6 +96,12 @@ class EmptyMockAdapter(AgentAdapter[Any]):
             pass
 
         return EmptyResult()
+
+    async def invoke(self, *, prompt: str, **_: Any) -> str:
+        return self.invoke_sync(prompt=prompt)
+
+    def invoke_sync(self, *, prompt: str, **_: Any) -> str:
+        return ""
 
 
 def _run_with_responses(src: str, responses: Dict[str, Any]) -> Any:

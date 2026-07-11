@@ -52,6 +52,12 @@ class LazyAdapter:
     async def produce(self, *args: Any, **kwargs: Any) -> Any:
         return await self._ensure().produce(*args, **kwargs)
 
+    def invoke_sync(self, *args: Any, **kwargs: Any) -> str:
+        return self._ensure().invoke_sync(*args, **kwargs)
+
+    async def invoke(self, *args: Any, **kwargs: Any) -> str:
+        return await self._ensure().invoke(*args, **kwargs)
+
     def profile_override(self, profile: AgentProfile) -> AbstractContextManager[None]:
         return self._ensure().profile_override(profile)
 

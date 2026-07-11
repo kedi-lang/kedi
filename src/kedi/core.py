@@ -153,6 +153,7 @@ class KediRuntime:
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
+        self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
         # Outstanding produce Futures (parallel mode) so the end-of-run drain awaits every
         # scheduled template — even unconsumed ones — and surfaces their errors. Lock-guarded
         # because workers add/remove concurrently.
@@ -530,10 +531,6 @@ class KediRuntime:
             else prompt_template.format(", ".join(required))
         )
 
-        if self.adapter is None:
-            raise RuntimeError("No adapter provided to KediRuntime")
-
-        adapter = self.adapter
         parallel = bool(getattr(self._engine, "parallel", False))
 
         # Resolve tool specs NOW, on the main thread, while the lexical scope is correct. A
@@ -543,6 +540,7 @@ class KediRuntime:
         from .agent_profile import current_block_agent_profile
 
         block_profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(block_profile)
         captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
         # Validate the profile override on the main thread too, so it raises synchronously at the
         # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
@@ -671,6 +669,29 @@ class KediRuntime:
                 f"(requested model={profile.model!r}, effort={profile.effort!r}, "
                 f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
             )
+
+    def _resolve_adapter(self, profile: Any) -> AgentAdapter[Any]:
+        shortname = getattr(profile, "adapter_shortname", None)
+        if shortname is None:
+            if self.adapter is None:
+                raise RuntimeError("No adapter provided to KediRuntime")
+            return self.adapter
+
+        adapter_shortname = (
+            getattr(self.adapter, "shortname", None) if self.adapter is not None else None
+        )
+        if self.adapter is not None and shortname == adapter_shortname:
+            return self.adapter
+
+        model = getattr(profile, "model", None)
+        cache_key = (shortname, model)
+        selected = self._selected_adapters.get(cache_key)
+        if selected is None:
+            from .agent_adapter.registry import build_adapter
+
+            selected = build_adapter(shortname, model)
+            self._selected_adapters[cache_key] = selected
+        return selected
 
     def _resolve_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve a template's tools to fully-bound ToolSpecs (on the main thread, in scope).

@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any
 
 from .profile import AgentProfile
 from .registry import (
+    ProfileAdapterMember,
+    ProfileAgentMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
@@ -16,6 +18,8 @@ from .registry import (
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
+        ProfileAdapterEntry,
+        ProfileAgentEntry,
         ProfileDefStmt,
         ProfileEffortEntry,
         ProfileMcpEntry,
@@ -28,13 +32,20 @@ if TYPE_CHECKING:
 
 def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
     members: list[
-        ProfileModelMember
+        ProfileAgentMember
+        | ProfileAdapterMember
+        | ProfileModelMember
         | ProfileEffortMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
     ] = []
+    _assert_profile_adapter_selection_is_not_mixed(stmt)
+    for entry in stmt.agent_members:
+        members.append(_agent_entry_to_member(entry))
+    for entry in stmt.adapter_members:
+        members.append(_adapter_entry_to_member(entry))
     for entry in stmt.model_members:
         members.append(_model_entry_to_member(entry))
     for entry in stmt.effort_members:
@@ -48,6 +59,20 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
     if stmt.tool_names:
         members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
     return ProfileDefinition(name=stmt.name, members=members)
+
+
+def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
+    return ProfileAgentMember(
+        plain_value=entry.plain_value,
+        backtick_code=entry.backtick_code,
+    )
+
+
+def _adapter_entry_to_member(entry: ProfileAdapterEntry) -> ProfileAdapterMember:
+    return ProfileAdapterMember(
+        plain_value=entry.plain_value,
+        backtick_code=entry.backtick_code,
+    )
 
 
 def _model_entry_to_member(entry: ProfileModelEntry) -> ProfileModelMember:
@@ -84,6 +109,15 @@ def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
     return {name: profile_stmt_to_definition(stmt) for name, stmt in prog.profile_defs.items()}
 
 
+def _assert_profile_adapter_selection_is_not_mixed(stmt: ProfileDefStmt) -> None:
+    if stmt.agent_members and stmt.adapter_members:
+        from ..errors import KediExecutionError
+
+        raise KediExecutionError(
+            f"Profile {stmt.name!r} cannot contain both '> agent:' and '> adapter:' members"
+        )
+
+
 def effective_profile_registry(rt: KediRuntime) -> dict[str, ProfileDefinition]:
     registry = rt._profile_registry
     return registry if isinstance(registry, dict) else {}
@@ -102,6 +136,8 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
 def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     from kedi.lang.ast import (
         EffortDirectiveStmt,
+        AdapterDirectiveStmt,
+        AgentDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
@@ -112,6 +148,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
 
     from .model import (
         eval_effort_directive,
+        eval_adapter_directive,
+        eval_agent_directive,
         eval_mcp_directive,
         eval_model_directive,
         eval_settings_directive,
@@ -125,10 +163,19 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
     active = AgentProfile.empty()
+    adapter_selection_kind: str | None = None
     defined_procedures: set[str] = set(rt._procedures.keys())
 
     for item in prog.ordered_toplevel:
-        if isinstance(item, ModelDirectiveStmt):
+        if isinstance(item, AgentDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent")
+            adapter_selection_kind = "agent"
+            active = active.merge(eval_agent_directive(rt, item, env))
+        elif isinstance(item, AdapterDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "adapter")
+            adapter_selection_kind = "adapter"
+            active = active.merge(eval_adapter_directive(rt, item, env))
+        elif isinstance(item, ModelDirectiveStmt):
             active = active.merge(eval_model_directive(rt, item, env))
         elif isinstance(item, EffortDirectiveStmt):
             active = active.merge(eval_effort_directive(rt, item, env))
@@ -151,3 +198,10 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         elif isinstance(item, ProcedureDef):
             item.captured_agent_profile = active.frozen_copy()
             defined_procedures.add(item.name)
+
+
+def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
+    if current is not None and current != incoming:
+        from ..errors import KediExecutionError
+
+        raise KediExecutionError("Cannot mix '> agent:' and '> adapter:' in the same scope")

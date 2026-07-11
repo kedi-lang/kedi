@@ -86,3 +86,11 @@ class AgentAdapter(Protocol[T]):
             T: The output produced by the agent, matching the specified output type.
         """
         ...
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        """Invoke the adapter with a raw text prompt and return the model's text response."""
+        ...
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        """Synchronous version of ``invoke``."""
+        ...

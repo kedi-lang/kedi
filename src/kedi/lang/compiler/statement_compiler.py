@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.model import (
+    eval_adapter_directive,
+    eval_agent_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -16,6 +18,8 @@ from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ..ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
@@ -46,6 +50,11 @@ from .evaluation import (
 from .type_system import KediType, assign_value_from_native, detect_rhs_kind
 
 _NO_RETURN = object()
+
+
+def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
+    if current is not None and current != incoming:
+        raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")
 
 
 class StatementCompiler:
@@ -234,10 +243,21 @@ class StatementExecutor:
 
         captured = proc.captured_agent_profile
         active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        adapter_selection_kind: str | None = None
         profile_registry = self.rt._profile_registry
 
         try:
             for stmt in proc.body:
+                if isinstance(stmt, AgentDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
+                    adapter_selection_kind = "agent-harness"
+                    active = active.merge(eval_agent_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, AdapterDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
+                    adapter_selection_kind = "agent-framework"
+                    active = active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
+                    continue
                 if isinstance(stmt, ModelDirectiveStmt):
                     active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
                     continue

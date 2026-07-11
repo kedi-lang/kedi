@@ -7,8 +7,12 @@ from lsprotocol import types as lsp
 
 from kedi.lang import parse_program
 from kedi.lang.ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     InputSegment,
     ProfileDefStmt,
+    ProfileAgentEntry,
+    ProfileAdapterEntry,
     ProfileModelEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
@@ -23,10 +27,14 @@ from tests.lsp_helpers import decode_semantic_tokens, hover_text_at, position_of
 
 def test_semantic_tokens_cover_agent_profile_directives() -> None:
     src = (
+        "> agent: codex\n"
+        "> adapter: pydantic\n"
         "> model: haiku\n"
         "> effort: low\n"
         "> system: Be concise.\n"
         "> profile: light:\n"
+        "    > agent: codex\n"
+        "    > adapter: pydantic\n"
         "    > model: opus\n"
         "    > effort: high\n"
         "    > system: Keep answers short.\n"
@@ -44,35 +52,47 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
 
     assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 0 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 0 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 1 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 1 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 1 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 2 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 2 and token_type == string_type for line, _, _, token_type, _ in decoded)
     assert any(line == 3 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 3 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 3 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 4 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 4 and token_type == string_type for line, _, _, token_type, _ in decoded)
     assert any(line == 5 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 5 and token_type == string_type for line, _, _, token_type, _ in decoded)
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    assert any(line == 5 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 6 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 6 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 7 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 8 and token_type == property_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 8 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 7 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 9 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 10 and token_type == property_type for line, _, _, token_type, _ in decoded)
     assert any(line == 10 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
     assert any(line == 11 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
-    assert any(line == 11 and token_type == label_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 12 and token_type == property_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 12 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 13 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 14 and token_type == property_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 14 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 15 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 15 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
 def test_hover_on_model_profile_and_use_directives() -> None:
     src = """
 > model: haiku
+> agent: `agent_name`
+> adapter: `adapter_name`
 > effort: low
 > system: Be concise.
 > settings:
     parallel_tool_calls: true
 > system: Be <tone>.
 > profile: light:
+    > agent: codex
+    > adapter: pydantic
     > model: opus
     > effort: high
     > system: Keep answers short.
@@ -89,11 +109,17 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     args: `["run", "--mcp"]`
 > use: light
 @foo():
+    > agent: `agent_name`
+    > adapter: `adapter_name`
     > mcp:
         command: local-mcp
     >> answer [x]
 """
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
+    assert "> agent:" in hover_text_at(src, "profile.kedi", "agent", occurrence=1)
+    assert "`agent_name`" in hover_text_at(src, "profile.kedi", "agent_name", occurrence=1)
+    assert "> adapter:" in hover_text_at(src, "profile.kedi", "adapter", occurrence=1)
+    assert "`adapter_name`" in hover_text_at(src, "profile.kedi", "adapter_name", occurrence=1)
     assert "> effort:" in hover_text_at(src, "profile.kedi", "effort", occurrence=1)
     assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
     assert "> settings:" in hover_text_at(src, "profile.kedi", "settings", occurrence=1)
@@ -121,6 +147,65 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "haiku" in hover_text_at(src, "profile.kedi", "haiku")
     assert "Agent profile" in hover_text_at(src, "profile.kedi", "light", occurrence=1)
     assert "> use:" in hover_text_at(src, "profile.kedi", "light", occurrence=2)
+    assert "reusable profile agent harness adapter" in hover_text_at(src, "profile.kedi", "codex")
+    assert "reusable profile agent framework adapter" in hover_text_at(
+        src, "profile.kedi", "pydantic"
+    )
+    assert "> agent:" in hover_text_at(src, "profile.kedi", "agent_name", occurrence=2)
+    assert "> adapter:" in hover_text_at(src, "profile.kedi", "adapter_name", occurrence=2)
+
+
+def test_document_symbols_cover_agent_and_adapter_directives() -> None:
+    src = """
+> profile: light:
+    > agent: `agent_name`
+    > adapter: `adapter_name`
+
+@foo():
+    > agent: `agent_name`
+    > adapter: `adapter_name`
+    >> answer [x]
+"""
+    symbols = features.compute_document_symbols(src, "profile.kedi")
+    profile = next(symbol for symbol in symbols if symbol.name == "> profile: light")
+    proc = next(symbol for symbol in symbols if symbol.name == "foo")
+
+    assert profile.children is not None
+    assert [child.name for child in profile.children[:2]] == [
+        "> agent: `agent_name`",
+        "> adapter: `adapter_name`",
+    ]
+    assert proc.children is not None
+    assert [child.name for child in proc.children[:2]] == [
+        "> agent: `agent_name`",
+        "> adapter: `adapter_name`",
+    ]
+
+
+def test_profile_symbol_skips_agent_and_adapter_members_without_locations() -> None:
+    profile = ProfileDefStmt(
+        name="synthetic",
+        agent_members=[ProfileAgentEntry(plain_value="codex")],
+        adapter_members=[ProfileAdapterEntry(plain_value="pydantic")],
+    )
+    symbol = features._profile_def_symbol(profile)
+
+    assert symbol.children == []
+
+
+def test_directive_markdown_helpers_for_synthetic_nodes() -> None:
+    assert "`agent_name`" in features._agent_directive_markdown(
+        AgentDirectiveStmt(backtick_code="agent_name")
+    )
+    assert "`adapter_name`" in features._adapter_directive_markdown(
+        AdapterDirectiveStmt(backtick_code="adapter_name")
+    )
+    assert "`agent_name`" in features._profile_agent_entry_markdown(
+        ProfileAgentEntry(backtick_code="agent_name")
+    )
+    assert "`adapter_name`" in features._profile_adapter_entry_markdown(
+        ProfileAdapterEntry(backtick_code="adapter_name")
+    )
 
 
 def test_hover_on_backtick_setting_and_settings_helpers() -> None:

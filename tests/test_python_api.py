@@ -118,6 +118,14 @@ class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
             return AttrDict({"summary": "short summary"})
         return AttrDict({"answer": "ok"})
 
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        return self.invoke_sync(prompt=prompt, **kwargs)
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        self.templates.append(prompt)
+        self.instructions.append(kwargs.get("instructions"))
+        return f"response:{prompt}"
+
 
 def lookup() -> str:
     return "lookup result"

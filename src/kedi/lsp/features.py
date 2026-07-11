@@ -63,6 +63,8 @@ from ..agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
 )
 from ..lang.ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -82,6 +84,8 @@ from ..lang.ast import (
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
+    ProfileAdapterEntry,
+    ProfileAgentEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
@@ -1270,6 +1274,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(span)
             return
         if isinstance(node, ProfileDefStmt):
+            for member in node.agent_members:
+                visit(member)
+            for member in node.adapter_members:
+                visit(member)
             for member in node.model_members:
                 visit(member)
             for member in node.effort_members:
@@ -1430,6 +1438,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`> optimize: {node.name}:`** — GEPA / DSPy optimisation target."
     if isinstance(node, ModelDirectiveStmt):
         return _model_directive_markdown(node)
+    if isinstance(node, AgentDirectiveStmt):
+        return _agent_directive_markdown(node)
+    if isinstance(node, AdapterDirectiveStmt):
+        return _adapter_directive_markdown(node)
     if isinstance(node, EffortDirectiveStmt):
         return _effort_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
@@ -1442,6 +1454,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _settings_directive_markdown(node)
     if isinstance(node, SettingsField):
         return _settings_field_markdown(node)
+    if isinstance(node, ProfileAgentEntry):
+        return _profile_agent_entry_markdown(node)
+    if isinstance(node, ProfileAdapterEntry):
+        return _profile_adapter_entry_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
@@ -1517,6 +1533,22 @@ def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
     )
 
 
+def _agent_directive_markdown(stmt: AgentDirectiveStmt) -> str:
+    value = _adapter_value_preview(stmt)
+    return (
+        f"**`> agent:`** — select agent harness adapter {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
+def _adapter_directive_markdown(stmt: AdapterDirectiveStmt) -> str:
+    value = _adapter_value_preview(stmt)
+    return (
+        f"**`> adapter:`** — select agent framework adapter {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
 def _effort_directive_markdown(stmt: EffortDirectiveStmt) -> str:
     value = _effort_value_preview(stmt)
     return (
@@ -1583,6 +1615,16 @@ def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
     return f"**`> settings:`** — reusable profile model configuration. Fields: {fields}."
 
 
+def _profile_agent_entry_markdown(entry: ProfileAgentEntry) -> str:
+    value = _adapter_value_preview(entry)
+    return f"**`> agent:`** — reusable profile agent harness adapter: {value}."
+
+
+def _profile_adapter_entry_markdown(entry: ProfileAdapterEntry) -> str:
+    value = _adapter_value_preview(entry)
+    return f"**`> adapter:`** — reusable profile agent framework adapter: {value}."
+
+
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return f"**`> system:`** — reusable agent profile instructions: {value}."
@@ -1594,6 +1636,14 @@ def _profile_effort_entry_markdown(entry: ProfileEffortEntry) -> str:
 
 
 def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str:
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
+
+
+def _adapter_value_preview(
+    stmt: AgentDirectiveStmt | AdapterDirectiveStmt | ProfileAgentEntry | ProfileAdapterEntry,
+) -> str:
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"
@@ -2347,7 +2397,31 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
                 )
             )
     for stmt in proc.body:
-        if isinstance(stmt, ModelDirectiveStmt) and stmt.loc is not None:
+        if isinstance(stmt, AgentDirectiveStmt) and stmt.loc is not None:
+            value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> agent: {value}",
+                    detail="agent harness override",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, AdapterDirectiveStmt) and stmt.loc is not None:
+            value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> adapter: {value}",
+                    detail="agent framework override",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, ModelDirectiveStmt) and stmt.loc is not None:
             value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
             children.append(
                 lsp.DocumentSymbol(
@@ -2419,6 +2493,38 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
 def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
     children: list[lsp.DocumentSymbol] = []
+    for member in profile.agent_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> agent: {value}",
+                detail="agent harness override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.adapter_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> adapter: {value}",
+                detail="agent framework override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
     for member in profile.model_members:
         if member.loc is None:
             continue

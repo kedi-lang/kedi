@@ -153,6 +153,20 @@ def test_codex_adapter_async_run_and_close(tmp_path: Path) -> None:
     assert result == Answer(answer="async")
 
 
+def test_codex_adapter_invoke_returns_raw_text_without_output_schema(tmp_path: Path) -> None:
+    adapter, log_path = _adapter(tmp_path, model="gpt-base")
+
+    assert adapter.invoke_sync(prompt="raw prompt") == '{"answer": "raw prompt"}'
+    assert asyncio.run(adapter.invoke(prompt="raw async")) == '{"answer": "raw async"}'
+    adapter.close()
+
+    turns = _method(_messages(log_path), "turn/start")
+    assert turns[0]["params"]["input"] == [{"type": "text", "text": "raw prompt"}]
+    assert "outputSchema" not in turns[0]["params"]
+    assert turns[1]["params"]["input"] == [{"type": "text", "text": "raw async"}]
+    assert "outputSchema" not in turns[1]["params"]
+
+
 def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None:
     adapter, log_path = _adapter(tmp_path)
     context_value: ContextVar[str] = ContextVar("codex_test_context", default="missing")

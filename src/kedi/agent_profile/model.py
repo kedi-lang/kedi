@@ -4,9 +4,13 @@ from typing import TYPE_CHECKING, Any
 
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from ..agent_adapter.meta import AgentAdapterKind
+from ..agent_adapter.registry import validate_adapter_kind
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentProfile
 from .registry import (
+    ProfileAdapterMember,
+    ProfileAgentMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
@@ -20,6 +24,8 @@ from .settings import parse_plain_setting_value
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
+        AdapterDirectiveStmt,
+        AgentDirectiveStmt,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         McpField,
@@ -98,6 +104,56 @@ def eval_model_directive(
         env=env,
     )
     return AgentProfile(model=model)
+
+
+def eval_agent_directive(
+    rt: KediRuntime,
+    stmt: AgentDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return _eval_adapter_selection(
+        rt,
+        directive_name="agent",
+        expected_kind="agent-harness",
+        plain_value=stmt.plain_value,
+        backtick_code=stmt.backtick_code,
+        env=env,
+    )
+
+
+def eval_adapter_directive(
+    rt: KediRuntime,
+    stmt: AdapterDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return _eval_adapter_selection(
+        rt,
+        directive_name="adapter",
+        expected_kind="agent-framework",
+        plain_value=stmt.plain_value,
+        backtick_code=stmt.backtick_code,
+        env=env,
+    )
+
+
+def _eval_adapter_selection(
+    rt: KediRuntime,
+    *,
+    directive_name: str,
+    expected_kind: AgentAdapterKind,
+    plain_value: str | None,
+    backtick_code: str | None,
+    env: dict[str, Any],
+) -> AgentProfile:
+    shortname = eval_model_value(
+        rt,
+        directive_name=directive_name,
+        plain_value=plain_value,
+        backtick_code=backtick_code,
+        env=env,
+    )
+    validate_adapter_kind(shortname, expected_kind)
+    return AgentProfile(adapter_kind=expected_kind, adapter_shortname=shortname)
 
 
 def eval_effort_value(
@@ -197,6 +253,8 @@ def _member_to_patch(
     rt: KediRuntime,
     member: (
         ProfileModelMember
+        | ProfileAgentMember
+        | ProfileAdapterMember
         | ProfileEffortMember
         | ProfileSystemMember
         | ProfileToolMember
@@ -205,6 +263,24 @@ def _member_to_patch(
     ),
     env: dict[str, Any],
 ) -> AgentProfile:
+    if member.kind == "agent":
+        return _eval_adapter_selection(
+            rt,
+            directive_name="agent",
+            expected_kind="agent-harness",
+            plain_value=member.plain_value,
+            backtick_code=member.backtick_code,
+            env=env,
+        )
+    if member.kind == "adapter":
+        return _eval_adapter_selection(
+            rt,
+            directive_name="adapter",
+            expected_kind="agent-framework",
+            plain_value=member.plain_value,
+            backtick_code=member.backtick_code,
+            env=env,
+        )
     if member.kind == "model":
         model = eval_model_value(
             rt,

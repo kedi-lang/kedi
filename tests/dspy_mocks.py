@@ -178,6 +178,12 @@ class RangeAwareAdapter(AgentAdapter[AttrDict[str, Any]]):
 
         return AttrDict(data)
 
+    async def invoke(self, *, prompt: str, **_: Any) -> str:
+        return self.invoke_sync(prompt=prompt)
+
+    def invoke_sync(self, *, prompt: str, **_: Any) -> str:
+        return f"response:{prompt}"
+
 
 # ======================
 # Mocked LM Layer

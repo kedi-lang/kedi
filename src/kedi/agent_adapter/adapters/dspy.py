@@ -131,6 +131,17 @@ class DSPyAdapter:
         field_definitions.update({"user_prompt": (str, dspy.InputField())})
         return build_dynamic_model("_OutputSignature", dspy.Signature, field_definitions)
 
+    @staticmethod
+    def invoke_signature() -> type[dspy.Signature]:
+        return build_dynamic_model(
+            "_InvokeSignature",
+            dspy.Signature,
+            {
+                "user_prompt": (str, dspy.InputField()),
+                "response": (str, dspy.OutputField()),
+            },
+        )
+
     async def produce(
         self,
         template: str,
@@ -170,6 +181,25 @@ class DSPyAdapter:
                 return run_sync(self._produce_with_mcp(sig, tools, template, kwargs))
             prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
             return prediction(**kwargs, user_prompt=template)
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        return await asyncio.to_thread(self.invoke_sync, prompt=prompt, **kwargs)
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        from ..utils import run_sync
+
+        kwargs.pop("user_prompt", None)
+        sig = self.invoke_signature()
+        instructions = kwargs.pop("instructions", None)
+        sig = sig.with_instructions(instructions)
+        tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
+        with self._produce_lm_context():
+            if self.active_profile.mcp_servers:
+                prediction = run_sync(self._produce_with_mcp(sig, tools, prompt, kwargs))
+            else:
+                adapter = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+                prediction = adapter(**kwargs, user_prompt=prompt)
+        return str(_prediction_value(prediction, "response"))
 
     def _produce_lm_context(self) -> AbstractContextManager[Any]:
         """Make the active LM authoritative for one produce call.
@@ -245,3 +275,9 @@ class DSPyAdapter:
                 yield
         finally:
             stack_var.reset(token)
+
+
+def _prediction_value(prediction: Any, field: str) -> Any:
+    if isinstance(prediction, dict):
+        return prediction[field]
+    return getattr(prediction, field)
