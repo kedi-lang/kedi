@@ -213,7 +213,7 @@ def test_cli_renders_parse_error_with_location(tmp_path: Path) -> None:
 def test_cli_maps_fenced_python_error_to_inner_kedi_line(tmp_path: Path) -> None:
     srcp = tmp_path / "sample.kedi"
     srcp.write_text(
-        '>> hello\n\n>> world\n\n>> foo\n\n>> bar\n\n>> baz\n\n>> qux\n```\nprint(f"{")\n```\n= none\n',
+        '[a] = hello\n\n[b] = world\n\n[c] = foo\n\n[d] = bar\n\n[e] = baz\n\n[f] = qux\n```\nprint(f"{")\n```\n= none\n',
         encoding="utf-8",
     )
 
