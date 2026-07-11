@@ -100,7 +100,12 @@ for raw_line in sys.stdin:
             )
             continue
         if prompt == "missing-turn-data":
-            send({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"status": "completed"}},
+                }
+            )
             continue
         if prompt == "invalid-output":
             complete_turn(turn_id, "not json")

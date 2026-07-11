@@ -14,30 +14,28 @@ import pytest
 from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
-from kedi.agent_adapter import (
-    AdapterCapabilities,
-    ClaudeAdapter as ExportedClaudeAdapter,
-    DSPyAdapter as ExportedDSPyAdapter,
-    LangChainAdapter as ExportedLangChainAdapter,
-    PydanticAdapter as ExportedPydanticAdapter,
-    WebGPUAdapter,
-    adapters as adapters_module,
-)
-from kedi.agent_adapter.adapters import claude as claude_adapter_module
-from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
+from kedi.agent_adapter import AdapterCapabilities
+from kedi.agent_adapter import ClaudeAdapter as ExportedClaudeAdapter
+from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
+from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
+from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
+from kedi.agent_adapter import WebGPUAdapter
+from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import (
     ClaudeAdapter,
     DSPyAdapter,
     LangChainAdapter,
     PydanticAdapter,
-    make_repr,
 )
+from kedi.agent_adapter.adapters import claude as claude_adapter_module
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import make_repr
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
-    kedi_tool_call_context,
     kedi_procedure_tool_spec,
+    kedi_tool_call_context,
     python_callable_tool_spec,
 )
 from kedi.agent_profile import AgentProfile
@@ -759,7 +757,10 @@ def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
     assert options["output_format"]["type"] == "json_schema"
     assert set(options["output_format"]["schema"]["properties"]) == {"answer"}
     assert "temperature" not in options
-    assert options["mcp_servers"]["existing"] == {"type": "stdio", "command": "existing"}
+    assert options["mcp_servers"]["existing"] == {
+        "type": "stdio",
+        "command": "existing",
+    }
     assert options["mcp_servers"]["kedi_mcp_0"] == {
         "type": "http",
         "url": "http://localhost/mcp",
@@ -901,9 +902,17 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
             "env": {"A": "B"},
         },
         "kedi_mcp_2": {"type": "sse", "url": "http://localhost/plain-sse"},
-        "kedi_mcp_3": {"type": "sse", "url": "http://localhost/sse", "headers": {"S": "V"}},
+        "kedi_mcp_3": {
+            "type": "sse",
+            "url": "http://localhost/sse",
+            "headers": {"S": "V"},
+        },
         "kedi_mcp_4": {"type": "http", "url": "http://localhost/plain-mcp"},
-        "kedi_mcp_5": {"type": "http", "url": "http://localhost/mcp", "headers": {"H": "V"}},
+        "kedi_mcp_5": {
+            "type": "http",
+            "url": "http://localhost/mcp",
+            "headers": {"H": "V"},
+        },
     }
 
     assert adapters_module._output_json_schema(str) == {"type": "string"}

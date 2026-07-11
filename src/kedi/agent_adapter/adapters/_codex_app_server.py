@@ -368,7 +368,10 @@ class CodexAppServerClient:
             self._send(
                 {
                     "id": request_id,
-                    "error": {"code": -32601, "message": f"Unsupported request: {method}"},
+                    "error": {
+                        "code": -32601,
+                        "message": f"Unsupported request: {method}",
+                    },
                 }
             )
             return

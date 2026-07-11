@@ -135,9 +135,9 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
 
 def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     from kedi.lang.ast import (
-        EffortDirectiveStmt,
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
+        EffortDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
@@ -147,9 +147,9 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     )
 
     from .model import (
-        eval_effort_directive,
         eval_adapter_directive,
         eval_agent_directive,
+        eval_effort_directive,
         eval_mcp_directive,
         eval_model_directive,
         eval_settings_directive,

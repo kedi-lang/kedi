@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AbstractContextManager, AsyncExitStack, contextmanager, nullcontext
+from contextlib import (
+    AbstractContextManager,
+    AsyncExitStack,
+    contextmanager,
+    nullcontext,
+)
 from contextvars import ContextVar
 from typing import Any, Callable, Iterator, Sequence, cast
 

@@ -213,8 +213,7 @@ def test_pyodide_prelude_exports_keep_browser_owned_objects_opaque() -> None:
 
 
 def test_pyodide_prelude_syncs_only_names_defined_by_that_prelude() -> None:
-    assert _prelude_names(
-        """
+    assert _prelude_names("""
 import importlib.util
 from collections.abc import Sequence as ItemSequence
 
@@ -222,8 +221,7 @@ seed = 7
 
 def package_is_installed(package_name: str) -> bool:
     return importlib.util.find_spec(package_name) is not None
-"""
-    ) == ["importlib", "ItemSequence", "seed", "package_is_installed"]
+""") == ["importlib", "ItemSequence", "seed", "package_is_installed"]
 
 
 def test_pyodide_dynamic_function_preserves_signature_and_defaults() -> None:

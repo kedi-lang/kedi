@@ -10,7 +10,10 @@ from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
 
 from ...agent_profile import AgentProfile
-from ...agent_profile.settings import LANGCHAIN_MODEL_SETTING_KEYS, langchain_model_settings
+from ...agent_profile.settings import (
+    LANGCHAIN_MODEL_SETTING_KEYS,
+    langchain_model_settings,
+)
 from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...model_normalization import normalize_for_langchain

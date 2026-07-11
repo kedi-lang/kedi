@@ -21,9 +21,7 @@ from kedi import (
     reset_config,
     tool,
 )
-from kedi import (
-    type as kedi_type,
-)
+from kedi import type as kedi_type
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module

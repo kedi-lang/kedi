@@ -15,12 +15,7 @@ from concurrent.futures import Future
 import pytest
 
 import kedi.core as core
-from kedi.engine import (
-    JobManagerEngine,
-    RetryPolicy,
-    SequentialEngine,
-    ThreadEngine,
-)
+from kedi.engine import JobManagerEngine, RetryPolicy, SequentialEngine, ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.compiler.environment import assert_kedienv_routing

@@ -5,8 +5,8 @@ import contextvars
 import json
 import subprocess
 import sys
-from contextvars import ContextVar
 from concurrent.futures import Future
+from contextvars import ContextVar
 from pathlib import Path
 from threading import current_thread
 from typing import Any, cast
@@ -14,9 +14,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from kedi.agent_adapter.adapters import _codex_app_server as codex_server_module
 from kedi.agent_adapter import CodexAdapter as ExportedCodexAdapter
 from kedi.agent_adapter.adapters import CodexAdapter
+from kedi.agent_adapter.adapters import _codex_app_server as codex_server_module
 from kedi.agent_adapter.adapters import codex as codex_adapter_module
 from kedi.agent_adapter.adapters._codex_app_server import (
     CodexAppServerClient,
@@ -26,7 +26,7 @@ from kedi.agent_adapter.adapters._codex_app_server import (
     CodexTurnResult,
 )
 from kedi.agent_adapter.tool_override import ToolSpec
-from kedi.agent_profile import AgentProfile, CODEX_AGENT_SETTING_KEYS
+from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 
 FAKE_APP_SERVER = Path(__file__).parent / "files" / "fake_codex_app_server.py"
@@ -153,7 +153,9 @@ def test_codex_adapter_async_run_and_close(tmp_path: Path) -> None:
     assert result == Answer(answer="async")
 
 
-def test_codex_adapter_invoke_returns_raw_text_without_output_schema(tmp_path: Path) -> None:
+def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
+    tmp_path: Path,
+) -> None:
     adapter, log_path = _adapter(tmp_path, model="gpt-base")
 
     assert adapter.invoke_sync(prompt="raw prompt") == '{"answer": "raw prompt"}'

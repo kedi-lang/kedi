@@ -4,10 +4,14 @@ from typing import Any, cast
 
 import pytest
 
-from kedi.agent_adapter.registry import AdapterFactory
-from kedi.agent_adapter.meta import AgentAdapterKind
-from kedi.agent_adapter.registry import adapter_factory, build_adapter, known_adapter_shortnames
 import kedi.agent_adapter.registry as adapter_registry
+from kedi.agent_adapter.meta import AgentAdapterKind
+from kedi.agent_adapter.registry import (
+    AdapterFactory,
+    adapter_factory,
+    build_adapter,
+    known_adapter_shortnames,
+)
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
 from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
@@ -419,27 +423,23 @@ def test_profile_agent_and_adapter_members_select_adapters(
     _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", secondary_adapter)
 
     harness_rt = compile_program(
-        parse_program(
-            """
+        parse_program("""
 > profile: harness_profile:
     > agent: harness
 > use: harness_profile
 >> value [x]
-"""
-        ),
+"""),
         adapter=None,
     )
     harness_rt.run_main()
 
     secondary_rt = compile_program(
-        parse_program(
-            """
+        parse_program("""
 > profile: secondary_profile:
     > adapter: secondary
 > use: secondary_profile
 >> value [x]
-"""
-        ),
+"""),
         adapter=None,
     )
     secondary_rt.run_main()

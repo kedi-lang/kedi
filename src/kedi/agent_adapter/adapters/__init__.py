@@ -3,7 +3,8 @@ from __future__ import annotations
 # Public re-exports for adapter implementations and compatibility helpers.
 from pydantic_ai import Agent
 
-from .._schema import make_repr, output_field_definition as _output_field_definition
+from .._schema import make_repr
+from .._schema import output_field_definition as _output_field_definition
 from . import claude, codex, dspy, langchain, lazy, pydantic, webgpu
 from .claude import (
     ClaudeAdapter,

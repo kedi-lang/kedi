@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..effort import EffortValue, validate_effort
-from ..errors import KediExecutionError
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
+from ..effort import EffortValue, validate_effort
+from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentProfile
 from .registry import (

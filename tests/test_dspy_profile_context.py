@@ -5,8 +5,8 @@ from typing import Any, Iterator
 
 import pytest
 
-from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import DSPyAdapter
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_profile import AgentProfile
 
 

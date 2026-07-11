@@ -38,10 +38,11 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import Node, Tree
+from tree_sitter import Node
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
+from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod
@@ -62,6 +63,7 @@ from ..agent_profile.settings import (
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
 )
+from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -76,7 +78,6 @@ from ..lang.ast import (
     EvalMetric,
     EvalSuite,
     InputSegment,
-    LiteralArg,  # noqa: F401
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
@@ -1642,7 +1643,7 @@ def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str
 
 
 def _adapter_value_preview(
-    stmt: AgentDirectiveStmt | AdapterDirectiveStmt | ProfileAgentEntry | ProfileAdapterEntry,
+    stmt: (AgentDirectiveStmt | AdapterDirectiveStmt | ProfileAgentEntry | ProfileAdapterEntry),
 ) -> str:
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"

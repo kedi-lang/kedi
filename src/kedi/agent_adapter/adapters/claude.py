@@ -206,7 +206,10 @@ class ClaudeAdapter:
         if mcp_servers:
             existing_servers = options_kwargs.get("mcp_servers")
             if isinstance(existing_servers, Mapping):
-                options_kwargs["mcp_servers"] = {**dict(existing_servers), **mcp_servers}
+                options_kwargs["mcp_servers"] = {
+                    **dict(existing_servers),
+                    **mcp_servers,
+                }
             else:
                 options_kwargs["mcp_servers"] = mcp_servers
         if allowed_tools:

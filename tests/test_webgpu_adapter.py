@@ -11,8 +11,8 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel
 
 import kedi.agent_adapter.adapters.webgpu as webgpu_module
-from kedi.agent_adapter.tool_override import ToolSpec
 from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
+from kedi.agent_adapter.tool_override import ToolSpec
 from kedi.agent_profile import AgentProfile, McpServerSpec
 
 
