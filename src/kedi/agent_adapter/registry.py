@@ -48,6 +48,12 @@ def _codex(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
     return CodexAdapter(model=model, **dict(kwargs))
 
 
+def _acp(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.acp import ACPAdapter
+
+    return ACPAdapter(model=model, **dict(kwargs))
+
+
 def _pydantic_capabilities() -> AdapterCapabilities:
     from .adapters.pydantic import PydanticAdapter
 
@@ -78,12 +84,19 @@ def _codex_capabilities() -> AdapterCapabilities:
     return CodexAdapter.capabilities
 
 
+def _acp_capabilities() -> AdapterCapabilities:
+    from .adapters.acp import ACPAdapter
+
+    return ACPAdapter.capabilities
+
+
 _ADAPTERS: dict[str, AdapterFactory] = {
     "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
     "dspy": AdapterFactory("dspy", "agent-framework", _dspy),
     "langchain": AdapterFactory("langchain", "agent-framework", _langchain),
     "claude": AdapterFactory("claude", "agent-harness", _claude),
     "codex": AdapterFactory("codex", "agent-harness", _codex),
+    "acp": AdapterFactory("acp", "agent-harness", _acp),
 }
 
 _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
@@ -92,6 +105,7 @@ _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
     "langchain": _langchain_capabilities,
     "claude": _claude_capabilities,
     "codex": _codex_capabilities,
+    "acp": _acp_capabilities,
 }
 
 

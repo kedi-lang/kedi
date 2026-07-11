@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -33,10 +34,16 @@ context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
 )
 @click.option(
     "--adapter",
-    type=click.Choice(["pydantic", "dspy", "langchain", "claude"]),
+    type=click.Choice(["pydantic", "dspy", "langchain", "claude", "codex", "acp"]),
     envvar="KEDI_ADAPTER",
     default="pydantic",
     help="Backend adapter for template execution",
+)
+@click.option(
+    "--acp-command",
+    envvar="KEDI_ACP_AGENT_COMMAND",
+    default=None,
+    help="Stdio command for the ACP agent harness",
 )
 @click.option(
     "--adapter-model",
@@ -149,6 +156,7 @@ def main(
     source: str | None,
     command_source: str | None,
     adapter: str,
+    acp_command: str | None,
     adapter_model: str,
     codegen_agent: str,
     codegen_model: str,
@@ -169,6 +177,8 @@ def main(
     quiet: bool = False,
     parse_only: bool = False,
 ):
+    if acp_command is not None:
+        os.environ["KEDI_ACP_AGENT_COMMAND"] = acp_command
     if source == "parse":
         if command_source is not None:
             parse_only = True

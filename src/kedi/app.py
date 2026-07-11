@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
+from .agent_adapter.adapters import ACPAdapter, DSPyAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.meta import AgentAdapter
 from .agent_adapter.registry import build_adapter
@@ -18,7 +18,12 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 
-def _build_runtime_adapter(adapter: str, model: str | None) -> AgentAdapter[Any]:
+def _build_runtime_adapter(
+    adapter: str,
+    model: str | None,
+    *,
+    acp_command: str | None = None,
+) -> AgentAdapter[Any]:
     """Create the adapter instance used for eval/test/program execution."""
     if adapter == "pydantic":
         return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
@@ -26,6 +31,8 @@ def _build_runtime_adapter(adapter: str, model: str | None) -> AgentAdapter[Any]
         return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
     if adapter == "langchain":
         return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
+    if adapter == "acp":
+        return ACPAdapter(model=model, command=acp_command)
     return build_adapter(adapter, model)
 
 

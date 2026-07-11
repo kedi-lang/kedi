@@ -75,6 +75,7 @@ from ..ast import (
     PythonBlock,
     PythonExprNativeSegment,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
@@ -334,6 +335,10 @@ class _Walker:
                 stmt = self._walk_assign_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "raw_invoke_stmt":
+                stmt = self._walk_raw_invoke_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "return_stmt":
                 prog.toplevel_return = self._walk_return_stmt(child)
             elif t == "return_block_stmt":
@@ -387,6 +392,16 @@ class _Walker:
         self.diagnostics.append(
             KediDiagnostic(
                 severity="error",
+                message=message,
+                span=self._span(node),
+                code=code,
+            )
+        )
+
+    def _warning(self, node: Node, message: str, code: Optional[str] = None) -> None:
+        self.diagnostics.append(
+            KediDiagnostic(
+                severity="warning",
                 message=message,
                 span=self._span(node),
                 code=code,
@@ -700,6 +715,8 @@ class _Walker:
             return self._walk_assign_stmt(node)
         if t == "assign_block_stmt":
             return self._walk_assign_block_stmt(node)
+        if t == "raw_invoke_stmt":
+            return self._walk_raw_invoke_stmt(node)
         if t == "return_stmt":
             return self._walk_return_stmt(node)
         if t == "return_block_stmt":
@@ -781,6 +798,51 @@ class _Walker:
         return AssignBlockStmt(
             name=name,
             code=code,
+            type_annotation=type_anno,
+            type_expr=type_expr,
+            loc=self._span(node),
+        )
+
+    def _walk_raw_invoke_stmt(self, node: Node) -> RawInvokeStmt:
+        target = _field(node, "target")
+        assert target is not None and target.type == "assign_target"
+        name_node = _field(target, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        type_node = _field(target, "type")
+        type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
+        type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+
+        if type_node is not None:
+            if type_anno == "str":
+                self._warning(
+                    type_node,
+                    "Raw invoke captures always produce string values; ': str' is redundant.",
+                    code="K-RAW-INVOKE-REDUNDANT-STR",
+                )
+            else:
+                self._error(
+                    type_node,
+                    "Raw invoke captures always produce string values.",
+                    code="K-RAW-INVOKE-TYPE",
+                )
+
+        prompt_node = _field(node, "prompt")
+        segments = self._walk_template_expr(prompt_node) if prompt_node is not None else []
+        for segment in segments:
+            if isinstance(segment, OutputSegment):
+                self.diagnostics.append(
+                    KediDiagnostic(
+                        severity="error",
+                        message="Raw invoke prompts cannot contain output fields.",
+                        span=segment.loc or self._span(prompt_node or node),
+                        code="K-RAW-INVOKE-OUTPUT",
+                    )
+                )
+
+        return RawInvokeStmt(
+            name=name,
+            segments=segments,
             type_annotation=type_anno,
             type_expr=type_expr,
             loc=self._span(node),

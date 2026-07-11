@@ -170,6 +170,32 @@ def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:
     assert diag.range.start.character == 2
 
 
+def test_diagnostics_warn_for_acp_unsupported_capabilities_from_registry() -> None:
+    src = """
+> agent: acp
+> settings:
+    command: `["vsh", "run", "--acp"]`
+
+@lookup():
+  = ok
+
+> use: lookup
+> mcp:
+    command: fs-mcp
+
+>> Capital is [capital].
+""".lstrip()
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    messages = [diag.message for diag in diags]
+    assert len(diags) == 3
+    assert any("agent tool registration" in message for message in messages)
+    assert any("MCP server directives" in message for message in messages)
+    assert any("structured template output fields" in message for message in messages)
+    assert all(diag.severity == lsp.DiagnosticSeverity.Warning for diag in diags)
+
+
 def test_diagnostics_warn_for_nested_scoped_unsupported_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -218,6 +218,27 @@ class KediRuntime:
             raise RuntimeError("m() called outside of a kedi procedure context")
         return self._kedi_run(expressions, env)
 
+    def invoke(self, expressions: Sequence[Expression], *, capture: str | None = None) -> Any:
+        env = self._current_env.get()
+        if env is None:
+            raise RuntimeError("invoke() called outside of a kedi procedure context")
+
+        parts: List[Any] = []
+        deps: List[Any] = []
+        for expr in expressions:
+            text, out = self._evaluate_expression(expr, env)
+            if out is not None:
+                raise ValueError("Raw invoke prompts cannot contain output fields.")
+            if text is not None:
+                parts.append(text)
+                if isinstance(text, KediPromise):
+                    deps.append(text._future)
+
+        result = self._invoke_text_parts(parts, deps, env, capture_key=capture)
+        if capture is None:
+            return None
+        return result[capture]
+
     def run_main(self) -> Any:
         if self._main is None:
             return None
@@ -493,6 +514,82 @@ class KediRuntime:
             source_snippet=line,
         )
 
+    def _invoke_text_parts(
+        self,
+        parts: Sequence[Any],
+        deps: Sequence[Any],
+        env: ValueEnv,
+        *,
+        capture_key: str | None,
+    ) -> Dict[str, Any]:
+        parallel = bool(getattr(self._engine, "parallel", False))
+
+        from .agent_profile import current_block_agent_profile
+
+        block_profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(block_profile)
+        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        self._assert_profile_override_supported(block_profile, adapter)
+
+        def _call_invoke() -> str:
+            resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
+            prompt = "".join(resolved_parts)
+
+            from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_profile import current_block_agent_profile
+
+            profile = current_block_agent_profile()
+            override_ctx = nullcontext()
+            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
+                adapter.default_model()
+            ):
+                override_ctx = adapter.profile_override(profile)
+
+            tool_adapter: Any = None
+            tool_ctx: Any = nullcontext()
+            if captured_tool_specs:
+                tool_adapter = cast(Any, adapter)
+                tool_ctx = tool_adapter.tool_scope()
+
+            with tool_ctx:
+                if tool_adapter is not None:
+                    for spec in captured_tool_specs:
+                        tool_adapter.register_tool(spec)
+                run_kwargs: dict[str, Any] = {}
+                if profile.system is not None:
+                    run_kwargs["instructions"] = profile.system
+                with override_ctx:
+                    return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
+
+        if not parallel:
+            response = _call_invoke()
+            if capture_key is None:
+                return {}
+            env[capture_key] = response
+            return {capture_key: response}
+
+        env_snapshot = dict(env)
+
+        def _job() -> Dict[str, Any]:
+            token = self._current_env.set(env_snapshot)
+            try:
+                response = _call_invoke()
+                return {capture_key: response} if capture_key is not None else {}
+            except KediExecutionError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise self.build_execution_error(exc) from None
+            finally:
+                self._current_env.reset(token)
+
+        future = self._engine.schedule(deps, _job)
+        self._register_outstanding(future)
+        if capture_key is None:
+            return {}
+        view = KediPromise(future, capture_key)
+        env[capture_key] = view
+        return {capture_key: view}
+
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
         # Prompt parts may include unresolved promises (dependency edges); collect their Futures
@@ -511,10 +608,10 @@ class KediRuntime:
 
         required = [out.key for out in outputs]
 
-        # If there are no required outputs, there's nothing to ask the LLM.
-        # Treat as a no-op and return empty mapping.
         if not required:
-            return {}
+            if not parts:
+                return {}
+            return self._invoke_text_parts(parts, deps, env, capture_key=None)
 
         # Build output schema mapping (default to str when unspecified)
         typed_fields: Dict[str, Any] = {

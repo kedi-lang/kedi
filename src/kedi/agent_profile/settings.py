@@ -106,12 +106,22 @@ CODEX_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
+ACP_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "command",
+        "cwd",
+        "env",
+        "timeout",
+    }
+)
+
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
     PYDANTIC_MODEL_SETTING_KEYS
     | DSPY_LM_SETTING_KEYS
     | LANGCHAIN_MODEL_SETTING_KEYS
     | CLAUDE_AGENT_SETTING_KEYS
     | CODEX_AGENT_SETTING_KEYS
+    | ACP_AGENT_SETTING_KEYS
 )
 
 
@@ -160,3 +170,7 @@ def claude_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
 
 def codex_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
     return {key: value for key, value in settings.items() if key in CODEX_AGENT_SETTING_KEYS}
+
+
+def acp_agent_settings(settings: SettingsMap) -> dict[str, SettingValue]:
+    return {key: value for key, value in settings.items() if key in ACP_AGENT_SETTING_KEYS}

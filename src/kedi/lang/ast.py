@@ -209,6 +209,16 @@ class TemplateBlock(Stmt):
 
 
 @dataclass
+class RawInvokeStmt(Stmt):
+    """Raw model invoke captured by ``[name] << prompt``."""
+
+    name: str = ""
+    segments: Expr = field(default_factory=list)
+    type_annotation: Optional[str] = None
+    type_expr: Optional[TypeExpr] = None
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 

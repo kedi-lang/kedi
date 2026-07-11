@@ -98,6 +98,7 @@ from ..lang.ast import (
     ProgramWithValidation,
     PythonBlock,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -214,6 +215,8 @@ def _segments_of(stmt) -> list:
             segs.extend(line.segments)
         return segs
     if isinstance(stmt, TemplateLine):
+        return list(stmt.segments)
+    if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)

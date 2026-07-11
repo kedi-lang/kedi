@@ -31,6 +31,7 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprNativeSegment,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Span,
@@ -800,6 +801,9 @@ def _emit_statements(
         if isinstance(stmt, AssignStmt):
             _emit_assign_stmt(builder, cursor, stmt, scope, indent)
             continue
+        if isinstance(stmt, RawInvokeStmt):
+            _emit_raw_invoke_stmt(builder, stmt, scope, indent)
+            continue
         if isinstance(stmt, PythonBlock):
             region = cursor.next("fenced", stmt.loc)
             if region is not None:
@@ -890,6 +894,23 @@ def _emit_assign_stmt(
     scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
 
 
+def _emit_raw_invoke_stmt(
+    builder: VirtualBuilder,
+    stmt: RawInvokeStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    line = builder.add(f"{indent}{stmt.name}: str = ...")
+    source_range = _raw_invoke_name_range(stmt)
+    builder.add_symbol(
+        kind="local",
+        name=stmt.name,
+        source_range=source_range,
+        virtual_range=_line_range(line, len(indent), stmt.name),
+    )
+    scope[stmt.name] = ScopeName(typ="str", source_range=source_range)
+
+
 def _emit_return(
     builder: VirtualBuilder,
     cursor: RegionCursor,
@@ -912,6 +933,8 @@ def _stmt_segments(stmt: Stmt) -> list:
             segments.extend(line.segments)
         return segments
     if isinstance(stmt, TemplateLine):
+        return list(stmt.segments)
+    if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
@@ -1103,6 +1126,14 @@ def _type_name_range(typedef: TypeDef) -> Optional[Range]:
 
 
 def _assign_name_range(stmt: AssignStmt | AssignBlockStmt) -> Optional[Range]:
+    if stmt.loc is None:
+        return None
+    line = stmt.loc.start_line - 1
+    start = stmt.loc.start_col
+    return _line_range(line, start, stmt.name)
+
+
+def _raw_invoke_name_range(stmt: RawInvokeStmt) -> Optional[Range]:
     if stmt.loc is None:
         return None
     line = stmt.loc.start_line - 1

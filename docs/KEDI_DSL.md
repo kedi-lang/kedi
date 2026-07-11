@@ -141,6 +141,26 @@ Inside procedures, multiple blocks are separated by blank lines or a new `>>`:
 Bare template lines (without `>>`) are a **parse error** at procedure and top level.
 They remain valid only inside `> optimize:` / `> auto:` bodies.
 
+### Raw Model Invokes (`<<`)
+
+When a `>>` prompt has no output fields, Kedi sends the rendered prompt to the active
+adapter as a raw model invoke and discards the model response:
+
+```kedi
+>> Summarize the project status in one sentence.
+```
+
+To keep the raw model response, put an untyped capture target in front of `<<`:
+
+```kedi
+[answer] << Summarize <topic> in one sentence.
+= <answer>
+```
+
+Raw invoke captures always produce strings. `[answer: str] << ...` is accepted but
+redundant, while any other capture type is an error. Raw invoke prompts cannot contain
+output fields such as `[capital]`; use `>>` when you want structured field filling.
+
 ### Substitutions (R-values)
 
 Substitutions read values and insert them into templates using `<...>`:
@@ -733,14 +753,18 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
         command: vsh
         args: `["run", "--mcp"]`
     > use: web_search
+> profile: acp_local:
+    > agent: acp
+    > settings:
+        command: `["vsh", "run", "--acp"]`
 ```
 
 - `> adapter: name` — select an agent framework adapter for following LLM
   calls in the current lexical scope. Built-in framework shortnames are
   `pydantic`, `dspy`, and `langchain`.
 - `> agent: name` — select an agent harness adapter for following LLM calls
-  in the current lexical scope. Built-in harness shortnames are `claude` and
-  `codex`.
+  in the current lexical scope. Built-in harness shortnames are `claude`,
+  `codex`, and `acp`.
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``).
 - `> effort: level` — set active reasoning effort. Accepted values are
@@ -755,7 +779,8 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   expressions are evaluated as Python for complex values. Kedi keeps the merged
   settings in the active profile, then filters them at adapter boundaries:
   Pydantic AI receives only supported `ModelSettings` keys, and DSPy receives
-  only supported `dspy.LM` kwargs. Unknown setting names are parser/LSP errors.
+  only supported `dspy.LM` kwargs. ACP receives harness process settings such as
+  `command`, `cwd`, `env`, and `timeout`. Unknown setting names are parser/LSP errors.
   Use backticks when the setting value should be a real Python object instead
   of a string or simple scalar:
 
@@ -765,6 +790,17 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
       stop_sequences: `["END", "DONE"]`
       extra_body: `{"mode": "json"}`
   ```
+  For ACP harnesses, `command` may also come from CLI/env:
+
+  ```kedi
+  > agent: acp
+
+  > settings:
+      command: `["vsh", "run", "--acp"]`
+  ```
+
+  If `command` is omitted, Kedi reads `KEDI_ACP_AGENT_COMMAND`; the CLI
+  `--acp-command` option writes the same setting for the process.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure
@@ -876,7 +912,9 @@ Example:
 ```
 
 Agent tools require an adapter that supports tool registration (for example
-Pydantic AI). Adapters without tool support raise a clear error at runtime.
+Pydantic AI). Adapters without tool support surface capability warnings in the
+LSP; harness adapters that cannot accept external tools may ignore registrations
+until their underlying protocol gains tool support.
 
 ## Python API
 

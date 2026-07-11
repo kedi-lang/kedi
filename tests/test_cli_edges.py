@@ -52,6 +52,26 @@ def test_cli_command_runs_inline_source() -> None:
     assert result.output == "done\n"
 
 
+def test_cli_acp_command_sets_process_env(monkeypatch: Any) -> None:
+    seen: dict[str, str | None] = {}
+
+    def fake_run_source_cli(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        seen["command"] = cli_module.os.getenv("KEDI_ACP_AGENT_COMMAND")
+        return 0, "ok"
+
+    monkeypatch.delenv("KEDI_ACP_AGENT_COMMAND", raising=False)
+    monkeypatch.setattr(cli_module, "run_source_cli", fake_run_source_cli)
+
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["-c", "= done", "--adapter", "acp", "--acp-command", "vsh run --acp"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "ok\n"
+    assert seen == {"command": "vsh run --acp"}
+
+
 def test_cli_command_passes_extra_args_to_program_env() -> None:
     result = CliRunner().invoke(
         cli_module.main,

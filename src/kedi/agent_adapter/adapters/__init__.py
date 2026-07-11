@@ -5,7 +5,8 @@ from pydantic_ai import Agent
 
 from .._schema import make_repr
 from .._schema import output_field_definition as _output_field_definition
-from . import claude, codex, dspy, langchain, lazy, pydantic, webgpu
+from . import acp, claude, codex, dspy, langchain, lazy, pydantic, webgpu
+from .acp import ACPAdapter
 from .claude import (
     ClaudeAdapter,
     _claude_external_mcp_servers,
@@ -29,6 +30,7 @@ from .webgpu import BrowserModelBridge, WebGPUAdapter
 
 __all__ = [
     "Agent",
+    "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",
@@ -48,6 +50,7 @@ __all__ = [
     "_mcp_toolset_from_config",
     "_output_json_schema",
     "_output_field_definition",
+    "acp",
     "claude",
     "codex",
     "dspy",

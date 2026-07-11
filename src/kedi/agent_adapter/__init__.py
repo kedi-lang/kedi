@@ -2,6 +2,7 @@ from typing import Any
 
 from . import adapters
 from .adapters import (
+    ACPAdapter,
     BrowserModelBridge,
     ClaudeAdapter,
     CodexAdapter,
@@ -38,6 +39,7 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterCapability",
     "AgentAdapterKind",
+    "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",

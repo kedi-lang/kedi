@@ -14,6 +14,7 @@ import pytest
 from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
+from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
 from kedi.agent_adapter import AdapterCapabilities
 from kedi.agent_adapter import ClaudeAdapter as ExportedClaudeAdapter
 from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
@@ -22,6 +23,7 @@ from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import WebGPUAdapter
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import (
+    ACPAdapter,
     ClaudeAdapter,
     DSPyAdapter,
     LangChainAdapter,
@@ -82,6 +84,11 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert WebGPUAdapter.kind == "agent-framework"
     assert WebGPUAdapter.shortname == "webgpu"
     assert WebGPUAdapter.capabilities.supports("tool_registration")
+    assert ACPAdapter is ExportedACPAdapter
+    assert ACPAdapter.kind == "agent-harness"
+    assert ACPAdapter.shortname == "acp"
+    assert not ACPAdapter.capabilities.supports("structured_output")
+    assert not ACPAdapter.capabilities.supports("tool_registration")
     assert ClaudeAdapter is ExportedClaudeAdapter
     assert ClaudeAdapter.kind == "agent-harness"
     assert ClaudeAdapter.shortname == "claude"

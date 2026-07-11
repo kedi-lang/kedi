@@ -9,6 +9,7 @@ from kedi.lang.ast import (
     AssignStmt,
     InputSegment,
     OutputSegment,
+    RawInvokeStmt,
     Span,
     TemplateBlock,
     TemplateLine,
@@ -16,12 +17,16 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.evaluation import merge_template_block_lines
 from kedi.lang.parser.diagnostics import KediParseError
+from kedi.core import KediRuntime, o
+from kedi.engine import ThreadEngine
+from kedi.errors import KediExecutionError
 from kedi.lsp import features
 from kedi.lsp.features import (
     compute_diagnostics,
     compute_hover,
     compute_semantic_tokens_full,
 )
+from kedi.lsp import python_virtual
 from kedi.lsp.python_virtual import compute_python_virtual_document
 from kedi.resolved_types import ResolvedKediType
 from tests.lsp_helpers import decode_semantic_tokens, hover_at, hover_value, position_of
@@ -96,6 +101,174 @@ def test_template_block_cannot_substitute_output_from_same_block() -> None:
     assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in exc.value.diagnostics)
     diagnostics = compute_diagnostics(src, None)
     assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in diagnostics)
+
+
+def test_raw_invoke_parses_capture_statement() -> None:
+    prog = parse_program("[answer] << Hello <name>\n")
+    stmt = prog.toplevel_body[0]
+    assert isinstance(stmt, RawInvokeStmt)
+    assert stmt.name == "answer"
+    assert any(isinstance(seg, InputSegment) and seg.name == "name" for seg in stmt.segments)
+
+
+def test_raw_invoke_capture_runs_adapter_invoke() -> None:
+    src = "[name] = Ada\n[answer] << Hello <name>\n= <answer>\n"
+    adapter = MockAdapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main() == "response:Hello Ada"
+    assert len(adapter.instruction_calls) == 1
+
+
+def test_raw_invoke_capture_runs_inside_procedure_body() -> None:
+    src = "@p(name):\n  [answer] << Hello <name>\n  = <answer>\n\n= <p(Ada)>\n"
+    adapter = MockAdapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main() == "response:Hello Ada"
+    assert len(adapter.instruction_calls) == 1
+
+
+def test_raw_invoke_direct_runtime_guards(monkeypatch: Any) -> None:
+    rt = KediRuntime(adapter=MockAdapter())
+    with pytest.raises(RuntimeError, match="outside of a kedi procedure"):
+        rt.invoke(["prompt"])
+
+    token = rt._current_env.set({})
+    try:
+        assert rt.invoke(["prompt"]) is None
+        with pytest.raises(ValueError, match="output fields"):
+            rt.invoke([o("answer")])
+
+        def fake_evaluate_expression(_expr: object, _env: dict[str, Any]) -> tuple[None, None]:
+            return None, None
+
+        monkeypatch.setattr(rt, "_evaluate_expression", fake_evaluate_expression)
+        assert rt.invoke(["ignored"]) is None
+    finally:
+        rt._current_env.reset(token)
+
+
+def test_raw_invoke_uses_profile_tools_system_and_parallel_engine() -> None:
+    src = (
+        "> model: raw-model\n"
+        "> system:\n"
+        "  Keep it short.\n"
+        "\n"
+        "@lookup() -> str:\n"
+        "  = ok\n"
+        "\n"
+        "> use: lookup\n"
+        "[answer] << Hello\n"
+        "= <answer>\n"
+    )
+    adapter = MockAdapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main() == "response:Hello"
+    assert adapter.model_calls == ["raw-model"]
+    assert adapter.instruction_calls == ["Keep it short."]
+    assert adapter.tool_calls == [("lookup",)]
+
+    parallel_adapter = MockAdapter()
+    parallel_rt = compile_program(
+        parse_program(">> Give me [name]\n[answer] << Hello <name>\n= <answer>\n"),
+        adapter=parallel_adapter,
+        engine=ThreadEngine(max_workers=1),
+    )
+    try:
+        assert parallel_rt.run_main() == "response:Hello name-value"
+    finally:
+        parallel_rt._engine.shutdown()
+
+    discard_adapter = MockAdapter()
+    discard_rt = compile_program(
+        parse_program(">> Hello\n= done\n"),
+        adapter=discard_adapter,
+        engine=ThreadEngine(max_workers=1),
+    )
+    try:
+        assert discard_rt.run_main() == "done"
+    finally:
+        discard_rt._engine.shutdown()
+
+
+def test_parallel_raw_invoke_preserves_kedi_execution_errors() -> None:
+    class FailingAdapter(MockAdapter):
+        def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+            raise KediExecutionError("adapter failed")
+
+    rt = compile_program(
+        parse_program("[answer] << Hello\n= <answer>\n"),
+        adapter=FailingAdapter(),
+        engine=ThreadEngine(max_workers=1),
+    )
+    try:
+        with pytest.raises(KediExecutionError, match="adapter failed"):
+            rt.run_main()
+    finally:
+        rt._engine.shutdown()
+
+
+def test_parallel_raw_invoke_wraps_unexpected_adapter_errors() -> None:
+    class FailingAdapter(MockAdapter):
+        def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+            raise ValueError("bad invoke")
+
+    rt = compile_program(
+        parse_program("[answer] << Hello\n= <answer>\n"),
+        adapter=FailingAdapter(),
+        engine=ThreadEngine(max_workers=1),
+    )
+    try:
+        with pytest.raises(KediExecutionError) as exc:
+            rt.run_main()
+        assert "bad invoke" in str(exc.value)
+        assert isinstance(exc.value.original, ValueError)
+    finally:
+        rt._engine.shutdown()
+
+
+def test_outputless_template_block_runs_adapter_invoke_and_discards_response() -> None:
+    src = ">> Hello raw\n= done\n"
+    adapter = MockAdapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+
+    assert rt.run_main() == "done"
+    assert len(adapter.instruction_calls) == 1
+
+
+def test_raw_invoke_is_visible_in_virtual_python() -> None:
+    src = "@p():\n  [answer] << Hello\n  ```\n  print(answer)\n  ```\n  = <answer>\n"
+    doc = compute_python_virtual_document(src, "/tmp/raw.kedi")
+
+    assert "answer: str = ..." in doc["text"]
+    assert any(symbol["name"] == "answer" for symbol in doc["symbols"])
+    stmt = parse_program("[answer] << Hello <name>\n").toplevel_body[0]
+    assert isinstance(stmt, RawInvokeStmt)
+    assert features._segments_of(stmt)
+    assert python_virtual._stmt_segments(stmt)
+    assert python_virtual._raw_invoke_name_range(RawInvokeStmt(name="x")) is None
+
+
+def test_raw_invoke_rejects_output_fields_and_non_string_capture_type() -> None:
+    with pytest.raises(KediParseError) as typed:
+        parse_program("[answer: int] << Hello\n")
+    assert any(d.code == "K-RAW-INVOKE-TYPE" for d in typed.value.diagnostics)
+
+    with pytest.raises(KediParseError) as output:
+        parse_program("[answer] << Hello [field]\n")
+    assert any(d.code == "K-RAW-INVOKE-OUTPUT" for d in output.value.diagnostics)
+
+
+def test_raw_invoke_str_capture_type_is_lsp_warning() -> None:
+    diags = compute_diagnostics("[answer: str] << Hello\n", "example.kedi")
+
+    assert any(
+        d.code == "K-RAW-INVOKE-REDUNDANT-STR"
+        and d.severity == features.lsp.DiagnosticSeverity.Warning
+        for d in diags
+    )
 
 
 def test_template_block_single_agent_run() -> None:
