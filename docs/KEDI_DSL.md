@@ -754,9 +754,10 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
         args: `["run", "--mcp"]`
     > use: web_search
 > profile: acp_local:
-    > agent: acp
+    > agent:
+        acp: `["vsh", "run", "--acp"]`
     > settings:
-        command: `["vsh", "run", "--acp"]`
+        cwd: /tmp/project
 ```
 
 - `> adapter: name` — select an agent framework adapter for following LLM
@@ -764,7 +765,15 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   `pydantic`, `dspy`, and `langchain`.
 - `> agent: name` — select an agent harness adapter for following LLM calls
   in the current lexical scope. Built-in harness shortnames are `claude`,
-  `codex`, and `acp`.
+  `codex`, and `acp`. ACP commands can also be declared in multiline form:
+
+  ```kedi
+  > agent:
+      acp: uv run acp server
+  ```
+
+  The command value may be plain text or an inline Python expression that
+  evaluates to a string or string sequence.
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``).
 - `> effort: level` — set active reasoning effort. Accepted values are
@@ -779,8 +788,10 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   expressions are evaluated as Python for complex values. Kedi keeps the merged
   settings in the active profile, then filters them at adapter boundaries:
   Pydantic AI receives only supported `ModelSettings` keys, and DSPy receives
-  only supported `dspy.LM` kwargs. ACP receives harness process settings such as
-  `command`, `cwd`, `env`, and `timeout`. Unknown setting names are parser/LSP errors.
+  only supported `dspy.LM` kwargs. Agent harnesses receive their supported
+  settings, such as `cwd`, `env`, and `timeout` for ACP. `cwd` is passed as
+  the agent process working directory where supported, including ACP, Codex,
+  and Claude. Unknown setting names are parser/LSP errors.
   Use backticks when the setting value should be a real Python object instead
   of a string or simple scalar:
 
@@ -790,17 +801,14 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
       stop_sequences: `["END", "DONE"]`
       extra_body: `{"mode": "json"}`
   ```
-  For ACP harnesses, `command` may also come from CLI/env:
+  ACP commands may also come from CLI/env:
 
   ```kedi
   > agent: acp
-
-  > settings:
-      command: `["vsh", "run", "--acp"]`
   ```
 
   If `command` is omitted, Kedi reads `KEDI_ACP_AGENT_COMMAND`; the CLI
-  `--acp-command` option writes the same setting for the process.
+  `--acp-command` option writes the same environment value for the process.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure

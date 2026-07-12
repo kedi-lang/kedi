@@ -264,6 +264,8 @@ class ModelDirectiveStmt(Stmt):
 class AgentDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    command_plain_value: Optional[str] = None
+    command_backtick_code: Optional[str] = None
 
 
 @dataclass
@@ -354,6 +356,8 @@ class ProfileModelEntry:
 class ProfileAgentEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    command_plain_value: Optional[str] = None
+    command_backtick_code: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

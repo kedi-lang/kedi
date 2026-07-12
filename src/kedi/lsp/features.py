@@ -59,7 +59,11 @@ except Exception:  # pragma: no cover — degraded mode if the wheel is missing
     _PY_HIGHLIGHTS_QUERY = None
 
 from ..agent_profile.settings import (
+    ACP_AGENT_SETTING_KEYS,
+    CLAUDE_AGENT_SETTING_KEYS,
+    CODEX_AGENT_SETTING_KEYS,
     DSPY_LM_SETTING_KEYS,
+    LANGCHAIN_MODEL_SETTING_KEYS,
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
 )
@@ -1737,6 +1741,11 @@ def _describe_ast_node(node) -> Optional[str]:
             "Inputs `<x>`, outputs `[x: T]`, calls `<f(...)>`, inline Python `` `...` ``, "
             "and literal text are stitched into one prompt."
         )
+    if isinstance(node, RawInvokeStmt):
+        return (
+            f"**Raw model invoke** `[{node.name}] << …` — sends the prompt text to "
+            "the active adapter and stores the plain string response."
+        )
     if isinstance(node, AssignStmt):
         ann = node.type_annotation or "str"
         return (
@@ -1860,6 +1869,12 @@ def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
 
 def _agent_directive_markdown(stmt: AgentDirectiveStmt) -> str:
     value = _adapter_value_preview(stmt)
+    command = _agent_command_preview(stmt)
+    if command is not None:
+        return (
+            f"**`> agent:`** — select agent harness adapter {value} and command "
+            f"{command} for subsequent statements in this indentation block."
+        )
     return (
         f"**`> agent:`** — select agent harness adapter {value} for subsequent "
         "statements in this indentation block."
@@ -1942,6 +1957,11 @@ def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
 
 def _profile_agent_entry_markdown(entry: ProfileAgentEntry) -> str:
     value = _adapter_value_preview(entry)
+    command = _agent_command_preview(entry)
+    if command is not None:
+        return (
+            f"**`> agent:`** — reusable profile agent harness adapter: {value}; command: {command}."
+        )
     return f"**`> agent:`** — reusable profile agent harness adapter: {value}."
 
 
@@ -1972,6 +1992,14 @@ def _adapter_value_preview(
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"
+
+
+def _agent_command_preview(stmt: AgentDirectiveStmt | ProfileAgentEntry) -> str | None:
+    if stmt.command_backtick_code is not None:
+        return f"`{stmt.command_backtick_code}`"
+    if stmt.command_plain_value is not None:
+        return f"`{stmt.command_plain_value}`"
+    return None
 
 
 def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:
@@ -2005,14 +2033,23 @@ def _settings_field_value_preview(field: SettingsField) -> str:
 
 
 def _setting_adapter_label(name: str) -> str:
-    in_pydantic = name in PYDANTIC_MODEL_SETTING_KEYS
-    in_dspy = name in DSPY_LM_SETTING_KEYS
-    if in_pydantic and in_dspy:
-        return "Pydantic AI `ModelSettings` and DSPy `LM`"
-    if in_pydantic:
-        return "Pydantic AI `ModelSettings` only"
-    if in_dspy:
-        return "DSPy `LM` only"
+    labels: list[str] = []
+    if name in PYDANTIC_MODEL_SETTING_KEYS:
+        labels.append("Pydantic AI `ModelSettings`")
+    if name in DSPY_LM_SETTING_KEYS:
+        labels.append("DSPy `LM`")
+    if name in LANGCHAIN_MODEL_SETTING_KEYS:
+        labels.append("LangChain model settings")
+    if name in CLAUDE_AGENT_SETTING_KEYS:
+        labels.append("Claude Agent SDK settings")
+    if name in CODEX_AGENT_SETTING_KEYS:
+        labels.append("Codex App Server settings")
+    if name in ACP_AGENT_SETTING_KEYS:
+        labels.append("ACP agent settings")
+    if len(labels) == 1:
+        return f"{labels[0]} only"
+    if labels:
+        return ", ".join(labels[:-1]) + f", and {labels[-1]}"
     expected = ", ".join(sorted(MODEL_SETTING_KEYS))
     return f"no adapter; valid keys are {expected}"
 

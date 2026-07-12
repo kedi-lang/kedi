@@ -8,6 +8,8 @@ from ..agent_adapter.meta import AgentAdapterKind
 from ..effort import EffortValue
 from .mcp import McpServerSpec
 
+AgentCommand = str | tuple[str, ...]
+
 
 @dataclass(frozen=True, kw_only=True)
 class AgentProfile:
@@ -16,6 +18,7 @@ class AgentProfile:
     model: str | None = None
     adapter_kind: AgentAdapterKind | None = None
     adapter_shortname: str | None = None
+    agent_command: AgentCommand | None = None
     effort: EffortValue | None = None
     system: str | None = None
     settings: Mapping[str, Any] = field(default_factory=dict)
@@ -31,6 +34,8 @@ class AgentProfile:
         if other.adapter_shortname is not None:
             updates["adapter_shortname"] = other.adapter_shortname
             updates["adapter_kind"] = other.adapter_kind
+        if other.agent_command is not None:
+            updates["agent_command"] = other.agent_command
         if other.model is not None:
             updates["model"] = other.model
         if other.effort is not None:
@@ -65,6 +70,7 @@ class AgentProfile:
     def needs_adapter_override(self, adapter_default: str | None) -> bool:
         return (
             self.effort is not None
+            or self.agent_command is not None
             or bool(self.mcp_servers)
             or bool(self.settings)
             or self.needs_model_override(adapter_default)

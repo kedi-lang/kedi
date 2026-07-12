@@ -19,6 +19,9 @@ def _log(message: dict[str, Any]) -> None:
             f.write(json.dumps(message, separators=(",", ":")) + "\n")
 
 
+_log({"method": "process/cwd", "cwd": os.getcwd()})
+
+
 for line in sys.stdin:
     request = json.loads(line)
     _log(request)

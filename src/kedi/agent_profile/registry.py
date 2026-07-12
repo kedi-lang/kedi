@@ -12,6 +12,8 @@ class ProfileAgentMember:
     kind: Literal["agent"] = "agent"
     plain_value: str | None = None
     backtick_code: str | None = None
+    command_plain_value: str | None = None
+    command_backtick_code: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

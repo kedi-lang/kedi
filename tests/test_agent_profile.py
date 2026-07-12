@@ -16,7 +16,12 @@ from kedi.agent_adapter.registry import (
 )
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
-from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
+from kedi.agent_profile.model import (
+    eval_agent_command_value,
+    eval_agent_directive,
+    eval_mcp_field_value,
+    eval_settings_field_value,
+)
 from kedi.agent_profile.settings import parse_plain_setting_value
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
@@ -102,6 +107,99 @@ def test_parse_model_profile_use_directives() -> None:
     assert prog.ordered_toplevel[5].system_members[0].plain_value == "Be concise."
     assert isinstance(prog.ordered_toplevel[6], UseDirectiveStmt)
     assert isinstance(prog.ordered_toplevel[7], ProcedureDef)
+
+
+def test_parse_multiline_agent_directive_with_command() -> None:
+    src = """
+> agent:
+    acp: uv run acp server
+
+> profile: local:
+    > agent:
+        acp: `command`
+"""
+    prog = parse_program(src)
+
+    agent = prog.ordered_toplevel[0]
+    assert isinstance(agent, AgentDirectiveStmt)
+    assert agent.plain_value == "acp"
+    assert agent.command_plain_value == "uv run acp server"
+
+    profile_agent = prog.profile_defs["local"].agent_members[0]
+    assert profile_agent.plain_value == "acp"
+    assert profile_agent.command_backtick_code == "command"
+
+
+def test_eval_agent_directive_carries_agent_command() -> None:
+    stmt = AgentDirectiveStmt(plain_value="acp", command_plain_value="uv run acp server")
+    profile = eval_agent_directive(KediRuntime(), stmt, {})
+
+    assert profile.adapter_shortname == "acp"
+    assert profile.agent_command == "uv run acp server"
+
+
+def test_eval_agent_directive_accepts_inline_sequence_command() -> None:
+    stmt = AgentDirectiveStmt(
+        plain_value="acp",
+        command_backtick_code='["uv", "run", "acp", "server"]',
+    )
+    profile = eval_agent_directive(KediRuntime(), stmt, {})
+
+    assert profile.adapter_shortname == "acp"
+    assert profile.agent_command == ("uv", "run", "acp", "server")
+
+
+def test_eval_agent_command_value_accepts_string_and_rejects_invalid_values() -> None:
+    rt = KediRuntime()
+
+    assert (
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code='"uv run acp"',
+            env={},
+        )
+        == "uv run acp"
+    )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code="[object()]",
+            env={},
+        )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code="1",
+            env={},
+        )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code='["uv", 1]',
+            env={},
+        )
+    with pytest.raises(ValueError, match="no value"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code=None,
+            env={},
+        )
+
+
+def test_agent_profile_merge_carries_agent_command() -> None:
+    merged = AgentProfile.empty().merge(AgentProfile(agent_command=("uv", "run", "acp")))
+
+    assert merged.agent_command == ("uv", "run", "acp")
 
 
 def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:

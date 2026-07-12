@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from ..agent_adapter.meta import AgentAdapterKind
@@ -7,7 +8,7 @@ from ..agent_adapter.registry import validate_adapter_kind
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import AgentProfile
+from .profile import AgentCommand, AgentProfile
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -66,6 +67,31 @@ def eval_model_value(
     raise ValueError(f"{directive_name} directive has no value")
 
 
+def eval_agent_command_value(
+    rt: KediRuntime,
+    *,
+    directive_name: str,
+    plain_value: str | None,
+    backtick_code: str | None,
+    env: dict[str, Any],
+) -> AgentCommand:
+    if backtick_code is not None:
+        value = rt.executor.evaluate_type_expression(rt, backtick_code, env)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            parts = tuple(value)
+            if all(isinstance(part, str) for part in parts):
+                return parts
+        raise TypeError(
+            f"{directive_name} directive must evaluate to str or sequence[str], "
+            f"got {type(value).__name__}"
+        )
+    if plain_value is not None:
+        return plain_value.strip()
+    raise ValueError(f"{directive_name} directive has no value")
+
+
 def eval_system_value(
     rt: KediRuntime,
     *,
@@ -117,6 +143,8 @@ def eval_agent_directive(
         expected_kind="agent-harness",
         plain_value=stmt.plain_value,
         backtick_code=stmt.backtick_code,
+        command_plain_value=stmt.command_plain_value,
+        command_backtick_code=stmt.command_backtick_code,
         env=env,
     )
 
@@ -144,6 +172,8 @@ def _eval_adapter_selection(
     plain_value: str | None,
     backtick_code: str | None,
     env: dict[str, Any],
+    command_plain_value: str | None = None,
+    command_backtick_code: str | None = None,
 ) -> AgentProfile:
     shortname = eval_model_value(
         rt,
@@ -153,7 +183,20 @@ def _eval_adapter_selection(
         env=env,
     )
     validate_adapter_kind(shortname, expected_kind)
-    return AgentProfile(adapter_kind=expected_kind, adapter_shortname=shortname)
+    command: AgentCommand | None = None
+    if command_plain_value is not None or command_backtick_code is not None:
+        command = eval_agent_command_value(
+            rt,
+            directive_name=f"{directive_name} command",
+            plain_value=command_plain_value,
+            backtick_code=command_backtick_code,
+            env=env,
+        )
+    return AgentProfile(
+        adapter_kind=expected_kind,
+        adapter_shortname=shortname,
+        agent_command=command,
+    )
 
 
 def eval_effort_value(
@@ -270,6 +313,8 @@ def _member_to_patch(
             expected_kind="agent-harness",
             plain_value=member.plain_value,
             backtick_code=member.backtick_code,
+            command_plain_value=member.command_plain_value,
+            command_backtick_code=member.command_backtick_code,
             env=env,
         )
     if member.kind == "adapter":

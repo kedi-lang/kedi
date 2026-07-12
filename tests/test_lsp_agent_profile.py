@@ -80,6 +80,19 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 15 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
+def test_semantic_tokens_and_hover_cover_raw_invoke() -> None:
+    src = "[answer] << Hello <name>\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/raw.kedi")
+    decoded = decode_semantic_tokens(tokens.data)
+
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 0 and token_type == variable_type for line, _, _, token_type, _ in decoded)
+    assert "Raw model invoke" in hover_text_at(src, "raw.kedi", "<<")
+
+
 def test_hover_on_model_profile_and_use_directives() -> None:
     src = """
 > model: haiku
@@ -123,9 +136,9 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "> effort:" in hover_text_at(src, "profile.kedi", "effort", occurrence=1)
     assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
     assert "> settings:" in hover_text_at(src, "profile.kedi", "settings", occurrence=1)
-    assert "Pydantic AI `ModelSettings` only" in hover_text_at(
-        src, "profile.kedi", "parallel_tool_calls"
-    )
+    parallel_tool_calls_hover = hover_text_at(src, "profile.kedi", "parallel_tool_calls")
+    assert "Pydantic AI `ModelSettings`" in parallel_tool_calls_hover
+    assert "LangChain model settings" in parallel_tool_calls_hover
     assert "Input segment" in hover_text_at(src, "profile.kedi", "tone", occurrence=1)
     assert "Keep answers short." in hover_text_at(src, "profile.kedi", "Keep")
     assert "reusable profile MCP" in hover_text_at(src, "profile.kedi", "mcp", occurrence=1)
@@ -134,9 +147,10 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "reusable profile model configuration" in hover_text_at(
         src, "profile.kedi", "settings", occurrence=2
     )
-    assert "Pydantic AI `ModelSettings` and DSPy `LM`" in hover_text_at(
-        src, "profile.kedi", "temperature"
-    )
+    temperature_hover = hover_text_at(src, "profile.kedi", "temperature")
+    assert "Pydantic AI `ModelSettings`" in temperature_hover
+    assert "DSPy `LM`" in temperature_hover
+    assert "LangChain model settings" in temperature_hover
     assert "DSPy `LM` only" in hover_text_at(src, "profile.kedi", "num_retries")
     assert "> mcp:" in hover_text_at(src, "profile.kedi", "mcp", occurrence=3)
     assert "MCP field" in hover_text_at(src, "profile.kedi", "transport")
@@ -197,11 +211,17 @@ def test_directive_markdown_helpers_for_synthetic_nodes() -> None:
     assert "`agent_name`" in features._agent_directive_markdown(
         AgentDirectiveStmt(backtick_code="agent_name")
     )
+    assert "command" in features._agent_directive_markdown(
+        AgentDirectiveStmt(plain_value="acp", command_backtick_code='["uv", "run"]')
+    )
     assert "`adapter_name`" in features._adapter_directive_markdown(
         AdapterDirectiveStmt(backtick_code="adapter_name")
     )
     assert "`agent_name`" in features._profile_agent_entry_markdown(
         ProfileAgentEntry(backtick_code="agent_name")
+    )
+    assert "uv run acp" in features._profile_agent_entry_markdown(
+        ProfileAgentEntry(plain_value="acp", command_plain_value="uv run acp")
     )
     assert "`adapter_name`" in features._profile_adapter_entry_markdown(
         ProfileAdapterEntry(backtick_code="adapter_name")
@@ -213,6 +233,10 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
 
     assert '`["END"]`' in hover_text_at(src, "profile.kedi", "stop_sequences")
     assert "no adapter; valid keys are" in features._setting_adapter_label("imaginary")
+    cwd_hover = features._setting_adapter_label("cwd")
+    assert "Claude Agent SDK settings" in cwd_hover
+    assert "Codex App Server settings" in cwd_hover
+    assert "ACP agent settings" in cwd_hover
     profile = ProfileDefStmt(
         name="empty_settings",
         settings_members=[ProfileSettingsEntry(fields=[])],

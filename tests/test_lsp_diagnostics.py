@@ -173,8 +173,8 @@ def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:
 def test_diagnostics_warn_for_acp_unsupported_capabilities_from_registry() -> None:
     src = """
 > agent: acp
-> settings:
-    command: `["vsh", "run", "--acp"]`
+> agent:
+    acp: `["vsh", "run", "--acp"]`
 
 @lookup():
   = ok

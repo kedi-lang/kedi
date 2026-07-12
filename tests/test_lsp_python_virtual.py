@@ -59,6 +59,21 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_defaults_untyped_procedure_params_to_str_in_python_blocks():
+    src = '@get_capital(country) -> str:\n  ```\n  print("called", country)\n  ```\n  = Stockholm\n'
+    virtual = compute_python_virtual_document(src, "/tmp/sys.kedi")
+    ast.parse(virtual["text"])
+
+    assert "def __kedi_scope_get_capital(country: str) -> str:" in virtual["text"]
+    assert 'print("called", country)' in virtual["text"]
+    assert any(
+        symbol["kind"] == "parameter"
+        and symbol["name"] == "country"
+        and symbol["sourceRange"]["start"] == {"line": 0, "character": 13}
+        for symbol in virtual["symbols"]
+    )
+
+
 def test_python_virtual_document_includes_procedure_docstring():
     src = (
         "@calculate_stats(numbers: list[int]) -> int:\n"

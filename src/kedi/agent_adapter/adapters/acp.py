@@ -43,12 +43,14 @@ class ACPClient:
         command: Sequence[str],
         *,
         env: Mapping[str, str] | None = None,
+        cwd: str | None = None,
         request_timeout: float = 30,
     ) -> None:
         if not command:
             raise ValueError("ACP command cannot be empty.")
         self._command = tuple(command)
         self._env = dict(env) if env is not None else None
+        self._cwd = cwd
         self._request_timeout = request_timeout
         self._process: subprocess.Popen[str] | None = None
         self._reader: Thread | None = None
@@ -145,6 +147,7 @@ class ACPClient:
                 text=True,
                 encoding="utf-8",
                 env={**os.environ, **self._env} if self._env is not None else None,
+                cwd=self._cwd,
             )
             self._reader = Thread(target=self._read_stdout, daemon=True)
             self._stderr_reader = Thread(target=self._read_stderr, daemon=True)
@@ -295,7 +298,9 @@ class ACPAdapter:
         }
         self._request_timeout = request_timeout
         self._client = client
-        self._clients: dict[tuple[tuple[str, ...], tuple[tuple[str, str], ...]], ACPClient] = {}
+        self._clients: dict[
+            tuple[tuple[str, ...], str, tuple[tuple[str, str], ...]], ACPClient
+        ] = {}
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_acp_profile_stack_{id(self)}",
             default=(),
@@ -375,16 +380,14 @@ class ACPAdapter:
             **acp_agent_settings(self.active_profile.settings),
             **self._validated_settings(kwargs),
         }
-        cwd = settings.get("cwd", os.getcwd())
-        if not isinstance(cwd, str):
-            raise TypeError("ACP cwd setting must be a string.")
+        cwd = _normalize_cwd(settings.get("cwd"))
         timeout = settings.get("timeout", self._request_timeout)
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
             raise TypeError("ACP timeout setting must be a positive number.")
         env = _normalize_env(settings.get("env"))
         if self._client is not None:
             return self._client, cwd, float(timeout)
-        command = _normalize_optional_command(settings.pop("command", None))
+        command = _normalize_optional_command(self.active_profile.agent_command)
         if command is None:
             command = self._command
         if command is None:
@@ -392,12 +395,12 @@ class ACPAdapter:
         if command is None:
             raise RuntimeError(
                 "ACPAdapter requires a command. Set KEDI_ACP_AGENT_COMMAND, pass "
-                "--acp-command, or use '> settings: command'."
+                "--acp-command, or use multiline '> agent:' syntax."
             )
-        key = (command, tuple(sorted(env.items())))
+        key = (command, cwd, tuple(sorted(env.items())))
         client = self._clients.get(key)
         if client is None:
-            client = ACPClient(command, env=env, request_timeout=self._request_timeout)
+            client = ACPClient(command, env=env, cwd=cwd, request_timeout=self._request_timeout)
             self._clients[key] = client
         return client, cwd, float(timeout)
 
@@ -429,6 +432,16 @@ def _normalize_optional_command(value: Any) -> tuple[str, ...] | None:
     if not all(isinstance(part, str) and part for part in parts):
         raise TypeError("ACP command entries must be non-empty strings.")
     return parts
+
+
+def _normalize_cwd(value: Any) -> str:
+    if value is None:
+        return os.getcwd()
+    if isinstance(value, str):
+        return value
+    if isinstance(value, os.PathLike):
+        return os.fspath(value)
+    raise TypeError("ACP cwd setting must be a string or path-like object.")
 
 
 def _normalize_env(value: Any) -> dict[str, str]:

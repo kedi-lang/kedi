@@ -108,7 +108,6 @@ CODEX_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 
 ACP_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
-        "command",
         "cwd",
         "env",
         "timeout",

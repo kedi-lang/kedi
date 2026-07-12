@@ -86,19 +86,19 @@ def test_acp_adapter_metadata_public_exports_and_registry() -> None:
     assert isinstance(_build_runtime_adapter("acp", None, acp_command="fake acp"), ACPAdapter)
 
 
-def test_acp_adapter_invoke_uses_profile_settings_command_and_env() -> None:
+def test_acp_adapter_invoke_uses_profile_command_settings_and_env() -> None:
     client = FakeACPClient()
     adapter = ACPAdapter(
         client=cast(Any, client),
-        model_settings={"command": ["base", "acp"], "timeout": 9},
+        model_settings={"timeout": 9},
     )
     profile = AgentProfile(
+        agent_command="profile acp",
         settings={
-            "command": ["profile", "acp"],
             "cwd": "/tmp/kedi-acp",
             "timeout": 3,
             "env": {"ACP_TEST": "ok"},
-        }
+        },
     )
 
     with adapter.profile_override(profile):
@@ -128,6 +128,13 @@ def test_acp_adapter_uses_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert adapter.invoke_sync(prompt="env") == f"sync:env:{Path.cwd()}:30"
 
 
+def test_acp_adapter_accepts_pathlike_cwd(tmp_path: Path) -> None:
+    client = FakeACPClient()
+    adapter = ACPAdapter(client=cast(Any, client))
+
+    assert adapter.invoke_sync(prompt="path", cwd=tmp_path) == f"sync:path:{tmp_path}:30"
+
+
 def test_acp_adapter_uses_real_client_from_env_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -145,14 +152,18 @@ def test_acp_adapter_uses_real_client_from_env_command(
         adapter.close()
 
     methods = [message["method"] for message in _messages(log_path)]
+    process_cwd = next(
+        message["cwd"] for message in _messages(log_path) if message["method"] == "process/cwd"
+    )
+    assert process_cwd == str(tmp_path)
     assert methods.count("initialize") == 1
     assert methods.count("session/prompt") == 2
 
 
-def test_acp_adapter_uses_settings_command_before_env(
+def test_acp_adapter_uses_profile_command_before_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    settings_log_path = tmp_path / "settings-acp.jsonl"
+    profile_log_path = tmp_path / "profile-acp.jsonl"
     env_log_path = tmp_path / "env-acp.jsonl"
     monkeypatch.setenv(
         "KEDI_ACP_AGENT_COMMAND",
@@ -161,17 +172,18 @@ def test_acp_adapter_uses_settings_command_before_env(
     monkeypatch.setenv("KEDI_ACP_FAKE_LOG", str(env_log_path))
     adapter = ACPAdapter(
         model_settings={
-            "command": [sys.executable, str(FAKE_ACP_AGENT)],
-            "env": {"KEDI_ACP_FAKE_LOG": str(settings_log_path)},
+            "env": {"KEDI_ACP_FAKE_LOG": str(profile_log_path)},
         }
     )
+    profile = AgentProfile(agent_command=f"{sys.executable} {FAKE_ACP_AGENT}")
 
     try:
-        assert adapter.invoke_sync(prompt="settings", cwd=str(tmp_path)) == "echo:settings"
+        with adapter.profile_override(profile):
+            assert adapter.invoke_sync(prompt="profile", cwd=str(tmp_path)) == "echo:profile"
     finally:
         adapter.close()
 
-    assert settings_log_path.exists()
+    assert profile_log_path.exists()
     assert not env_log_path.exists()
 
 
@@ -214,9 +226,9 @@ def test_acp_adapter_rejects_unsupported_settings_and_invalid_values() -> None:
     with pytest.raises(TypeError, match="env"):
         adapter.invoke_sync(prompt="bad", env=object())
     with pytest.raises(TypeError, match="command"):
-        ACPAdapter(command=[object()])
+        ACPAdapter(command=cast(Any, [object()]))
     with pytest.raises(TypeError, match="command"):
-        ACPAdapter(command=object())
+        ACPAdapter(command=cast(Any, object()))
     assert ACPAdapter(command="")._command is None
 
 
@@ -250,7 +262,9 @@ def test_acp_client_runs_prompt_through_stdio_agent(tmp_path: Path) -> None:
     finally:
         client.close()
 
-    methods = [message["method"] for message in _messages(log_path)]
+    methods = [
+        message["method"] for message in _messages(log_path) if message["method"] != "process/cwd"
+    ]
     assert methods == ["initialize", "session/new", "session/prompt", "session/close"]
 
 
@@ -336,7 +350,7 @@ def test_acp_client_running_uninitialized_process_initializes() -> None:
         called.append(True)
         client._initialized = True
 
-    client._initialize = initialize  # type: ignore[method-assign]
+    client._initialize = cast(Any, initialize)
     client._ensure_started()
 
     assert called == [True]

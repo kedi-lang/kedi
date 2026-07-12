@@ -30,6 +30,7 @@ method per relevant CST node type, plus a small dispatcher
 from __future__ import annotations
 
 import ast as py_ast
+import re
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
@@ -107,6 +108,9 @@ from .escapes import dedent_block, unescape_text_with_tracking
 # Utilities
 # ---------------------------------------------------------------------
 
+_HYPHENATED_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+")
+_LEADING_HYPHEN_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])-([A-Za-z_][A-Za-z0-9_]*)")
+
 
 def _span(
     node: Node,
@@ -139,6 +143,16 @@ def _src_text(source: bytes, node: Node) -> str:
 def _identifier_name(source: bytes, node: Node) -> str:
     """Return the text of an identifier node."""
     return _src_text(source, node)
+
+
+def _hyphenated_identifier(source: str) -> str | None:
+    match = _HYPHENATED_IDENTIFIER_RE.search(source)
+    if match is not None:
+        return match.group(0)
+    match = _LEADING_HYPHEN_IDENTIFIER_RE.search(source)
+    if match is not None:
+        return match.group(0)
+    return None
 
 
 def _named_children(node: Node) -> List[Node]:
@@ -360,7 +374,9 @@ class _Walker:
                 # tree-sitter; we skip them here.
                 continue
             elif t == "ERROR" or child.is_error:
-                self._error(child, "unexpected source at top level")
+                self._error(
+                    child, self._parse_error_message(child, "unexpected source at top level")
+                )
             else:
                 self._error(child, f"unexpected top-level node {t!r}")
 
@@ -543,12 +559,33 @@ class _Walker:
             if node.is_missing:
                 msg = f"missing {node.type!r}"
             else:
-                msg = "unexpected syntax"
+                msg = self._parse_error_message(node, "unexpected syntax")
             self._error(node, msg, code="K-PARSE")
             return  # don't recurse into ERROR subtrees
         for child in node.children:
             if child.has_error:
                 self._collect_tree_errors(child)
+
+    def _parse_error_message(self, node: Node, fallback: str) -> str:
+        raw = _src_text(self.source, node)
+        if "``" in raw:
+            return "inline Python expression cannot be empty"
+        invalid_identifier = _hyphenated_identifier(
+            self._source_line(node)
+        ) or _hyphenated_identifier(raw)
+        if invalid_identifier is not None:
+            return (
+                f"invalid identifier {invalid_identifier!r}: '-' cannot be used in "
+                "Kedi identifiers; use '_' instead"
+            )
+        return fallback
+
+    def _source_line(self, node: Node) -> str:
+        lines = self.source.splitlines()
+        row = node.start_point[0]
+        if row < 0 or row >= len(lines):
+            return ""
+        return lines[row].decode("utf-8")
 
     # =================================================================
     # Module directives
@@ -746,7 +783,9 @@ class _Walker:
                     code="K-OPT-EMPTY",
                 )
             else:
-                self._error(node, f"unexpected statement node {t!r}")
+                self._error(
+                    node, self._parse_error_message(node, f"unexpected statement node {t!r}")
+                )
             return None
         # Anything else is an unexpected node — surface a diagnostic
         # but keep parsing the rest of the body.
@@ -1339,8 +1378,43 @@ class _Walker:
         return ModelDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
 
     def _walk_agent_directive(self, node: Node) -> AgentDirectiveStmt:
-        plain, code = self._walk_simple_directive_value(node)
-        return AgentDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+        plain, code, command_plain, command_code = self._walk_agent_directive_parts(node)
+        return AgentDirectiveStmt(
+            plain_value=plain,
+            backtick_code=code,
+            command_plain_value=command_plain,
+            command_backtick_code=command_code,
+            loc=self._span(node),
+        )
+
+    def _walk_agent_directive_parts(
+        self,
+        node: Node,
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        body_node = _field(node, "body")
+        if body_node is None:
+            plain, code = self._walk_simple_directive_value(node)
+            return plain, code, None, None
+
+        fields = [child for child in _named_children(body_node) if child.type == "agent_field"]
+        if len(fields) != 1:
+            self._error(
+                body_node,
+                "Multiline '> agent:' must contain exactly one agent entry",
+                code="K-AGENT-BODY",
+            )
+            return None, None, None, None
+        field = fields[0]
+        name_node = _field(field, "name")
+        value_node = _field(field, "value")
+        assert name_node is not None
+        assert value_node is not None
+        plain = _identifier_name(self.source, name_node)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return plain, None, None, _src_text(self.source, code_node)
+        return plain, None, _src_text(self.source, value_node).strip(), None
 
     def _walk_adapter_directive(self, node: Node) -> AdapterDirectiveStmt:
         plain, code = self._walk_simple_directive_value(node)
@@ -1520,10 +1594,16 @@ class _Walker:
                 docstring_loc = self._span(comment)
             for child in body_children:
                 if child.type == "agent_directive":
-                    plain, code = self._walk_simple_directive_value(child)
+                    plain, code, command_plain, command_code = self._walk_agent_directive_parts(
+                        child
+                    )
                     agent_members.append(
                         ProfileAgentEntry(
-                            plain_value=plain, backtick_code=code, loc=self._span(child)
+                            plain_value=plain,
+                            backtick_code=code,
+                            command_plain_value=command_plain,
+                            command_backtick_code=command_code,
+                            loc=self._span(child),
                         )
                     )
                 elif child.type == "adapter_directive":
