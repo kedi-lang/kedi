@@ -215,5 +215,13 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
         create_directory
         get_file_info
 
+> profile: readonlyfs:
+    > use:
+        read_text_file
+        path_exists
+        list_directory
+        get_file_info
+
 > export:
     filesystem
+    readonlyfs
