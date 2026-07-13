@@ -495,6 +495,43 @@ def test_render_execution_error_cleans_syntax_and_fallback_details() -> None:
     assert "fallback message" in fallback
 
 
+def test_render_execution_error_limits_embedded_python_context() -> None:
+    code = "\n".join(f"line_{index} = {index}" for index in range(1, 41))
+    span = Span(0, 5, 1, 1, 1, 6, source_path="/tmp/long_python.kedi")
+    output = render_execution_error(
+        KediExecutionError(
+            "boom",
+            frames=(
+                KediTraceFrame(
+                    kind="python_block",
+                    label="python block",
+                    span=span,
+                    source_snippet="= ```",
+                ),
+            ),
+            python_traces=(
+                KediPythonTrace(
+                    filename="<kedi-python:block:1>",
+                    kind="block",
+                    code=code,
+                    span=span,
+                    traceback_lineno=20,
+                    python_lineno=20,
+                    kedi_lineno=1,
+                ),
+            ),
+            original=RuntimeError("boom"),
+        ),
+        use_color=False,
+    )
+
+    assert "line_18 = 18" in output
+    assert "line_20 = 20" in output
+    assert "line_25 = 25" in output
+    assert "line_17 = 17" not in output
+    assert "line_26 = 26" not in output
+
+
 def test_render_parse_error_handles_multiple_diagnostics_and_linecache(
     tmp_path: Path,
 ) -> None:

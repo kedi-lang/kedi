@@ -114,7 +114,7 @@ def test_diagnostics_accept_streamable_http_mcp_transport() -> None:
     assert features.compute_diagnostics(src, "example.kedi") == []
 
 
-def test_diagnostics_warn_when_adapter_lacks_structured_output(
+def test_diagnostics_errors_when_adapter_lacks_structured_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -129,7 +129,7 @@ def test_diagnostics_warn_when_adapter_lacks_structured_output(
     assert len(diags) == 1
     diag = diags[0]
     assert diag.code == "K-ADAPTER-CAPABILITY"
-    assert diag.severity == lsp.DiagnosticSeverity.Warning
+    assert diag.severity == lsp.DiagnosticSeverity.Error
     assert "structured template output fields" in diag.message
     assert diag.range.start.line == 2
     assert diag.range.start.character == len(">> Capital is ")
@@ -193,7 +193,11 @@ def test_diagnostics_warn_for_acp_unsupported_capabilities_from_registry() -> No
     assert any("agent tool registration" in message for message in messages)
     assert any("MCP server directives" in message for message in messages)
     assert any("structured template output fields" in message for message in messages)
-    assert all(diag.severity == lsp.DiagnosticSeverity.Warning for diag in diags)
+    assert sorted(diag.severity for diag in diags) == [
+        lsp.DiagnosticSeverity.Error,
+        lsp.DiagnosticSeverity.Warning,
+        lsp.DiagnosticSeverity.Warning,
+    ]
 
 
 def test_diagnostics_warn_for_nested_scoped_unsupported_capabilities(
@@ -261,11 +265,12 @@ def test_diagnostics_warn_for_nested_scoped_unsupported_capabilities(
 
     diags = features.compute_diagnostics(src, "example.kedi")
 
-    assert [diag.severity for diag in diags] == [lsp.DiagnosticSeverity.Warning] * len(diags)
     messages = [diag.message for diag in diags]
     assert any("MCP server directives" in message for message in messages)
     assert any("agent tool registration" in message for message in messages)
     assert any("structured template output fields" in message for message in messages)
+    assert any(diag.severity == lsp.DiagnosticSeverity.Error for diag in diags)
+    assert any(diag.severity == lsp.DiagnosticSeverity.Warning for diag in diags)
     assert any(diag.range.start.line == 3 and diag.range.start.character == 6 for diag in diags)
     assert any(diag.range.start.line == 9 and diag.range.start.character == 6 for diag in diags)
     assert any(diag.range.start.line == 33 and diag.range.start.character == 6 for diag in diags)

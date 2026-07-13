@@ -530,6 +530,14 @@ Type fields can also have single-line inline Python defaults:
 = <`Person("Ada").model_dump_json()`>
 ```
 
+`Annotated[type, "description"]` works on custom type fields too. The generated
+Pydantic model keeps `type` as the runtime annotation and exposes the string as
+the field description in JSON schema:
+
+```kedi
+~Person(name: Annotated[str, "Full display name"], age: int)
+```
+
 Defaulted type fields must be annotated. Required fields must come before defaulted fields. Generated Kedi types are Pydantic `BaseModel` subclasses, so keyword construction and model APIs such as `model_dump_json()` remain available; Kedi also supports positional construction in field order.
 
 ## Advanced Features
@@ -828,11 +836,11 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   Use `> agent:` only for `agent-harness` adapters and `> adapter:` only for
   `agent-framework` adapters.
 - Editor diagnostics use adapter capability metadata. If the selected adapter
-  does not currently support structured template outputs, `> use:` tool
-  registration, or `> mcp:` servers, the LSP reports warnings on the relevant
-  output field, tool name, or directive keyword. These are capability warnings:
-  when an adapter later advertises support for that feature, the same Kedi code
-  stops warning without syntax changes.
+  does not currently support structured template outputs, the LSP reports an
+  error on the relevant output field and the adapter raises when that template
+  runs. `> use:` tool registration and `> mcp:` servers remain capability
+  warnings: when an adapter later advertises support for that feature, the same
+  Kedi code stops warning without syntax changes.
 
 ### `> mcp:` semantics
 

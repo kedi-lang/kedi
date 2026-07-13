@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import shlex
-from typing import Any, Optional, Union
+from typing import Annotated, Any, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -361,17 +361,18 @@ def register_type(
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
             raise TypeError(f"Unknown type annotation {kedi_type!s} in type {typedef.name}")
-        annotations[field.name] = resolved
+        annotation, description = _annotated_field_metadata(resolved)
+        annotations[field.name] = annotation
         if field.default_expr is None:
-            field_defs[field.name] = (resolved, ...)
+            field_defs[field.name] = (annotation, _required_field(description))
         else:
             default_value = rt.executor.evaluate_type_expression(
                 rt, field.default_expr, default_env
             )
             default_values[field.name] = default_value
             field_defs[field.name] = (
-                resolved,
-                _pydantic_default(default_value),
+                annotation,
+                _pydantic_default(default_value, description=description),
             )
 
     new_model = build_dynamic_model(
@@ -397,10 +398,24 @@ def register_type(
     type_env[f"__{typedef.name}_fields__"] = annotations
 
 
-def _pydantic_default(value: Any) -> Any:
+def _annotated_field_metadata(resolved: Any) -> tuple[Any, str | None]:
+    if get_origin(resolved) is not Annotated:
+        return resolved, None
+    args = get_args(resolved)
+    description = next((item for item in args[1:] if isinstance(item, str)), None)
+    return args[0], description
+
+
+def _required_field(description: str | None) -> Any:
+    if description is None:
+        return ...
+    return Field(description=description)
+
+
+def _pydantic_default(value: Any, *, description: str | None = None) -> Any:
     if _is_immutable_default(value):
-        return Field(default=value)
-    return Field(default_factory=_default_factory(copy.deepcopy(value)))
+        return Field(default=value, description=description)
+    return Field(default_factory=_default_factory(copy.deepcopy(value)), description=description)
 
 
 def _default_factory(value: Any):

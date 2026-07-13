@@ -26,6 +26,21 @@ def test_basic_type_usage():
     assert '"name":"Ada"' in out
 
 
+def test_custom_type_field_annotated_description_is_preserved():
+    src = (
+        '~Person(name: Annotated[str, "Full display name"], age: Annotated[int, "Age"] = `0`)\n'
+        "= ```\n"
+        "schema = Person.model_json_schema()\n"
+        "return schema['properties']['name']['description'] + '/' + "
+        "schema['properties']['age']['description'] + '/' + str(Person('Ada').age)\n"
+        "```\n"
+    )
+
+    out = _run(src)
+
+    assert out == "Full display name/Age/0"
+
+
 def test_type_parameter_annotation_call():
     src = (
         "~Person(age:int, name, city)\n"

@@ -798,10 +798,15 @@ def _unsupported_capability_diagnostics(
     supported = _adapter_supports(state, feature)
     if supported is not False or state.shortname is None:
         return []
+    severity = (
+        lsp.DiagnosticSeverity.Error
+        if feature == "structured_output"
+        else lsp.DiagnosticSeverity.Warning
+    )
     return [
         lsp.Diagnostic(
             range=_span_to_range(span),
-            severity=lsp.DiagnosticSeverity.Warning,
+            severity=severity,
             code="K-ADAPTER-CAPABILITY",
             source="kedi",
             message=(
