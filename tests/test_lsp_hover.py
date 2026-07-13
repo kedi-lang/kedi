@@ -530,10 +530,21 @@ def test_hover_on_annotated_explains_kedi_schema_metadata():
 
 
 def test_hover_on_datetime_type_uses_datetime_namespace():
-    src = "@p(started_at: datetime) -> timedelta:\n  = <started_at>\n"
+    src = "@p(started_at: datetime, day: date) -> timedelta:\n  = <started_at>\n"
 
     assert "datetime.datetime" in hover_text_at(src, "example.kedi", "datetime")
+    assert "datetime.date" in hover_text_at(src, "example.kedi", "date")
     assert "datetime.timedelta" in hover_text_at(src, "example.kedi", "timedelta")
+    assert "datetime.time" in hover_text_at("@p(clock: time):\n  = ok\n", "example.kedi", "time")
+
+
+def test_hover_on_runtime_schema_aliases():
+    src = "@p(pattern: Regex, email: Email, site: HttpUrl, file: FileUrl):\n  = <email>\n"
+
+    assert "re.Pattern[str]" in hover_text_at(src, "example.kedi", "Regex")
+    assert "EmailStr" in hover_text_at(src, "example.kedi", "Email")
+    assert "HttpUrl" in hover_text_at(src, "example.kedi", "HttpUrl")
+    assert "FileUrl" in hover_text_at(src, "example.kedi", "FileUrl")
 
 
 def test_builtin_type_definition_and_rename_are_disabled():

@@ -1277,6 +1277,17 @@ def _typing_import_lines(program: Any) -> list[str]:
     datetime_names = sorted(imports_by_origin.get("datetime", ()))
     if datetime_names:
         lines.append(f"from datetime import {', '.join(datetime_names)}")
+    if "Regex" in imports_by_origin.get("re", ()):
+        lines.append("from re import Pattern as Regex")
+    pydantic_names = imports_by_origin.get("pydantic", set())
+    pydantic_imports = []
+    if "Email" in pydantic_names:
+        pydantic_imports.append("EmailStr as Email")
+    for name in ("FileUrl", "HttpUrl"):
+        if name in pydantic_names:
+            pydantic_imports.append(name)
+    if pydantic_imports:
+        lines.append(f"from pydantic import {', '.join(pydantic_imports)}")
     return lines
 
 

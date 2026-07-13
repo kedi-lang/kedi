@@ -439,6 +439,22 @@ def test_python_virtual_document_imports_datetime_types():
     assert "-> timedelta" in virtual["text"]
 
 
+def test_python_virtual_document_imports_runtime_type_aliases():
+    src = (
+        "@p(day: date, clock: time, matcher: Regex, email: Email, site: HttpUrl, file: FileUrl):\n"
+        "  = <email>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "from datetime import date, time" in virtual["text"]
+    assert "from re import Pattern as Regex" in virtual["text"]
+    assert "from pydantic import EmailStr as Email, FileUrl, HttpUrl" in virtual["text"]
+    assert "matcher: Regex" in virtual["text"]
+    assert "email: Email" in virtual["text"]
+    assert "site: HttpUrl" in virtual["text"]
+    assert "file: FileUrl" in virtual["text"]
+
+
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     src = (
         "@get_country(city):\n"

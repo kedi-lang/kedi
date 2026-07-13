@@ -92,7 +92,13 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     assert "Protocol" not in build_type_env(broken_rt, None)
     assert "Generic" not in build_type_env(broken_rt, None)
     assert build_type_env(broken_rt, None)["datetime"].__name__ == "datetime"
+    assert build_type_env(broken_rt, None)["date"].__name__ == "date"
+    assert build_type_env(broken_rt, None)["time"].__name__ == "time"
     assert build_type_env(broken_rt, None)["timedelta"].__name__ == "timedelta"
+    assert build_type_env(broken_rt, None)["Regex"].__origin__.__name__ == "Pattern"
+    assert build_type_env(broken_rt, None)["Email"].__name__ == "EmailStr"
+    assert build_type_env(broken_rt, None)["HttpUrl"].__name__ == "HttpUrl"
+    assert build_type_env(broken_rt, None)["FileUrl"].__name__ == "FileUrl"
     cast(Any, broken_rt)._type_env_stack = None
     assert "List" in build_type_env(broken_rt, None)
     with pytest.raises(KeyError, match="Unknown variable"):

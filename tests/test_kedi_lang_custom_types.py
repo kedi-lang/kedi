@@ -75,6 +75,27 @@ def test_custom_type_accepts_datetime_and_timedelta_field_types():
     assert '"duration":' in out
 
 
+def test_custom_type_schema_formats_for_builtin_runtime_types():
+    src = (
+        "~Formats(day: date, clock: time, pattern: Regex, email: Email, site: HttpUrl, file: FileUrl)\n"
+        "= ```\n"
+        "props = Formats.model_json_schema()['properties']\n"
+        "return '|'.join([\n"
+        "    props['day']['format'],\n"
+        "    props['clock']['format'],\n"
+        "    props['pattern']['format'],\n"
+        "    props['email']['format'],\n"
+        "    props['site']['format'],\n"
+        "    props['file']['format'],\n"
+        "])\n"
+        "```\n"
+    )
+
+    out = _run(src)
+
+    assert out == "date|time|regex|email|uri|uri"
+
+
 def test_type_parameter_annotation_call():
     src = (
         "~Person(age:int, name, city)\n"

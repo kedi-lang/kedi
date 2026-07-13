@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import builtins
 import linecache
+import re
 import typing
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import typing_extensions
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
 from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
@@ -37,8 +38,33 @@ KEDI_TYPING_TYPE_NAMES = frozenset(
     }
 )
 
+KEDI_RUNTIME_TYPES = {
+    "datetime": datetime,
+    "date": date,
+    "time": time,
+    "timedelta": timedelta,
+    "Regex": re.Pattern[str],
+    "Email": EmailStr,
+    "EmailStr": EmailStr,
+    "HttpUrl": HttpUrl,
+    "FileUrl": FileUrl,
+}
+
+KEDI_RUNTIME_TYPE_ORIGINS = {
+    "datetime": "datetime",
+    "date": "datetime",
+    "time": "datetime",
+    "timedelta": "datetime",
+    "Regex": "re",
+    "Email": "pydantic",
+    "HttpUrl": "pydantic",
+    "FileUrl": "pydantic",
+}
+
 KEDI_DATETIME_TYPES = {
     "datetime": datetime,
+    "date": date,
+    "time": time,
     "timedelta": timedelta,
 }
 
@@ -169,7 +195,7 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
             if value is not None:
                 env.setdefault(name, value)
 
-    env.update(KEDI_DATETIME_TYPES)
+    env.update(KEDI_RUNTIME_TYPES)
 
     # Layer type environments
     for layer in rt._type_env_stack or []:

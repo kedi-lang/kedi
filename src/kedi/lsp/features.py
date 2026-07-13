@@ -69,7 +69,7 @@ from ..agent_profile.settings import (
 )
 from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
 from ..agent_adapter.registry import adapter_capabilities, adapter_factory
-from ..lang.compiler.environment import KEDI_DATETIME_TYPES, KEDI_TYPING_TYPE_NAMES
+from ..lang.compiler.environment import KEDI_RUNTIME_TYPE_ORIGINS, KEDI_TYPING_TYPE_NAMES
 from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
@@ -180,8 +180,8 @@ def _build_lsp_type_registry() -> dict[str, str]:
         for name in KEDI_TYPING_TYPE_NAMES:
             if hasattr(module, name):
                 registry.setdefault(name, origin)
-    for name in KEDI_DATETIME_TYPES:
-        registry[name] = "datetime"
+    for name, origin in KEDI_RUNTIME_TYPE_ORIGINS.items():
+        registry[name] = origin
     return registry
 
 
@@ -2291,6 +2291,15 @@ def _known_type_markdown(name: str, origin: str) -> str:
         )
     if origin == "datetime":
         return f"`{name}`\n\nKedi type resolved to Python's datetime.{name}."
+    if origin == "re":
+        return "`Regex`\n\nKedi type resolved to Python's `re.Pattern[str]`."
+    if origin == "pydantic":
+        pydantic_name = {
+            "Email": "EmailStr",
+            "HttpUrl": "HttpUrl",
+            "FileUrl": "FileUrl",
+        }.get(name, name)
+        return f"`{name}`\n\nKedi type resolved to Pydantic's `{pydantic_name}`."
     return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
 
 

@@ -526,7 +526,10 @@ Fields without type annotations default to `str`. You can use backtick-wrapped t
 
 Kedi's built-in type namespace includes common Python and typing types such as `str`,
 `int`, `list`, `dict`, `Union`, `Optional`, `Literal`, `Annotated`, plus
-`datetime` and `timedelta`.
+serializable runtime types such as `datetime`, `date`, `time`, `timedelta`,
+`Regex`, `Email`, `HttpUrl`, and `FileUrl`. These names resolve to Python or
+Pydantic types, so generated JSON schemas keep their native formats: `date`,
+`time`, `regex`, `email`, or `uri` where applicable.
 
 Type fields can also have single-line inline Python defaults:
 
