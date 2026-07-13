@@ -8,6 +8,7 @@ from __future__ import annotations
 import builtins
 import linecache
 import typing
+from datetime import datetime, timedelta
 from typing import Any
 
 import typing_extensions
@@ -15,6 +16,31 @@ from pydantic import BaseModel
 
 from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
+
+KEDI_TYPING_TYPE_NAMES = frozenset(
+    {
+        "Annotated",
+        "Any",
+        "Callable",
+        "Dict",
+        "FrozenSet",
+        "Iterable",
+        "List",
+        "Literal",
+        "Mapping",
+        "Optional",
+        "Sequence",
+        "Set",
+        "Tuple",
+        "Type",
+        "Union",
+    }
+)
+
+KEDI_DATETIME_TYPES = {
+    "datetime": datetime,
+    "timedelta": timedelta,
+}
 
 
 class KediEnv(dict):
@@ -136,14 +162,14 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
         "typing_extensions": typing_extensions,
     }
 
-    # Import common typing names
+    # Import only names that are meaningful as Kedi type annotations.
     for module in (typing, typing_extensions):
-        for name in module.__all__:
-            if not name.startswith("_"):
-                try:
-                    env.setdefault(name, vars(module)[name])
-                except KeyError:
-                    continue
+        for name in KEDI_TYPING_TYPE_NAMES:
+            value = getattr(module, name, None)
+            if value is not None:
+                env.setdefault(name, value)
+
+    env.update(KEDI_DATETIME_TYPES)
 
     # Layer type environments
     for layer in rt._type_env_stack or []:

@@ -15,8 +15,9 @@ def make_repr(cls: type) -> str:
 def output_field_definition(type_: ResolvedKediType) -> tuple[Any, Any]:
     if get_origin(type_) is Annotated:
         args = get_args(type_)
-        if args:
-            description = next((item for item in args[1:] if isinstance(item, str)), None)
-            if description is not None:
-                return args[0], Field(description=description)
+        if len(args) == 0:
+            return type_, ...
+        description = args[1] if len(args) > 1 and isinstance(args[1], str) else None
+        if description is not None:
+            return args[0], Field(description=description)
     return type_, ...

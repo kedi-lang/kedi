@@ -28,6 +28,42 @@ def test_diagnostics_accept_annotated_output_description():
     assert features.compute_diagnostics(src, "example.kedi") == []
 
 
+def test_diagnostics_warns_when_annotated_description_is_missing():
+    src = "@p():\n  >> Capital is [capital: Annotated[str]].\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    assert diags[0].code == "K-ANNOTATED-DESCRIPTION"
+    assert diags[0].severity == lsp.DiagnosticSeverity.Warning
+    assert 'Annotated[type, "description"]' in diags[0].message
+
+
+def test_diagnostics_warns_for_annotated_inside_union_type():
+    src = "@p():\n  >> Value: [value: Annotated[str] | int].\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    assert diags[0].code == "K-ANNOTATED-DESCRIPTION"
+
+
+def test_diagnostics_warns_when_annotated_description_is_not_string():
+    src = "@p():\n  >> Capital is [capital: Annotated[str, int]].\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    assert diags[0].code == "K-ANNOTATED-DESCRIPTION"
+    assert "second argument should be a string literal" in diags[0].message
+
+
+def test_diagnostics_warns_when_annotated_has_extra_metadata():
+    src = '~Person(name: Annotated[str, "Full name", "unused"])\n= ok\n'
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    assert diags[0].code == "K-ANNOTATED-EXTRA"
+    assert "extra Annotated metadata is ignored" in diags[0].message
+
+
 def test_diagnostics_accept_tools_fixture() -> None:
     path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")

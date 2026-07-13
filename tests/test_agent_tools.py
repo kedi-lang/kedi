@@ -615,3 +615,8 @@ def test_pydantic_adapter_output_schema_uses_annotated_description() -> None:
         == "Canonical city name returned by the model."
     )
     assert schema["required"] == ["capital"]
+
+    ignored = PydanticAdapter.type_builder(
+        {"capital": Annotated[str, int, "ignored description"]}
+    ).model_json_schema()
+    assert "description" not in ignored["properties"]["capital"]

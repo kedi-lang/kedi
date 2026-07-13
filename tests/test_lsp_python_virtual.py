@@ -430,6 +430,15 @@ def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types()
     assert "issues: list[Issue]" in virtual["text"]
 
 
+def test_python_virtual_document_imports_datetime_types():
+    src = "@p(started_at: datetime) -> timedelta:\n  = <started_at>\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "from datetime import datetime, timedelta" in virtual["text"]
+    assert "started_at: datetime" in virtual["text"]
+    assert "-> timedelta" in virtual["text"]
+
+
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     src = (
         "@get_country(city):\n"

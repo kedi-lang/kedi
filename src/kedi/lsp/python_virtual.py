@@ -1274,6 +1274,9 @@ def _typing_import_lines(program: Any) -> list[str]:
         names = sorted(imports_by_origin.get(origin, ()))
         if names:
             lines.append(f"from {origin} import {', '.join(names)}")
+    datetime_names = sorted(imports_by_origin.get("datetime", ()))
+    if datetime_names:
+        lines.append(f"from datetime import {', '.join(datetime_names)}")
     return lines
 
 

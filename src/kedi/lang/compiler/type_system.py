@@ -74,6 +74,11 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         args = tuple(_resolve_expr(rt, a, type_env) for a in expr.args)
         if any(a is None for a in args):
             return None
+        if base is Annotated:
+            if not args:
+                return None
+            if len(args) == 1:
+                return args[0]
         try:
             if len(args) == 1:
                 return base[args[0]]
@@ -402,8 +407,10 @@ def _annotated_field_metadata(resolved: Any) -> tuple[Any, str | None]:
     if get_origin(resolved) is not Annotated:
         return resolved, None
     args = get_args(resolved)
-    description = next((item for item in args[1:] if isinstance(item, str)), None)
-    return args[0], description
+    annotation = next(iter(args))
+    metadata = args[1:]
+    description = metadata[0] if metadata and isinstance(metadata[0], str) else None
+    return annotation, description
 
 
 def _required_field(description: str | None) -> Any:

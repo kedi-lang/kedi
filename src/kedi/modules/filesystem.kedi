@@ -206,6 +206,9 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
     ```
 
 > profile: filesystem:
+    ###
+    Filesystem profile with full read/write access.
+    ###
     > use:
         read_text_file
         write_text_file
@@ -216,6 +219,9 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
         get_file_info
 
 > profile: readonlyfs:
+    ###
+    Filesystem profile with only read access.
+    ###
     > use:
         read_text_file
         path_exists

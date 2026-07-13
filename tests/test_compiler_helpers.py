@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -88,6 +89,10 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     cast(Any, broken_rt)._current_env = RaisingCurrentEnv()
     assert build_python_env(broken_rt, {"local": 1})["local"] == 1
     assert "List" in build_type_env(broken_rt, None)
+    assert "Protocol" not in build_type_env(broken_rt, None)
+    assert "Generic" not in build_type_env(broken_rt, None)
+    assert build_type_env(broken_rt, None)["datetime"].__name__ == "datetime"
+    assert build_type_env(broken_rt, None)["timedelta"].__name__ == "timedelta"
     cast(Any, broken_rt)._type_env_stack = None
     assert "List" in build_type_env(broken_rt, None)
     with pytest.raises(KeyError, match="Unknown variable"):
@@ -98,6 +103,9 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(compiler_env.typing, "__all__", ("_PrivateTypingName",), raising=False)
     assert "_PrivateTypingName" not in build_type_env(KediRuntime(), None)
+
+    monkeypatch.setattr(compiler_env, "typing", SimpleNamespace(List=list))
+    assert build_type_env(KediRuntime(), None)["List"] is list
 
 
 def test_runtime_lookup_reads_current_env() -> None:

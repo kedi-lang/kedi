@@ -41,6 +41,40 @@ def test_custom_type_field_annotated_description_is_preserved():
     assert out == "Full display name/Age/0"
 
 
+def test_custom_type_field_annotated_ignores_extra_metadata():
+    src = (
+        '~Person(name: Annotated[str, int, "unused description"])\n'
+        "= ```\n"
+        "schema = Person.model_json_schema()\n"
+        "return str('description' in schema['properties']['name'])\n"
+        "```\n"
+    )
+
+    out = _run(src)
+
+    assert out == "False"
+
+
+def test_custom_type_accepts_datetime_and_timedelta_field_types():
+    src = (
+        "```\n"
+        "from datetime import datetime, timedelta\n"
+        "```\n"
+        "~Event(at: datetime, duration: timedelta)\n"
+        "= ```\n"
+        "event = Event(at=datetime(2026, 1, 2, 3, 4, 5), duration=timedelta(seconds=90))\n"
+        "payload = event.model_dump_json()\n"
+        "return str(type(event.at).__name__) + '/' + str(type(event.duration).__name__) + '/' + payload\n"
+        "```\n"
+    )
+
+    out = _run(src)
+
+    assert out.startswith("datetime/timedelta/")
+    assert '"at":"2026-01-02T03:04:05"' in out
+    assert '"duration":' in out
+
+
 def test_type_parameter_annotation_call():
     src = (
         "~Person(age:int, name, city)\n"

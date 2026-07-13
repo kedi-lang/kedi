@@ -104,6 +104,16 @@ def test_structured_type_resolution_and_rendering_edges() -> None:
     )
     assert annotated.resolve(rt, {"Annotated": Annotated}) == Annotated[str, "City name"]
     assert str(annotated) == 'Annotated[str, "City name"]'
+    assert (
+        KediType(TypeApply(name="Annotated", args=[TypeRef(name="str")])).resolve(
+            rt,
+            {"Annotated": Annotated},
+        )
+        is str
+    )
+    assert (
+        KediType(TypeApply(name="Annotated", args=[])).resolve(rt, {"Annotated": Annotated}) is None
+    )
     assert str(KediType(TypeUnion(left=TypeRef(name="str"), right=TypeRef(name="int")))) == (
         "str | int"
     )

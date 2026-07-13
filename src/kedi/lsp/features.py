@@ -69,6 +69,7 @@ from ..agent_profile.settings import (
 )
 from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
 from ..agent_adapter.registry import adapter_capabilities, adapter_factory
+from ..lang.compiler.environment import KEDI_DATETIME_TYPES, KEDI_TYPING_TYPE_NAMES
 from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
@@ -117,6 +118,7 @@ from ..lang.ast import (
     TypeDef,
     TypeExpr,
     TypeField,
+    TypeLiteral,
     TypeRef,
     TypeUnion,
     UseDirectiveStmt,
@@ -175,9 +177,11 @@ def _build_lsp_type_registry() -> dict[str, str]:
     ):
         if module is None:
             continue
-        for name in module.__all__:
-            if not name.startswith("_") and hasattr(module, name):
+        for name in KEDI_TYPING_TYPE_NAMES:
+            if hasattr(module, name):
                 registry.setdefault(name, origin)
+    for name in KEDI_DATETIME_TYPES:
+        registry[name] = "datetime"
     return registry
 
 
@@ -240,6 +244,7 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
         prog = parse_program(source, source_path=source_path)
         out = _missing_import_diagnostics(prog)
         out.extend(_adapter_capability_diagnostics(prog))
+        out.extend(_annotated_type_diagnostics(prog))
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -257,6 +262,96 @@ def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
         code=d.code,
         source="kedi",
         message=d.message,
+    )
+
+
+def _annotated_type_diagnostics(
+    prog: Union[Program, ProgramWithValidation],
+) -> List[lsp.Diagnostic]:
+    out: List[lsp.Diagnostic] = []
+    for expr in _iter_type_exprs(prog):
+        _collect_annotated_type_diagnostics(expr, out)
+    return out
+
+
+def _iter_type_exprs(prog: Union[Program, ProgramWithValidation]):
+    for typedef in prog.type_defs:
+        for field in typedef.fields:
+            yield field.type_expr
+    for proc in _all_procedures(prog):
+        yield proc.return_type_expr
+        for expr in (proc.param_type_exprs or {}).values():
+            yield expr
+        for stmt in proc.body:
+            yield from _iter_stmt_type_exprs(stmt)
+    for stmt in prog.toplevel_body:
+        yield from _iter_stmt_type_exprs(stmt)
+    if prog.toplevel_return is not None:
+        yield from _iter_stmt_type_exprs(prog.toplevel_return)
+
+
+def _iter_stmt_type_exprs(stmt):
+    if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+        yield stmt.type_expr
+    for segment in _segments_of(stmt):
+        if isinstance(segment, OutputSegment):
+            yield segment.type_expr
+
+
+def _collect_annotated_type_diagnostics(
+    expr: Optional[TypeExpr],
+    out: List[lsp.Diagnostic],
+) -> None:
+    if expr is None:
+        return
+    if isinstance(expr, TypeApply):
+        if expr.name == "Annotated" and expr.loc is not None:
+            if len(expr.args) == 1:
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-DESCRIPTION",
+                        "Annotated[type] is accepted as the runtime type, but Kedi "
+                        "Annotated metadata should include a string description: "
+                        'Annotated[type, "description"].',
+                    )
+                )
+            elif len(expr.args) > 2:
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-EXTRA",
+                        'Kedi uses only Annotated[type, "description"]; extra Annotated '
+                        "metadata is ignored.",
+                    )
+                )
+            elif len(expr.args) == 2 and not _is_string_type_literal(expr.args[1]):
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-DESCRIPTION",
+                        'Kedi Annotated metadata expects Annotated[type, "description"]; '
+                        "the second argument should be a string literal.",
+                    )
+                )
+        for arg in expr.args:
+            _collect_annotated_type_diagnostics(arg, out)
+    elif isinstance(expr, TypeUnion):
+        _collect_annotated_type_diagnostics(expr.left, out)
+        _collect_annotated_type_diagnostics(expr.right, out)
+
+
+def _is_string_type_literal(expr: TypeExpr) -> bool:
+    return isinstance(expr, TypeLiteral) and isinstance(expr.value, str)
+
+
+def _warning(span: Span, code: str, message: str) -> lsp.Diagnostic:
+    return lsp.Diagnostic(
+        range=_span_to_range(span),
+        severity=lsp.DiagnosticSeverity.Warning,
+        code=code,
+        source="kedi",
+        message=message,
     )
 
 
@@ -2187,6 +2282,15 @@ def _type_field_annotation(field: TypeField) -> str:
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
+    if name == "Annotated":
+        return (
+            "`Annotated`\n\n"
+            'Kedi uses `Annotated[type, "description"]` as schema metadata. '
+            "The first argument is the runtime type; the string description is passed "
+            "to generated JSON schema and LLM adapter field descriptions."
+        )
+    if origin == "datetime":
+        return f"`{name}`\n\nKedi type resolved to Python's datetime.{name}."
     return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
 
 

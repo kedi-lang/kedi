@@ -204,11 +204,13 @@ Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`
 
 Backtick-wrapped type expressions in outputs are evaluated at runtime, giving you access to dynamic types from the prelude or computed values.
 
-`Annotated[type, "description"]` can attach schema descriptions to output fields without
+`Annotated[type, "description"]` has Kedi-specific meaning: it keeps `type` as the
+runtime type and attaches the string as schema/LLM field description metadata without
 using inline Python. The description must be a single-line string literal inside the
 `Annotated[...]` arguments; standalone string literals are not valid type annotations.
 Adapters that expose JSON schema, such as Pydantic AI and LangChain, pass this metadata
-as the field description:
+as the field description. `Annotated[type]` still resolves as `type`, but the LSP warns
+because no description metadata was provided; extra `Annotated[...]` metadata is ignored.
 
 ```kedi
 >> Extract the customer as [name: Annotated[str, "Full customer name"]].
@@ -521,6 +523,10 @@ return Person(name="Bob", age=25, email="bob@example.com")
 ````
 
 Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable assignments. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
+
+Kedi's built-in type namespace includes common Python and typing types such as `str`,
+`int`, `list`, `dict`, `Union`, `Optional`, `Literal`, `Annotated`, plus
+`datetime` and `timedelta`.
 
 Type fields can also have single-line inline Python defaults:
 

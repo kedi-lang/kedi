@@ -518,6 +518,24 @@ def test_hover_on_builtin_and_typing_types_is_not_undefined():
         assert "not defined" not in body
 
 
+def test_hover_on_annotated_explains_kedi_schema_metadata():
+    src = '@p():\n  >> Capital is [capital: Annotated[str, "Canonical city name"]].\n'
+
+    body = hover_text_at(src, "example.kedi", "Annotated")
+
+    assert 'Annotated[type, "description"]' in body
+    assert "schema metadata" in body
+    assert "runtime type" in body
+    assert "LLM adapter field descriptions" in body
+
+
+def test_hover_on_datetime_type_uses_datetime_namespace():
+    src = "@p(started_at: datetime) -> timedelta:\n  = <started_at>\n"
+
+    assert "datetime.datetime" in hover_text_at(src, "example.kedi", "datetime")
+    assert "datetime.timedelta" in hover_text_at(src, "example.kedi", "timedelta")
+
+
 def test_builtin_type_definition_and_rename_are_disabled():
     src = "@p(x: Optional[str]) -> bool:\n  = <x>\n"
     uri = "file:///tmp/example.kedi"
