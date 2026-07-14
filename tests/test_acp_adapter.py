@@ -1,0 +1,441 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import sys
+from concurrent.futures import Future
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
+from kedi.agent_adapter.adapters import ACPAdapter
+from kedi.agent_adapter.adapters.acp import ACPClient, ACPDisconnected, ACPProtocolError
+from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
+from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_profile import ACP_AGENT_SETTING_KEYS, AgentProfile
+from kedi.app import _build_runtime_adapter
+
+FAKE_ACP_AGENT = Path(__file__).parent / "files" / "fake_acp_agent.py"
+
+
+class FakeACPClient:
+    def __init__(self) -> None:
+        self.sync_calls: list[dict[str, Any]] = []
+        self.async_calls: list[dict[str, Any]] = []
+        self.closed = False
+
+    def run_prompt_sync(self, *, prompt: str, cwd: str, timeout: float) -> str:
+        self.sync_calls.append({"prompt": prompt, "cwd": cwd, "timeout": timeout})
+        return f"sync:{prompt}:{cwd}:{timeout:g}"
+
+    async def run_prompt(self, *, prompt: str, cwd: str, timeout: float) -> str:
+        self.async_calls.append({"prompt": prompt, "cwd": cwd, "timeout": timeout})
+        return f"async:{prompt}:{cwd}:{timeout:g}"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class BrokenStdin:
+    def write(self, line: str) -> None:
+        raise BrokenPipeError
+
+    def flush(self) -> None:
+        raise AssertionError("flush should not be called after write fails")
+
+
+class FakeProcess:
+    def __init__(self) -> None:
+        self.stdin: Any = BrokenStdin()
+        self.stdout: Any = []
+        self.stderr: Any = []
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> None:
+        return None
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def wait(self, timeout: float) -> None:
+        raise TimeoutError
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def _messages(log_path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_acp_adapter_metadata_public_exports_and_registry() -> None:
+    assert ACPAdapter is ExportedACPAdapter
+    assert ACPAdapter.kind == "agent-harness"
+    assert ACPAdapter.shortname == "acp"
+    assert not ACPAdapter.capabilities.supports("structured_output")
+    assert not ACPAdapter.capabilities.supports("tool_registration")
+    assert not ACPAdapter.capabilities.supports("mcp")
+    assert ACPAdapter.capabilities.supports("profile_override")
+    assert ACPAdapter.capabilities.settings == ACP_AGENT_SETTING_KEYS
+
+    assert adapter_capabilities("acp") == ACPAdapter.capabilities
+    assert isinstance(build_adapter("acp"), ACPAdapter)
+    assert isinstance(_build_runtime_adapter("acp", None, acp_command="fake acp"), ACPAdapter)
+
+
+def test_acp_adapter_invoke_uses_profile_command_settings_and_env() -> None:
+    client = FakeACPClient()
+    adapter = ACPAdapter(
+        client=cast(Any, client),
+        model_settings={"timeout": 9},
+    )
+    profile = AgentProfile(
+        agent_command="profile acp",
+        settings={
+            "cwd": "/tmp/kedi-acp",
+            "timeout": 3,
+            "env": {"ACP_TEST": "ok"},
+        },
+    )
+
+    with adapter.profile_override(profile):
+        assert adapter.invoke_sync(prompt="hello") == "sync:hello:/tmp/kedi-acp:3"
+        assert asyncio.run(adapter.invoke(prompt="world")) == "async:world:/tmp/kedi-acp:3"
+
+    assert client.sync_calls == [{"prompt": "hello", "cwd": "/tmp/kedi-acp", "timeout": 3.0}]
+    assert client.async_calls == [{"prompt": "world", "cwd": "/tmp/kedi-acp", "timeout": 3.0}]
+    adapter.close()
+    assert client.closed
+
+
+def test_acp_adapter_default_model_and_async_close() -> None:
+    client = FakeACPClient()
+    adapter = ACPAdapter(model="acp-model", client=cast(Any, client))
+
+    assert adapter.default_model() == "acp-model"
+    asyncio.run(adapter.aclose())
+    assert client.closed
+
+
+def test_acp_adapter_uses_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeACPClient()
+    adapter = ACPAdapter(client=cast(Any, client))
+    monkeypatch.setenv("KEDI_ACP_AGENT_COMMAND", "env-acp --stdio")
+
+    assert adapter.invoke_sync(prompt="env") == f"sync:env:{Path.cwd()}:30"
+
+
+def test_acp_adapter_accepts_pathlike_cwd(tmp_path: Path) -> None:
+    client = FakeACPClient()
+    adapter = ACPAdapter(client=cast(Any, client))
+
+    assert adapter.invoke_sync(prompt="path", cwd=tmp_path) == f"sync:path:{tmp_path}:30"
+
+
+def test_acp_adapter_uses_real_client_from_env_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log_path = tmp_path / "acp.jsonl"
+    monkeypatch.setenv(
+        "KEDI_ACP_AGENT_COMMAND",
+        f"{sys.executable} {FAKE_ACP_AGENT}",
+    )
+    adapter = ACPAdapter(model_settings={"env": {"KEDI_ACP_FAKE_LOG": str(log_path)}})
+
+    try:
+        assert adapter.invoke_sync(prompt="first", cwd=str(tmp_path)) == "echo:first"
+        assert adapter.invoke_sync(prompt="second", cwd=str(tmp_path)) == "echo:second"
+    finally:
+        adapter.close()
+
+    methods = [message["method"] for message in _messages(log_path)]
+    process_cwd = next(
+        message["cwd"] for message in _messages(log_path) if message["method"] == "process/cwd"
+    )
+    assert process_cwd == str(tmp_path)
+    assert methods.count("initialize") == 1
+    assert methods.count("session/prompt") == 2
+
+
+def test_acp_adapter_uses_profile_command_before_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_log_path = tmp_path / "profile-acp.jsonl"
+    env_log_path = tmp_path / "env-acp.jsonl"
+    monkeypatch.setenv(
+        "KEDI_ACP_AGENT_COMMAND",
+        f"{sys.executable} {FAKE_ACP_AGENT}",
+    )
+    monkeypatch.setenv("KEDI_ACP_FAKE_LOG", str(env_log_path))
+    adapter = ACPAdapter(
+        model_settings={
+            "env": {"KEDI_ACP_FAKE_LOG": str(profile_log_path)},
+        }
+    )
+    profile = AgentProfile(agent_command=f"{sys.executable} {FAKE_ACP_AGENT}")
+
+    try:
+        with adapter.profile_override(profile):
+            assert adapter.invoke_sync(prompt="profile", cwd=str(tmp_path)) == "echo:profile"
+    finally:
+        adapter.close()
+
+    assert profile_log_path.exists()
+    assert not env_log_path.exists()
+
+
+def test_acp_adapter_uses_constructor_command_when_settings_omit_command(tmp_path: Path) -> None:
+    log_path = tmp_path / "constructor-acp.jsonl"
+    adapter = ACPAdapter(
+        command=[sys.executable, str(FAKE_ACP_AGENT)],
+        model_settings={"env": {"KEDI_ACP_FAKE_LOG": str(log_path)}},
+    )
+
+    try:
+        assert adapter.invoke_sync(prompt="constructor", cwd=str(tmp_path)) == "echo:constructor"
+    finally:
+        adapter.close()
+
+    assert log_path.exists()
+
+
+def test_acp_adapter_requires_command_when_no_client_or_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("KEDI_ACP_AGENT_COMMAND", raising=False)
+    adapter = ACPAdapter()
+
+    with pytest.raises(RuntimeError, match="requires a command"):
+        adapter.invoke_sync(prompt="missing")
+
+
+def test_acp_adapter_rejects_unsupported_settings_and_invalid_values() -> None:
+    with pytest.raises(TypeError, match="Unsupported ACP setting"):
+        ACPAdapter(not_a_setting=True)
+
+    adapter = ACPAdapter(client=cast(Any, FakeACPClient()))
+    with pytest.raises(TypeError, match="cwd"):
+        adapter.invoke_sync(prompt="bad", cwd=1)
+    with pytest.raises(TypeError, match="timeout"):
+        adapter.invoke_sync(prompt="bad", timeout=0)
+    with pytest.raises(TypeError, match="env"):
+        adapter.invoke_sync(prompt="bad", env={"X": 1})
+    with pytest.raises(TypeError, match="env"):
+        adapter.invoke_sync(prompt="bad", env=object())
+    with pytest.raises(TypeError, match="command"):
+        ACPAdapter(command=cast(Any, [object()]))
+    with pytest.raises(TypeError, match="command"):
+        ACPAdapter(command=cast(Any, object()))
+    assert ACPAdapter(command="")._command is None
+
+
+def test_acp_adapter_structured_output_is_explicitly_unsupported() -> None:
+    adapter = ACPAdapter(client=cast(Any, FakeACPClient()))
+
+    with pytest.raises(NotImplementedError, match="structured template output"):
+        adapter.produce_sync("template", output_schema={"answer": str})
+    with pytest.raises(NotImplementedError, match="structured template output"):
+        asyncio.run(adapter.produce("template", output_schema={"answer": str}))
+
+
+def test_acp_adapter_accepts_but_ignores_registered_tools() -> None:
+    adapter = ACPAdapter(client=cast(Any, FakeACPClient()))
+
+    adapter.register_tool(ToolSpec(fn=lambda: "ok", name="noop"))
+    with adapter.tool_scope((ToolSpec(fn=lambda: "scoped", name="scoped"),)):
+        assert adapter.scoped_tools == ()
+
+
+def test_acp_client_runs_prompt_through_stdio_agent(tmp_path: Path) -> None:
+    log_path = tmp_path / "acp.jsonl"
+    client = ACPClient(
+        (sys.executable, str(FAKE_ACP_AGENT)),
+        env={"KEDI_ACP_FAKE_LOG": str(log_path)},
+        request_timeout=1,
+    )
+
+    try:
+        assert client.run_prompt_sync(prompt="hello", cwd=str(tmp_path), timeout=1) == "echo:hello"
+    finally:
+        client.close()
+
+    methods = [
+        message["method"] for message in _messages(log_path) if message["method"] != "process/cwd"
+    ]
+    assert methods == ["initialize", "session/new", "session/prompt", "session/close"]
+
+
+def test_acp_client_async_prompt_and_close(tmp_path: Path) -> None:
+    client = ACPClient((sys.executable, str(FAKE_ACP_AGENT)), request_timeout=1)
+
+    assert asyncio.run(client.run_prompt(prompt="async", cwd=str(tmp_path), timeout=1)) == (
+        "echo:async"
+    )
+    asyncio.run(client.aclose())
+    with pytest.raises(ACPDisconnected, match="closed"):
+        client.request("initialize")
+
+
+def test_acp_client_rejects_empty_command() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        ACPClient(())
+
+
+def test_acp_client_protocol_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = ACPClient(("fake",))
+
+    monkeypatch.setattr(client, "request", lambda *args, **kwargs: None)
+    with pytest.raises(ACPProtocolError, match="initialize"):
+        client._initialize()
+    with pytest.raises(ACPProtocolError, match="session/new"):
+        client._new_session("/tmp")
+
+    assert "disconnected" in client._disconnect_message()
+    client._stderr_tail.append("boom")
+    assert "boom" in client._disconnect_message()
+
+
+def test_acp_client_write_and_reader_edge_paths() -> None:
+    client = ACPClient(("fake",))
+
+    with pytest.raises(ACPDisconnected):
+        client._write({"method": "x"})
+    client._read_stdout()
+    client._read_stderr()
+
+    process = FakeProcess()
+    client._process = cast(Any, process)
+    with pytest.raises(ACPDisconnected):
+        client._write({"method": "x"})
+    process.stdout = ["not-json\n"]
+    client._read_stdout()
+    process.stdout = ["[]\n"]
+    client._read_stdout()
+    process.stderr = ["one\n", "two\n"]
+    client._read_stderr()
+    assert list(client._stderr_tail)[-2:] == ["one", "two"]
+
+
+def test_acp_client_close_without_process_is_safe() -> None:
+    client = ACPClient(("fake",))
+
+    client.close()
+
+    assert client._closed
+
+
+def test_acp_client_can_start_without_initializing(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = FakeProcess()
+    monkeypatch.setattr(
+        "kedi.agent_adapter.adapters.acp.subprocess.Popen", lambda *_, **__: process
+    )
+    client = ACPClient(("fake",))
+
+    client._ensure_started(initialize=False)
+
+    assert client._process is process
+    assert not client._initialized
+
+
+def test_acp_client_running_uninitialized_process_initializes() -> None:
+    client = ACPClient(("fake",))
+    process = FakeProcess()
+    client._process = cast(Any, process)
+    called: list[bool] = []
+
+    def initialize() -> None:
+        called.append(True)
+        client._initialized = True
+
+    client._initialize = cast(Any, initialize)
+    client._ensure_started()
+
+    assert called == [True]
+
+
+def test_acp_client_close_terminates_and_kills_running_process() -> None:
+    client = ACPClient(("fake",))
+    process = FakeProcess()
+    client._process = cast(Any, process)
+
+    client.close()
+
+    assert process.terminated
+    assert process.killed
+
+
+def test_acp_client_message_routing_edge_paths() -> None:
+    client = ACPClient(("fake",))
+
+    client._handle_message({"id": "not-int", "result": {}})
+    client._handle_message({"id": 999, "result": {}})
+
+    done: Future[dict[str, Any] | None] = Future()
+    done.set_result({})
+    pending: Future[dict[str, Any] | None] = Future()
+    with client._state_lock:
+        client._pending[1] = done
+        client._pending[2] = pending
+    client._handle_message({"id": 1, "result": {}})
+    client._handle_message({"id": 2, "error": {"message": "bad"}})
+    with pytest.raises(ACPProtocolError, match="bad"):
+        pending.result()
+
+    client._handle_message({"method": "other", "params": {}})
+    client._handle_session_update({})
+    client._handle_session_update({"sessionId": "s", "update": "bad"})
+    client._handle_session_update({"sessionId": "s", "update": {"sessionUpdate": "other"}})
+    client._handle_session_update(
+        {"sessionId": "s", "update": {"sessionUpdate": "agent_message_chunk"}}
+    )
+    client._handle_session_update(
+        {
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "image"},
+            },
+        }
+    )
+    client._handle_session_update(
+        {
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": 1},
+            },
+        }
+    )
+    client._handle_session_update(
+        {
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "orphan"},
+            },
+        }
+    )
+    client._sessions["s"] = session_state = cast(Any, type("State", (), {"messages": []})())
+    client._handle_session_update(
+        {
+            "sessionId": "s",
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "chunk"},
+            },
+        }
+    )
+    assert session_state.messages == ["chunk"]
+
+    future: Future[dict[str, Any] | None] = Future()
+    done_future: Future[dict[str, Any] | None] = Future()
+    done_future.set_result({})
+    with client._state_lock:
+        client._pending[3] = future
+        client._pending[4] = done_future
+    client._fail_all(RuntimeError("fail"))
+    with pytest.raises(RuntimeError, match="fail"):
+        future.result()

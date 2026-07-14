@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.model import (
+    eval_adapter_directive,
+    eval_agent_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -16,6 +18,8 @@ from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ..ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
@@ -24,6 +28,7 @@ from ..ast import (
     ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -46,6 +51,11 @@ from .evaluation import (
 from .type_system import KediType, assign_value_from_native, detect_rhs_kind
 
 _NO_RETURN = object()
+
+
+def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
+    if current is not None and current != incoming:
+        raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")
 
 
 class StatementCompiler:
@@ -100,6 +110,18 @@ class StatementCompiler:
         n = len(stmt.lines)
         label = f"template block ({n} line{'s' if n != 1 else ''})"
         return self.compile_template_line(merged, trace_label=label)
+
+    def compile_raw_invoke(self, stmt: RawInvokeStmt) -> Callable:
+        """Compile ``[name] << prompt`` as a raw string model invocation."""
+
+        def _fn(**kwargs: Any) -> Any:
+            with self.rt.trace_frame(
+                KediTraceFrame(kind="template", label=f"raw invoke {stmt.name}", span=stmt.loc)
+            ):
+                expr, _ = prepare_segments(self.rt, stmt.segments, kwargs)
+                return self.rt.invoke(expr, capture=stmt.name)
+
+        return _fn
 
     def compile_return(self, stmt: ReturnStmt) -> Callable:
         """Compile a return statement to a function."""
@@ -234,10 +256,21 @@ class StatementExecutor:
 
         captured = proc.captured_agent_profile
         active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        adapter_selection_kind: str | None = None
         profile_registry = self.rt._profile_registry
 
         try:
             for stmt in proc.body:
+                if isinstance(stmt, AgentDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
+                    adapter_selection_kind = "agent-harness"
+                    active = active.merge(eval_agent_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, AdapterDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
+                    adapter_selection_kind = "agent-framework"
+                    active = active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
+                    continue
                 if isinstance(stmt, ModelDirectiveStmt):
                     active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
                     continue
@@ -315,6 +348,11 @@ class StatementExecutor:
             self._sync_env(closure_env)
             return _NO_RETURN
 
+        if isinstance(stmt, RawInvokeStmt):
+            self.compiler.compile_raw_invoke(stmt)(**closure_env)
+            self._sync_env(closure_env)
+            return _NO_RETURN
+
         if isinstance(stmt, TypeDefStmt):
             if stmt.typedef is not None:
                 register_type(self.rt, stmt.typedef, type_scope, closure_env)
@@ -375,6 +413,10 @@ class StatementExecutor:
 
         if isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**env)
+            self._sync_env(env)
+
+        elif isinstance(stmt, RawInvokeStmt):
+            self.compiler.compile_raw_invoke(stmt)(**env)
             self._sync_env(env)
 
         elif isinstance(stmt, ProcDefStmt):

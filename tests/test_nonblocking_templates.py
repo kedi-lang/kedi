@@ -151,7 +151,8 @@ def test_sequential_does_not_overlap() -> None:
 
 
 @pytest.mark.parametrize(
-    "src,expected", [(INDEPENDENT_SRC, "a-value-b-value"), (CHAINS_SRC, "b-value+d-value")]
+    "src,expected",
+    [(INDEPENDENT_SRC, "a-value-b-value"), (CHAINS_SRC, "b-value+d-value")],
 )
 def test_sequential_parallel_equivalence(src: str, expected: str) -> None:
     seq = _run(src, MockAdapter(), SequentialEngine())

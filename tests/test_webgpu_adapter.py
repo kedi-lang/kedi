@@ -10,9 +10,9 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel
 
-import kedi.agent_adapter.webgpu as webgpu_module
+import kedi.agent_adapter.adapters.webgpu as webgpu_module
+from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
 from kedi.agent_adapter.tool_override import ToolSpec
-from kedi.agent_adapter.webgpu import WebGPUAdapter
 from kedi.agent_profile import AgentProfile, McpServerSpec
 
 
@@ -55,6 +55,21 @@ def test_webgpu_adapter_produces_schema_and_output_type() -> None:
     assert "title" not in output_prompt
 
 
+def test_webgpu_adapter_invoke_returns_text_response() -> None:
+    bridge = QueueBridge(
+        {"kind": "final", "text": "plain text"},
+        {"kind": "final", "data": "data text"},
+        {"kind": "final", "data": {"text": "nested text"}},
+    )
+    adapter = WebGPUAdapter(bridge, model="bonsai")
+
+    assert adapter.invoke_sync(prompt="say hi") == "plain text"
+    assert adapter.invoke_sync(prompt="say hi") == "data text"
+    assert asyncio.run(adapter.invoke(prompt="say hi")) == "nested text"
+    assert all(payload["responseMode"] == "text" for payload in bridge.payloads)
+    assert all("outputSchema" not in payload for payload in bridge.payloads)
+
+
 def test_webgpu_adapter_validates_construction_and_output_contract() -> None:
     with pytest.raises(ValueError, match="at least 1"):
         WebGPUAdapter(QueueBridge(), model="bonsai", max_tool_steps=0)
@@ -64,6 +79,14 @@ def test_webgpu_adapter_validates_construction_and_output_contract() -> None:
     adapter = WebGPUAdapter(QueueBridge(), model="anything")
     with pytest.raises(ValueError, match="Output spec"):
         adapter.produce_sync(template="answer")
+    with pytest.raises(TypeError, match="text response"):
+        WebGPUAdapter(QueueBridge({"kind": "final", "data": {}}), model="anything").invoke_sync(
+            prompt="answer"
+        )
+    with pytest.raises(TypeError, match="text response"):
+        WebGPUAdapter(QueueBridge({"kind": "final", "data": 1}), model="anything").invoke_sync(
+            prompt="answer"
+        )
 
 
 def test_webgpu_adapter_profile_scope_and_settings() -> None:
@@ -460,7 +483,10 @@ def test_webgpu_adapter_formats_schema_variants_as_xml() -> None:
     ("response", "message"),
     [
         ({"kind": "tool_call", "name": 1}, "name must be a string"),
-        ({"kind": "tool_call", "name": "tool", "arguments": []}, "arguments must be an object"),
+        (
+            {"kind": "tool_call", "name": "tool", "arguments": []},
+            "arguments must be an object",
+        ),
         ({"kind": "tool_call", "name": "missing"}, "unknown tool"),
     ],
 )

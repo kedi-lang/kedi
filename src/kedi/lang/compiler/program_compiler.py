@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
 from ...agent_profile.model import (
+    eval_adapter_directive,
+    eval_agent_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -21,6 +23,8 @@ from ...errors import KediTraceFrame
 from ...module_registry import resolve_module_path
 from ...source_loading import load_kedi_source_bundle
 from ..ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     EffortDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
@@ -42,6 +46,11 @@ from .type_system import register_type
 if TYPE_CHECKING:
     from ...agent_adapter.meta import AgentAdapter
     from ...executors.base import Executor
+
+
+def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
+    if current is not None and current != incoming:
+        raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")
 
 
 def compile_program(
@@ -304,6 +313,7 @@ class ProgramCompiler:
         wrapper = self.rt.executor.create_dynamic_function(name, params, _body, defaults)
         metadata = get_procedure_metadata(fn)
         if metadata is not None:
+            setattr(wrapper, "__signature__", metadata.introspection_signature())
             setattr(wrapper, "__kedi_procedure_metadata__", metadata)
             setattr(
                 wrapper,
@@ -339,6 +349,7 @@ class ProgramCompiler:
             kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             self.rt._globals_env = kwargs
             active = AgentProfile.empty()
+            adapter_selection_kind = active.adapter_kind
 
             # Execute top-level statements
             with self.rt.trace_frame(
@@ -350,6 +361,18 @@ class ProgramCompiler:
             ):
                 for item in toplevel_sequence:
                     if isinstance(item, ProcedureDef):
+                        continue
+                    if isinstance(item, AgentDirectiveStmt):
+                        _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
+                        adapter_selection_kind = "agent-harness"
+                        active = active.merge(eval_agent_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, AdapterDirectiveStmt):
+                        _assert_adapter_selection_not_mixed(
+                            adapter_selection_kind, "agent-framework"
+                        )
+                        adapter_selection_kind = "agent-framework"
+                        active = active.merge(eval_adapter_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, ModelDirectiveStmt):
                         active = active.merge(eval_model_directive(self.rt, item, kwargs))

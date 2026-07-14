@@ -141,6 +141,26 @@ Inside procedures, multiple blocks are separated by blank lines or a new `>>`:
 Bare template lines (without `>>`) are a **parse error** at procedure and top level.
 They remain valid only inside `> optimize:` / `> auto:` bodies.
 
+### Raw Model Invokes (`<<`)
+
+When a `>>` prompt has no output fields, Kedi sends the rendered prompt to the active
+adapter as a raw model invoke and discards the model response:
+
+```kedi
+>> Summarize the project status in one sentence.
+```
+
+To keep the raw model response, put an untyped capture target in front of `<<`:
+
+```kedi
+[answer] << Summarize <topic> in one sentence.
+= <answer>
+```
+
+Raw invoke captures always produce strings. `[answer: str] << ...` is accepted but
+redundant, while any other capture type is an error. Raw invoke prompts cannot contain
+output fields such as `[capital]`; use `>>` when you want structured field filling.
+
 ### Substitutions (R-values)
 
 Substitutions read values and insert them into templates using `<...>`:
@@ -173,6 +193,9 @@ Outputs are placeholders filled by the LLM using `[...]`:
 # Typed output with inline Python type annotation
 >> Top cities: [cities: `list[str]`]
 
+# Typed output with field description metadata
+>> Capital of Turkey is [capital: Annotated[str, "Canonical city name"]].
+
 # Multiple outputs on one line
 >> [first_name] [last_name] lives in [city: str]
 ```
@@ -180,6 +203,24 @@ Outputs are placeholders filled by the LLM using `[...]`:
 Output names must be valid identifiers: `^[A-Za-z_][A-Za-z0-9_]*$`
 
 Backtick-wrapped type expressions in outputs are evaluated at runtime, giving you access to dynamic types from the prelude or computed values.
+
+`Annotated[type, "description"]` has Kedi-specific meaning: it keeps `type` as the
+runtime type and attaches the string as schema/LLM field description metadata without
+using inline Python. The description must be a single-line string literal inside the
+`Annotated[...]` arguments; standalone string literals are not valid type annotations.
+Adapters that expose JSON schema, such as Pydantic AI and LangChain, pass this metadata
+as the field description. `Annotated[type]` still resolves as `type`, but the LSP warns
+because no description metadata was provided; extra `Annotated[...]` metadata is ignored.
+
+```kedi
+>> Extract the customer as [name: Annotated[str, "Full customer name"]].
+```
+
+Use backticks only when the type itself must come from runtime Python state:
+
+```kedi
+>> Extract [value: `output_type`].
+```
 
 ### Variable Assignment
 
@@ -483,12 +524,34 @@ return Person(name="Bob", age=25, email="bob@example.com")
 
 Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable assignments. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
 
+Kedi's built-in type namespace includes common Python and typing types such as `str`,
+`int`, `list`, `dict`, `Union`, `Optional`, `Literal`, `Annotated`, plus
+serializable runtime types such as `datetime`, `date`, `time`, `timedelta`,
+`Regex`, `Email`, `HttpUrl`, and `FileUrl`. These names resolve to Python or
+Pydantic types, so generated JSON schemas keep their native formats: `date`,
+`time`, `regex`, `email`, or `uri` where applicable. Adapter schema support is
+validated before a model call. Codex accepts `date`, `date-time`, `duration`,
+`email`, and `time`, but rejects `Regex`, `HttpUrl`, and `FileUrl`; the LSP marks
+those output annotations as errors in a Codex scope and runtime raises before
+contacting Codex. When plain text with semantic guidance is enough, use a type
+such as `Annotated[str, "Exact URL pointing to the file"]` instead. Its
+description is included in the generated provider schema while its wire type
+remains `string`. Claude currently accepts all of the formats listed above.
+
 Type fields can also have single-line inline Python defaults:
 
 ```kedi
 ~Person(name: str, salary: int = `0`, tags: list[str] = `[]`)
 
 = <`Person("Ada").model_dump_json()`>
+```
+
+`Annotated[type, "description"]` works on custom type fields too. The generated
+Pydantic model keeps `type` as the runtime annotation and exposes the string as
+the field description in JSON schema:
+
+```kedi
+~Person(name: Annotated[str, "Full display name"], age: int)
 ```
 
 Defaulted type fields must be annotated. Required fields must come before defaulted fields. Generated Kedi types are Pydantic `BaseModel` subclasses, so keyword construction and model APIs such as `model_dump_json()` remain available; Kedi also supports positional construction in field order.
@@ -679,19 +742,21 @@ Dataset items can follow two conventions:
 
 ## Agent Profiles and Tools
 
-Kedi routes LLM calls through agent adapters. Use `> model:`, `> effort:`,
-`> system:`, `> mcp:`, `> profile:`, and `> use:` to choose models, set
-reasoning effort, set agent instructions, load MCP tools, and expose Kedi
-procedures as agent tools.
+Kedi routes LLM calls through agent adapters. Use `> adapter:`, `> agent:`,
+`> model:`, `> effort:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
+to choose adapter implementations, choose models, set reasoning effort, set
+agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
 
 ### Model and profile directives
 
 ```kedi
+> adapter: pydantic
 > model: groq:qwen/qwen3-32b
 > effort: low
 > system: Answer concisely and avoid extra narration.
 
 > profile: fast:
+    > adapter: pydantic
     > model: groq:qwen/qwen3-32b
     > effort: minimal
     > settings:
@@ -701,6 +766,7 @@ procedures as agent tools.
         Prefer short direct answers.
         Adapt examples for <audience>.
 > profile: quality:
+    > agent: codex
     > model: openrouter/google/gemini-3-flash-preview
     > effort: high
     > system: Be precise and cite the relevant tool output.
@@ -711,8 +777,32 @@ procedures as agent tools.
         command: vsh
         args: `["run", "--mcp"]`
     > use: web_search
+> profile: acp_local:
+    > agent:
+        acp: `["vsh", "run", "--acp"]`
+    > settings:
+        cwd: /tmp/project
 ```
 
+- `> adapter: name` — select an agent framework adapter for following LLM
+  calls in the current lexical scope. Built-in framework shortnames are
+  `pydantic`, `dspy`, and `langchain`.
+- `> agent: name` — select an agent harness adapter for following LLM calls
+  in the current lexical scope. Built-in harness shortnames are `claude`,
+  `codex`, and `acp`. ACP commands can also be declared in multiline form:
+
+  ```kedi
+  > agent:
+      acp: uv run acp server
+  ```
+
+  Literal adapter names are validated by the LSP and at runtime. `> agent:`
+  only accepts harness adapters, while `> adapter:` only accepts framework
+  adapters; use an inline Python value only when the selected name must be
+  determined dynamically at runtime.
+
+  The command value may be plain text or an inline Python expression that
+  evaluates to a string or string sequence.
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``).
 - `> effort: level` — set active reasoning effort. Accepted values are
@@ -727,7 +817,19 @@ procedures as agent tools.
   expressions are evaluated as Python for complex values. Kedi keeps the merged
   settings in the active profile, then filters them at adapter boundaries:
   Pydantic AI receives only supported `ModelSettings` keys, and DSPy receives
-  only supported `dspy.LM` kwargs. Unknown setting names are parser/LSP errors.
+  only supported `dspy.LM` kwargs. Agent harnesses receive their supported
+  settings, such as `cwd`, `env`, and `timeout` for ACP. `cwd` is passed as
+  the agent process working directory where supported, including ACP, Codex,
+  and Claude. Claude enables the Claude Code built-in tool and system prompt
+  presets by default; `> system:` is appended to the Claude Code preset so file
+  tools remain part of the agent behavior. Non-interactive Claude runs default
+  to `permission_mode: acceptEdits`, allowing those built-in file tools to
+  complete; set `permission_mode` explicitly to override it. Set `tools`
+  explicitly if you want a narrower Claude tool surface. Codex exposes its
+  harness tools through its own `sandbox`, `approval_policy`, and `cwd`
+  settings; its default sandbox is `workspace-write` so read/write harness tools
+  are eligible unless narrowed by settings. Unknown setting names are parser/LSP
+  errors.
   Use backticks when the setting value should be a real Python object instead
   of a string or simple scalar:
 
@@ -737,17 +839,38 @@ procedures as agent tools.
       stop_sequences: `["END", "DONE"]`
       extra_body: `{"mode": "json"}`
   ```
+  ACP commands may also come from CLI/env:
+
+  ```kedi
+  > agent: acp
+  ```
+
+  If `command` is omitted, Kedi reads `KEDI_ACP_AGENT_COMMAND`; the CLI
+  `--acp-command` option writes the same environment value for the process.
 - Multiline `> system:` bodies are newline-joined like `>>` blocks, but they
   are read-only: literal text, `<name>` substitutions, and inline Python
   substitutions such as ``<`args.name`>`` are allowed; LLM outputs and procedure
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
-- `> profile: name:` — define a reusable profile with nested `> model:`,
-  `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members.
+- `> profile: name:` — define a reusable profile with nested `> agent:`,
+  `> adapter:`, `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`,
+  and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
 - Profiles merge when applied: later members override earlier ones of the same kind.
+- Adapter selection follows normal lexical scoping. A direct source directive in
+  the current scope overrides an active profile, which overrides CLI defaults.
+  Nested scopes may switch adapters, but a single lexical scope cannot mix
+  `> agent:` and `> adapter:` because those select different adapter classes.
+  Use `> agent:` only for `agent-harness` adapters and `> adapter:` only for
+  `agent-framework` adapters.
+- Editor diagnostics use adapter capability metadata. If the selected adapter
+  does not currently support structured template outputs, the LSP reports an
+  error on the relevant output field and the adapter raises when that template
+  runs. `> use:` tool registration and `> mcp:` servers remain capability
+  warnings: when an adapter later advertises support for that feature, the same
+  Kedi code stops warning without syntax changes.
 
 ### `> mcp:` semantics
 
@@ -835,7 +958,9 @@ Example:
 ```
 
 Agent tools require an adapter that supports tool registration (for example
-Pydantic AI). Adapters without tool support raise a clear error at runtime.
+Pydantic AI). Adapters without tool support surface capability warnings in the
+LSP; harness adapters that cannot accept external tools may ignore registrations
+until their underlying protocol gains tool support.
 
 ## Python API
 

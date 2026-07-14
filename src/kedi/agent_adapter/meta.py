@@ -1,14 +1,57 @@
-from typing import Any, Protocol, TypeVar
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, TypeVar
 
 from typing_extensions import runtime_checkable
 
 from ..resolved_types import ResolvedKediType
 
 T = TypeVar("T", covariant=True)
+AgentAdapterKind = Literal["agent-framework", "agent-harness"]
+AdapterCapability = Literal[
+    "structured_output",
+    "tool_registration",
+    "mcp",
+    "profile_override",
+    "model_override",
+    "effort",
+    "settings",
+    "codemode",
+]
+
+
+@dataclass(frozen=True)
+class AdapterCapabilities:
+    supports_structured_output: bool | None = None
+    supports_tool_registration: bool | None = None
+    supports_mcp: bool | None = None
+    supports_profile_override: bool | None = None
+    supports_model_override: bool | None = None
+    supports_effort: bool | None = None
+    supports_settings: bool | None = None
+    supports_codemode: bool | None = None
+    supported_json_schema_formats: frozenset[str] | None = None
+    settings: frozenset[str] = field(default_factory=frozenset)
+
+    def supports(self, feature: AdapterCapability) -> bool:
+        values = {
+            "structured_output": self.supports_structured_output,
+            "tool_registration": self.supports_tool_registration,
+            "mcp": self.supports_mcp,
+            "profile_override": self.supports_profile_override,
+            "model_override": self.supports_model_override,
+            "effort": self.supports_effort,
+            "settings": self.supports_settings,
+            "codemode": self.supports_codemode,
+        }
+        return bool(values[feature])
 
 
 @runtime_checkable
 class AgentAdapter(Protocol[T]):
+    kind: AgentAdapterKind
+    shortname: str
+    capabilities: AdapterCapabilities
+
     async def produce(
         self,
         *,
@@ -43,4 +86,12 @@ class AgentAdapter(Protocol[T]):
         Returns:
             T: The output produced by the agent, matching the specified output type.
         """
+        ...
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        """Invoke the adapter with a raw text prompt and return the model's text response."""
+        ...
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        """Synchronous version of ``invoke``."""
         ...

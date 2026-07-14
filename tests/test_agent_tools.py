@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import pytest
 
@@ -444,7 +444,7 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
         assert output_schema == {"x": str}
         return FakeSignature()
 
-    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.dspy.ReAct", FakeReAct)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
@@ -540,7 +540,7 @@ async def fetch(url: str) -> str:
         assert output_schema == {"x": str}
         return FakeSignature()
 
-    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.ReAct", FakeReAct)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.dspy.dspy.ReAct", FakeReAct)
     monkeypatch.setattr(DSPyAdapter, "type_builder", staticmethod(fake_type_builder))
 
     adapter = object.__new__(DSPyAdapter)
@@ -599,3 +599,24 @@ def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
             asyncio.run(adapter.produce("go", output_type=str))
     assert fake_run.await_args is not None
     assert fake_run.await_args.kwargs.get("toolsets") is not None
+
+
+def test_pydantic_adapter_output_schema_uses_annotated_description() -> None:
+    from kedi.agent_adapter.adapters import PydanticAdapter
+
+    model = PydanticAdapter.type_builder(
+        {"capital": Annotated[str, "Canonical city name returned by the model."]}
+    )
+
+    schema = model.model_json_schema()
+    assert schema["properties"]["capital"]["type"] == "string"
+    assert (
+        schema["properties"]["capital"]["description"]
+        == "Canonical city name returned by the model."
+    )
+    assert schema["required"] == ["capital"]
+
+    ignored = PydanticAdapter.type_builder(
+        {"capital": Annotated[str, int, "ignored description"]}
+    ).model_json_schema()
+    assert "description" not in ignored["properties"]["capital"]

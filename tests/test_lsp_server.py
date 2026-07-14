@@ -163,7 +163,8 @@ def ask(name: str) -> str:
     assert (
         handlers[lsp.TEXT_DOCUMENT_INLAY_HINT](
             SimpleNamespace(
-                text_document=text_document, range=lsp.Range(start=position, end=position)
+                text_document=text_document,
+                range=lsp.Range(start=position, end=position),
             )
         )
         == []
@@ -369,11 +370,19 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
     ) == {"uri": uri, "diagnostics": ["kedi-diagnostic"]}
     assert handlers["kedi/kediDocstringHover"]({}) is None
     assert handlers["kedi/kediDocstringHover"](
-        {"textDocument": {"uri": uri}, "text": source, "position": {"line": 1, "character": 2}}
+        {
+            "textDocument": {"uri": uri},
+            "text": source,
+            "position": {"line": 1, "character": 2},
+        }
     ) == {"contents": "hover"}
     assert handlers["kedi/kediDocstringDefinition"]({}) == {"uri": "", "locations": []}
     assert handlers["kedi/kediDocstringDefinition"](
-        {"textDocument": {"uri": uri}, "text": source, "position": {"line": 1, "character": 2}}
+        {
+            "textDocument": {"uri": uri},
+            "text": source,
+            "position": {"line": 1, "character": 2},
+        }
     ) == {"uri": uri, "locations": ["definition"]}
     assert handlers["kedi/kediDocstringReferences"]({}) == {"uri": "", "locations": []}
     assert handlers["kedi/kediDocstringReferences"](

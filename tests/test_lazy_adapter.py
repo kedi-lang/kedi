@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 
 import kedi.app as app
-from kedi.agent_adapter.lazy import LazyAdapter
+from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.app import run_program_cli
 from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
@@ -99,6 +99,14 @@ class _RecordingAdapter:
         self.calls.append("produce")
         return "p"
 
+    def invoke_sync(self, *a: object, **k: object) -> str:
+        self.calls.append("invoke_sync")
+        return "is"
+
+    async def invoke(self, *a: object, **k: object) -> str:
+        self.calls.append("invoke")
+        return "i"
+
     def profile_override(self, profile: object) -> object:
         self.calls.append("profile_override")
         return nullcontext()
@@ -125,6 +133,8 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert lazy.default_model() == "m"
     assert lazy.produce_sync() == "ps"
     assert asyncio.run(lazy.produce()) == "p"
+    assert lazy.invoke_sync() == "is"
+    assert asyncio.run(lazy.invoke()) == "i"
     with lazy.profile_override(object()):
         pass
     with lazy.tool_scope(["x"]):
@@ -135,6 +145,8 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert builds == [1]  # built exactly once, then reused
     assert "produce_sync" in rec.calls
     assert "produce" in rec.calls
+    assert "invoke_sync" in rec.calls
+    assert "invoke" in rec.calls
     assert "profile_override" in rec.calls
     assert "tool_scope" in rec.calls
     assert ("register_tool", "tool") in rec.calls

@@ -15,7 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import shlex
-from typing import Any, Optional, Union
+from typing import Annotated, Any, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -23,7 +23,15 @@ from ...core import KediRuntime
 from ...dynamic_models import build_dynamic_model
 from ...errors import KediTypeExecutionError
 from ...resolved_types import is_resolved_kedi_type
-from ..ast import TypeApply, TypeDef, TypeExpr, TypePython, TypeRef, TypeUnion
+from ..ast import (
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypeLiteral,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
 from ..type_introspection import make_type_init
 from .environment import build_type_env
 
@@ -66,6 +74,11 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         args = tuple(_resolve_expr(rt, a, type_env) for a in expr.args)
         if any(a is None for a in args):
             return None
+        if base is Annotated:
+            if not args:
+                return None
+            if len(args) == 1:
+                return args[0]
         try:
             if len(args) == 1:
                 return base[args[0]]
@@ -98,6 +111,9 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         if not _is_valid_type(result):
             raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
         return result
+
+    if isinstance(expr, TypeLiteral):
+        return expr.value
 
     return None
 
@@ -281,6 +297,8 @@ def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:
         return f"{_typeexpr_to_str(e.left)} | {_typeexpr_to_str(e.right)}"
     if isinstance(e, TypePython):
         return f"`{e.code}`"
+    if isinstance(e, TypeLiteral):
+        return e.source or repr(e.value)
     return repr(e)
 
 
@@ -348,17 +366,18 @@ def register_type(
         resolved = kedi_type.resolve(rt, env=type_env)
         if resolved is None:
             raise TypeError(f"Unknown type annotation {kedi_type!s} in type {typedef.name}")
-        annotations[field.name] = resolved
+        annotation, description = _annotated_field_metadata(resolved)
+        annotations[field.name] = annotation
         if field.default_expr is None:
-            field_defs[field.name] = (resolved, ...)
+            field_defs[field.name] = (annotation, _required_field(description))
         else:
             default_value = rt.executor.evaluate_type_expression(
                 rt, field.default_expr, default_env
             )
             default_values[field.name] = default_value
             field_defs[field.name] = (
-                resolved,
-                _pydantic_default(default_value),
+                annotation,
+                _pydantic_default(default_value, description=description),
             )
 
     new_model = build_dynamic_model(
@@ -384,10 +403,26 @@ def register_type(
     type_env[f"__{typedef.name}_fields__"] = annotations
 
 
-def _pydantic_default(value: Any) -> Any:
+def _annotated_field_metadata(resolved: Any) -> tuple[Any, str | None]:
+    if get_origin(resolved) is not Annotated:
+        return resolved, None
+    args = get_args(resolved)
+    annotation = next(iter(args))
+    metadata = args[1:]
+    description = metadata[0] if metadata and isinstance(metadata[0], str) else None
+    return annotation, description
+
+
+def _required_field(description: str | None) -> Any:
+    if description is None:
+        return ...
+    return Field(description=description)
+
+
+def _pydantic_default(value: Any, *, description: str | None = None) -> Any:
     if _is_immutable_default(value):
-        return Field(default=value)
-    return Field(default_factory=_default_factory(copy.deepcopy(value)))
+        return Field(default=value, description=description)
+    return Field(default_factory=_default_factory(copy.deepcopy(value)), description=description)
 
 
 def _default_factory(value: Any):
@@ -448,7 +483,12 @@ def assign_value_from_native(
 
 def detect_rhs_kind(segments: list) -> tuple[bool, bool, bool]:
     """Detect the kind of RHS expression."""
-    from ..ast import CallSegment, PythonExprNativeSegment, PythonExprSegment, TextSegment
+    from ..ast import (
+        CallSegment,
+        PythonExprNativeSegment,
+        PythonExprSegment,
+        TextSegment,
+    )
 
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
 

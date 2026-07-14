@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from kedi.errors import KediExecutionError
+
+from .meta import AdapterCapabilities, AgentAdapter, AgentAdapterKind
+
+
+@dataclass(frozen=True)
+class AdapterFactory:
+    shortname: str
+    kind: AgentAdapterKind
+    build: Callable[[str | None, Mapping[str, Any]], AgentAdapter[Any]]
+
+
+def _pydantic(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.pydantic import PydanticAdapter
+
+    return PydanticAdapter(model=model, **dict(kwargs))
+
+
+def _dspy(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.dspy import DSPyAdapter
+
+    if model is None:
+        raise ValueError("DSPy adapter requires a model")
+    return DSPyAdapter(model=model, **dict(kwargs))
+
+
+def _langchain(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.langchain import LangChainAdapter
+
+    return LangChainAdapter(model=model, **dict(kwargs))
+
+
+def _claude(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.claude import ClaudeAdapter
+
+    return ClaudeAdapter(model=model, **dict(kwargs))
+
+
+def _codex(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.codex import CodexAdapter
+
+    return CodexAdapter(model=model, **dict(kwargs))
+
+
+def _acp(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.acp import ACPAdapter
+
+    return ACPAdapter(model=model, **dict(kwargs))
+
+
+def _pydantic_capabilities() -> AdapterCapabilities:
+    from .adapters.pydantic import PydanticAdapter
+
+    return PydanticAdapter.capabilities
+
+
+def _dspy_capabilities() -> AdapterCapabilities:
+    from .adapters.dspy import DSPyAdapter
+
+    return DSPyAdapter.capabilities
+
+
+def _langchain_capabilities() -> AdapterCapabilities:
+    from .adapters.langchain import LangChainAdapter
+
+    return LangChainAdapter.capabilities
+
+
+def _claude_capabilities() -> AdapterCapabilities:
+    from .adapters.claude import ClaudeAdapter
+
+    return ClaudeAdapter.capabilities
+
+
+def _codex_capabilities() -> AdapterCapabilities:
+    from .adapters.codex import CodexAdapter
+
+    return CodexAdapter.capabilities
+
+
+def _acp_capabilities() -> AdapterCapabilities:
+    from .adapters.acp import ACPAdapter
+
+    return ACPAdapter.capabilities
+
+
+_ADAPTERS: dict[str, AdapterFactory] = {
+    "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
+    "dspy": AdapterFactory("dspy", "agent-framework", _dspy),
+    "langchain": AdapterFactory("langchain", "agent-framework", _langchain),
+    "claude": AdapterFactory("claude", "agent-harness", _claude),
+    "codex": AdapterFactory("codex", "agent-harness", _codex),
+    "acp": AdapterFactory("acp", "agent-harness", _acp),
+}
+
+_CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
+    "pydantic": _pydantic_capabilities,
+    "dspy": _dspy_capabilities,
+    "langchain": _langchain_capabilities,
+    "claude": _claude_capabilities,
+    "codex": _codex_capabilities,
+    "acp": _acp_capabilities,
+}
+
+
+def known_adapter_shortnames() -> tuple[str, ...]:
+    return tuple(_ADAPTERS)
+
+
+def adapter_factory(shortname: str) -> AdapterFactory:
+    try:
+        return _ADAPTERS[shortname]
+    except KeyError as exc:
+        known = ", ".join(sorted(_ADAPTERS))
+        raise KediExecutionError(
+            f"Unknown agent adapter {shortname!r}. Known adapters: {known}"
+        ) from exc
+
+
+def validate_adapter_kind(shortname: str, expected_kind: AgentAdapterKind) -> None:
+    directive = "agent" if expected_kind == "agent-harness" else "adapter"
+    kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
+    try:
+        factory = adapter_factory(shortname)
+    except KediExecutionError as exc:
+        known = ", ".join(
+            name for name, candidate in _ADAPTERS.items() if candidate.kind == expected_kind
+        )
+        raise KediExecutionError(
+            f"> {directive}: unknown {kind_label} adapter {shortname!r}. "
+            f"Known {kind_label} adapters: {known}"
+        ) from exc
+    if factory.kind != expected_kind:
+        actual = "agent" if factory.kind == "agent-harness" else "adapter"
+        raise KediExecutionError(
+            f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter"
+        )
+
+
+def adapter_capabilities(shortname: str) -> AdapterCapabilities:
+    adapter_factory(shortname)
+    loader = _CAPABILITY_LOADERS.get(shortname)
+    if loader is None:
+        return AdapterCapabilities()
+    return loader()
+
+
+def build_adapter(
+    shortname: str,
+    model: str | None = None,
+    **kwargs: Any,
+) -> AgentAdapter[Any]:
+    return adapter_factory(shortname).build(model, kwargs)

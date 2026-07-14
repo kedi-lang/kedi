@@ -177,7 +177,14 @@ def test_resolve_in_type_expr_and_stmt(
     person_type_ref: TypeRef,
     resolution_pos: lsp.Position,
 ) -> None:
-    from kedi.lang.ast import AssignBlockStmt, OutputSegment, TypeApply, TypeDef, TypeRef, TypeUnion
+    from kedi.lang.ast import (
+        AssignBlockStmt,
+        OutputSegment,
+        TypeApply,
+        TypeDef,
+        TypeRef,
+        TypeUnion,
+    )
 
     person_def = {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))}
     assert (

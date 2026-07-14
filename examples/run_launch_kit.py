@@ -52,7 +52,9 @@ class _SimAdapter:
 
 
 @kedi.bind(file="launch_kit.kedi")
-def launch_kit(idea: str) -> str:  # body comes from the .kedi file; `idea` becomes a global
+def launch_kit(
+    idea: str,
+) -> str:  # body comes from the .kedi file; `idea` becomes a global
     ...
 
 
@@ -70,7 +72,10 @@ def main() -> None:
         "--demo", action="store_true", help="offline simulated-latency run (no API key)"
     )
     ap.add_argument(
-        "--latency", type=float, default=0.6, help="simulated per-call latency for --demo"
+        "--latency",
+        type=float,
+        default=0.6,
+        help="simulated per-call latency for --demo",
     )
     args = ap.parse_args()
 

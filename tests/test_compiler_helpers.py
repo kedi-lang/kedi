@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -35,7 +36,11 @@ from kedi.lang.ast import (
     VarArg,
 )
 from kedi.lang.compiler import environment as compiler_env
-from kedi.lang.compiler.environment import build_python_env, build_type_env, lookup_value
+from kedi.lang.compiler.environment import (
+    build_python_env,
+    build_type_env,
+    lookup_value,
+)
 from kedi.lang.compiler.evaluation import (
     _evaluate_arg,
     _stringify_segments,
@@ -84,6 +89,16 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     cast(Any, broken_rt)._current_env = RaisingCurrentEnv()
     assert build_python_env(broken_rt, {"local": 1})["local"] == 1
     assert "List" in build_type_env(broken_rt, None)
+    assert "Protocol" not in build_type_env(broken_rt, None)
+    assert "Generic" not in build_type_env(broken_rt, None)
+    assert build_type_env(broken_rt, None)["datetime"].__name__ == "datetime"
+    assert build_type_env(broken_rt, None)["date"].__name__ == "date"
+    assert build_type_env(broken_rt, None)["time"].__name__ == "time"
+    assert build_type_env(broken_rt, None)["timedelta"].__name__ == "timedelta"
+    assert build_type_env(broken_rt, None)["Regex"].__origin__.__name__ == "Pattern"
+    assert build_type_env(broken_rt, None)["Email"].__name__ == "EmailStr"
+    assert build_type_env(broken_rt, None)["HttpUrl"].__name__ == "HttpUrl"
+    assert build_type_env(broken_rt, None)["FileUrl"].__name__ == "FileUrl"
     cast(Any, broken_rt)._type_env_stack = None
     assert "List" in build_type_env(broken_rt, None)
     with pytest.raises(KeyError, match="Unknown variable"):
@@ -94,6 +109,9 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(compiler_env.typing, "__all__", ("_PrivateTypingName",), raising=False)
     assert "_PrivateTypingName" not in build_type_env(KediRuntime(), None)
+
+    monkeypatch.setattr(compiler_env, "typing", SimpleNamespace(List=list))
+    assert build_type_env(KediRuntime(), None)["List"] is list
 
 
 def test_runtime_lookup_reads_current_env() -> None:

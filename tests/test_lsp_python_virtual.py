@@ -59,6 +59,21 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_defaults_untyped_procedure_params_to_str_in_python_blocks():
+    src = '@get_capital(country) -> str:\n  ```\n  print("called", country)\n  ```\n  = Stockholm\n'
+    virtual = compute_python_virtual_document(src, "/tmp/sys.kedi")
+    ast.parse(virtual["text"])
+
+    assert "def __kedi_scope_get_capital(country: str) -> str:" in virtual["text"]
+    assert 'print("called", country)' in virtual["text"]
+    assert any(
+        symbol["kind"] == "parameter"
+        and symbol["name"] == "country"
+        and symbol["sourceRange"]["start"] == {"line": 0, "character": 13}
+        for symbol in virtual["symbols"]
+    )
+
+
 def test_python_virtual_document_includes_procedure_docstring():
     src = (
         "@calculate_stats(numbers: list[int]) -> int:\n"
@@ -225,7 +240,9 @@ def test_virtual_document_exposes_runtime_args_as_attrdict():
     assert "args.debug" in virtual["text"]
 
 
-def test_python_virtual_document_exposes_imported_python_exports_in_python_blocks(tmp_path):
+def test_python_virtual_document_exposes_imported_python_exports_in_python_blocks(
+    tmp_path,
+):
     source_path = tmp_path / "main.kedi"
     src = "> import: require\n\n```\nrequire('pydantic_monty', required_by='Sandbox')\n```\n"
 
@@ -411,6 +428,31 @@ def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types()
     assert "from typing import Any, Literal" in virtual["text"]
     assert 'severity: Literal["critical", "low", "medium"]' in virtual["text"]
     assert "issues: list[Issue]" in virtual["text"]
+
+
+def test_python_virtual_document_imports_datetime_types():
+    src = "@p(started_at: datetime) -> timedelta:\n  = <started_at>\n"
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "from datetime import datetime, timedelta" in virtual["text"]
+    assert "started_at: datetime" in virtual["text"]
+    assert "-> timedelta" in virtual["text"]
+
+
+def test_python_virtual_document_imports_runtime_type_aliases():
+    src = (
+        "@p(day: date, clock: time, matcher: Regex, email: Email, site: HttpUrl, file: FileUrl):\n"
+        "  = <email>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "from datetime import date, time" in virtual["text"]
+    assert "from re import Pattern as Regex" in virtual["text"]
+    assert "from pydantic import EmailStr as Email, FileUrl, HttpUrl" in virtual["text"]
+    assert "matcher: Regex" in virtual["text"]
+    assert "email: Email" in virtual["text"]
+    assert "site: HttpUrl" in virtual["text"]
+    assert "file: FileUrl" in virtual["text"]
 
 
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():

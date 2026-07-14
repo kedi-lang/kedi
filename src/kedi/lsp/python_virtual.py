@@ -31,6 +31,7 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprNativeSegment,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Span,
@@ -48,8 +49,16 @@ from ..lang.ast import (
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python
-from .features import _known_lsp_type_origin, compute_header_python_ranges, compute_python_ranges
-from .module_surface import ImportedSurface, ImportedValueInfo, imported_surface_for_program
+from .features import (
+    _known_lsp_type_origin,
+    compute_header_python_ranges,
+    compute_python_ranges,
+)
+from .module_surface import (
+    ImportedSurface,
+    ImportedValueInfo,
+    imported_surface_for_program,
+)
 
 Position = dict[str, int]
 Range = dict[str, Position]
@@ -792,6 +801,9 @@ def _emit_statements(
         if isinstance(stmt, AssignStmt):
             _emit_assign_stmt(builder, cursor, stmt, scope, indent)
             continue
+        if isinstance(stmt, RawInvokeStmt):
+            _emit_raw_invoke_stmt(builder, stmt, scope, indent)
+            continue
         if isinstance(stmt, PythonBlock):
             region = cursor.next("fenced", stmt.loc)
             if region is not None:
@@ -882,6 +894,23 @@ def _emit_assign_stmt(
     scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
 
 
+def _emit_raw_invoke_stmt(
+    builder: VirtualBuilder,
+    stmt: RawInvokeStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    line = builder.add(f"{indent}{stmt.name}: str = ...")
+    source_range = _raw_invoke_name_range(stmt)
+    builder.add_symbol(
+        kind="local",
+        name=stmt.name,
+        source_range=source_range,
+        virtual_range=_line_range(line, len(indent), stmt.name),
+    )
+    scope[stmt.name] = ScopeName(typ="str", source_range=source_range)
+
+
 def _emit_return(
     builder: VirtualBuilder,
     cursor: RegionCursor,
@@ -904,6 +933,8 @@ def _stmt_segments(stmt: Stmt) -> list:
             segments.extend(line.segments)
         return segments
     if isinstance(stmt, TemplateLine):
+        return list(stmt.segments)
+    if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
@@ -1102,6 +1133,14 @@ def _assign_name_range(stmt: AssignStmt | AssignBlockStmt) -> Optional[Range]:
     return _line_range(line, start, stmt.name)
 
 
+def _raw_invoke_name_range(stmt: RawInvokeStmt) -> Optional[Range]:
+    if stmt.loc is None:
+        return None
+    line = stmt.loc.start_line - 1
+    start = stmt.loc.start_col
+    return _line_range(line, start, stmt.name)
+
+
 def _output_name_range(segment: OutputSegment) -> Optional[Range]:
     if segment.loc is None:
         return None
@@ -1235,6 +1274,20 @@ def _typing_import_lines(program: Any) -> list[str]:
         names = sorted(imports_by_origin.get(origin, ()))
         if names:
             lines.append(f"from {origin} import {', '.join(names)}")
+    datetime_names = sorted(imports_by_origin.get("datetime", ()))
+    if datetime_names:
+        lines.append(f"from datetime import {', '.join(datetime_names)}")
+    if "Regex" in imports_by_origin.get("re", ()):
+        lines.append("from re import Pattern as Regex")
+    pydantic_names = imports_by_origin.get("pydantic", set())
+    pydantic_imports = []
+    if "Email" in pydantic_names:
+        pydantic_imports.append("EmailStr as Email")
+    for name in ("FileUrl", "HttpUrl"):
+        if name in pydantic_names:
+            pydantic_imports.append(name)
+    if pydantic_imports:
+        lines.append(f"from pydantic import {', '.join(pydantic_imports)}")
     return lines
 
 

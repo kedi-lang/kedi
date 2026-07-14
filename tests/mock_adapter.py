@@ -6,6 +6,7 @@ from contextlib import AbstractContextManager, contextmanager
 from typing import Any, Dict, Iterator, List, Sequence
 
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.resolved_types import ResolvedKediType
@@ -16,6 +17,18 @@ _PREV_WORD_RE = re.compile(r"last letter of (\S+)", re.IGNORECASE)
 
 
 class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
+    kind: AgentAdapterKind = "agent-framework"
+    shortname = "mock"
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_mcp=True,
+        supports_profile_override=True,
+        supports_model_override=True,
+        supports_effort=True,
+        supports_settings=True,
+    )
+
     def __init__(self, *, default_model: str | None = None) -> None:
         self._tool_scope = ToolScope()
         # Recording lists are shared instance state appended from worker threads under the
@@ -129,6 +142,19 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
             else:
                 data[k] = f"{k}-value"
         return AttrDict(data)
+
+    async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+        return self.invoke_sync(prompt=prompt, **kwargs)
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        with self._record_lock:
+            self.model_calls.append(self.last_effective_model)
+            self.effort_calls.append(self.last_effective_effort)
+            self.settings_calls.append(dict(self.last_effective_settings))
+            self.instruction_calls.append(kwargs.get("instructions"))
+            self.tool_calls.append(tuple(tool.name for tool in self.scoped_tools))
+            self.mcp_calls.append(self.last_effective_mcp_commands)
+        return f"response:{prompt}"
 
 
 class WordChainMockAdapter(MockAdapter):

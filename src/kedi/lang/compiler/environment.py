@@ -7,14 +7,78 @@ from __future__ import annotations
 
 import builtins
 import linecache
+import re
 import typing
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import typing_extensions
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
 from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
+
+KEDI_TYPING_TYPE_NAMES = frozenset(
+    {
+        "Annotated",
+        "Any",
+        "Callable",
+        "Dict",
+        "FrozenSet",
+        "Iterable",
+        "List",
+        "Literal",
+        "Mapping",
+        "Optional",
+        "Sequence",
+        "Set",
+        "Tuple",
+        "Type",
+        "Union",
+    }
+)
+
+KEDI_RUNTIME_TYPES = {
+    "datetime": datetime,
+    "date": date,
+    "time": time,
+    "timedelta": timedelta,
+    "Regex": re.Pattern[str],
+    "Email": EmailStr,
+    "EmailStr": EmailStr,
+    "HttpUrl": HttpUrl,
+    "FileUrl": FileUrl,
+}
+
+KEDI_RUNTIME_TYPE_ORIGINS = {
+    "datetime": "datetime",
+    "date": "datetime",
+    "time": "datetime",
+    "timedelta": "datetime",
+    "Regex": "re",
+    "Email": "pydantic",
+    "HttpUrl": "pydantic",
+    "FileUrl": "pydantic",
+}
+
+KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS = {
+    "datetime": "date-time",
+    "date": "date",
+    "time": "time",
+    "timedelta": "duration",
+    "Regex": "regex",
+    "Email": "email",
+    "EmailStr": "email",
+    "HttpUrl": "uri",
+    "FileUrl": "uri",
+}
+
+KEDI_DATETIME_TYPES = {
+    "datetime": datetime,
+    "date": date,
+    "time": time,
+    "timedelta": timedelta,
+}
 
 
 class KediEnv(dict):
@@ -136,14 +200,14 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
         "typing_extensions": typing_extensions,
     }
 
-    # Import common typing names
+    # Import only names that are meaningful as Kedi type annotations.
     for module in (typing, typing_extensions):
-        for name in module.__all__:
-            if not name.startswith("_"):
-                try:
-                    env.setdefault(name, vars(module)[name])
-                except KeyError:
-                    continue
+        for name in KEDI_TYPING_TYPE_NAMES:
+            value = getattr(module, name, None)
+            if value is not None:
+                env.setdefault(name, value)
+
+    env.update(KEDI_RUNTIME_TYPES)
 
     # Layer type environments
     for layer in rt._type_env_stack or []:
@@ -224,6 +288,7 @@ def _make_proc_wrapper(
         return _make_generic_proc_wrapper(rt, proc_name)
     wrapper = namespace[metadata.name]
     wrapper.__doc__ = metadata.docstring
+    setattr(wrapper, "__signature__", metadata.introspection_signature())
     setattr(wrapper, "__kedi_procedure_metadata__", metadata)
     procedure_def = get_procedure_def(proc_fn)
     if procedure_def is not None:

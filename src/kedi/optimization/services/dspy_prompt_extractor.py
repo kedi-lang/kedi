@@ -9,7 +9,10 @@ from typing import Any, cast
 import dspy
 
 from ...lang.ast import OptimizeSpan
-from ..dspy_introspection import extract_signature_instructions, is_non_default_instruction
+from ..dspy_introspection import (
+    extract_signature_instructions,
+    is_non_default_instruction,
+)
 from ..utils import normalize_optimized_prompt_prefix, span_to_instruction
 
 

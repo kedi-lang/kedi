@@ -348,7 +348,8 @@ class DefaultExecutor:
         parallel mode — a nested ``def``/``lambda`` rebinding a Kedi var must use ``global x`` (not
         ``nonlocal x``), and reflection must read the bare name / ``globals()`` (not ``locals()``).
         Documented for users in docs/KEDI_DSL.md ("Kedi variables are Python globals"). Recommended
-        CI hardening: a Python 3.11/3.12 matrix to guard the interpreter routing this depends on."""
+        CI hardening: a Python 3.11/3.12 matrix to guard the interpreter routing this depends on.
+        """
         env = self._build_python_env(rt, local_env)
         names = list(local_env.keys())
         # A function wrapper is needed so ``return`` is legal; declaring the Kedi vars ``global``

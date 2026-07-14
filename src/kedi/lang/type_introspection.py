@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import linecache
 import sys
 import types
@@ -12,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .ast import TypeDef
+from .procedure_introspection import build_introspection_signature
 from .type_render import type_expr_to_python
 
 
@@ -69,6 +71,16 @@ class TypeInitMetadata:
             default_value = _DefaultValue(source, value)
             namespace[f"__kedi_default_{index}"] = default_value
         return namespace
+
+    def introspection_signature(self) -> inspect.Signature:
+        return build_introspection_signature(
+            self.fields,
+            self.field_types,
+            self.default_sources,
+            self.default_values,
+            "None",
+            include_self=True,
+        )
 
     def _signature(self) -> str:
         params = ", ".join(
@@ -182,9 +194,14 @@ def make_type_init(
     init.__qualname__ = f"{typedef.name}.__init__"
     init.__module__ = module_name
     init.__doc__ = "This stub is generated for Python introspection."
+    init.__signature__ = metadata.introspection_signature()
     model_class.__module__ = module_name
     model_class.__qualname__ = typedef.name
     model_class.__doc__ = "This stub is generated for Python introspection."
+    # Python 3.13+ requires an own ``__firstlineno__`` entry when locating
+    # class source. The dynamic Pydantic model has no compiled class body, so
+    # point inspect at the first line of our registered display stub.
+    setattr(model_class, "__firstlineno__", 1)
     return init
 
 

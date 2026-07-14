@@ -17,7 +17,11 @@ from kedi.lang.type_render import (
     procedure_return_type_to_python,
     type_expr_to_python,
 )
-from kedi.source_loading import SourceDocument, load_kedi_source_bundle, merge_source_documents
+from kedi.source_loading import (
+    SourceDocument,
+    load_kedi_source_bundle,
+    merge_source_documents,
+)
 from kedi.utils import AttrDict, parse_args
 
 

@@ -81,6 +81,24 @@ def test_semantic_tokens_cover_assignment_targets_and_args():
     )
 
 
+def test_semantic_tokens_cover_annotated_description_string():
+    line = '  >> Capital is [capital: Annotated[str, "City name"]].'
+    src = f"@p():\n{line}\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    decoded = decode_semantic_tokens(tokens.data)
+
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    description_col = line.index('"City name"')
+
+    assert any(
+        line_no == 1
+        and col == description_col
+        and length == len('"City name"')
+        and token_type == string_type
+        for line_no, col, length, token_type, _ in decoded
+    )
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------

@@ -62,6 +62,12 @@ uv sync --dev
 uv run kedi your_program.kedi
 ```
 
+Enable the Claude Agent SDK harness in a source checkout with:
+
+```bash
+uv sync --extra claude
+```
+
 Pip fallback:
 
 ```bash
@@ -128,6 +134,7 @@ change earlier procedures.
     > settings:
         temperature: 0.2
 > profile: quality:
+    > agent: codex
     > model: openrouter/google/gemini-3-flash-preview
     > effort: high
     > system: Be precise and use the available tools when useful.
@@ -149,6 +156,7 @@ change earlier procedures.
 ````
 
 - `> model: name` — set the model for subsequent procedure captures (plain name or `` `expression` ``)
+- `> agent: name` — select an agent harness such as `codex`, `claude`, or `acp`; ACP commands can use multiline `> agent:` entries
 - `> effort: minimal|low|medium|high|xhigh|max` — set reasoning effort
 - `> system:` — set plain or multiline agent instructions with `<name>` and ``<`python`>`` substitutions
 - `> settings:` — set adapter-filtered model settings; use backticks for Python values like `` `["END"]` ``

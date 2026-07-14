@@ -29,6 +29,8 @@ method per relevant CST node type, plus a small dispatcher
 
 from __future__ import annotations
 
+import ast as py_ast
+import re
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
@@ -38,6 +40,8 @@ from ...effort import EFFORT_VALUES, is_valid_effort
 from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 from ...source_loading import CompositeSourceMap
 from ..ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -59,6 +63,8 @@ from ..ast import (
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
+    ProfileAdapterEntry,
+    ProfileAgentEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
@@ -70,6 +76,7 @@ from ..ast import (
     PythonBlock,
     PythonExprNativeSegment,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
@@ -88,6 +95,7 @@ from ..ast import (
     TypeDefStmt,
     TypeExpr,
     TypeField,
+    TypeLiteral,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -99,6 +107,9 @@ from .escapes import dedent_block, unescape_text_with_tracking
 # ---------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------
+
+_HYPHENATED_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+")
+_LEADING_HYPHEN_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])-([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _span(
@@ -132,6 +143,16 @@ def _src_text(source: bytes, node: Node) -> str:
 def _identifier_name(source: bytes, node: Node) -> str:
     """Return the text of an identifier node."""
     return _src_text(source, node)
+
+
+def _hyphenated_identifier(source: str) -> str | None:
+    match = _HYPHENATED_IDENTIFIER_RE.search(source)
+    if match is not None:
+        return match.group(0)
+    match = _LEADING_HYPHEN_IDENTIFIER_RE.search(source)
+    if match is not None:
+        return match.group(0)
+    return None
 
 
 def _named_children(node: Node) -> List[Node]:
@@ -268,6 +289,14 @@ class _Walker:
                 stmt = self._walk_model_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "agent_directive":
+                stmt = self._walk_agent_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "adapter_directive":
+                stmt = self._walk_adapter_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "effort_directive":
                 stmt = self._walk_effort_directive(child)
                 prog.toplevel_body.append(stmt)
@@ -320,6 +349,10 @@ class _Walker:
                 stmt = self._walk_assign_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "raw_invoke_stmt":
+                stmt = self._walk_raw_invoke_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "return_stmt":
                 prog.toplevel_return = self._walk_return_stmt(child)
             elif t == "return_block_stmt":
@@ -341,7 +374,9 @@ class _Walker:
                 # tree-sitter; we skip them here.
                 continue
             elif t == "ERROR" or child.is_error:
-                self._error(child, "unexpected source at top level")
+                self._error(
+                    child, self._parse_error_message(child, "unexpected source at top level")
+                )
             else:
                 self._error(child, f"unexpected top-level node {t!r}")
 
@@ -373,6 +408,16 @@ class _Walker:
         self.diagnostics.append(
             KediDiagnostic(
                 severity="error",
+                message=message,
+                span=self._span(node),
+                code=code,
+            )
+        )
+
+    def _warning(self, node: Node, message: str, code: Optional[str] = None) -> None:
+        self.diagnostics.append(
+            KediDiagnostic(
+                severity="warning",
                 message=message,
                 span=self._span(node),
                 code=code,
@@ -514,12 +559,33 @@ class _Walker:
             if node.is_missing:
                 msg = f"missing {node.type!r}"
             else:
-                msg = "unexpected syntax"
+                msg = self._parse_error_message(node, "unexpected syntax")
             self._error(node, msg, code="K-PARSE")
             return  # don't recurse into ERROR subtrees
         for child in node.children:
             if child.has_error:
                 self._collect_tree_errors(child)
+
+    def _parse_error_message(self, node: Node, fallback: str) -> str:
+        raw = _src_text(self.source, node)
+        if "``" in raw:
+            return "inline Python expression cannot be empty"
+        invalid_identifier = _hyphenated_identifier(
+            self._source_line(node)
+        ) or _hyphenated_identifier(raw)
+        if invalid_identifier is not None:
+            return (
+                f"invalid identifier {invalid_identifier!r}: '-' cannot be used in "
+                "Kedi identifiers; use '_' instead"
+            )
+        return fallback
+
+    def _source_line(self, node: Node) -> str:
+        lines = self.source.splitlines()
+        row = node.start_point[0]
+        if row < 0 or row >= len(lines):
+            return ""
+        return lines[row].decode("utf-8")
 
     # =================================================================
     # Module directives
@@ -665,6 +731,10 @@ class _Walker:
             return None
         if t == "model_directive":
             return self._walk_model_directive(node)
+        if t == "agent_directive":
+            return self._walk_agent_directive(node)
+        if t == "adapter_directive":
+            return self._walk_adapter_directive(node)
         if t == "effort_directive":
             return self._walk_effort_directive(node)
         if t == "system_directive":
@@ -682,6 +752,8 @@ class _Walker:
             return self._walk_assign_stmt(node)
         if t == "assign_block_stmt":
             return self._walk_assign_block_stmt(node)
+        if t == "raw_invoke_stmt":
+            return self._walk_raw_invoke_stmt(node)
         if t == "return_stmt":
             return self._walk_return_stmt(node)
         if t == "return_block_stmt":
@@ -711,7 +783,9 @@ class _Walker:
                     code="K-OPT-EMPTY",
                 )
             else:
-                self._error(node, f"unexpected statement node {t!r}")
+                self._error(
+                    node, self._parse_error_message(node, f"unexpected statement node {t!r}")
+                )
             return None
         # Anything else is an unexpected node — surface a diagnostic
         # but keep parsing the rest of the body.
@@ -763,6 +837,51 @@ class _Walker:
         return AssignBlockStmt(
             name=name,
             code=code,
+            type_annotation=type_anno,
+            type_expr=type_expr,
+            loc=self._span(node),
+        )
+
+    def _walk_raw_invoke_stmt(self, node: Node) -> RawInvokeStmt:
+        target = _field(node, "target")
+        assert target is not None and target.type == "assign_target"
+        name_node = _field(target, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        type_node = _field(target, "type")
+        type_anno = self._type_expr_to_str(type_node) if type_node is not None else None
+        type_expr = self._walk_type_expr(type_node) if type_node is not None else None
+
+        if type_node is not None:
+            if type_anno == "str":
+                self._warning(
+                    type_node,
+                    "Raw invoke captures always produce string values; ': str' is redundant.",
+                    code="K-RAW-INVOKE-REDUNDANT-STR",
+                )
+            else:
+                self._error(
+                    type_node,
+                    "Raw invoke captures always produce string values.",
+                    code="K-RAW-INVOKE-TYPE",
+                )
+
+        prompt_node = _field(node, "prompt")
+        segments = self._walk_template_expr(prompt_node) if prompt_node is not None else []
+        for segment in segments:
+            if isinstance(segment, OutputSegment):
+                self.diagnostics.append(
+                    KediDiagnostic(
+                        severity="error",
+                        message="Raw invoke prompts cannot contain output fields.",
+                        span=segment.loc or self._span(prompt_node or node),
+                        code="K-RAW-INVOKE-OUTPUT",
+                    )
+                )
+
+        return RawInvokeStmt(
+            name=name,
+            segments=segments,
             type_annotation=type_anno,
             type_expr=type_expr,
             loc=self._span(node),
@@ -908,9 +1027,9 @@ class _Walker:
             assert name_node is not None
             name = _identifier_name(self.source, name_node)
             args = [
-                self._walk_type_expr(arg)
+                self._walk_type_arg(arg)
                 for arg in _named_children(target)
-                if arg.type == "type_expr"
+                if arg.type == "type_arg"
             ]
             args = [a for a in args if a is not None]
             return TypeApply(name=name, args=args, loc=self._span(target))
@@ -928,6 +1047,19 @@ class _Walker:
         self._error(target, f"unexpected type_expr inner {target.type!r}")
         return None
 
+    def _walk_type_arg(self, node: Node) -> Optional[TypeExpr]:
+        """Walk a ``type_arg`` wrapper inside generic type applications."""
+        target = _named_children(node)[0]
+        if target.type == "type_python":
+            body_node = _field(target, "code")
+            code = _decode_type_python_body(self.source, body_node) if body_node is not None else ""
+            return TypePython(code=code, loc=self._span(target))
+        if target.type == "type_string":
+            source = _src_text(self.source, target).strip()
+            value = py_ast.literal_eval(source)
+            return TypeLiteral(value=value, source=source, loc=self._span(target))
+        return self._walk_type_term(target)
+
     def _walk_type_term(self, node: Node) -> Optional[TypeExpr]:
         """Walk a node that is a `_type_expr_term` alternative (no `type_expr` wrapper)."""
         t = node.type
@@ -939,9 +1071,7 @@ class _Walker:
             assert name_node is not None
             name = _identifier_name(self.source, name_node)
             args = [
-                self._walk_type_expr(arg)
-                for arg in _named_children(node)
-                if arg.type == "type_expr"
+                self._walk_type_arg(arg) for arg in _named_children(node) if arg.type == "type_arg"
             ]
             args = [a for a in args if a is not None]
             return TypeApply(name=name, args=args, loc=self._span(node))
@@ -1244,17 +1374,60 @@ class _Walker:
         return AutoSpec(prompt=prompt, loc=self._span(node))
 
     def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        return ModelDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+    def _walk_agent_directive(self, node: Node) -> AgentDirectiveStmt:
+        plain, code, command_plain, command_code = self._walk_agent_directive_parts(node)
+        return AgentDirectiveStmt(
+            plain_value=plain,
+            backtick_code=code,
+            command_plain_value=command_plain,
+            command_backtick_code=command_code,
+            loc=self._span(node),
+        )
+
+    def _walk_agent_directive_parts(
+        self,
+        node: Node,
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        body_node = _field(node, "body")
+        if body_node is None:
+            plain, code = self._walk_simple_directive_value(node)
+            return plain, code, None, None
+
+        fields = [child for child in _named_children(body_node) if child.type == "agent_field"]
+        if len(fields) != 1:
+            self._error(
+                body_node,
+                "Multiline '> agent:' must contain exactly one agent entry",
+                code="K-AGENT-BODY",
+            )
+            return None, None, None, None
+        field = fields[0]
+        name_node = _field(field, "name")
+        value_node = _field(field, "value")
+        assert name_node is not None
+        assert value_node is not None
+        plain = _identifier_name(self.source, name_node)
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return plain, None, None, _src_text(self.source, code_node)
+        return plain, None, _src_text(self.source, value_node).strip(), None
+
+    def _walk_adapter_directive(self, node: Node) -> AdapterDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        return AdapterDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
+    def _walk_simple_directive_value(self, node: Node) -> tuple[str | None, str | None]:
         value_node = _field(node, "value")
         assert value_node is not None
         if value_node.type == "inline_python_expr":
             code_node = _field(value_node, "code")
             assert code_node is not None
-            return ModelDirectiveStmt(
-                backtick_code=_src_text(self.source, code_node),
-                loc=self._span(node),
-            )
-        plain = _src_text(self.source, value_node).strip()
-        return ModelDirectiveStmt(plain_value=plain, loc=self._span(node))
+            return None, _src_text(self.source, code_node)
+        return _src_text(self.source, value_node).strip(), None
 
     def _walk_effort_directive(self, node: Node) -> EffortDirectiveStmt:
         value_node = _field(node, "value")
@@ -1403,6 +1576,8 @@ class _Walker:
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
         members: list[ProfileModelEntry] = []
+        agent_members: list[ProfileAgentEntry] = []
+        adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
@@ -1418,7 +1593,29 @@ class _Walker:
                 docstring = _decode_block_comment_body(_src_text(self.source, comment))
                 docstring_loc = self._span(comment)
             for child in body_children:
-                if child.type == "model_directive":
+                if child.type == "agent_directive":
+                    plain, code, command_plain, command_code = self._walk_agent_directive_parts(
+                        child
+                    )
+                    agent_members.append(
+                        ProfileAgentEntry(
+                            plain_value=plain,
+                            backtick_code=code,
+                            command_plain_value=command_plain,
+                            command_backtick_code=command_code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "adapter_directive":
+                    plain, code = self._walk_simple_directive_value(child)
+                    adapter_members.append(
+                        ProfileAdapterEntry(
+                            plain_value=plain,
+                            backtick_code=code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "model_directive":
                     value_node = _field(child, "value")
                     if value_node is None:
                         continue
@@ -1510,6 +1707,8 @@ class _Walker:
                     )
         if (
             not members
+            and not agent_members
+            and not adapter_members
             and not effort_members
             and not system_members
             and not mcp_members
@@ -1518,11 +1717,13 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
             name=name,
+            agent_members=agent_members,
+            adapter_members=adapter_members,
             model_members=members,
             effort_members=effort_members,
             system_members=system_members,

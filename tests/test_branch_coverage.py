@@ -67,15 +67,14 @@ def test_type_registry_skips_private_and_missing_names(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_module = SimpleNamespace(
-        __all__=("_private", "Visible", "Missing"),
-        Visible=object(),
+        Optional=object(),
     )
     monkeypatch.setattr(features, "_typing", fake_module)
     monkeypatch.setattr(features, "_typing_extensions", None)
     registry = features._build_lsp_type_registry()
-    assert "_private" not in registry
-    assert "Missing" not in registry
-    assert registry["Visible"] == "typing"
+    assert registry["Optional"] == "typing"
+    assert "Literal" not in registry
+    assert "Protocol" not in registry
 
 
 def test_exported_name_skips_position_outside_name_span(tmp_path) -> None:

@@ -4,16 +4,28 @@ from contextlib import AbstractContextManager
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from kedi.agent_adapter.adapters import DSPyAdapter, LangChainAdapter, PydanticAdapter
+from kedi.agent_adapter.adapters.acp import ACPAdapter
+from kedi.agent_adapter.adapters.claude import ClaudeAdapter
+from kedi.agent_adapter.adapters.codex import CodexAdapter
+from kedi.agent_adapter.adapters.dspy import DSPyAdapter
+from kedi.agent_adapter.adapters.langchain import LangChainAdapter
+from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
+from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 
 if TYPE_CHECKING:
-    from ..agent_profile import AgentProfile
-    from .tool_override import ToolSpec
+    from ...agent_profile import AgentProfile
+    from ..tool_override import ToolSpec
 
-AvailableAdapter = DSPyAdapter | LangChainAdapter | PydanticAdapter
+AvailableAdapter = (
+    ACPAdapter | CodexAdapter | ClaudeAdapter | DSPyAdapter | LangChainAdapter | PydanticAdapter
+)
 
 
 class LazyAdapter:
+    kind: AgentAdapterKind = "agent-framework"
+    shortname = "lazy"
+    capabilities = AdapterCapabilities()
+
     """Builds the real adapter on first LLM use so the program runs exactly once.
 
     Programs fully covered by generated/native code never construct an adapter (no
@@ -42,6 +54,12 @@ class LazyAdapter:
 
     async def produce(self, *args: Any, **kwargs: Any) -> Any:
         return await self._ensure().produce(*args, **kwargs)
+
+    def invoke_sync(self, *args: Any, **kwargs: Any) -> str:
+        return self._ensure().invoke_sync(*args, **kwargs)
+
+    async def invoke(self, *args: Any, **kwargs: Any) -> str:
+        return await self._ensure().invoke(*args, **kwargs)
 
     def profile_override(self, profile: AgentProfile) -> AbstractContextManager[None]:
         return self._ensure().profile_override(profile)

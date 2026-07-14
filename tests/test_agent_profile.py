@@ -4,13 +4,30 @@ from typing import Any, cast
 
 import pytest
 
+import kedi.agent_adapter.registry as adapter_registry
+from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.agent_adapter.meta import AgentAdapterKind
+from kedi.agent_adapter.registry import (
+    AdapterFactory,
+    adapter_capabilities,
+    adapter_factory,
+    build_adapter,
+    known_adapter_shortnames,
+)
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
-from kedi.agent_profile.model import eval_mcp_field_value, eval_settings_field_value
+from kedi.agent_profile.model import (
+    eval_agent_command_value,
+    eval_agent_directive,
+    eval_mcp_field_value,
+    eval_settings_field_value,
+)
 from kedi.agent_profile.settings import parse_plain_setting_value
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     EffortDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
@@ -36,12 +53,34 @@ def _procedure_def(fn: object) -> ProcedureDef:
     return proc
 
 
+def _patch_adapter_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    kind: AgentAdapterKind,
+    adapter: MockAdapter,
+) -> None:
+    adapter.shortname = name
+    adapter.kind = kind
+    monkeypatch.setitem(
+        adapter_registry._ADAPTERS,
+        name,
+        AdapterFactory(
+            shortname=name,
+            kind=kind,
+            build=lambda _model, _kwargs: adapter,
+        ),
+    )
+
+
 def test_parse_model_profile_use_directives() -> None:
     src = """
+> agent: codex
+> adapter: pydantic
 > model: haiku
 > effort: low
 > system: top-system
 > profile: light:
+    > agent: codex
     > model: opus
     > effort: high
     > system: Be concise.
@@ -50,19 +89,117 @@ def test_parse_model_profile_use_directives() -> None:
     >> answer [x]
 """
     prog = parse_program(src)
-    assert len(prog.ordered_toplevel) == 6
-    assert isinstance(prog.ordered_toplevel[0], ModelDirectiveStmt)
-    assert prog.ordered_toplevel[0].plain_value == "haiku"
-    assert isinstance(prog.ordered_toplevel[1], EffortDirectiveStmt)
-    assert prog.ordered_toplevel[1].plain_value == "low"
-    assert isinstance(prog.ordered_toplevel[2], SystemDirectiveStmt)
-    assert prog.ordered_toplevel[2].plain_value == "top-system"
-    assert isinstance(prog.ordered_toplevel[3], ProfileDefStmt)
-    assert prog.ordered_toplevel[3].name == "light"
-    assert prog.ordered_toplevel[3].effort_members[0].plain_value == "high"
-    assert prog.ordered_toplevel[3].system_members[0].plain_value == "Be concise."
-    assert isinstance(prog.ordered_toplevel[4], UseDirectiveStmt)
-    assert isinstance(prog.ordered_toplevel[5], ProcedureDef)
+    assert len(prog.ordered_toplevel) == 8
+    assert isinstance(prog.ordered_toplevel[0], AgentDirectiveStmt)
+    assert prog.ordered_toplevel[0].plain_value == "codex"
+    assert isinstance(prog.ordered_toplevel[1], AdapterDirectiveStmt)
+    assert prog.ordered_toplevel[1].plain_value == "pydantic"
+    assert isinstance(prog.ordered_toplevel[2], ModelDirectiveStmt)
+    assert prog.ordered_toplevel[2].plain_value == "haiku"
+    assert isinstance(prog.ordered_toplevel[3], EffortDirectiveStmt)
+    assert prog.ordered_toplevel[3].plain_value == "low"
+    assert isinstance(prog.ordered_toplevel[4], SystemDirectiveStmt)
+    assert prog.ordered_toplevel[4].plain_value == "top-system"
+    assert isinstance(prog.ordered_toplevel[5], ProfileDefStmt)
+    assert prog.ordered_toplevel[5].name == "light"
+    assert prog.ordered_toplevel[5].agent_members[0].plain_value == "codex"
+    assert prog.ordered_toplevel[5].effort_members[0].plain_value == "high"
+    assert prog.ordered_toplevel[5].system_members[0].plain_value == "Be concise."
+    assert isinstance(prog.ordered_toplevel[6], UseDirectiveStmt)
+    assert isinstance(prog.ordered_toplevel[7], ProcedureDef)
+
+
+def test_parse_multiline_agent_directive_with_command() -> None:
+    src = """
+> agent:
+    acp: uv run acp server
+
+> profile: local:
+    > agent:
+        acp: `command`
+"""
+    prog = parse_program(src)
+
+    agent = prog.ordered_toplevel[0]
+    assert isinstance(agent, AgentDirectiveStmt)
+    assert agent.plain_value == "acp"
+    assert agent.command_plain_value == "uv run acp server"
+
+    profile_agent = prog.profile_defs["local"].agent_members[0]
+    assert profile_agent.plain_value == "acp"
+    assert profile_agent.command_backtick_code == "command"
+
+
+def test_eval_agent_directive_carries_agent_command() -> None:
+    stmt = AgentDirectiveStmt(plain_value="acp", command_plain_value="uv run acp server")
+    profile = eval_agent_directive(KediRuntime(), stmt, {})
+
+    assert profile.adapter_shortname == "acp"
+    assert profile.agent_command == "uv run acp server"
+
+
+def test_eval_agent_directive_accepts_inline_sequence_command() -> None:
+    stmt = AgentDirectiveStmt(
+        plain_value="acp",
+        command_backtick_code='["uv", "run", "acp", "server"]',
+    )
+    profile = eval_agent_directive(KediRuntime(), stmt, {})
+
+    assert profile.adapter_shortname == "acp"
+    assert profile.agent_command == ("uv", "run", "acp", "server")
+
+
+def test_eval_agent_command_value_accepts_string_and_rejects_invalid_values() -> None:
+    rt = KediRuntime()
+
+    assert (
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code='"uv run acp"',
+            env={},
+        )
+        == "uv run acp"
+    )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code="[object()]",
+            env={},
+        )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code="1",
+            env={},
+        )
+    with pytest.raises(TypeError, match="str or sequence"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code='["uv", 1]',
+            env={},
+        )
+    with pytest.raises(ValueError, match="no value"):
+        eval_agent_command_value(
+            rt,
+            directive_name="agent command",
+            plain_value=None,
+            backtick_code=None,
+            env={},
+        )
+
+
+def test_agent_profile_merge_carries_agent_command() -> None:
+    merged = AgentProfile.empty().merge(AgentProfile(agent_command=("uv", "run", "acp")))
+
+    assert merged.agent_command == ("uv", "run", "acp")
 
 
 def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:
@@ -199,6 +336,299 @@ def test_top_level_mcp_applies_to_following_prompt() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert adapter.mcp_calls == [("top-mcp",)]
+
+
+def test_source_adapter_directive_selects_framework_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> adapter: secondary
+>> value [x]
+"""
+    default_adapter = _adapter()
+    default_adapter.shortname = "default"
+    selected_adapter = MockAdapter(default_model="selected-model")
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", selected_adapter)
+
+    rt = compile_program(parse_program(src), adapter=default_adapter)
+    rt.run_main()
+
+    assert default_adapter.model_calls == []
+    assert selected_adapter.model_calls == ["selected-model"]
+
+
+def test_source_adapter_directive_can_supply_runtime_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> adapter: secondary
+>> value [x]
+"""
+    selected_adapter = MockAdapter(default_model="selected-model")
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", selected_adapter)
+
+    rt = compile_program(parse_program(src))
+    rt.run_main()
+
+    assert selected_adapter.model_calls == ["selected-model"]
+
+
+def test_source_adapter_directive_reuses_matching_runtime_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> adapter: secondary
+>> value [x]
+"""
+    adapter = _adapter()
+    adapter.shortname = "secondary"
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", adapter)
+
+    rt = compile_program(parse_program(src), adapter=adapter)
+    rt.run_main()
+
+    assert adapter.model_calls == ["default-model"]
+
+
+def test_selected_adapter_cache_is_keyed_by_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[MockAdapter] = []
+
+    def build(model: str | None, _kwargs: object) -> MockAdapter:
+        adapter = MockAdapter(default_model=model or "default")
+        adapter.shortname = "secondary"
+        built.append(adapter)
+        return adapter
+
+    monkeypatch.setitem(
+        adapter_registry._ADAPTERS,
+        "secondary",
+        AdapterFactory(shortname="secondary", kind="agent-framework", build=build),
+    )
+    src = """
+> adapter: secondary
+> model: first
+>> first [x]
+> model: second
+>> second [y]
+"""
+    rt = compile_program(parse_program(src), adapter=None)
+    rt.run_main()
+
+    assert [adapter.default_model() for adapter in built] == ["first", "second"]
+    assert [adapter.model_calls for adapter in built] == [["first"], ["second"]]
+
+
+def test_selected_adapter_cache_reuses_same_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: list[MockAdapter] = []
+
+    def build(model: str | None, _kwargs: object) -> MockAdapter:
+        adapter = MockAdapter(default_model=model or "default")
+        adapter.shortname = "secondary"
+        built.append(adapter)
+        return adapter
+
+    monkeypatch.setitem(
+        adapter_registry._ADAPTERS,
+        "secondary",
+        AdapterFactory(shortname="secondary", kind="agent-framework", build=build),
+    )
+    src = """
+> adapter: secondary
+> model: same
+>> first [x]
+>> second [y]
+"""
+    rt = compile_program(parse_program(src), adapter=None)
+    rt.run_main()
+
+    assert len(built) == 1
+    assert built[0].model_calls == ["same", "same"]
+
+
+def test_source_agent_directive_selects_harness_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> agent: harness
+>> value [x]
+"""
+    default_adapter = _adapter()
+    default_adapter.shortname = "default"
+    selected_adapter = MockAdapter(default_model="harness-model")
+    _patch_adapter_factory(monkeypatch, "harness", "agent-harness", selected_adapter)
+
+    rt = compile_program(parse_program(src), adapter=default_adapter)
+    rt.run_main()
+
+    assert default_adapter.model_calls == []
+    assert selected_adapter.model_calls == ["harness-model"]
+
+
+def test_procedure_body_adapter_can_override_captured_top_level_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> agent: harness
+@foo():
+    > adapter: secondary
+    >> value [x]
+"""
+    default_adapter = _adapter()
+    default_adapter.shortname = "default"
+    harness_adapter = MockAdapter(default_model="harness-model")
+    secondary_adapter = MockAdapter(default_model="secondary-model")
+    _patch_adapter_factory(monkeypatch, "harness", "agent-harness", harness_adapter)
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", secondary_adapter)
+
+    rt = compile_program(parse_program(src), adapter=default_adapter)
+    rt._invoke_procedure(rt._procedures["foo"], [])
+
+    assert harness_adapter.model_calls == []
+    assert secondary_adapter.model_calls == ["secondary-model"]
+
+
+def test_procedure_body_agent_can_override_captured_top_level_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src = """
+> adapter: secondary
+@foo():
+    > agent: harness
+    >> value [x]
+"""
+    default_adapter = _adapter()
+    default_adapter.shortname = "default"
+    harness_adapter = MockAdapter(default_model="harness-model")
+    secondary_adapter = MockAdapter(default_model="secondary-model")
+    _patch_adapter_factory(monkeypatch, "harness", "agent-harness", harness_adapter)
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", secondary_adapter)
+
+    rt = compile_program(parse_program(src), adapter=default_adapter)
+    rt._invoke_procedure(rt._procedures["foo"], [])
+
+    assert secondary_adapter.model_calls == []
+    assert harness_adapter.model_calls == ["harness-model"]
+
+
+def test_profile_agent_and_adapter_members_select_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness_adapter = MockAdapter(default_model="harness-model")
+    secondary_adapter = MockAdapter(default_model="secondary-model")
+    _patch_adapter_factory(monkeypatch, "harness", "agent-harness", harness_adapter)
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", secondary_adapter)
+
+    harness_rt = compile_program(
+        parse_program("""
+> profile: harness_profile:
+    > agent: harness
+> use: harness_profile
+>> value [x]
+"""),
+        adapter=None,
+    )
+    harness_rt.run_main()
+
+    secondary_rt = compile_program(
+        parse_program("""
+> profile: secondary_profile:
+    > adapter: secondary
+> use: secondary_profile
+>> value [x]
+"""),
+        adapter=None,
+    )
+    secondary_rt.run_main()
+
+    assert harness_adapter.model_calls == ["harness-model"]
+    assert secondary_adapter.model_calls == ["secondary-model"]
+
+
+@pytest.mark.parametrize(
+    ("src", "message"),
+    [
+        ("> agent: pydantic\n>> value [x]\n", "cannot select 'pydantic'"),
+        ("> adapter: codex\n>> value [x]\n", "cannot select 'codex'"),
+        ("> agent: codex\n> adapter: pydantic\n>> value [x]\n", "Cannot mix"),
+        (
+            "> profile: mixed:\n    > agent: codex\n    > adapter: pydantic\n> use: mixed\n>> value [x]\n",
+            "cannot contain both",
+        ),
+        (
+            "@foo():\n    > agent: harness\n    > adapter: secondary\n    >> value [x]\n",
+            "Cannot mix",
+        ),
+        (
+            "> agent: harness\n> adapter: secondary\n@foo():\n    >> value [x]\n",
+            "Cannot mix",
+        ),
+    ],
+)
+def test_adapter_directive_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    src: str,
+    message: str,
+) -> None:
+    _patch_adapter_factory(monkeypatch, "harness", "agent-harness", _adapter())
+    _patch_adapter_factory(monkeypatch, "secondary", "agent-framework", _adapter())
+    with pytest.raises(Exception, match=message):
+        rt = compile_program(parse_program(src), adapter=_adapter())
+        if "foo" in rt._procedures:
+            rt._invoke_procedure(rt._procedures["foo"], [])
+        else:
+            rt.run_main()
+
+
+@pytest.mark.parametrize(
+    ("src", "message"),
+    [
+        ("> agent: foobarbaz\n", "unknown agent harness adapter 'foobarbaz'"),
+        ("> adapter: foobarbaz\n", "unknown agent framework adapter 'foobarbaz'"),
+        (
+            "> profile: invalid:\n    > agent: foobarbaz\n> use: invalid\n",
+            "unknown agent harness adapter 'foobarbaz'",
+        ),
+    ],
+)
+def test_unknown_agent_adapter_directive_fails_at_runtime(src: str, message: str) -> None:
+    rt = compile_program(parse_program(src), adapter=_adapter())
+
+    with pytest.raises(Exception, match=message):
+        rt.run_main()
+
+
+def test_adapter_registry_helpers() -> None:
+    assert "pydantic" in known_adapter_shortnames()
+    assert adapter_factory("pydantic").kind == "agent-framework"
+    assert adapter_capabilities("pydantic").supports("structured_output")
+    assert adapter_capabilities("dspy").supports("tool_registration")
+    assert adapter_capabilities("langchain").supports("mcp")
+    assert adapter_capabilities("claude").supports("mcp")
+    assert not adapter_capabilities("codex").supports("mcp")
+    assert build_adapter("pydantic").shortname == "pydantic"
+    assert build_adapter("claude", "claude-model").shortname == "claude"
+    assert build_adapter("codex", "codex-model").shortname == "codex"
+    with pytest.raises(ValueError, match="DSPy adapter requires"):
+        build_adapter("dspy")
+    with pytest.raises(Exception, match="Unknown agent adapter"):
+        adapter_factory("missing")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(
+            adapter_registry._ADAPTERS,
+            "custom",
+            AdapterFactory("custom", "agent-framework", lambda *_args: cast(Any, object())),
+        )
+        assert adapter_capabilities("custom") == AdapterCapabilities()
+
+
+def test_agent_profile_adapter_selection_helper() -> None:
+    assert not AgentProfile.empty().needs_adapter_selection("pydantic")
+    assert AgentProfile(adapter_shortname="pydantic").needs_adapter_selection("dspy")
+    assert not AgentProfile(adapter_shortname="pydantic").needs_adapter_selection("pydantic")
 
 
 def test_top_level_mcp_is_captured_by_following_procedure() -> None:

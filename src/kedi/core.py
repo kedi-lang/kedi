@@ -23,7 +23,12 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter
 
-from .errors import KediExecutionError, KediPythonOrigin, KediTraceFrame, build_execution_error
+from .errors import (
+    KediExecutionError,
+    KediPythonOrigin,
+    KediTraceFrame,
+    build_execution_error,
+)
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
@@ -148,6 +153,7 @@ class KediRuntime:
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
+        self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
         # Outstanding produce Futures (parallel mode) so the end-of-run drain awaits every
         # scheduled template — even unconsumed ones — and surfaces their errors. Lock-guarded
         # because workers add/remove concurrently.
@@ -211,6 +217,27 @@ class KediRuntime:
         if env is None:
             raise RuntimeError("m() called outside of a kedi procedure context")
         return self._kedi_run(expressions, env)
+
+    def invoke(self, expressions: Sequence[Expression], *, capture: str | None = None) -> Any:
+        env = self._current_env.get()
+        if env is None:
+            raise RuntimeError("invoke() called outside of a kedi procedure context")
+
+        parts: List[Any] = []
+        deps: List[Any] = []
+        for expr in expressions:
+            text, out = self._evaluate_expression(expr, env)
+            if out is not None:
+                raise ValueError("Raw invoke prompts cannot contain output fields.")
+            if text is not None:
+                parts.append(text)
+                if isinstance(text, KediPromise):
+                    deps.append(text._future)
+
+        result = self._invoke_text_parts(parts, deps, env, capture_key=capture)
+        if capture is None:
+            return None
+        return result[capture]
 
     def run_main(self) -> Any:
         if self._main is None:
@@ -487,6 +514,82 @@ class KediRuntime:
             source_snippet=line,
         )
 
+    def _invoke_text_parts(
+        self,
+        parts: Sequence[Any],
+        deps: Sequence[Any],
+        env: ValueEnv,
+        *,
+        capture_key: str | None,
+    ) -> Dict[str, Any]:
+        parallel = bool(getattr(self._engine, "parallel", False))
+
+        from .agent_profile import current_block_agent_profile
+
+        block_profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(block_profile)
+        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        self._assert_profile_override_supported(block_profile, adapter)
+
+        def _call_invoke() -> str:
+            resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
+            prompt = "".join(resolved_parts)
+
+            from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_profile import current_block_agent_profile
+
+            profile = current_block_agent_profile()
+            override_ctx = nullcontext()
+            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
+                adapter.default_model()
+            ):
+                override_ctx = adapter.profile_override(profile)
+
+            tool_adapter: Any = None
+            tool_ctx: Any = nullcontext()
+            if captured_tool_specs:
+                tool_adapter = cast(Any, adapter)
+                tool_ctx = tool_adapter.tool_scope()
+
+            with tool_ctx:
+                if tool_adapter is not None:
+                    for spec in captured_tool_specs:
+                        tool_adapter.register_tool(spec)
+                run_kwargs: dict[str, Any] = {}
+                if profile.system is not None:
+                    run_kwargs["instructions"] = profile.system
+                with override_ctx:
+                    return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
+
+        if not parallel:
+            response = _call_invoke()
+            if capture_key is None:
+                return {}
+            env[capture_key] = response
+            return {capture_key: response}
+
+        env_snapshot = dict(env)
+
+        def _job() -> Dict[str, Any]:
+            token = self._current_env.set(env_snapshot)
+            try:
+                response = _call_invoke()
+                return {capture_key: response} if capture_key is not None else {}
+            except KediExecutionError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise self.build_execution_error(exc) from None
+            finally:
+                self._current_env.reset(token)
+
+        future = self._engine.schedule(deps, _job)
+        self._register_outstanding(future)
+        if capture_key is None:
+            return {}
+        view = KediPromise(future, capture_key)
+        env[capture_key] = view
+        return {capture_key: view}
+
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
         # Prompt parts may include unresolved promises (dependency edges); collect their Futures
@@ -505,10 +608,10 @@ class KediRuntime:
 
         required = [out.key for out in outputs]
 
-        # If there are no required outputs, there's nothing to ask the LLM.
-        # Treat as a no-op and return empty mapping.
         if not required:
-            return {}
+            if not parts:
+                return {}
+            return self._invoke_text_parts(parts, deps, env, capture_key=None)
 
         # Build output schema mapping (default to str when unspecified)
         typed_fields: Dict[str, Any] = {
@@ -525,10 +628,6 @@ class KediRuntime:
             else prompt_template.format(", ".join(required))
         )
 
-        if self.adapter is None:
-            raise RuntimeError("No adapter provided to KediRuntime")
-
-        adapter = self.adapter
         parallel = bool(getattr(self._engine, "parallel", False))
 
         # Resolve tool specs NOW, on the main thread, while the lexical scope is correct. A
@@ -538,6 +637,7 @@ class KediRuntime:
         from .agent_profile import current_block_agent_profile
 
         block_profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(block_profile)
         captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
         # Validate the profile override on the main thread too, so it raises synchronously at the
         # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
@@ -667,6 +767,29 @@ class KediRuntime:
                 f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
             )
 
+    def _resolve_adapter(self, profile: Any) -> AgentAdapter[Any]:
+        shortname = getattr(profile, "adapter_shortname", None)
+        if shortname is None:
+            if self.adapter is None:
+                raise RuntimeError("No adapter provided to KediRuntime")
+            return self.adapter
+
+        adapter_shortname = (
+            getattr(self.adapter, "shortname", None) if self.adapter is not None else None
+        )
+        if self.adapter is not None and shortname == adapter_shortname:
+            return self.adapter
+
+        model = getattr(profile, "model", None)
+        cache_key = (shortname, model)
+        selected = self._selected_adapters.get(cache_key)
+        if selected is None:
+            from .agent_adapter.registry import build_adapter
+
+            selected = build_adapter(shortname, model)
+            self._selected_adapters[cache_key] = selected
+        return selected
+
     def _resolve_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve a template's tools to fully-bound ToolSpecs (on the main thread, in scope).
 
@@ -678,9 +801,15 @@ class KediRuntime:
             return ()
 
         from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+        from .agent_adapter.utils import (
+            kedi_procedure_tool_spec,
+            python_callable_tool_spec,
+        )
         from .agent_profile import AgentToolOverrideUnsupported
-        from .agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+        from .agent_profile.tools import (
+            procedure_def_for_tool,
+            python_callable_for_tool,
+        )
 
         if not isinstance(adapter, SupportsToolRegistration):
             raise AgentToolOverrideUnsupported(

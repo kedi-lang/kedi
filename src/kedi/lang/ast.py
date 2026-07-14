@@ -96,6 +96,14 @@ class TypePython(TypeExpr):
     code: str = ""
 
 
+@dataclass
+class TypeLiteral(TypeExpr):
+    """A literal value inside a type expression, e.g. Annotated[str, "description"]."""
+
+    value: Any = None
+    source: str = ""
+
+
 # =====================================================================
 # Segments used inside template / return expressions
 # =====================================================================
@@ -201,6 +209,16 @@ class TemplateBlock(Stmt):
 
 
 @dataclass
+class RawInvokeStmt(Stmt):
+    """Raw model invoke captured by ``[name] << prompt``."""
+
+    name: str = ""
+    segments: Expr = field(default_factory=list)
+    type_annotation: Optional[str] = None
+    type_expr: Optional[TypeExpr] = None
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 
@@ -238,6 +256,20 @@ class AssignStmt(Stmt):
 
 @dataclass
 class ModelDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
+class AgentDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    command_plain_value: Optional[str] = None
+    command_backtick_code: Optional[str] = None
+
+
+@dataclass
+class AdapterDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
 
@@ -301,6 +333,8 @@ UseProfileStmt = UseDirectiveStmt
 @dataclass
 class ProfileDefStmt(Stmt):
     name: str = ""
+    agent_members: List["ProfileAgentEntry"] = field(default_factory=list)
+    adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
@@ -313,6 +347,22 @@ class ProfileDefStmt(Stmt):
 
 @dataclass
 class ProfileModelEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileAgentEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    command_plain_value: Optional[str] = None
+    command_backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileAdapterEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)

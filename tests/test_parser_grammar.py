@@ -30,6 +30,7 @@ from kedi.lang import (
     ProgramWithValidation,
     Span,
     TypeApply,
+    TypeLiteral,
     TypePython,
     TypeRef,
     TypeUnion,
@@ -108,6 +109,8 @@ def _fake_walker(source: bytes = b"name") -> Any:
 
 def test_cst_walker_defensive_edges(monkeypatch):
     assert cst_module._decode_block_comment_body("###") == ""
+    assert cst_module._hyphenated_identifier("plain_identifier") is None
+    assert cst_module._hyphenated_identifier("-profile") == "-profile"
 
     field_child = _FakeNode("field_child")
     other_child = _FakeNode("other_child")
@@ -131,6 +134,9 @@ def test_cst_walker_defensive_edges(monkeypatch):
     walker._validate_block_comments()
     walker._line_error(0, "bad")
     assert walker.diagnostics == []
+    out_of_bounds = _FakeNode("ERROR")
+    out_of_bounds.start_point = (10, 0)
+    assert walker._source_line(cast(Any, out_of_bounds)) == ""
 
     missing = _FakeNode("identifier", has_error=True, is_missing=True)
     error_walker = _fake_walker()
@@ -888,6 +894,37 @@ def test_type_apply_nested():
     assert isinstance(inner.args[0], TypeRef) and inner.args[0].name == "int"
 
 
+def test_type_apply_accepts_string_literal_metadata():
+    prog = parse_program('@p():\n  >> Capital is [capital: Annotated[str, "City name"]].\n')
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    out = next(s for s in block.lines[0].segments if isinstance(s, OutputSegment))
+    assert isinstance(out.type_expr, TypeApply)
+    assert out.type_expr.name == "Annotated"
+    assert isinstance(out.type_expr.args[0], TypeRef)
+    assert out.type_expr.args[0].name == "str"
+    assert isinstance(out.type_expr.args[1], TypeLiteral)
+    assert out.type_expr.args[1].value == "City name"
+    assert out.type_annotation == 'Annotated[str, "City name"]'
+
+
+def test_type_apply_accepts_inline_python_args():
+    prog = parse_program("@p():\n  >> Values: [values: list[`str`]].\n")
+    block = prog.procedures[0].body[0]
+    assert isinstance(block, TemplateBlock)
+    out = next(s for s in block.lines[0].segments if isinstance(s, OutputSegment))
+    assert isinstance(out.type_expr, TypeApply)
+    assert out.type_expr.name == "list"
+    assert isinstance(out.type_expr.args[0], TypePython)
+    assert out.type_expr.args[0].code == "str"
+    assert out.type_annotation == "list[`str`]"
+
+
+def test_string_literal_is_not_a_standalone_type_expr():
+    with pytest.raises(KediParseError):
+        parse_program('@p():\n  >> Capital is [capital: "City name"].\n')
+
+
 def test_type_union():
     prog = parse_program("@p(v: int | str | float):\n  = ok\n")
     proc = prog.procedures[0]
@@ -1019,6 +1056,46 @@ def test_optimize_empty_body_raises_with_legacy_substring():
     src = "@p():\n  > optimize: span:\n\n  = done\n"
     with pytest.raises(KediParseError, match="must have an indented block"):
         parse_program(src)
+
+
+def test_empty_inline_python_has_specific_diagnostic() -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program("[x] = ``\n")
+
+    assert any(
+        "inline Python expression cannot be empty" in diagnostic.message
+        for diagnostic in info.value.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "invalid_name"),
+    [
+        ("> profile: my-profile:\n    > model: x\n", "my-profile"),
+        ("@my-proc():\n    = done\n", "my-proc"),
+        ("~My-Type(name: str)\n", "My-Type"),
+        ("> use: my-profile\n", "my-profile"),
+        (">> [my-output]\n", "my-output"),
+    ],
+)
+def test_hyphenated_identifiers_have_specific_diagnostic(source: str, invalid_name: str) -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(source)
+
+    assert any(
+        f"invalid identifier {invalid_name!r}" in diagnostic.message
+        and "'-' cannot be used" in diagnostic.message
+        for diagnostic in info.value.diagnostics
+    )
+
+
+def test_multiline_agent_directive_rejects_multiple_entries() -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program("> agent:\n    acp: uv run acp\n    codex: codex app-server\n")
+
+    assert any(
+        "exactly one agent entry" in diagnostic.message for diagnostic in info.value.diagnostics
+    )
 
 
 # ---------------------------------------------------------------------

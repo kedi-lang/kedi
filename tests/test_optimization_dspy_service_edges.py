@@ -19,9 +19,15 @@ from kedi.lang.ast import (
 )
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import dspy_config as dspy_config_module
-from kedi.optimization.services.dspy_config import AdaptiveJSONAdapter, DSPyConfigurationService
+from kedi.optimization.services.dspy_config import (
+    AdaptiveJSONAdapter,
+    DSPyConfigurationService,
+)
 from kedi.optimization.services.dspy_example_formatter import DSPyExampleFormatter
-from kedi.optimization.services.dspy_module_builder import DSPyModuleBuilder, _KediRuntimeRef
+from kedi.optimization.services.dspy_module_builder import (
+    DSPyModuleBuilder,
+    _KediRuntimeRef,
+)
 from kedi.optimization.services.dspy_prompt_extractor import DSPyPromptExtractor
 from kedi.optimization.services.dspy_score_calculator import DSPyScoreCalculator
 from kedi.optimization.services.prompt_loader import OptimizedPromptLoader

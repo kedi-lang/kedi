@@ -429,7 +429,9 @@ def test_codegen_orchestration_retries_on_def_wrapper_translation(
             return "def f():\n    return 'x'\n"  # a def-wrapper → rejected by the real translator
 
     monkeypatch.setattr(
-        manager_module, "kedi_signature_to_python_signature", lambda header: "def f() -> str:"
+        manager_module,
+        "kedi_signature_to_python_signature",
+        lambda header: "def f() -> str:",
     )
     monkeypatch.setattr(manager_module, "python_tests_to_kedi_tests", lambda tests, name: tests)
     # Intentionally do NOT patch python_impl_to_kedi_impl — we want the real def-wrapper rejection.

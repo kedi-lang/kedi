@@ -38,10 +38,11 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import Node, Tree
+from tree_sitter import Node
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
+from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod
@@ -58,11 +59,29 @@ except Exception:  # pragma: no cover — degraded mode if the wheel is missing
     _PY_HIGHLIGHTS_QUERY = None
 
 from ..agent_profile.settings import (
+    ACP_AGENT_SETTING_KEYS,
+    CLAUDE_AGENT_SETTING_KEYS,
+    CODEX_AGENT_SETTING_KEYS,
     DSPY_LM_SETTING_KEYS,
+    LANGCHAIN_MODEL_SETTING_KEYS,
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
 )
+from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
+from ..agent_adapter.registry import (
+    adapter_capabilities,
+    adapter_factory,
+    known_adapter_shortnames,
+)
+from ..lang.compiler.environment import (
+    KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS,
+    KEDI_RUNTIME_TYPE_ORIGINS,
+    KEDI_TYPING_TYPE_NAMES,
+)
+from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
+    AdapterDirectiveStmt,
+    AgentDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -74,7 +93,6 @@ from ..lang.ast import (
     EvalMetric,
     EvalSuite,
     InputSegment,
-    LiteralArg,  # noqa: F401
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
@@ -82,6 +100,8 @@ from ..lang.ast import (
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
+    ProfileAdapterEntry,
+    ProfileAgentEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
@@ -91,6 +111,7 @@ from ..lang.ast import (
     ProgramWithValidation,
     PythonBlock,
     PythonExprSegment,
+    RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -105,6 +126,8 @@ from ..lang.ast import (
     TypeDef,
     TypeExpr,
     TypeField,
+    TypeLiteral,
+    TypePython,
     TypeRef,
     TypeUnion,
     UseDirectiveStmt,
@@ -163,9 +186,11 @@ def _build_lsp_type_registry() -> dict[str, str]:
     ):
         if module is None:
             continue
-        for name in module.__all__:
-            if not name.startswith("_") and hasattr(module, name):
+        for name in KEDI_TYPING_TYPE_NAMES:
+            if hasattr(module, name):
                 registry.setdefault(name, origin)
+    for name, origin in KEDI_RUNTIME_TYPE_ORIGINS.items():
+        registry[name] = origin
     return registry
 
 
@@ -208,6 +233,8 @@ def _segments_of(stmt) -> list:
         return segs
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)
+    if isinstance(stmt, RawInvokeStmt):
+        return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
     if isinstance(stmt, AssignStmt):
@@ -225,6 +252,8 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
     try:
         prog = parse_program(source, source_path=source_path)
         out = _missing_import_diagnostics(prog)
+        out.extend(_adapter_capability_diagnostics(prog))
+        out.extend(_annotated_type_diagnostics(prog))
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -242,6 +271,96 @@ def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
         code=d.code,
         source="kedi",
         message=d.message,
+    )
+
+
+def _annotated_type_diagnostics(
+    prog: Union[Program, ProgramWithValidation],
+) -> List[lsp.Diagnostic]:
+    out: List[lsp.Diagnostic] = []
+    for expr in _iter_type_exprs(prog):
+        _collect_annotated_type_diagnostics(expr, out)
+    return out
+
+
+def _iter_type_exprs(prog: Union[Program, ProgramWithValidation]):
+    for typedef in prog.type_defs:
+        for field in typedef.fields:
+            yield field.type_expr
+    for proc in _all_procedures(prog):
+        yield proc.return_type_expr
+        for expr in (proc.param_type_exprs or {}).values():
+            yield expr
+        for stmt in proc.body:
+            yield from _iter_stmt_type_exprs(stmt)
+    for stmt in prog.toplevel_body:
+        yield from _iter_stmt_type_exprs(stmt)
+    if prog.toplevel_return is not None:
+        yield from _iter_stmt_type_exprs(prog.toplevel_return)
+
+
+def _iter_stmt_type_exprs(stmt):
+    if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+        yield stmt.type_expr
+    for segment in _segments_of(stmt):
+        if isinstance(segment, OutputSegment):
+            yield segment.type_expr
+
+
+def _collect_annotated_type_diagnostics(
+    expr: Optional[TypeExpr],
+    out: List[lsp.Diagnostic],
+) -> None:
+    if expr is None:
+        return
+    if isinstance(expr, TypeApply):
+        if expr.name == "Annotated" and expr.loc is not None:
+            if len(expr.args) == 1:
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-DESCRIPTION",
+                        "Annotated[type] is accepted as the runtime type, but Kedi "
+                        "Annotated metadata should include a string description: "
+                        'Annotated[type, "description"].',
+                    )
+                )
+            elif len(expr.args) > 2:
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-EXTRA",
+                        'Kedi uses only Annotated[type, "description"]; extra Annotated '
+                        "metadata is ignored.",
+                    )
+                )
+            elif len(expr.args) == 2 and not _is_string_type_literal(expr.args[1]):
+                out.append(
+                    _warning(
+                        expr.loc,
+                        "K-ANNOTATED-DESCRIPTION",
+                        'Kedi Annotated metadata expects Annotated[type, "description"]; '
+                        "the second argument should be a string literal.",
+                    )
+                )
+        for arg in expr.args:
+            _collect_annotated_type_diagnostics(arg, out)
+    elif isinstance(expr, TypeUnion):
+        _collect_annotated_type_diagnostics(expr.left, out)
+        _collect_annotated_type_diagnostics(expr.right, out)
+
+
+def _is_string_type_literal(expr: TypeExpr) -> bool:
+    return isinstance(expr, TypeLiteral) and isinstance(expr.value, str)
+
+
+def _warning(span: Span, code: str, message: str) -> lsp.Diagnostic:
+    return lsp.Diagnostic(
+        range=_span_to_range(span),
+        severity=lsp.DiagnosticSeverity.Warning,
+        code=code,
+        source="kedi",
+        message=message,
     )
 
 
@@ -506,6 +625,516 @@ def _missing_import_diagnostics(
             )
         )
     return diagnostics
+
+
+@dataclass(frozen=True)
+class _AdapterDiagnosticState:
+    shortname: str | None = None
+    kind: AgentAdapterKind | None = None
+
+
+def _adapter_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> list[lsp.Diagnostic]:
+    imported_surface = imported_surface_for_program(prog)
+    profile_defs = _merged_profile_defs(prog, imported_surface)
+    proc_names = {proc.name for proc in _all_procedures(prog)}
+    proc_names.update(imported_surface.procedures)
+    profile_states = {
+        name: _profile_adapter_state(profile) for name, profile in profile_defs.items()
+    }
+    type_defs = {typedef.name: typedef for typedef in prog.type_defs}
+    type_defs.update(imported_surface.types)
+
+    diagnostics: list[lsp.Diagnostic] = []
+    for profile in prog.profile_defs.values():
+        diagnostics.extend(
+            _profile_capability_diagnostics(
+                prog,
+                profile,
+                _profile_adapter_state(profile),
+            )
+        )
+
+    diagnostics.extend(
+        _scan_capability_scope(
+            prog,
+            prog.ordered_toplevel or prog.toplevel_body,
+            _AdapterDiagnosticState(),
+            profile_defs,
+            profile_states,
+            proc_names,
+            type_defs,
+        )
+    )
+    return diagnostics
+
+
+def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
+    members: list[tuple[int, AgentAdapterKind, str | None]] = []
+    for member in profile.agent_members:
+        if member.loc is not None:
+            members.append((member.loc.start_byte, "agent-harness", member.plain_value))
+    for member in profile.adapter_members:
+        if member.loc is not None:
+            members.append((member.loc.start_byte, "agent-framework", member.plain_value))
+
+    state = _AdapterDiagnosticState()
+    for _, expected_kind, shortname in sorted(members):
+        selected = _adapter_state_from_plain_value(shortname, expected_kind)
+        if selected is not None:
+            state = selected
+    return state
+
+
+def _adapter_state_from_plain_value(
+    shortname: str | None,
+    expected_kind: AgentAdapterKind,
+) -> _AdapterDiagnosticState | None:
+    if shortname is None:
+        return None
+    try:
+        factory = adapter_factory(shortname)
+    except Exception:  # pragma: no cover - parser/compiler surfaces unknown adapters elsewhere
+        return None
+    if factory.kind != expected_kind:
+        return None
+    return _AdapterDiagnosticState(shortname=shortname, kind=factory.kind)
+
+
+def _merge_adapter_state(
+    outer: _AdapterDiagnosticState,
+    inner: _AdapterDiagnosticState,
+) -> _AdapterDiagnosticState:
+    return inner if inner.shortname is not None else outer
+
+
+def _adapter_supports(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+) -> bool | None:
+    if state.shortname is None:
+        return None
+    try:
+        capabilities = adapter_capabilities(state.shortname)
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        capabilities = AdapterCapabilities()
+    return capabilities.supports(feature)
+
+
+def _profile_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+    profile: ProfileDefStmt,
+    state: _AdapterDiagnosticState,
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for member in profile.agent_members:
+        diagnostics.extend(
+            _adapter_selection_diagnostics(
+                prog,
+                shortname=member.plain_value,
+                expected_kind="agent-harness",
+                loc=member.loc,
+            )
+        )
+    for member in profile.adapter_members:
+        diagnostics.extend(
+            _adapter_selection_diagnostics(
+                prog,
+                shortname=member.plain_value,
+                expected_kind="agent-framework",
+                loc=member.loc,
+            )
+        )
+    for member in profile.mcp_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "mcp",
+                [_directive_keyword_span(prog, member.loc, "mcp") or member.loc],
+                "MCP server directives",
+            )
+        )
+    return diagnostics
+
+
+def _scan_capability_scope(
+    prog: Program | ProgramWithValidation,
+    statements: Sequence[object],
+    state: _AdapterDiagnosticState,
+    profile_defs: dict[str, ProfileDefStmt],
+    profile_states: dict[str, _AdapterDiagnosticState],
+    proc_names: set[str],
+    type_defs: dict[str, TypeDef],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    active = state
+
+    for stmt in statements:
+        if isinstance(stmt, AgentDirectiveStmt):
+            diagnostics.extend(
+                _adapter_selection_diagnostics(
+                    prog,
+                    shortname=stmt.plain_value,
+                    expected_kind="agent-harness",
+                    loc=stmt.loc,
+                )
+            )
+            selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-harness")
+            if selected is not None:
+                active = selected
+            continue
+        if isinstance(stmt, AdapterDirectiveStmt):
+            diagnostics.extend(
+                _adapter_selection_diagnostics(
+                    prog,
+                    shortname=stmt.plain_value,
+                    expected_kind="agent-framework",
+                    loc=stmt.loc,
+                )
+            )
+            selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
+            if selected is not None:
+                active = selected
+            continue
+        if isinstance(stmt, McpDirectiveStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "mcp",
+                    [_directive_keyword_span(prog, stmt.loc, "mcp") or stmt.loc],
+                    "MCP server directives",
+                )
+            )
+            continue
+        if isinstance(stmt, UseDirectiveStmt):
+            diagnostics.extend(
+                _use_capability_diagnostics(
+                    prog,
+                    stmt,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                )
+            )
+            if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
+                active = _merge_adapter_state(active, profile_states.get(stmt.name, active))
+            continue
+        if isinstance(stmt, TemplateBlock):
+            diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, TemplateLine):
+            diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, ProcedureDef):
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                    type_defs,
+                )
+            )
+            continue
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.proc.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                    type_defs,
+                )
+            )
+            continue
+    return diagnostics
+
+
+def _adapter_selection_diagnostics(
+    prog: Program | ProgramWithValidation,
+    *,
+    shortname: str | None,
+    expected_kind: AgentAdapterKind,
+    loc: Span | None,
+) -> list[lsp.Diagnostic]:
+    """Report invalid literal ``> agent:`` / ``> adapter:`` selections.
+
+    Backtick values are resolved by the runtime, so only literal shortnames can
+    be diagnosed statically here.
+    """
+    if shortname is None or loc is None:
+        return []
+
+    directive = "agent" if expected_kind == "agent-harness" else "adapter"
+    kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
+    span = _directive_name_span(prog, loc, shortname) or loc
+    try:
+        factory = adapter_factory(shortname)
+    except Exception:
+        known = ", ".join(
+            name
+            for name in known_adapter_shortnames()
+            if adapter_factory(name).kind == expected_kind
+        )
+        return [
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-NOT-FOUND",
+                source="kedi",
+                message=(
+                    f"Unknown {kind_label} adapter {shortname!r}. "
+                    f"Known {kind_label} adapters: {known}"
+                ),
+            )
+        ]
+    if factory.kind == expected_kind:
+        return []
+
+    actual = "agent harness" if factory.kind == "agent-harness" else "agent framework"
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(span),
+            severity=lsp.DiagnosticSeverity.Error,
+            code="K-ADAPTER-KIND",
+            source="kedi",
+            message=(f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter."),
+        )
+    ]
+
+
+def _use_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+    stmt: UseDirectiveStmt,
+    state: _AdapterDiagnosticState,
+    profile_defs: dict[str, ProfileDefStmt],
+    profile_states: dict[str, _AdapterDiagnosticState],
+    proc_names: set[str],
+) -> list[lsp.Diagnostic]:
+    if stmt.tool_names:
+        spans = [span for _, span in _use_tool_entry_spans(prog, stmt)]
+        return _unsupported_capability_diagnostics(
+            state,
+            "tool_registration",
+            spans or [stmt.loc],
+            "agent tool registration",
+        )
+    if not stmt.name:
+        return []
+
+    target_span = _use_single_target_span(prog, stmt) or stmt.loc
+    if stmt.name in proc_names:
+        return _unsupported_capability_diagnostics(
+            state,
+            "tool_registration",
+            [target_span],
+            "agent tool registration",
+        )
+
+    profile = profile_defs.get(stmt.name)
+    if profile is None:
+        return []
+    merged = _merge_adapter_state(state, profile_states.get(stmt.name, _AdapterDiagnosticState()))
+    diagnostics: list[lsp.Diagnostic] = []
+    if profile.tool_names:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "tool_registration",
+                [target_span],
+                "agent tool registration from this profile",
+            )
+        )
+    if profile.mcp_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "mcp",
+                [target_span],
+                "MCP server directives from this profile",
+            )
+        )
+    return diagnostics
+
+
+def _template_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    stmt: TemplateBlock,
+    type_defs: dict[str, TypeDef],
+) -> list[lsp.Diagnostic]:
+    diagnostics: list[lsp.Diagnostic] = []
+    for line in stmt.lines:
+        diagnostics.extend(_template_line_capability_diagnostics(state, line, type_defs))
+    return diagnostics
+
+
+def _template_line_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    line: TemplateLine,
+    type_defs: dict[str, TypeDef],
+) -> list[lsp.Diagnostic]:
+    output_segments = [seg for seg in line.segments if isinstance(seg, OutputSegment)]
+    diagnostics = _unsupported_capability_diagnostics(
+        state,
+        "structured_output",
+        [seg.loc for seg in output_segments],
+        "structured template output fields",
+    )
+    if diagnostics or state.shortname is None:
+        return diagnostics
+
+    try:
+        supported_formats = adapter_capabilities(state.shortname).supported_json_schema_formats
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        supported_formats = None
+    if supported_formats is None:
+        return diagnostics
+
+    for segment in output_segments:
+        unsupported = _unsupported_type_formats(
+            segment.type_expr,
+            type_defs,
+            supported_formats,
+        )
+        if not unsupported:
+            continue
+        type_name, schema_format = unsupported[0]
+        span = segment.type_expr.loc if segment.type_expr is not None else segment.loc
+        if span is None:
+            continue
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-SCHEMA-FORMAT",
+                source="kedi",
+                message=(
+                    f"Adapter '{state.shortname}' does not support Kedi type "
+                    f"'{type_name}' in structured output (JSON Schema format "
+                    f"'{schema_format}'). Use Annotated[str, \"field description\"] "
+                    "when a string with semantic guidance is sufficient."
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _unsupported_type_formats(
+    expr: TypeExpr | None,
+    type_defs: dict[str, TypeDef],
+    supported_formats: frozenset[str],
+    seen_types: frozenset[str] = frozenset(),
+) -> list[tuple[str, str]]:
+    if expr is None or isinstance(expr, (TypeLiteral, TypePython)):
+        return []
+    if isinstance(expr, TypeRef):
+        schema_format = KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS.get(expr.name)
+        if schema_format is not None and schema_format not in supported_formats:
+            return [(expr.name, schema_format)]
+        typedef = type_defs.get(expr.name)
+        if typedef is None or expr.name in seen_types:
+            return []
+        nested_seen = seen_types | {expr.name}
+        return [
+            unsupported
+            for field in typedef.fields
+            for unsupported in _unsupported_type_formats(
+                field.type_expr,
+                type_defs,
+                supported_formats,
+                nested_seen,
+            )
+        ]
+    if isinstance(expr, TypeApply):
+        return [
+            unsupported
+            for arg in expr.args
+            for unsupported in _unsupported_type_formats(
+                arg,
+                type_defs,
+                supported_formats,
+                seen_types,
+            )
+        ]
+    if isinstance(expr, TypeUnion):
+        return [
+            *_unsupported_type_formats(
+                expr.left,
+                type_defs,
+                supported_formats,
+                seen_types,
+            ),
+            *_unsupported_type_formats(
+                expr.right,
+                type_defs,
+                supported_formats,
+                seen_types,
+            ),
+        ]
+    return []
+
+
+def _unsupported_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+    spans: Sequence[Span | None],
+    description: str,
+) -> list[lsp.Diagnostic]:
+    supported = _adapter_supports(state, feature)
+    if supported is not False or state.shortname is None:
+        return []
+    severity = (
+        lsp.DiagnosticSeverity.Error
+        if feature == "structured_output"
+        else lsp.DiagnosticSeverity.Warning
+    )
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(span),
+            severity=severity,
+            code="K-ADAPTER-CAPABILITY",
+            source="kedi",
+            message=(
+                f"Adapter '{state.shortname}' does not support {description}; "
+                "this construct will not be handled by that adapter."
+            ),
+        )
+        for span in spans
+        if span is not None
+    ]
+
+
+def _directive_keyword_span(
+    prog: Program | ProgramWithValidation,
+    loc: Span | None,
+    keyword: str,
+) -> Span | None:
+    if loc is None:
+        return None
+    line = _program_line_text(prog, loc.start_line, loc.source_path)
+    line_start = _line_start_byte(prog, loc.start_line)
+    if line is None or line_start is None:
+        return None
+    name_index = line.find(keyword)
+    if name_index < 0:
+        return None
+    start_byte = line_start + len(line[:name_index].encode("utf-8"))
+    start_col = name_index + 1
+    return Span(
+        start_byte=start_byte,
+        end_byte=start_byte + len(keyword.encode("utf-8")),
+        start_line=loc.start_line,
+        start_col=start_col,
+        end_line=loc.start_line,
+        end_col=start_col + len(keyword),
+        source_path=loc.source_path,
+    )
 
 
 def _resolve_symbol_at(
@@ -1270,6 +1899,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(span)
             return
         if isinstance(node, ProfileDefStmt):
+            for member in node.agent_members:
+                visit(member)
+            for member in node.adapter_members:
+                visit(member)
             for member in node.model_members:
                 visit(member)
             for member in node.effort_members:
@@ -1404,6 +2037,11 @@ def _describe_ast_node(node) -> Optional[str]:
             "Inputs `<x>`, outputs `[x: T]`, calls `<f(...)>`, inline Python `` `...` ``, "
             "and literal text are stitched into one prompt."
         )
+    if isinstance(node, RawInvokeStmt):
+        return (
+            f"**Raw model invoke** `[{node.name}] << …` — sends the prompt text to "
+            "the active adapter and stores the plain string response."
+        )
     if isinstance(node, AssignStmt):
         ann = node.type_annotation or "str"
         return (
@@ -1430,6 +2068,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`> optimize: {node.name}:`** — GEPA / DSPy optimisation target."
     if isinstance(node, ModelDirectiveStmt):
         return _model_directive_markdown(node)
+    if isinstance(node, AgentDirectiveStmt):
+        return _agent_directive_markdown(node)
+    if isinstance(node, AdapterDirectiveStmt):
+        return _adapter_directive_markdown(node)
     if isinstance(node, EffortDirectiveStmt):
         return _effort_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
@@ -1442,6 +2084,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _settings_directive_markdown(node)
     if isinstance(node, SettingsField):
         return _settings_field_markdown(node)
+    if isinstance(node, ProfileAgentEntry):
+        return _profile_agent_entry_markdown(node)
+    if isinstance(node, ProfileAdapterEntry):
+        return _profile_adapter_entry_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
@@ -1517,6 +2163,28 @@ def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
     )
 
 
+def _agent_directive_markdown(stmt: AgentDirectiveStmt) -> str:
+    value = _adapter_value_preview(stmt)
+    command = _agent_command_preview(stmt)
+    if command is not None:
+        return (
+            f"**`> agent:`** — select agent harness adapter {value} and command "
+            f"{command} for subsequent statements in this indentation block."
+        )
+    return (
+        f"**`> agent:`** — select agent harness adapter {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
+def _adapter_directive_markdown(stmt: AdapterDirectiveStmt) -> str:
+    value = _adapter_value_preview(stmt)
+    return (
+        f"**`> adapter:`** — select agent framework adapter {value} for subsequent "
+        "statements in this indentation block."
+    )
+
+
 def _effort_directive_markdown(stmt: EffortDirectiveStmt) -> str:
     value = _effort_value_preview(stmt)
     return (
@@ -1583,6 +2251,21 @@ def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
     return f"**`> settings:`** — reusable profile model configuration. Fields: {fields}."
 
 
+def _profile_agent_entry_markdown(entry: ProfileAgentEntry) -> str:
+    value = _adapter_value_preview(entry)
+    command = _agent_command_preview(entry)
+    if command is not None:
+        return (
+            f"**`> agent:`** — reusable profile agent harness adapter: {value}; command: {command}."
+        )
+    return f"**`> agent:`** — reusable profile agent harness adapter: {value}."
+
+
+def _profile_adapter_entry_markdown(entry: ProfileAdapterEntry) -> str:
+    value = _adapter_value_preview(entry)
+    return f"**`> adapter:`** — reusable profile agent framework adapter: {value}."
+
+
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return f"**`> system:`** — reusable agent profile instructions: {value}."
@@ -1597,6 +2280,22 @@ def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"
+
+
+def _adapter_value_preview(
+    stmt: (AgentDirectiveStmt | AdapterDirectiveStmt | ProfileAgentEntry | ProfileAdapterEntry),
+) -> str:
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
+
+
+def _agent_command_preview(stmt: AgentDirectiveStmt | ProfileAgentEntry) -> str | None:
+    if stmt.command_backtick_code is not None:
+        return f"`{stmt.command_backtick_code}`"
+    if stmt.command_plain_value is not None:
+        return f"`{stmt.command_plain_value}`"
+    return None
 
 
 def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:
@@ -1630,14 +2329,23 @@ def _settings_field_value_preview(field: SettingsField) -> str:
 
 
 def _setting_adapter_label(name: str) -> str:
-    in_pydantic = name in PYDANTIC_MODEL_SETTING_KEYS
-    in_dspy = name in DSPY_LM_SETTING_KEYS
-    if in_pydantic and in_dspy:
-        return "Pydantic AI `ModelSettings` and DSPy `LM`"
-    if in_pydantic:
-        return "Pydantic AI `ModelSettings` only"
-    if in_dspy:
-        return "DSPy `LM` only"
+    labels: list[str] = []
+    if name in PYDANTIC_MODEL_SETTING_KEYS:
+        labels.append("Pydantic AI `ModelSettings`")
+    if name in DSPY_LM_SETTING_KEYS:
+        labels.append("DSPy `LM`")
+    if name in LANGCHAIN_MODEL_SETTING_KEYS:
+        labels.append("LangChain model settings")
+    if name in CLAUDE_AGENT_SETTING_KEYS:
+        labels.append("Claude Agent SDK settings")
+    if name in CODEX_AGENT_SETTING_KEYS:
+        labels.append("Codex App Server settings")
+    if name in ACP_AGENT_SETTING_KEYS:
+        labels.append("ACP agent settings")
+    if len(labels) == 1:
+        return f"{labels[0]} only"
+    if labels:
+        return ", ".join(labels[:-1]) + f", and {labels[-1]}"
     expected = ", ".join(sorted(MODEL_SETTING_KEYS))
     return f"no adapter; valid keys are {expected}"
 
@@ -1770,6 +2478,24 @@ def _type_field_annotation(field: TypeField) -> str:
 
 
 def _known_type_markdown(name: str, origin: str) -> str:
+    if name == "Annotated":
+        return (
+            "`Annotated`\n\n"
+            'Kedi uses `Annotated[type, "description"]` as schema metadata. '
+            "The first argument is the runtime type; the string description is passed "
+            "to generated JSON schema and LLM adapter field descriptions."
+        )
+    if origin == "datetime":
+        return f"`{name}`\n\nKedi type resolved to Python's datetime.{name}."
+    if origin == "re":
+        return "`Regex`\n\nKedi type resolved to Python's `re.Pattern[str]`."
+    if origin == "pydantic":
+        pydantic_name = {
+            "Email": "EmailStr",
+            "HttpUrl": "HttpUrl",
+            "FileUrl": "FileUrl",
+        }.get(name, name)
+        return f"`{name}`\n\nKedi type resolved to Pydantic's `{pydantic_name}`."
     return f"`{name}`\n\nKedi type resolved to Python's {origin}.{name}."
 
 
@@ -2347,7 +3073,31 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
                 )
             )
     for stmt in proc.body:
-        if isinstance(stmt, ModelDirectiveStmt) and stmt.loc is not None:
+        if isinstance(stmt, AgentDirectiveStmt) and stmt.loc is not None:
+            value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> agent: {value}",
+                    detail="agent harness override",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, AdapterDirectiveStmt) and stmt.loc is not None:
+            value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
+            children.append(
+                lsp.DocumentSymbol(
+                    name=f"> adapter: {value}",
+                    detail="agent framework override",
+                    kind=lsp.SymbolKind.Event,
+                    range=_span_to_range(stmt.loc),
+                    selection_range=_span_to_range(stmt.loc),
+                    children=[],
+                )
+            )
+        elif isinstance(stmt, ModelDirectiveStmt) and stmt.loc is not None:
             value = stmt.plain_value or (f"`{stmt.backtick_code}`" if stmt.backtick_code else "")
             children.append(
                 lsp.DocumentSymbol(
@@ -2419,6 +3169,38 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
 def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
     children: list[lsp.DocumentSymbol] = []
+    for member in profile.agent_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> agent: {value}",
+                detail="agent harness override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.adapter_members:
+        if member.loc is None:
+            continue
+        value = member.plain_value or (
+            f"`{member.backtick_code}`" if member.backtick_code is not None else ""
+        )
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> adapter: {value}",
+                detail="agent framework override",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
     for member in profile.model_members:
         if member.loc is None:
             continue

@@ -21,6 +21,10 @@ class RenderStyle(str, Enum):
     MONO_LIGHT = "mono_light"
 
 
+_PYTHON_CONTEXT_BEFORE = 2
+_PYTHON_CONTEXT_AFTER = 5
+
+
 def render_execution_error(
     error: KediExecutionError,
     *,
@@ -250,8 +254,15 @@ def _render_python_snippet(
     caret: tuple[int, int] | None = None,
 ) -> None:
     lines = code.splitlines() or [""]
-    width = len(str(max(len(lines), highlight_line)))
-    for line_no, line in enumerate(lines, start=1):
+    start_line, end_line = _python_snippet_window(
+        len(lines),
+        highlight_line,
+        before=_PYTHON_CONTEXT_BEFORE,
+        after=_PYTHON_CONTEXT_AFTER,
+    )
+    width = len(str(max(end_line, highlight_line)))
+    for line_no in range(start_line, end_line + 1):
+        line = lines[line_no - 1]
         rendered = _highlight_python_line(_normalize_line(line), style)
         _render_numbered_line(
             console,
@@ -271,6 +282,20 @@ def _render_python_snippet(
                 caret=caret,
                 width=width,
             )
+
+
+def _python_snippet_window(
+    line_count: int,
+    highlight_line: int,
+    *,
+    before: int,
+    after: int,
+) -> tuple[int, int]:
+    safe_line_count = max(line_count, 1)
+    safe_highlight = min(max(highlight_line, 1), safe_line_count)
+    start_line = max(safe_highlight - before, 1)
+    end_line = min(safe_highlight + after, safe_line_count)
+    return start_line, end_line
 
 
 def _render_numbered_line(

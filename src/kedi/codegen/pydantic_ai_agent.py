@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..agent_adapter.adapters import PydanticAdapter
+from ..agent_adapter.adapters.pydantic import PydanticAdapter
 from .interfaces import CodegenAgent, ProgramContext
 from .prompts import build_implementation_prompt, build_test_generation_prompt
 

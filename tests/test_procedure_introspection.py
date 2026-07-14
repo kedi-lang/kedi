@@ -61,10 +61,7 @@ def test_python_interop_stub_keeps_typed_annotations() -> None:
         rt, "str(inspect.signature(format_person))", {"inspect": inspect}
     )
 
-    assert "person:" in signature
-    assert "Person" in signature
-    assert "note: Optional[str]" in signature
-    assert "-> list[str]" in signature
+    assert signature == "(person: Person, note: Optional[str]) -> list[str]"
 
 
 def test_nested_procedure_python_interop_uses_nested_stub() -> None:
@@ -131,7 +128,10 @@ def test_type_class_source_omits_new_stub() -> None:
 
 
 def test_python_interop_wrapper_preserves_procedure_metadata() -> None:
-    from kedi.lang.procedure_introspection import get_procedure_def, get_procedure_metadata
+    from kedi.lang.procedure_introspection import (
+        get_procedure_def,
+        get_procedure_metadata,
+    )
 
     src = (
         "@kedi_proc(x: str) -> str:\n"

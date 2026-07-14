@@ -7,8 +7,9 @@ from typing import Any, cast
 
 import pytest
 
-from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
+from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compile import (
     build_capture_env,
@@ -232,7 +233,9 @@ def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> N
             return None
 
     monkeypatch.setattr(
-        adapters_module.Agent, "override", lambda self, **kwargs: FakeOverride(**kwargs)
+        pydantic_adapter_module.Agent,
+        "override",
+        lambda self, **kwargs: FakeOverride(**kwargs),
     )
 
     adapter = object.__new__(PydanticAdapter)
@@ -282,10 +285,12 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
         def __exit__(self, *_args: object) -> None:
             return None
 
-    monkeypatch.setattr(adapters_module, "ThinkingStrippingLM", FakeLM)
-    monkeypatch.setattr(adapters_module.dspy, "context", lambda **kwargs: FakeContext(**kwargs))
+    monkeypatch.setattr(dspy_adapter_module, "ThinkingStrippingLM", FakeLM)
+    monkeypatch.setattr(dspy_adapter_module.dspy, "context", lambda **kwargs: FakeContext(**kwargs))
     monkeypatch.setattr(
-        adapters_module.dspy, "settings", SimpleNamespace(configure=lambda **_: None)
+        dspy_adapter_module.dspy,
+        "settings",
+        SimpleNamespace(configure=lambda **_: None),
     )
 
     adapter = object.__new__(DSPyAdapter)

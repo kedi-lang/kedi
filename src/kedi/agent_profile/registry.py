@@ -8,6 +8,22 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileAgentMember:
+    kind: Literal["agent"] = "agent"
+    plain_value: str | None = None
+    backtick_code: str | None = None
+    command_plain_value: str | None = None
+    command_backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileAdapterMember:
+    kind: Literal["adapter"] = "adapter"
+    plain_value: str | None = None
+    backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileModelMember:
     kind: Literal["model"] = "model"
     plain_value: str | None = None
@@ -51,7 +67,9 @@ class ProfileSettingsMember:
 class ProfileDefinition:
     name: str
     members: list[
-        ProfileModelMember
+        ProfileAgentMember
+        | ProfileAdapterMember
+        | ProfileModelMember
         | ProfileEffortMember
         | ProfileSystemMember
         | ProfileToolMember

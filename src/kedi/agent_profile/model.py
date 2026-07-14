@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from ..agent_adapter.meta import AgentAdapterKind
+from ..agent_adapter.registry import validate_adapter_kind
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import AgentProfile
+from .profile import AgentCommand, AgentProfile
 from .registry import (
+    ProfileAdapterMember,
+    ProfileAgentMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
@@ -20,6 +25,8 @@ from .settings import parse_plain_setting_value
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import (
+        AdapterDirectiveStmt,
+        AgentDirectiveStmt,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         McpField,
@@ -60,6 +67,31 @@ def eval_model_value(
     raise ValueError(f"{directive_name} directive has no value")
 
 
+def eval_agent_command_value(
+    rt: KediRuntime,
+    *,
+    directive_name: str,
+    plain_value: str | None,
+    backtick_code: str | None,
+    env: dict[str, Any],
+) -> AgentCommand:
+    if backtick_code is not None:
+        value = rt.executor.evaluate_type_expression(rt, backtick_code, env)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            parts = tuple(value)
+            if all(isinstance(part, str) for part in parts):
+                return parts
+        raise TypeError(
+            f"{directive_name} directive must evaluate to str or sequence[str], "
+            f"got {type(value).__name__}"
+        )
+    if plain_value is not None:
+        return plain_value.strip()
+    raise ValueError(f"{directive_name} directive has no value")
+
+
 def eval_system_value(
     rt: KediRuntime,
     *,
@@ -69,7 +101,10 @@ def eval_system_value(
     env: dict[str, Any],
 ) -> str:
     if template_lines:
-        from kedi.lang.compiler.evaluation import merge_template_block_lines, render_expression
+        from kedi.lang.compiler.evaluation import (
+            merge_template_block_lines,
+            render_expression,
+        )
 
         merged = merge_template_block_lines(list(template_lines))
         return render_expression(rt, merged.segments, env, context="system").strip()
@@ -95,6 +130,73 @@ def eval_model_directive(
         env=env,
     )
     return AgentProfile(model=model)
+
+
+def eval_agent_directive(
+    rt: KediRuntime,
+    stmt: AgentDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return _eval_adapter_selection(
+        rt,
+        directive_name="agent",
+        expected_kind="agent-harness",
+        plain_value=stmt.plain_value,
+        backtick_code=stmt.backtick_code,
+        command_plain_value=stmt.command_plain_value,
+        command_backtick_code=stmt.command_backtick_code,
+        env=env,
+    )
+
+
+def eval_adapter_directive(
+    rt: KediRuntime,
+    stmt: AdapterDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return _eval_adapter_selection(
+        rt,
+        directive_name="adapter",
+        expected_kind="agent-framework",
+        plain_value=stmt.plain_value,
+        backtick_code=stmt.backtick_code,
+        env=env,
+    )
+
+
+def _eval_adapter_selection(
+    rt: KediRuntime,
+    *,
+    directive_name: str,
+    expected_kind: AgentAdapterKind,
+    plain_value: str | None,
+    backtick_code: str | None,
+    env: dict[str, Any],
+    command_plain_value: str | None = None,
+    command_backtick_code: str | None = None,
+) -> AgentProfile:
+    shortname = eval_model_value(
+        rt,
+        directive_name=directive_name,
+        plain_value=plain_value,
+        backtick_code=backtick_code,
+        env=env,
+    )
+    validate_adapter_kind(shortname, expected_kind)
+    command: AgentCommand | None = None
+    if command_plain_value is not None or command_backtick_code is not None:
+        command = eval_agent_command_value(
+            rt,
+            directive_name=f"{directive_name} command",
+            plain_value=command_plain_value,
+            backtick_code=command_backtick_code,
+            env=env,
+        )
+    return AgentProfile(
+        adapter_kind=expected_kind,
+        adapter_shortname=shortname,
+        agent_command=command,
+    )
 
 
 def eval_effort_value(
@@ -194,6 +296,8 @@ def _member_to_patch(
     rt: KediRuntime,
     member: (
         ProfileModelMember
+        | ProfileAgentMember
+        | ProfileAdapterMember
         | ProfileEffortMember
         | ProfileSystemMember
         | ProfileToolMember
@@ -202,6 +306,26 @@ def _member_to_patch(
     ),
     env: dict[str, Any],
 ) -> AgentProfile:
+    if member.kind == "agent":
+        return _eval_adapter_selection(
+            rt,
+            directive_name="agent",
+            expected_kind="agent-harness",
+            plain_value=member.plain_value,
+            backtick_code=member.backtick_code,
+            command_plain_value=member.command_plain_value,
+            command_backtick_code=member.command_backtick_code,
+            env=env,
+        )
+    if member.kind == "adapter":
+        return _eval_adapter_selection(
+            rt,
+            directive_name="adapter",
+            expected_kind="agent-framework",
+            plain_value=member.plain_value,
+            backtick_code=member.backtick_code,
+            env=env,
+        )
     if member.kind == "model":
         model = eval_model_value(
             rt,

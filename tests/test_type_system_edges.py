@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel
 
 from kedi.core import KediRuntime
-from kedi.lang.ast import TypeApply, TypeDef, TypeExpr, TypeField, TypePython, TypeRef, TypeUnion
+from kedi.lang.ast import (
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypeField,
+    TypeLiteral,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
 from kedi.lang.compiler import type_system as type_system_module
 from kedi.lang.compiler.type_system import (
     KediType,
@@ -84,6 +93,27 @@ def test_structured_type_resolution_and_rendering_edges() -> None:
     assert repr(KediType(TypeRef(name="str"))).startswith("KediType(TypeRef")
     assert repr(KediType("int")) == "KediType('int')"
     assert str(KediType(TypeApply(name="list", args=[TypeRef(name="str")]))) == "list[str]"
+    annotated = KediType(
+        TypeApply(
+            name="Annotated",
+            args=[
+                TypeRef(name="str"),
+                TypeLiteral(value="City name", source='"City name"'),
+            ],
+        )
+    )
+    assert annotated.resolve(rt, {"Annotated": Annotated}) == Annotated[str, "City name"]
+    assert str(annotated) == 'Annotated[str, "City name"]'
+    assert (
+        KediType(TypeApply(name="Annotated", args=[TypeRef(name="str")])).resolve(
+            rt,
+            {"Annotated": Annotated},
+        )
+        is str
+    )
+    assert (
+        KediType(TypeApply(name="Annotated", args=[])).resolve(rt, {"Annotated": Annotated}) is None
+    )
     assert str(KediType(TypeUnion(left=TypeRef(name="str"), right=TypeRef(name="int")))) == (
         "str | int"
     )
