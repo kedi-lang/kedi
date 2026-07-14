@@ -313,6 +313,7 @@ class ProgramCompiler:
         wrapper = self.rt.executor.create_dynamic_function(name, params, _body, defaults)
         metadata = get_procedure_metadata(fn)
         if metadata is not None:
+            setattr(wrapper, "__signature__", metadata.introspection_signature())
             setattr(wrapper, "__kedi_procedure_metadata__", metadata)
             setattr(
                 wrapper,

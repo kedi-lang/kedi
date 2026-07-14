@@ -61,10 +61,7 @@ def test_python_interop_stub_keeps_typed_annotations() -> None:
         rt, "str(inspect.signature(format_person))", {"inspect": inspect}
     )
 
-    assert "person:" in signature
-    assert "Person" in signature
-    assert "note: Optional[str]" in signature
-    assert "-> list[str]" in signature
+    assert signature == "(person: Person, note: Optional[str]) -> list[str]"
 
 
 def test_nested_procedure_python_interop_uses_nested_stub() -> None:

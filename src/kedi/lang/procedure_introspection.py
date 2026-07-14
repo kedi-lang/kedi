@@ -82,6 +82,65 @@ class ProcedurePythonMetadata:
         call = f"__kedi_call__({args})" if args else "__kedi_call__()"
         return f"{self._executable_signature()}\n    return {call}\n"
 
+    def introspection_signature(self) -> inspect.Signature:
+        """Return the stable Python-facing signature for a generated stub."""
+        return build_introspection_signature(
+            self.params,
+            self.param_types,
+            self.param_defaults,
+            self.default_values,
+            self.return_type,
+        )
+
+
+class _RenderedAnnotation:
+    """An annotation whose repr preserves Kedi's source spelling for inspect."""
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+
+    def __repr__(self) -> str:
+        return self._source
+
+
+def build_introspection_signature(
+    names: tuple[str, ...],
+    type_sources: tuple[str, ...],
+    default_sources: tuple[str | None, ...],
+    default_values: tuple[Any | None, ...],
+    return_type: str,
+    *,
+    include_self: bool = False,
+) -> inspect.Signature:
+    """Build an ``inspect.Signature`` independent of Python typing repr changes.
+
+    The executable wrapper keeps real annotations for runtime typing APIs. This
+    display-only signature retains the Kedi spelling visible in generated stub
+    source across supported Python versions.
+    """
+    parameters: list[inspect.Parameter] = []
+    if include_self:
+        parameters.append(inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD))
+    parameters.extend(
+        inspect.Parameter(
+            name,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=(inspect.Parameter.empty if default_source is None else default_value),
+            annotation=_RenderedAnnotation(type_source),
+        )
+        for name, type_source, default_source, default_value in zip(
+            names,
+            type_sources,
+            default_sources,
+            default_values,
+            strict=True,
+        )
+    )
+    return inspect.Signature(
+        parameters,
+        return_annotation=_RenderedAnnotation(return_type),
+    )
+
 
 def attach_procedure_metadata(
     fn: Callable[..., Any],

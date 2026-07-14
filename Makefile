@@ -3,7 +3,8 @@ GREEN := \033[1;32m
 RESET := \033[0m
 
 UV ?= uv
-PYTHON_VERSIONS ?= 3.11 3.12
+PYTHON_VERSIONS ?= 3.10 3.11 3.12 3.13 3.14
+MATRIX_ENV_ROOT ?= /tmp/kedi-python-matrix
 
 .PHONY: all format check-formatted lint ty basedpyright check check-docs check-release tests coverage check-coverage check-matrix playground-tree-sitter prod
 
@@ -70,10 +71,10 @@ check-coverage:
 check-matrix:
 	@for version in $(PYTHON_VERSIONS); do \
 		printf "$(BLUE)==>$(RESET) Running checks on Python $$version...\n"; \
-		$(UV) run --group dev --python $$version ruff check || exit $$?; \
-		$(UV) run --group dev --python $$version ruff format --check || exit $$?; \
-		$(UV) run --group dev --python $$version ty check src --python-version $$version || exit $$?; \
-		$(UV) run --group dev --python $$version basedpyright --pythonversion $$version src || exit $$?; \
+		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ruff check || exit $$?; \
+		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ruff format --check || exit $$?; \
+		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ty check src --python-version $$version || exit $$?; \
+		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version basedpyright --pythonversion $$version src || exit $$?; \
 	done
 	@printf "$(GREEN)✔ Matrix checking complete.$(RESET)\n"
 

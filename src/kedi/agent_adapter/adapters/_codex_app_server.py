@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 from collections import deque
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from contextvars import Context
 from dataclasses import dataclass, field
@@ -268,7 +268,7 @@ class CodexAppServerClient:
             self._send({"id": request_id, "method": method, "params": params})
             try:
                 return future.result(timeout=self._request_timeout if timeout is None else timeout)
-            except TimeoutError as exc:
+            except FutureTimeoutError as exc:
                 raise TimeoutError(f"Codex App Server request {method!r} timed out.") from exc
         finally:
             with self._state_lock:
