@@ -80,6 +80,18 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 15 and token_type == label_type for line, _, _, token_type, _ in decoded)
 
 
+def test_semantic_tokens_cover_multiline_acp_agent_command() -> None:
+    src = "> agent:\n    acp: uv run acp server\n"
+    tokens = features.compute_semantic_tokens_full(src, "/tmp/acp.kedi")
+    decoded = decode_semantic_tokens(tokens.data)
+
+    label_type = features.SEMANTIC_TOKEN_TYPES.index("enumMember")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+
+    assert (1, 4, 3, label_type, 0) in decoded
+    assert (1, 9, len("uv run acp server"), string_type, 0) in decoded
+
+
 def test_semantic_tokens_and_hover_cover_raw_invoke() -> None:
     src = "[answer] << Hello <name>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/raw.kedi")
