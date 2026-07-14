@@ -124,9 +124,19 @@ def adapter_factory(shortname: str) -> AdapterFactory:
 
 
 def validate_adapter_kind(shortname: str, expected_kind: AgentAdapterKind) -> None:
-    factory = adapter_factory(shortname)
+    directive = "agent" if expected_kind == "agent-harness" else "adapter"
+    kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
+    try:
+        factory = adapter_factory(shortname)
+    except KediExecutionError as exc:
+        known = ", ".join(
+            name for name, candidate in _ADAPTERS.items() if candidate.kind == expected_kind
+        )
+        raise KediExecutionError(
+            f"> {directive}: unknown {kind_label} adapter {shortname!r}. "
+            f"Known {kind_label} adapters: {known}"
+        ) from exc
     if factory.kind != expected_kind:
-        directive = "agent" if expected_kind == "agent-harness" else "adapter"
         actual = "agent" if factory.kind == "agent-harness" else "adapter"
         raise KediExecutionError(
             f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter"

@@ -61,6 +61,18 @@ KEDI_RUNTIME_TYPE_ORIGINS = {
     "FileUrl": "pydantic",
 }
 
+KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS = {
+    "datetime": "date-time",
+    "date": "date",
+    "time": "time",
+    "timedelta": "duration",
+    "Regex": "regex",
+    "Email": "email",
+    "EmailStr": "email",
+    "HttpUrl": "uri",
+    "FileUrl": "uri",
+}
+
 KEDI_DATETIME_TYPES = {
     "datetime": datetime,
     "date": date,

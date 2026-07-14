@@ -9,7 +9,20 @@ import pytest
 from lsprotocol import types as lsp
 
 from kedi.agent_adapter import AdapterCapabilities
-from kedi.lang.ast import Program, Span
+from kedi.lang.ast import (
+    OutputSegment,
+    Program,
+    Span,
+    TemplateLine,
+    TypeApply,
+    TypeDef,
+    TypeExpr,
+    TypeField,
+    TypeLiteral,
+    TypePython,
+    TypeRef,
+    TypeUnion,
+)
 from kedi.lang.parser.diagnostics import KediDiagnostic
 from kedi.lsp import features
 
@@ -169,6 +182,142 @@ def test_diagnostics_errors_when_adapter_lacks_structured_output(
     assert "structured template output fields" in diag.message
     assert diag.range.start.line == 2
     assert diag.range.start.character == len(">> Capital is ")
+
+
+@pytest.mark.parametrize(
+    ("src", "code", "message", "line", "character"),
+    [
+        (
+            "> agent: foobarbaz\n",
+            "K-ADAPTER-NOT-FOUND",
+            "Unknown agent harness adapter 'foobarbaz'",
+            0,
+            len("> agent: "),
+        ),
+        (
+            "> adapter: foobarbaz\n",
+            "K-ADAPTER-NOT-FOUND",
+            "Unknown agent framework adapter 'foobarbaz'",
+            0,
+            len("> adapter: "),
+        ),
+        (
+            "> agent: pydantic\n",
+            "K-ADAPTER-KIND",
+            "cannot select 'pydantic'",
+            0,
+            len("> agent: "),
+        ),
+        (
+            "> profile: invalid:\n    > adapter: codex\n",
+            "K-ADAPTER-KIND",
+            "cannot select 'codex'",
+            1,
+            len("    > adapter: "),
+        ),
+    ],
+)
+def test_diagnostics_report_invalid_agent_adapter_selection(
+    src: str,
+    code: str,
+    message: str,
+    line: int,
+    character: int,
+) -> None:
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == code
+    assert diag.severity == lsp.DiagnosticSeverity.Error
+    assert message in diag.message
+    assert diag.range.start.line == line
+    assert diag.range.start.character == character
+
+
+def test_diagnostics_error_for_codex_unsupported_output_format() -> None:
+    src = "> agent: codex\n\n>> Return [file: FileUrl].\n"
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-ADAPTER-SCHEMA-FORMAT"
+    assert diag.severity == lsp.DiagnosticSeverity.Error
+    assert "FileUrl" in diag.message
+    assert "uri" in diag.message
+    assert "Annotated[str" in diag.message
+    assert diag.range.start.line == 2
+    assert diag.range.start.character == len(">> Return [file: ")
+
+
+def test_diagnostics_error_for_nested_codex_unsupported_output_format() -> None:
+    src = "~Artifact(file: FileUrl)\n\n> agent: codex\n\n>> Return [artifact: Artifact].\n"
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-ADAPTER-SCHEMA-FORMAT"
+    assert "FileUrl" in diag.message
+    assert diag.range.start.line == 4
+    assert diag.range.start.character == len(">> Return [artifact: ")
+
+
+def test_diagnostics_accept_provider_supported_output_formats() -> None:
+    codex_src = "> agent: codex\n\n>> Return [email: Email] on [day: date].\n"
+    claude_src = "> agent: claude\n\n>> Return [file: FileUrl] matching [pattern: Regex].\n"
+
+    assert features.compute_diagnostics(codex_src, "codex.kedi") == []
+    assert features.compute_diagnostics(claude_src, "claude.kedi") == []
+
+
+def test_adapter_schema_format_diagnostics_cover_nested_type_expressions() -> None:
+    supported_formats = frozenset({"email"})
+    loop = TypeDef(
+        name="Loop",
+        fields=[TypeField(name="next", type_expr=TypeRef(name="Loop"))],
+    )
+    type_defs = {"Loop": loop}
+
+    assert features._unsupported_type_formats(None, type_defs, supported_formats) == []
+    assert (
+        features._unsupported_type_formats(
+            TypeLiteral(value="description"), type_defs, supported_formats
+        )
+        == []
+    )
+    assert (
+        features._unsupported_type_formats(
+            TypePython(code="dynamic_type"), type_defs, supported_formats
+        )
+        == []
+    )
+    assert (
+        features._unsupported_type_formats(TypeRef(name="Missing"), type_defs, supported_formats)
+        == []
+    )
+    assert (
+        features._unsupported_type_formats(TypeRef(name="Loop"), type_defs, supported_formats) == []
+    )
+    assert features._unsupported_type_formats(TypeExpr(), type_defs, supported_formats) == []
+    assert features._unsupported_type_formats(
+        TypeApply(name="list", args=[TypeRef(name="FileUrl")]),
+        type_defs,
+        supported_formats,
+    ) == [("FileUrl", "uri")]
+    assert features._unsupported_type_formats(
+        TypeUnion(left=TypeRef(name="Email"), right=TypeRef(name="Regex")),
+        type_defs,
+        supported_formats,
+    ) == [("Regex", "regex")]
+
+    diagnostics = features._template_line_capability_diagnostics(
+        features._AdapterDiagnosticState(shortname="codex", kind="agent-harness"),
+        TemplateLine(segments=[OutputSegment(name="file", type_expr=TypeRef(name="FileUrl"))]),
+        type_defs,
+    )
+    assert diagnostics == []
 
 
 def test_diagnostics_warn_when_adapter_lacks_tool_registration(

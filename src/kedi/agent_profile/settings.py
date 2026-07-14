@@ -89,6 +89,7 @@ CLAUDE_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
         "max_budget_usd",
         "max_turns",
         "permission_mode",
+        "tools",
     }
 )
 

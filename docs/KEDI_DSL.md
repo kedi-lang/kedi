@@ -529,7 +529,14 @@ Kedi's built-in type namespace includes common Python and typing types such as `
 serializable runtime types such as `datetime`, `date`, `time`, `timedelta`,
 `Regex`, `Email`, `HttpUrl`, and `FileUrl`. These names resolve to Python or
 Pydantic types, so generated JSON schemas keep their native formats: `date`,
-`time`, `regex`, `email`, or `uri` where applicable.
+`time`, `regex`, `email`, or `uri` where applicable. Adapter schema support is
+validated before a model call. Codex accepts `date`, `date-time`, `duration`,
+`email`, and `time`, but rejects `Regex`, `HttpUrl`, and `FileUrl`; the LSP marks
+those output annotations as errors in a Codex scope and runtime raises before
+contacting Codex. When plain text with semantic guidance is enough, use a type
+such as `Annotated[str, "Exact URL pointing to the file"]` instead. Its
+description is included in the generated provider schema while its wire type
+remains `string`. Claude currently accepts all of the formats listed above.
 
 Type fields can also have single-line inline Python defaults:
 
@@ -789,6 +796,11 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
       acp: uv run acp server
   ```
 
+  Literal adapter names are validated by the LSP and at runtime. `> agent:`
+  only accepts harness adapters, while `> adapter:` only accepts framework
+  adapters; use an inline Python value only when the selected name must be
+  determined dynamically at runtime.
+
   The command value may be plain text or an inline Python expression that
   evaluates to a string or string sequence.
 - `> model: name` — set the active model for subsequent procedure captures (plain
@@ -808,7 +820,16 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   only supported `dspy.LM` kwargs. Agent harnesses receive their supported
   settings, such as `cwd`, `env`, and `timeout` for ACP. `cwd` is passed as
   the agent process working directory where supported, including ACP, Codex,
-  and Claude. Unknown setting names are parser/LSP errors.
+  and Claude. Claude enables the Claude Code built-in tool and system prompt
+  presets by default; `> system:` is appended to the Claude Code preset so file
+  tools remain part of the agent behavior. Non-interactive Claude runs default
+  to `permission_mode: acceptEdits`, allowing those built-in file tools to
+  complete; set `permission_mode` explicitly to override it. Set `tools`
+  explicitly if you want a narrower Claude tool surface. Codex exposes its
+  harness tools through its own `sandbox`, `approval_policy`, and `cwd`
+  settings; its default sandbox is `workspace-write` so read/write harness tools
+  are eligible unless narrowed by settings. Unknown setting names are parser/LSP
+  errors.
   Use backticks when the setting value should be a real Python object instead
   of a string or simple scalar:
 

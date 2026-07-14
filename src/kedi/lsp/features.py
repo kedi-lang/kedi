@@ -68,8 +68,16 @@ from ..agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
 )
 from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
-from ..agent_adapter.registry import adapter_capabilities, adapter_factory
-from ..lang.compiler.environment import KEDI_RUNTIME_TYPE_ORIGINS, KEDI_TYPING_TYPE_NAMES
+from ..agent_adapter.registry import (
+    adapter_capabilities,
+    adapter_factory,
+    known_adapter_shortnames,
+)
+from ..lang.compiler.environment import (
+    KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS,
+    KEDI_RUNTIME_TYPE_ORIGINS,
+    KEDI_TYPING_TYPE_NAMES,
+)
 from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
@@ -119,6 +127,7 @@ from ..lang.ast import (
     TypeExpr,
     TypeField,
     TypeLiteral,
+    TypePython,
     TypeRef,
     TypeUnion,
     UseDirectiveStmt,
@@ -634,6 +643,8 @@ def _adapter_capability_diagnostics(
     profile_states = {
         name: _profile_adapter_state(profile) for name, profile in profile_defs.items()
     }
+    type_defs = {typedef.name: typedef for typedef in prog.type_defs}
+    type_defs.update(imported_surface.types)
 
     diagnostics: list[lsp.Diagnostic] = []
     for profile in prog.profile_defs.values():
@@ -653,6 +664,7 @@ def _adapter_capability_diagnostics(
             profile_defs,
             profile_states,
             proc_names,
+            type_defs,
         )
     )
     return diagnostics
@@ -716,6 +728,24 @@ def _profile_capability_diagnostics(
     state: _AdapterDiagnosticState,
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
+    for member in profile.agent_members:
+        diagnostics.extend(
+            _adapter_selection_diagnostics(
+                prog,
+                shortname=member.plain_value,
+                expected_kind="agent-harness",
+                loc=member.loc,
+            )
+        )
+    for member in profile.adapter_members:
+        diagnostics.extend(
+            _adapter_selection_diagnostics(
+                prog,
+                shortname=member.plain_value,
+                expected_kind="agent-framework",
+                loc=member.loc,
+            )
+        )
     for member in profile.mcp_members:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
@@ -735,17 +765,34 @@ def _scan_capability_scope(
     profile_defs: dict[str, ProfileDefStmt],
     profile_states: dict[str, _AdapterDiagnosticState],
     proc_names: set[str],
+    type_defs: dict[str, TypeDef],
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     active = state
 
     for stmt in statements:
         if isinstance(stmt, AgentDirectiveStmt):
+            diagnostics.extend(
+                _adapter_selection_diagnostics(
+                    prog,
+                    shortname=stmt.plain_value,
+                    expected_kind="agent-harness",
+                    loc=stmt.loc,
+                )
+            )
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-harness")
             if selected is not None:
                 active = selected
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
+            diagnostics.extend(
+                _adapter_selection_diagnostics(
+                    prog,
+                    shortname=stmt.plain_value,
+                    expected_kind="agent-framework",
+                    loc=stmt.loc,
+                )
+            )
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
             if selected is not None:
                 active = selected
@@ -775,10 +822,10 @@ def _scan_capability_scope(
                 active = _merge_adapter_state(active, profile_states.get(stmt.name, active))
             continue
         if isinstance(stmt, TemplateBlock):
-            diagnostics.extend(_template_capability_diagnostics(active, stmt))
+            diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
             continue
         if isinstance(stmt, TemplateLine):
-            diagnostics.extend(_template_line_capability_diagnostics(active, stmt))
+            diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
             continue
         if isinstance(stmt, ProcedureDef):
             diagnostics.extend(
@@ -789,6 +836,7 @@ def _scan_capability_scope(
                     profile_defs,
                     profile_states,
                     proc_names,
+                    type_defs,
                 )
             )
             continue
@@ -801,10 +849,64 @@ def _scan_capability_scope(
                     profile_defs,
                     profile_states,
                     proc_names,
+                    type_defs,
                 )
             )
             continue
     return diagnostics
+
+
+def _adapter_selection_diagnostics(
+    prog: Program | ProgramWithValidation,
+    *,
+    shortname: str | None,
+    expected_kind: AgentAdapterKind,
+    loc: Span | None,
+) -> list[lsp.Diagnostic]:
+    """Report invalid literal ``> agent:`` / ``> adapter:`` selections.
+
+    Backtick values are resolved by the runtime, so only literal shortnames can
+    be diagnosed statically here.
+    """
+    if shortname is None or loc is None:
+        return []
+
+    directive = "agent" if expected_kind == "agent-harness" else "adapter"
+    kind_label = "agent harness" if expected_kind == "agent-harness" else "agent framework"
+    span = _directive_name_span(prog, loc, shortname) or loc
+    try:
+        factory = adapter_factory(shortname)
+    except Exception:
+        known = ", ".join(
+            name
+            for name in known_adapter_shortnames()
+            if adapter_factory(name).kind == expected_kind
+        )
+        return [
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-NOT-FOUND",
+                source="kedi",
+                message=(
+                    f"Unknown {kind_label} adapter {shortname!r}. "
+                    f"Known {kind_label} adapters: {known}"
+                ),
+            )
+        ]
+    if factory.kind == expected_kind:
+        return []
+
+    actual = "agent harness" if factory.kind == "agent-harness" else "agent framework"
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(span),
+            severity=lsp.DiagnosticSeverity.Error,
+            code="K-ADAPTER-KIND",
+            source="kedi",
+            message=(f"> {directive}: cannot select {shortname!r}; it is an {actual} adapter."),
+        )
+    ]
 
 
 def _use_capability_diagnostics(
@@ -864,24 +966,118 @@ def _use_capability_diagnostics(
 def _template_capability_diagnostics(
     state: _AdapterDiagnosticState,
     stmt: TemplateBlock,
+    type_defs: dict[str, TypeDef],
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     for line in stmt.lines:
-        diagnostics.extend(_template_line_capability_diagnostics(state, line))
+        diagnostics.extend(_template_line_capability_diagnostics(state, line, type_defs))
     return diagnostics
 
 
 def _template_line_capability_diagnostics(
     state: _AdapterDiagnosticState,
     line: TemplateLine,
+    type_defs: dict[str, TypeDef],
 ) -> list[lsp.Diagnostic]:
-    spans = [seg.loc for seg in line.segments if isinstance(seg, OutputSegment)]
-    return _unsupported_capability_diagnostics(
+    output_segments = [seg for seg in line.segments if isinstance(seg, OutputSegment)]
+    diagnostics = _unsupported_capability_diagnostics(
         state,
         "structured_output",
-        spans,
+        [seg.loc for seg in output_segments],
         "structured template output fields",
     )
+    if diagnostics or state.shortname is None:
+        return diagnostics
+
+    try:
+        supported_formats = adapter_capabilities(state.shortname).supported_json_schema_formats
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        supported_formats = None
+    if supported_formats is None:
+        return diagnostics
+
+    for segment in output_segments:
+        unsupported = _unsupported_type_formats(
+            segment.type_expr,
+            type_defs,
+            supported_formats,
+        )
+        if not unsupported:
+            continue
+        type_name, schema_format = unsupported[0]
+        span = segment.type_expr.loc if segment.type_expr is not None else segment.loc
+        if span is None:
+            continue
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-SCHEMA-FORMAT",
+                source="kedi",
+                message=(
+                    f"Adapter '{state.shortname}' does not support Kedi type "
+                    f"'{type_name}' in structured output (JSON Schema format "
+                    f"'{schema_format}'). Use Annotated[str, \"field description\"] "
+                    "when a string with semantic guidance is sufficient."
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _unsupported_type_formats(
+    expr: TypeExpr | None,
+    type_defs: dict[str, TypeDef],
+    supported_formats: frozenset[str],
+    seen_types: frozenset[str] = frozenset(),
+) -> list[tuple[str, str]]:
+    if expr is None or isinstance(expr, (TypeLiteral, TypePython)):
+        return []
+    if isinstance(expr, TypeRef):
+        schema_format = KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS.get(expr.name)
+        if schema_format is not None and schema_format not in supported_formats:
+            return [(expr.name, schema_format)]
+        typedef = type_defs.get(expr.name)
+        if typedef is None or expr.name in seen_types:
+            return []
+        nested_seen = seen_types | {expr.name}
+        return [
+            unsupported
+            for field in typedef.fields
+            for unsupported in _unsupported_type_formats(
+                field.type_expr,
+                type_defs,
+                supported_formats,
+                nested_seen,
+            )
+        ]
+    if isinstance(expr, TypeApply):
+        return [
+            unsupported
+            for arg in expr.args
+            for unsupported in _unsupported_type_formats(
+                arg,
+                type_defs,
+                supported_formats,
+                seen_types,
+            )
+        ]
+    if isinstance(expr, TypeUnion):
+        return [
+            *_unsupported_type_formats(
+                expr.left,
+                type_defs,
+                supported_formats,
+                seen_types,
+            ),
+            *_unsupported_type_formats(
+                expr.right,
+                type_defs,
+                supported_formats,
+                seen_types,
+            ),
+        ]
+    return []
 
 
 def _unsupported_capability_diagnostics(

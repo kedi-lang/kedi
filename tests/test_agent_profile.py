@@ -583,6 +583,24 @@ def test_adapter_directive_validation(
             rt.run_main()
 
 
+@pytest.mark.parametrize(
+    ("src", "message"),
+    [
+        ("> agent: foobarbaz\n", "unknown agent harness adapter 'foobarbaz'"),
+        ("> adapter: foobarbaz\n", "unknown agent framework adapter 'foobarbaz'"),
+        (
+            "> profile: invalid:\n    > agent: foobarbaz\n> use: invalid\n",
+            "unknown agent harness adapter 'foobarbaz'",
+        ),
+    ],
+)
+def test_unknown_agent_adapter_directive_fails_at_runtime(src: str, message: str) -> None:
+    rt = compile_program(parse_program(src), adapter=_adapter())
+
+    with pytest.raises(Exception, match=message):
+        rt.run_main()
+
+
 def test_adapter_registry_helpers() -> None:
     assert "pydantic" in known_adapter_shortnames()
     assert adapter_factory("pydantic").kind == "agent-framework"

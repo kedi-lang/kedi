@@ -29,6 +29,7 @@ class AdapterCapabilities:
     supports_effort: bool | None = None
     supports_settings: bool | None = None
     supports_codemode: bool | None = None
+    supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
 
     def supports(self, feature: AdapterCapability) -> bool:

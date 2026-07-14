@@ -7,11 +7,13 @@ import sys
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from re import Pattern
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
@@ -51,6 +53,17 @@ class DirectOutput(BaseModel):
 
 class DirectAnswer(BaseModel):
     answer: str
+
+
+class FormattedClaudeOutput(BaseModel):
+    created_at: datetime
+    elapsed: timedelta
+    day: date
+    clock: time
+    matcher: Pattern[str]
+    email: EmailStr
+    site: HttpUrl
+    file: FileUrl
 
 
 def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
@@ -757,10 +770,16 @@ def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
     assert events["prompts"][0]["prompt"] == "template"
     options = events["options"][0]
     assert options["model"] == "claude-opus-4"
+    assert options["tools"] == {"type": "preset", "preset": "claude_code"}
+    assert options["permission_mode"] == "acceptEdits"
     assert options["max_turns"] == 3
     assert options["cwd"] == "/tmp/project"
     assert options["effort"] == "xhigh"
-    assert options["system_prompt"] == "Runtime instructions."
+    assert options["system_prompt"] == {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": "Runtime instructions.",
+    }
     assert options["output_format"]["type"] == "json_schema"
     assert set(options["output_format"]["schema"]["properties"]) == {"answer"}
     assert "temperature" not in options
@@ -803,6 +822,53 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
 
     assert adapter.invoke_sync(prompt="template") == "plain claude text"
     assert "output_format" not in events["options"][-1]
+    assert events["options"][-1]["tools"] == {"type": "preset", "preset": "claude_code"}
+    assert events["options"][-1]["permission_mode"] == "acceptEdits"
+    assert events["options"][-1]["system_prompt"] == {
+        "type": "preset",
+        "preset": "claude_code",
+    }
+
+
+def test_claude_adapter_allows_tools_setting_to_override_builtin_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(
+        model="claude",
+        model_settings={"tools": ["web_search"]},
+    )
+
+    adapter.produce_sync("template", output_schema={"answer": str})
+
+    assert events["options"][0]["tools"] == ["web_search"]
+
+
+def test_claude_adapter_allows_permission_mode_to_override_builtin_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(
+        model="claude",
+        model_settings={"permission_mode": "plan"},
+    )
+
+    adapter.produce_sync("template", output_schema={"answer": str})
+
+    assert events["options"][0]["permission_mode"] == "plan"
+
+
+def test_claude_adapter_preserves_supported_string_formats() -> None:
+    properties = claude_adapter_module._output_json_schema(FormattedClaudeOutput)["properties"]
+
+    assert properties["created_at"]["format"] == "date-time"
+    assert properties["elapsed"]["format"] == "duration"
+    assert properties["day"]["format"] == "date"
+    assert properties["clock"]["format"] == "time"
+    assert properties["matcher"]["format"] == "regex"
+    assert properties["email"]["format"] == "email"
+    assert properties["site"]["format"] == "uri"
+    assert properties["file"]["format"] == "uri"
 
 
 def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,6 +21,15 @@ from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..tool_override import ToolScope, ToolSpec
 
 OutputDataT = Any
+CLAUDE_CODE_TOOLS_PRESET: Mapping[str, str] = {
+    "type": "preset",
+    "preset": "claude_code",
+}
+CLAUDE_CODE_SYSTEM_PROMPT_PRESET: Mapping[str, str] = {
+    "type": "preset",
+    "preset": "claude_code",
+}
+CLAUDE_CODE_PERMISSION_MODE = "acceptEdits"
 
 
 class ClaudeAdapter:
@@ -190,6 +199,8 @@ class ClaudeAdapter:
             **self._settings_for_run(),
             **dict(run_kwargs),
         }
+        options_kwargs.setdefault("tools", dict(CLAUDE_CODE_TOOLS_PRESET))
+        options_kwargs.setdefault("permission_mode", CLAUDE_CODE_PERMISSION_MODE)
         if output_type is not None:
             options_kwargs["output_format"] = {
                 "type": "json_schema",
@@ -200,7 +211,15 @@ class ClaudeAdapter:
             options_kwargs["model"] = model
         system_prompt = instructions or self.active_profile.system
         if system_prompt is not None:
-            options_kwargs["system_prompt"] = system_prompt
+            options_kwargs.setdefault(
+                "system_prompt",
+                {
+                    **CLAUDE_CODE_SYSTEM_PROMPT_PRESET,
+                    "append": system_prompt,
+                },
+            )
+        else:
+            options_kwargs.setdefault("system_prompt", dict(CLAUDE_CODE_SYSTEM_PROMPT_PRESET))
 
         mcp_servers, allowed_tools = self._mcp_servers_for_run(sdk)
         if mcp_servers:

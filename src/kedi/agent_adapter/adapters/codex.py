@@ -26,6 +26,16 @@ from ._codex_app_server import (
 )
 
 OutputDataT = Any
+CODEX_DEFAULT_SANDBOX = "workspace-write"
+CODEX_SUPPORTED_STRING_FORMATS = frozenset(
+    {
+        "date",
+        "date-time",
+        "duration",
+        "email",
+        "time",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,7 @@ class CodexAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )
 
@@ -233,7 +244,7 @@ class CodexAdapter:
         thread_params: dict[str, Any] = {
             "ephemeral": True,
             "approvalPolicy": settings.get("approval_policy", "never"),
-            "sandbox": _codex_sandbox_value(settings.get("sandbox", "read-only")),
+            "sandbox": _codex_sandbox_value(settings.get("sandbox", CODEX_DEFAULT_SANDBOX)),
             "cwd": str(settings.get("cwd", os.getcwd())),
             "serviceName": "kedi",
         }
@@ -277,11 +288,12 @@ class CodexAdapter:
 
 
 def _dynamic_tool_spec(tool: ToolSpec) -> dict[str, Any]:
+    input_schema = tool.json_schema or _callable_json_schema(tool)
     return {
         "type": "function",
         "name": tool.name,
         "description": tool.description or tool.name,
-        "inputSchema": tool.json_schema or _callable_json_schema(tool),
+        "inputSchema": _codex_json_schema(input_schema),
     }
 
 
@@ -319,7 +331,7 @@ def _callable_json_schema(tool: ToolSpec) -> dict[str, Any]:
 
 def _output_json_schema(output_type: type[Any]) -> dict[str, Any]:
     if issubclass(output_type, BaseModel):
-        return _strict_object_schema(output_type.model_json_schema())
+        return _codex_json_schema(output_type.model_json_schema())
     if output_type is str:
         return {"type": "string"}
     if output_type is int:
@@ -353,18 +365,31 @@ def _copy_setting(
         target[destination] = settings[source]
 
 
-def _strict_object_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+def _codex_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
     value = deepcopy(dict(schema))
 
-    def visit(node: Any) -> None:
+    def visit(node: Any, path: tuple[str, ...] = ()) -> None:
         if isinstance(node, dict):
             if node.get("type") == "object":
                 node["additionalProperties"] = False
-            for child in node.values():
-                visit(child)
+            schema_format = node.get("format")
+            if (
+                node.get("type") == "string"
+                and isinstance(schema_format, str)
+                and schema_format not in CODEX_SUPPORTED_STRING_FORMATS
+            ):
+                location = ".".join(path) or "<root>"
+                raise TypeError(
+                    f"Codex does not support JSON Schema format {schema_format!r} "
+                    f"at {location}. Choose a different Kedi type for this output "
+                    'or tool field. Use Annotated[str, "field description"] when '
+                    "a string with semantic guidance is sufficient."
+                )
+            for key, child in node.items():
+                visit(child, (*path, str(key)))
         elif isinstance(node, list):
-            for child in node:
-                visit(child)
+            for index, child in enumerate(node):
+                visit(child, (*path, str(index)))
 
     visit(value)
     return value

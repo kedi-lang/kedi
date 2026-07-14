@@ -27,6 +27,8 @@ dependencies = [
     "langchain-openai",
     "langchain-openrouter",
     "langchain-mcp-adapters",
+    "basedpyright>=1.39.6",
+    "nodejs-wheel>=24.16.0",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},

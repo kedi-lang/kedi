@@ -7,12 +7,14 @@ import subprocess
 import sys
 from concurrent.futures import Future
 from contextvars import ContextVar
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from re import Pattern
 from threading import current_thread
 from typing import Any, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
 from kedi.agent_adapter import CodexAdapter as ExportedCodexAdapter
 from kedi.agent_adapter.adapters import CodexAdapter
@@ -43,6 +45,20 @@ class ToolAnswer(BaseModel):
 
 class DumpedToolResult(BaseModel):
     value: int
+
+
+class FormattedOutput(BaseModel):
+    created_at: datetime
+    elapsed: timedelta
+    day: date
+    clock: time
+    email: EmailStr
+
+
+class UnsupportedFormattedOutput(BaseModel):
+    matcher: Pattern[str]
+    site: HttpUrl
+    file: FileUrl
 
 
 def _adapter(
@@ -138,6 +154,7 @@ def test_codex_adapter_sync_run_reuses_connection_and_maps_profile(
         "serviceTier": "fast",
         "config": {"features.web_search": True},
     }
+    assert "dynamicTools" not in first_params
     turns = _method(messages, "turn/start")
     assert turns[0]["params"]["effort"] == "xhigh"
     assert turns[0]["params"]["summary"] == "concise"
@@ -216,6 +233,9 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
     }
     messages = _messages(log_path)
     specs = [message["params"]["dynamicTools"][0] for message in _method(messages, "thread/start")]
+    starts = _method(messages, "thread/start")
+    assert all(start["params"]["sandbox"] == "workspace-write" for start in starts)
+    assert all(start["params"]["approvalPolicy"] == "never" for start in starts)
     assert specs[0]["inputSchema"]["required"] == ["query"]
     assert specs[1]["inputSchema"]["properties"]["limit"]["default"] == 2
     tool_responses = [message for message in messages if message.get("id", 0) >= 10_000]
@@ -303,6 +323,18 @@ def test_codex_adapter_validation_and_mcp_rejection(tmp_path: Path) -> None:
         CodexAdapter(unknown=True)
 
 
+def test_codex_rejects_unsupported_output_format_before_starting_server(
+    tmp_path: Path,
+) -> None:
+    adapter, log_path = _adapter(tmp_path)
+
+    with pytest.raises(TypeError, match="JSON Schema format 'regex'"):
+        adapter.produce_sync("return formatted data", output_type=UnsupportedFormattedOutput)
+
+    assert not log_path.exists()
+    adapter.close()
+
+
 def test_codex_tool_schema_validation_and_result_helpers() -> None:
     def variadic(*values: str) -> str:
         return "".join(values)
@@ -323,11 +355,31 @@ def test_codex_tool_schema_validation_and_result_helpers() -> None:
     with pytest.raises(TypeError, match="cannot use positional-only"):
         codex_adapter_module._dynamic_tool_spec(ToolSpec(fn=positional, name="positional"))
 
-    explicit = {"type": "object", "properties": {}}
+    explicit = {
+        "type": "object",
+        "properties": {"file": {"type": "string", "format": "uri"}},
+    }
+    with pytest.raises(
+        TypeError,
+        match=r"does not support JSON Schema format 'uri' at properties\.file",
+    ):
+        codex_adapter_module._dynamic_tool_spec(
+            ToolSpec(fn=lambda: None, name="empty", json_schema=explicit)
+        )
+    assert explicit["properties"]["file"]["format"] == "uri"
+
+    supported_explicit = {
+        "type": "object",
+        "properties": {"email": {"type": "string", "format": "email"}},
+    }
     spec = codex_adapter_module._dynamic_tool_spec(
-        ToolSpec(fn=lambda: None, name="empty", json_schema=explicit)
+        ToolSpec(fn=lambda: None, name="empty", json_schema=supported_explicit)
     )
-    assert spec["inputSchema"] is explicit
+    assert spec["inputSchema"] == {
+        "type": "object",
+        "properties": {"email": {"type": "string", "format": "email"}},
+        "additionalProperties": False,
+    }
     assert spec["description"] == "empty"
 
     assert codex_adapter_module._output_json_schema(str) == {"type": "string"}
@@ -339,6 +391,17 @@ def test_codex_tool_schema_validation_and_result_helpers() -> None:
         "additionalProperties": False,
     }
     assert codex_adapter_module._output_json_schema(Answer)["additionalProperties"] is False
+    formatted = codex_adapter_module._output_json_schema(FormattedOutput)["properties"]
+    assert formatted["created_at"]["format"] == "date-time"
+    assert formatted["elapsed"]["format"] == "duration"
+    assert formatted["day"]["format"] == "date"
+    assert formatted["clock"]["format"] == "time"
+    assert formatted["email"]["format"] == "email"
+    with pytest.raises(
+        TypeError,
+        match=r"does not support JSON Schema format 'regex' at properties\.matcher",
+    ):
+        codex_adapter_module._output_json_schema(UnsupportedFormattedOutput)
     assert (
         codex_adapter_module._parse_structured_result(CodexTurnResult(text='"plain"', turn={}), str)
         == "plain"
