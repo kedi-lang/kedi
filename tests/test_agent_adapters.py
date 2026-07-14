@@ -17,12 +17,11 @@ from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
-from kedi.agent_adapter import AdapterCapabilities
+from kedi.agent_adapter import AdapterCapabilities, WebGPUAdapter
 from kedi.agent_adapter import ClaudeAdapter as ExportedClaudeAdapter
 from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
-from kedi.agent_adapter import WebGPUAdapter
 from kedi.agent_adapter import adapters as adapters_module
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
@@ -30,10 +29,10 @@ from kedi.agent_adapter.adapters import (
     DSPyAdapter,
     LangChainAdapter,
     PydanticAdapter,
+    make_repr,
 )
 from kedi.agent_adapter.adapters import claude as claude_adapter_module
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters import make_repr
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
 from kedi.agent_adapter.utils import (

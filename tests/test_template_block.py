@@ -4,6 +4,9 @@ from typing import Any
 
 import pytest
 
+from kedi.core import KediRuntime, o
+from kedi.engine import ThreadEngine
+from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     AssignStmt,
@@ -17,16 +20,12 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.evaluation import merge_template_block_lines
 from kedi.lang.parser.diagnostics import KediParseError
-from kedi.core import KediRuntime, o
-from kedi.engine import ThreadEngine
-from kedi.errors import KediExecutionError
-from kedi.lsp import features
+from kedi.lsp import features, python_virtual
 from kedi.lsp.features import (
     compute_diagnostics,
     compute_hover,
     compute_semantic_tokens_full,
 )
-from kedi.lsp import python_virtual
 from kedi.lsp.python_virtual import compute_python_virtual_document
 from kedi.resolved_types import ResolvedKediType
 from tests.lsp_helpers import decode_semantic_tokens, hover_at, hover_value, position_of

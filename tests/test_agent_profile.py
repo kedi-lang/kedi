@@ -5,8 +5,7 @@ from typing import Any, cast
 import pytest
 
 import kedi.agent_adapter.registry as adapter_registry
-from kedi.agent_adapter.meta import AdapterCapabilities
-from kedi.agent_adapter.meta import AgentAdapterKind
+from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.registry import (
     AdapterFactory,
     adapter_capabilities,

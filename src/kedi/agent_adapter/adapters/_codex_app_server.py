@@ -7,7 +7,8 @@ import os
 import shutil
 import subprocess
 from collections import deque
-from concurrent.futures import Future, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from contextvars import Context
 from dataclasses import dataclass, field

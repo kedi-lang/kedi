@@ -38,11 +38,10 @@ from typing import List, Optional, Tuple, Union
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
-from tree_sitter import Node
+from tree_sitter import Node, Tree
 from tree_sitter import Parser as _TSParser
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
-from tree_sitter import Tree
 
 try:
     import tree_sitter_python as _ts_python_mod
@@ -58,6 +57,12 @@ except Exception:  # pragma: no cover — degraded mode if the wheel is missing
     _PY_LANGUAGE = None
     _PY_HIGHLIGHTS_QUERY = None
 
+from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
+from ..agent_adapter.registry import (
+    adapter_capabilities,
+    adapter_factory,
+    known_adapter_shortnames,
+)
 from ..agent_profile.settings import (
     ACP_AGENT_SETTING_KEYS,
     CLAUDE_AGENT_SETTING_KEYS,
@@ -67,18 +72,6 @@ from ..agent_profile.settings import (
     MODEL_SETTING_KEYS,
     PYDANTIC_MODEL_SETTING_KEYS,
 )
-from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
-from ..agent_adapter.registry import (
-    adapter_capabilities,
-    adapter_factory,
-    known_adapter_shortnames,
-)
-from ..lang.compiler.environment import (
-    KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS,
-    KEDI_RUNTIME_TYPE_ORIGINS,
-    KEDI_TYPING_TYPE_NAMES,
-)
-from ..lang.ast import LiteralArg  # noqa: F401
 from ..lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -93,6 +86,7 @@ from ..lang.ast import (
     EvalMetric,
     EvalSuite,
     InputSegment,
+    LiteralArg,  # noqa: F401
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
@@ -133,6 +127,11 @@ from ..lang.ast import (
     UseDirectiveStmt,
 )
 from ..lang.call_arg_access import iter_call_arg_nested
+from ..lang.compiler.environment import (
+    KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS,
+    KEDI_RUNTIME_TYPE_ORIGINS,
+    KEDI_TYPING_TYPE_NAMES,
+)
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
