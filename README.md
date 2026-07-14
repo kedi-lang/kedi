@@ -62,6 +62,12 @@ uv sync --dev
 uv run kedi your_program.kedi
 ```
 
+Enable the Claude Agent SDK harness in a source checkout with:
+
+```bash
+uv sync --extra claude
+```
+
 Pip fallback:
 
 ```bash

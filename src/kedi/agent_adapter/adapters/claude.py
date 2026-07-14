@@ -255,8 +255,9 @@ def _claude_sdk() -> Any:
     if find_spec("claude_agent_sdk") is not None:
         return __import__("claude_agent_sdk")
     raise ModuleNotFoundError(
-        "ClaudeAdapter requires claude-agent-sdk. Install with: "
-        "uv add kedi --extra claude or uv pip install 'kedi[claude]'"
+        "ClaudeAdapter requires claude-agent-sdk. In a Kedi source checkout, run "
+        "`uv sync --extra claude`; for an installed package, run "
+        "`uv pip install 'kedi[claude]'`."
     )
 
 

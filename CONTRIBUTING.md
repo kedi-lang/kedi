@@ -20,6 +20,12 @@ uv sync --dev
 `uv sync --dev` installs Kedi with the development tools used by CI: `ruff`, `ty`,
 `basedpyright`, `pytest-cov`, and `pre-commit`.
 
+To work on or run the Claude Agent SDK adapter, install its optional dependency too:
+
+```bash
+uv sync --extra claude
+```
+
 You usually do not need to activate `.venv` manually because the commands below use
 `uv run` through the `Makefile`.
 
