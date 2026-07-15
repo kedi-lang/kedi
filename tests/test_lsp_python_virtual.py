@@ -28,7 +28,9 @@ def test_python_virtual_document_models_procedure_scope():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     text = virtual["text"]
-    assert "def calculate_stats(numbers: list[int]) -> int: ..." in text
+    assert (
+        "def calculate_stats(numbers: list[int]) -> int: return cast(int, _kedi_placeholder())"
+    ) in text
     assert "def __kedi_scope_calculate_stats(numbers: list[int]) -> int:" in text
     assert "total: int" in text
     assert "count: int" in text
@@ -92,6 +94,19 @@ def test_python_virtual_document_includes_procedure_docstring():
     assert "Reuses Python locals below." in text
 
 
+def test_python_virtual_document_wraps_template_python_substitutions_in_assignments():
+    src = "@greet(name: str) -> str:\n  [upper: str] = `name.upper()`\n  = Hello <`upper`>\n"
+
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "__kedi_inline_expression_" in virtual["text"]
+    assert "        upper" in virtual["text"]
+    assert any(
+        mapping["sourceRange"]["start"] == {"line": 2, "character": 12}
+        for mapping in virtual["mappings"]
+    )
+
+
 def test_python_virtual_document_can_focus_single_procedure_body():
     src = (
         "@alpha(items: list[int]) -> int:\n"
@@ -111,8 +126,11 @@ def test_python_virtual_document_can_focus_single_procedure_body():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=2)
     ast.parse(virtual["text"])
     assert virtual["focusKey"] == "proc:alpha:1"
-    assert "def alpha(items: list[int]) -> int: ..." in virtual["text"]
-    assert "def beta(name: str) -> str: ..." in virtual["text"]
+    assert (
+        "def alpha(items: list[int]) -> int: return cast(int, _kedi_placeholder())"
+        in virtual["text"]
+    )
+    assert "def beta(name: str) -> str: return cast(str, _kedi_placeholder())" in virtual["text"]
     assert "def __kedi_scope_alpha(items: list[int]) -> int:" in virtual["text"]
     assert "return sum(items)" in virtual["text"]
     assert "def __kedi_scope_beta(name: str) -> str:" not in virtual["text"]
@@ -155,9 +173,28 @@ def test_python_virtual_document_can_focus_nested_procedure_body():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
     ast.parse(virtual["text"])
     assert virtual["focusKey"] == "proc:bar:2"
-    assert "def __kedi_scope_bar(name: str) -> str:" in virtual["text"]
+    assert "def __kedi_scope_foo() -> str:" in virtual["text"]
+    assert "def bar(name: str) -> str:" in virtual["text"]
     assert "return name.upper()" in virtual["text"]
-    assert "def __kedi_scope_foo() -> str:" not in virtual["text"]
+
+
+def test_nested_python_scope_inherits_outer_kedi_locals() -> None:
+    src = (
+        "@outer(value: str) -> str:\n"
+        "  @inner() -> str:\n"
+        "    ```\n"
+        "    return value.upper()\n"
+        "    ```\n"
+        "    = <value>\n"
+        "  = <inner()>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=3)
+    ast.parse(virtual["text"])
+
+    assert "def __kedi_scope_outer(value: str) -> str:" in virtual["text"]
+    assert "    def inner() -> str:" in virtual["text"]
+    assert "        return value.upper()" in virtual["text"]
+    assert "def __kedi_scope_inner" not in virtual["text"]
 
 
 def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():
@@ -184,7 +221,7 @@ def test_python_virtual_document_includes_prelude_symbols_for_toplevel_scope():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     assert "class Person(BaseModel):" in virtual["text"]
-    assert "person: Person = ..." in virtual["text"]
+    assert "person: Person = cast(Person, _kedi_placeholder())" in virtual["text"]
     assert "    person" in virtual["text"]
 
 
@@ -204,11 +241,13 @@ def test_focused_virtual_document_stubs_unfocused_module_python():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=9)
     ast.parse(virtual["text"])
     assert "from pydantic import BaseModel, Field" not in virtual["text"]
-    assert "class BaseModel: ..." in virtual["text"]
-    assert "def Field(*args: Any, **kwargs: Any) -> Any: ..." in virtual["text"]
+    assert "class BaseModel: pass" in virtual["text"]
+    assert (
+        "def Field(*args: Any, **kwargs: Any) -> Any: return cast(Any, _kedi_placeholder())"
+    ) in virtual["text"]
     assert "class Person:" in virtual["text"]
     assert "def __init__(self, name: str, age: int) -> None: ..." in virtual["text"]
-    assert "person: Person = ..." in virtual["text"]
+    assert "person: Person = cast(Person, _kedi_placeholder())" in virtual["text"]
 
 
 def test_focused_virtual_document_keeps_focused_module_python_mapped():
@@ -235,7 +274,9 @@ def test_virtual_document_exposes_runtime_args_as_attrdict():
     ast.parse(virtual["text"])
     assert "ArgType: TypeAlias = Union[str, bool, None]" in virtual["text"]
     assert "class AttrDict(dict[_K, _V], Generic[_K, _V]):" in virtual["text"]
-    assert "args: AttrDict[str, ArgType] = ..." in virtual["text"]
+    assert (
+        "args: AttrDict[str, ArgType] = cast(AttrDict[str, ArgType], _kedi_placeholder())"
+    ) in virtual["text"]
     assert "args.city" in virtual["text"]
     assert "args.debug" in virtual["text"]
 
@@ -292,12 +333,176 @@ def test_python_virtual_document_exposes_imported_kedi_and_python_symbols(tmp_pa
 
     ast.parse(virtual["text"])
     assert "async def fetch_profile_id() -> int: ..." in virtual["text"]
-    assert "class Helper: ..." in virtual["text"]
+    assert "class Helper:\n    pass" in virtual["text"]
     assert "class Profile:" in virtual["text"]
-    assert "def make_profile(name: str) -> Profile: ..." in virtual["text"]
-    assert "profile_id: int = ..." in virtual["text"]
+    assert (
+        "def make_profile(name: str) -> Profile: return cast(Profile, _kedi_placeholder())"
+    ) in virtual["text"]
+    assert "profile_id: int = cast(int, _kedi_placeholder())" in virtual["text"]
     assert 'profile = make_profile("Ada")' in virtual["text"]
     assert any(symbol["kind"] == "imported_value" for symbol in virtual["symbols"])
+
+
+def test_python_virtual_document_preserves_imported_python_type_metadata(tmp_path):
+    module_path = tmp_path / "helpers.kedi"
+    module_path.write_text(
+        "```\n"
+        "from typing import Annotated, Optional\n"
+        "from datetime import datetime\n"
+        "\n"
+        "class Record:\n"
+        "    label: Annotated[str, 'Display label']\n"
+        "    alias: Optional[str]\n"
+        "    created_at: datetime\n"
+        "\n"
+        "def fetch_record(identifier: int, *, include_archived: bool = False) -> Record:\n"
+        "    return Record()\n"
+        "\n"
+        "endpoint: str = 'https://example.test'\n"
+        "untyped_value = object()\n"
+        "```\n\n"
+        "> export:\n"
+        "  Record\n"
+        "  fetch_record\n"
+        "  endpoint\n"
+        "  untyped_value\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = (
+        "> import: helpers\n\n"
+        "```\n"
+        "record = fetch_record(1)\n"
+        "label = record.label\n"
+        "url = endpoint\n"
+        "unknown = untyped_value\n"
+        "```\n"
+    )
+
+    virtual = compute_python_virtual_document(source, str(source_path))
+    ast.parse(virtual["text"])
+
+    assert "class Record:\n    label: Annotated[str, 'Display label']" in virtual["text"]
+    assert "alias: Optional[str]" in virtual["text"]
+    assert "created_at: datetime" in virtual["text"]
+    assert "from typing import Annotated, Any, Optional" in virtual["text"]
+    assert "from datetime import datetime" in virtual["text"]
+    assert (
+        "def fetch_record(identifier: int, *, include_archived: bool=False) -> Record: ..."
+        in virtual["text"]
+    )
+    assert "endpoint: str = cast(str, _kedi_placeholder())" in virtual["text"]
+    assert "untyped_value: object = cast(object, _kedi_placeholder())" in virtual["text"]
+    assert "record = fetch_record(1)" in virtual["text"]
+
+
+def test_python_virtual_type_import_discovery_handles_partial_and_star_imports() -> None:
+    from kedi.lang import parse_program
+    from kedi.lsp import python_virtual as pv
+
+    program = parse_program('~Request(note: Annotated[str, "Human note"])\n')
+
+    assert pv._typing_import_lines(program, None) == ["from typing import Annotated, Any"]
+    assert (
+        pv._typing_import_lines(
+            program,
+            None,
+            ("from typing import *", "this is not valid Python:"),
+        )
+        == []
+    )
+    assert pv._typing_symbols_in_python_stub("not valid Python:") == set()
+    assert ("typing", "Optional") in pv._typing_symbols_in_python_stub(
+        "def normalize(value: Optional[str]): ..."
+    )
+
+
+def test_python_virtual_document_orders_prelude_before_kedi_signatures() -> None:
+    src = (
+        "```\n"
+        "from typing import Annotated\n"
+        "DEFAULT_LIMIT: int = 3\n"
+        "```\n\n"
+        '~Request(note: Annotated[str, "Human note"])\n'
+        "@run(limit: int = `DEFAULT_LIMIT`) -> str:\n"
+        "  = ok\n"
+    )
+
+    full = compute_python_virtual_document(src, "/tmp/x.kedi")
+    focused = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=6)
+
+    ast.parse(full["text"])
+    ast.parse(focused["text"])
+    assert full["text"].index("DEFAULT_LIMIT: int = 3") < full["text"].index(
+        "def run(limit: int = DEFAULT_LIMIT)"
+    )
+    assert "from typing import Annotated" in focused["text"]
+    assert full["text"].count("from typing import Annotated") == 1
+    assert focused["text"].count("from typing import Annotated") == 1
+    assert "class Annotated" not in focused["text"]
+    assert "DEFAULT_LIMIT: int = cast(int, _kedi_placeholder())" in focused["text"]
+
+
+def test_python_virtual_document_exposes_toplevel_values_to_procedure_python() -> None:
+    src = (
+        "[top_inline: int] = `1`\n"
+        "[top_block: str] = ```\n"
+        "return str(top_inline)\n"
+        "```\n\n"
+        "@read_top(prefix) -> str:\n"
+        "  [value: str] = ```\n"
+        '  return f"{prefix}:{top_block}:{top_inline}"\n'
+        "  ```\n"
+        "  = <value>\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=7)
+
+    ast.parse(virtual["text"])
+    assert "top_inline: int = cast(int, _kedi_placeholder())" in virtual["text"]
+    assert "top_block: str = cast(str, _kedi_placeholder())" in virtual["text"]
+    assert 'return f"{prefix}:{top_block}:{top_inline}"' in virtual["text"]
+
+
+def test_python_virtual_document_maps_inline_python_nested_in_call_arguments() -> None:
+    src = (
+        "@compose(topic):\n  >> <compose(`topic`)> <compose(<`topic.upper()`>)> <`topic.lower()`>\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi", focus_line=1)
+
+    assert [region["text"] for region in virtual["ranges"]] == [
+        "topic",
+        "topic.upper()",
+        "topic.lower()",
+    ]
+    assert virtual["text"].count("__kedi_inline_expression_") == 3
+
+
+def test_python_virtual_document_maps_directive_inline_python() -> None:
+    src = (
+        "```\n"
+        "endpoint: str = 'https://example.test/mcp'\n"
+        "limit: int = 128\n"
+        "```\n"
+        "> mcp:\n"
+        "    transport: http\n"
+        "    url: `endpoint`\n"
+        "> settings:\n"
+        "    max_tokens: `limit`\n"
+        "> profile: analyst:\n"
+        "    > settings:\n"
+        "        max_tokens: `limit`\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert [region["text"] for region in virtual["ranges"]] == [
+        "endpoint: str = 'https://example.test/mcp'\nlimit: int = 128",
+        "limit",
+        "endpoint",
+        "limit",
+    ]
 
 
 def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
@@ -321,7 +526,7 @@ def test_python_virtual_document_hoists_leading_toplevel_python_blocks():
     assert "import this" in virtual["text"]
     assert "class Person(BaseModel):" in virtual["text"]
     assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
-    assert "    person: Person = ..." in virtual["text"]
+    assert "    person: Person = cast(Person, _kedi_placeholder())" in virtual["text"]
 
 
 def test_python_virtual_document_emits_ellipsis_for_empty_generated_python_blocks():
@@ -357,7 +562,7 @@ def test_python_virtual_document_emits_ellipsis_for_comment_only_validation_bloc
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     assert "def __kedi_metric_score_check() -> Any:" in virtual["text"]
-    assert "    expected: Any = ..." in virtual["text"]
+    assert "    expected: Any = _kedi_placeholder()" in virtual["text"]
     assert "    ..." in virtual["text"]
 
 
@@ -384,7 +589,9 @@ def test_python_virtual_document_models_defaulted_signatures():
     ast.parse(virtual["text"])
     assert "    salary: int = 0" in virtual["text"]
     assert "    def __init__(self, name: str, salary: int = 0) -> None: ..." in virtual["text"]
-    assert "def make(name: str, salary: int = 0) -> Person: ..." in virtual["text"]
+    assert (
+        "def make(name: str, salary: int = 0) -> Person: return cast(Person, _kedi_placeholder())"
+    ) in virtual["text"]
     assert "def __kedi_scope_make(name: str, salary: int = 0) -> Person:" in virtual["text"]
     assert any(region["text"] == "0" for region in virtual["ranges"])
 
@@ -393,7 +600,7 @@ def test_python_virtual_document_defaults_untyped_proc_params_to_str():
     src = "@greet(name):\n  = ```\n  return name.upper()\n  ```\n"
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
-    assert "def greet(name: str) -> str: ..." in virtual["text"]
+    assert "def greet(name: str) -> str: return cast(str, _kedi_placeholder())" in virtual["text"]
     assert "def __kedi_scope_greet(name: str) -> str:" in virtual["text"]
 
 
@@ -428,6 +635,19 @@ def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types()
     assert "from typing import Any, Literal" in virtual["text"]
     assert 'severity: Literal["critical", "low", "medium"]' in virtual["text"]
     assert "issues: list[Issue]" in virtual["text"]
+
+
+def test_python_virtual_document_preserves_annotated_metadata():
+    src = (
+        '~Person(name: Annotated[str, "Full name"])\n'
+        "= ok\n\n"
+        '@p(name: Annotated[str, "Full name"]) -> str:\n'
+        "  = <name>\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/annotated.kedi")
+
+    assert 'name: Annotated[str, "Full name"]' in virtual["text"]
+    assert "from typing import Annotated" in virtual["text"]
 
 
 def test_python_virtual_document_imports_datetime_types():
@@ -470,7 +690,9 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     )
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
-    assert "def get_country(city: str) -> str: ..." in virtual["text"]
+    assert ("def get_country(city: str) -> str: return cast(str, _kedi_placeholder())") in virtual[
+        "text"
+    ]
     assert "def __kedi_metric_get_country_accuracy() -> Any:" in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
     assert any(r["kind"] == "fenced" for r in virtual["ranges"])
@@ -480,7 +702,7 @@ def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
         and s["sourceRange"]["start"] == {"line": 0, "character": 1}
         for s in virtual["symbols"]
     )
-    assert "    city: str = ..." in virtual["text"]
+    assert "    city: str = cast(str, _kedi_placeholder())" in virtual["text"]
     assert 'result = get_country("France")' in virtual["text"]
 
 
@@ -500,8 +722,8 @@ def test_python_virtual_document_models_metric_scope_params_as_any():
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     assert "def __kedi_metric_solve_knapsack_accuracy() -> Any:" in virtual["text"]
-    assert "    problems: Any = ..." in virtual["text"]
-    assert "    capacity: str = ..." in virtual["text"]
+    assert "    problems: Any = _kedi_placeholder()" in virtual["text"]
+    assert "    capacity: str = cast(str, _kedi_placeholder())" in virtual["text"]
     assert "    items_str, capacity = problems" in virtual["text"]
     assert "    pred = solve_knapsack(items_str, capacity)" in virtual["text"]
 
@@ -510,13 +732,17 @@ def test_python_virtual_helper_edges(monkeypatch):
     from kedi.lang.ast import (
         AssignStmt,
         BacktickLineStmt,
+        CallSegment,
         EvalMetric,
         EvalSuite,
+        LiteralArg,
         OutputSegment,
         ProcedureDef,
         ProgramWithValidation,
         PythonBlock,
+        PythonExprSegment,
         PythonExprNativeSegment,
+        RawInvokeStmt,
         Span,
         TestCase,
         TestSuite,
@@ -527,6 +753,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         TypePython,
         TypeRef,
         TypeUnion,
+        VarArg,
     )
     from kedi.lsp import python_virtual as pv
 
@@ -620,18 +847,26 @@ def test_python_virtual_helper_edges(monkeypatch):
         "    required: int = Field(...)\n"
         "    async def run(self) -> str:\n"
         "        return 'ok'\n"
+        "class ExplicitInit:\n"
+        "    name: str\n"
+        "    def __init__(self, name: str) -> None:\n"
+        "        self.name = name\n"
         "def fn(x: int) -> str:\n"
         "    return str(x)\n"
         "a = b = 1\n"
         "(c, [d, obj.attr]) = (1, [2, 3])\n",
     )
     text = stub_builder.finish()
-    assert "os: Any = ..." in text
-    assert "def Field(*args: Any, **kwargs: Any) -> Any: ..." in text
-    assert "class User: ..." in text
+    assert "os: Any = cast(Any, _kedi_placeholder())" in text
+    assert (
+        "def Field(*args: Any, **kwargs: Any) -> Any: return cast(Any, _kedi_placeholder())"
+    ) in text
+    assert "class User: pass" in text
     assert "class Empty:" in text and "    pass" in text
     assert "async def run" in text
-    assert "c: Any = ..." in text and "d: Any = ..." in text
+    assert text.count("def __init__(self, name: str) -> None") == 1
+    assert "c: Any = cast(Any, _kedi_placeholder())" in text
+    assert "d: Any = cast(Any, _kedi_placeholder())" in text
     field_call = cast(ast.Call, ast.parse("obj.Field(...)", mode="eval").body)
     factory_call = cast(ast.Call, ast.parse("factory()", mode="eval").body)
     assert pv._python_call_name(field_call.func) == "Field"
@@ -701,11 +936,11 @@ def test_python_virtual_helper_edges(monkeypatch):
         docstring="doc",
         loc=Span(0, 1, 2, 3, 5, 8),
     )
-    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), inner, "    ", {})
+    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), inner, {}, "    ", {})
     empty_inner = ProcedureDef(name="empty", params=[], body=[], loc=Span(0, 1, 1, 1, 1, 10))
-    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), empty_inner, "    ", {})
+    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), empty_inner, {}, "    ", {})
     assert '"""doc"""' in nested_builder.finish()
-    assert "        pass" in nested_builder.finish()
+    assert "        return cast(str, _kedi_placeholder())" in nested_builder.finish()
     assert pv._docstring_lines("one line", "  ") == ['  """one line"""']
 
     assign = AssignStmt(
@@ -722,7 +957,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         loc=Span(0, 1, 1, 2, 1, 3),
     )
     pv._emit_assign_stmt(emit_builder, pv.RegionCursor([]), plain_assign, {}, "    ")
-    assert "y: str = ..." in emit_builder.finish()
+    assert "y: str = cast(str, _kedi_placeholder())" in emit_builder.finish()
     region_for_assign = {
         "kind": "inline",
         "range": {
@@ -732,6 +967,92 @@ def test_python_virtual_helper_edges(monkeypatch):
         "text": "1",
     }
     pv._emit_assign_stmt(emit_builder, pv.RegionCursor([region_for_assign]), assign, {}, "    ")
+
+    import_builder = pv.VirtualBuilder("", None)
+    assert pv._emit_python_stub_stmt(import_builder, ast.parse("import typing").body[0])
+    assert (
+        pv._emit_python_stub_stmt(
+            import_builder,
+            ast.parse("from package import *").body[0],
+        )
+        is False
+    )
+    assert "import typing" in import_builder.finish()
+    assert pv._checker_safe_value_stub("not valid Python !") == "not valid Python !"
+
+    no_region_block = pv.AssignBlockStmt(
+        name="blocked",
+        code="return 1",
+        type_annotation="int",
+        loc=Span(0, 1, 1, 1, 1, 10),
+    )
+    pv._emit_assign_block(
+        emit_builder,
+        pv.RegionCursor([]),
+        no_region_block,
+        {},
+        "    ",
+    )
+    assert "blocked: int" in emit_builder.finish()
+
+    nested_call = CallSegment(
+        name="outer",
+        args=[
+            VarArg(name="plain"),
+            LiteralArg(native_backtick="native", loc=Span(0, 1, 1, 1, 1, 2)),
+            LiteralArg(
+                python_segment=PythonExprSegment(
+                    code="python_value",
+                    loc=Span(0, 1, 1, 3, 1, 15),
+                )
+            ),
+            LiteralArg(
+                call_segment=CallSegment(
+                    name="inner",
+                    args=[LiteralArg(native_backtick="deep", loc=Span(0, 1, 1, 16, 1, 20))],
+                )
+            ),
+            LiteralArg(
+                render_segments=[
+                    PythonExprNativeSegment(code="rendered", loc=Span(0, 1, 1, 21, 1, 29)),
+                    CallSegment(
+                        name="render_call",
+                        args=[
+                            LiteralArg(
+                                python_segment=PythonExprSegment(
+                                    code="nested_render",
+                                    loc=Span(0, 1, 1, 30, 1, 43),
+                                )
+                            )
+                        ],
+                    ),
+                ]
+            ),
+        ],
+    )
+    assert len(list(pv._call_inline_python_locations(nested_call))) == 5
+    pv._emit_segments(
+        emit_builder,
+        pv.RegionCursor([]),
+        pv.TemplateLine(segments=[nested_call]),
+        {},
+        "    ",
+    )
+    pv._emit_segments(
+        emit_builder,
+        pv.RegionCursor([]),
+        pv.TemplateLine(
+            segments=[PythonExprSegment(code="missing_region", loc=Span(0, 1, 1, 1, 1, 5))]
+        ),
+        {},
+        "    ",
+    )
+
+    raw_scope = pv._collect_toplevel_scope(
+        [RawInvokeStmt(name="response", segments=[TextSegment(text="hello")])]
+    )
+    assert raw_scope["response"].typ == "str"
+    assert pv._index_header_ranges([{"ownerKind": None, "containerLine": None}]) == {}
 
     stmt_builder = pv.VirtualBuilder("[a] = ok\n`x = 1`\n", None)
     pv._emit_statements(
@@ -758,7 +1079,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         "    ",
         {},
     )
-    assert "a: str = ..." in stmt_builder.finish()
+    assert "a: str = cast(str, _kedi_placeholder())" in stmt_builder.finish()
     assert "x = 1" in stmt_builder.finish()
     pv._emit_statements(
         stmt_builder,
@@ -899,7 +1220,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
     assert pv._container_line(ProcedureDef(name="p", params=[])) == -1
-    pv._add_proc_default_regions(
+    pv._add_proc_header_regions(
         symbol_builder,
         ProcedureDef(
             name="p",
@@ -909,19 +1230,22 @@ def test_python_virtual_helper_edges(monkeypatch):
         ),
         signature_line=0,
         signature="def p(y: str = 1):",
-        header_defaults={
+        header_ranges={
             "param": {
                 0: [
                     {
-                        "start": {"line": 0, "character": 0},
-                        "end": {"line": 0, "character": 1},
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 1},
+                        },
+                        "expressionKind": "default",
                     }
                 ]
             }
         },
     )
     monkeypatch.setattr(pv, "_proc_param_to_python", lambda proc, name: "x: str")
-    pv._add_proc_default_regions(
+    pv._add_proc_header_regions(
         symbol_builder,
         ProcedureDef(
             name="p",
@@ -931,18 +1255,130 @@ def test_python_virtual_helper_edges(monkeypatch):
         ),
         signature_line=0,
         signature="def p(x: str):",
-        header_defaults={
+        header_ranges={
             "param": {
                 0: [
                     {
-                        "start": {"line": 0, "character": 0},
-                        "end": {"line": 0, "character": 1},
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 1},
+                        },
+                        "expressionKind": "default",
                     }
                 ]
             }
         },
     )
     monkeypatch.undo()
+    dynamic_header_builder = pv.VirtualBuilder("", None)
+    pv._add_proc_header_regions(
+        dynamic_header_builder,
+        ProcedureDef(
+            name="dynamic",
+            params=["value"],
+            param_type_annotations={"value": "int"},
+            param_type_exprs={"value": TypePython(code="int")},
+            return_type_annotation="list[int]",
+            return_type_expr=TypePython(code="list[int]"),
+            loc=Span(0, 1, 1, 1, 1, 30),
+        ),
+        signature_line=0,
+        signature="def dynamic(value: int) -> list[int]:",
+        header_ranges={
+            "param": {
+                0: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 16},
+                            "end": {"line": 0, "character": 19},
+                        },
+                        "expressionKind": "type",
+                    }
+                ]
+            },
+            "return_type": {
+                0: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 26},
+                            "end": {"line": 0, "character": 35},
+                        },
+                        "expressionKind": "type",
+                    }
+                ]
+            },
+        },
+    )
+    assert len(dynamic_header_builder.mappings) == 2
+    dynamic_proc = ProcedureDef(
+        name="dynamic",
+        params=["value"],
+        param_type_annotations={"value": "int"},
+        param_type_exprs={"value": TypePython(code="int")},
+        return_type_annotation="list[int]",
+        return_type_expr=TypePython(code="list[int]"),
+        loc=Span(0, 1, 1, 1, 1, 30),
+    )
+    missing_header_builder = pv.VirtualBuilder("", None)
+    pv._add_proc_header_regions(
+        missing_header_builder,
+        dynamic_proc,
+        signature_line=0,
+        signature="def dynamic(value: object):",
+        header_ranges={
+            "param": {
+                0: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 16},
+                            "end": {"line": 0, "character": 19},
+                        },
+                        "expressionKind": "type",
+                    }
+                ]
+            }
+        },
+    )
+    pv._add_proc_header_regions(
+        missing_header_builder,
+        dynamic_proc,
+        signature_line=0,
+        signature="def dynamic(value: int) -> object:",
+        header_ranges={
+            "return_type": {
+                0: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 26},
+                            "end": {"line": 0, "character": 35},
+                        },
+                        "expressionKind": "type",
+                    }
+                ]
+            }
+        },
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(pv, "_proc_param_to_python", lambda _proc, _name: "value: object")
+        pv._add_proc_header_regions(
+            missing_header_builder,
+            dynamic_proc,
+            signature_line=0,
+            signature="def dynamic(value: object):",
+            header_ranges={
+                "param": {
+                    0: [
+                        {
+                            "range": {
+                                "start": {"line": 0, "character": 16},
+                                "end": {"line": 0, "character": 19},
+                            },
+                            "expressionKind": "type",
+                        }
+                    ]
+                }
+            },
+        )
     pv._add_default_expr_region(
         symbol_builder,
         source_range={
@@ -955,6 +1391,10 @@ def test_python_virtual_helper_edges(monkeypatch):
     )
 
     assert pv._find_deepest_procedure_at_line([ProcedureDef(name="p", params=[])], 1) is None
+    first = ProcedureDef(name="first", params=[])
+    second = ProcedureDef(name="second", params=[])
+    assert pv._top_level_procedure_for([first, second], second) is second
+    assert pv._top_level_procedure_for([first], second) is None
     assert pv._should_emit_full_module_python(None, 1) is False
     assert pv._indent_width("") == 0
     pv._fallback_virtual_document(
@@ -976,7 +1416,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         "@p():\n  = ok\n\n```\nSIDE = 2\n```\n",
         focus_line=99,
     )
-    assert "SIDE: Any = ..." in outside_focus["text"]
+    assert "SIDE: Any = cast(Any, _kedi_placeholder())" in outside_focus["text"]
     fallback = pv.compute_python_virtual_document("```\nvalue = 1\n```\n@bad(:\n")
     assert fallback["focusKey"] is None
 

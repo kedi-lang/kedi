@@ -29,6 +29,7 @@ from __future__ import annotations
 import ast as _py_ast
 import builtins as _builtins
 import importlib.resources
+import re
 import typing as _typing
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -138,6 +139,15 @@ from ..lang.parser.parser import parse as _ts_parse
 from ..module_registry import describe_module_search_paths, module_search_paths
 from .ast_helpers import assignment_name_span
 from .ast_spans import name_token_span
+from .coordinates import (
+    byte_column_to_utf16,
+    current_source,
+    position_inside as _position_inside,
+    span_to_range as _span_to_range,
+    tree_sitter_point_to_position,
+    utf16_length,
+    with_source_coordinates,
+)
 from .module_surface import (
     ImportedSurface,
     ImportedValueInfo,
@@ -205,24 +215,6 @@ def _known_lsp_type_origin(name: str) -> Optional[str]:
 # =====================================================================
 
 
-def _span_to_range(span: Span) -> lsp.Range:
-    return lsp.Range(
-        start=lsp.Position(line=span.start_line - 1, character=span.start_col - 1),
-        end=lsp.Position(line=span.end_line - 1, character=max(span.end_col - 1, 0)),
-    )
-
-
-def _position_inside(pos: lsp.Position, span: Span) -> bool:
-    """Return True if a 0-based LSP position falls inside a 1-based ``Span``."""
-    if pos.line + 1 < span.start_line or pos.line + 1 > span.end_line:
-        return False
-    if pos.line + 1 == span.start_line and pos.character + 1 < span.start_col:
-        return False
-    if pos.line + 1 == span.end_line and pos.character + 1 >= span.end_col:
-        return False
-    return True
-
-
 def _segments_of(stmt) -> list:
     """All segment children of a statement (``segments`` or ``expr``)."""
     if isinstance(stmt, TemplateBlock):
@@ -246,6 +238,7 @@ def _segments_of(stmt) -> list:
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
@@ -389,6 +382,14 @@ def _merged_profile_defs(
     return merged
 
 
+def _validation_suites(
+    prog: Program | ProgramWithValidation,
+) -> tuple[TestSuite | EvalSuite, ...]:
+    if not isinstance(prog, ProgramWithValidation):
+        return ()
+    return (*prog.tests, *prog.evals)
+
+
 def _output_name_span(seg: OutputSegment) -> Optional[Span]:
     if seg.loc is None:
         return None
@@ -430,6 +431,14 @@ def _line_start_byte(
             return offset
         offset += len(line.encode("utf-8"))
     return None
+
+
+def _line_start_byte_for_program(
+    prog: Program | ProgramWithValidation,
+    line_number: int,
+) -> Optional[int]:
+    """Return the UTF-8 byte offset of a source line in ``prog``."""
+    return _line_start_byte(prog, line_number)
 
 
 def _name_token_span_on_line(
@@ -488,6 +497,57 @@ def _use_tool_entry_spans(
     return spans
 
 
+def _profile_tool_entry_spans(
+    prog: Program | ProgramWithValidation,
+    profile: ProfileDefStmt,
+) -> list[tuple[str, Span]]:
+    """Return tool-name spans from a profile's ``> use:`` member.
+
+    Profile members are flattened into ``ProfileDefStmt.tool_names`` by the
+    parser, unlike top-level ``UseDirectiveStmt`` nodes. Reconstruct the
+    declaration-like spans from the source, but only on the directive line
+    and its indented identifier entries so prose in a profile system prompt
+    cannot become a false reference.
+    """
+    if profile.loc is None or not profile.tool_names:
+        return []
+
+    spans: list[tuple[str, Span]] = []
+    seen: set[tuple[str, int, int]] = set()
+    in_use_body = False
+    for line_number in range(profile.loc.start_line, profile.loc.end_line + 1):
+        line = _program_line_text(prog, line_number, profile.loc.source_path)
+        if line is None:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("> use:"):
+            in_use_body = True
+            search_start = line.find(":") + 1
+        elif stripped.startswith(">"):
+            in_use_body = False
+            continue
+        elif not in_use_body or not stripped:
+            continue
+        else:
+            search_start = len(line) - len(line.lstrip())
+
+        for tool_name in profile.tool_names:
+            name_span = _name_token_span_on_line(
+                prog,
+                line_number=line_number,
+                source_path=profile.loc.source_path,
+                name=tool_name,
+                search_start=search_start,
+            )
+            if name_span is None:
+                continue
+            key = (tool_name, name_span.start_line, name_span.start_col)
+            if key not in seen:
+                seen.add(key)
+                spans.append((tool_name, name_span))
+    return spans
+
+
 def _use_single_target_span(
     prog: Program | ProgramWithValidation,
     stmt: UseDirectiveStmt,
@@ -504,6 +564,27 @@ def _use_single_target_span(
         line_number=stmt.loc.start_line,
         source_path=stmt.loc.source_path,
         name=stmt.name,
+        search_start=search_start,
+    )
+
+
+def _validation_procedure_span(
+    prog: Program | ProgramWithValidation,
+    suite: TestSuite | EvalSuite,
+) -> Optional[Span]:
+    """Return the procedure-name token in a validation-suite header."""
+    if suite.loc is None:
+        return None
+    line = _program_line_text(prog, suite.loc.start_line, suite.loc.source_path)
+    if line is None:
+        return None
+    colon_index = line.find(":")
+    search_start = colon_index + 1 if colon_index >= 0 else 0
+    return _name_token_span_on_line(
+        prog,
+        line_number=suite.loc.start_line,
+        source_path=suite.loc.source_path,
+        name=suite.procedure_name,
         search_start=search_start,
     )
 
@@ -525,7 +606,10 @@ def _directive_name_span(
         return None
     prefix = line[:name_index]
     start_col = name_index + 1
-    start_byte = loc.start_byte + len(prefix.encode("utf-8"))
+    line_start = _line_start_byte_for_program(prog, loc.start_line)
+    if line_start is None:
+        return None
+    start_byte = line_start + len(prefix.encode("utf-8"))
     return Span(
         start_byte=start_byte,
         end_byte=start_byte + len(name.encode("utf-8")),
@@ -553,7 +637,10 @@ def _import_name_span(
         return None
     prefix = line[:name_index]
     start_col = name_index + 1
-    start_byte = module_import.loc.start_byte + len(prefix.encode("utf-8"))
+    line_start = _line_start_byte_for_program(prog, module_import.loc.start_line)
+    if line_start is None:
+        return None
+    start_byte = line_start + len(prefix.encode("utf-8"))
     return Span(
         start_byte=start_byte,
         end_byte=start_byte + len(module_import.module.encode("utf-8")),
@@ -584,7 +671,10 @@ def _exported_name_at_position(
         if name_index < 0:
             continue
         start_col = name_index + 1
-        start_byte = export.loc.start_byte + len(line[:name_index].encode("utf-8"))
+        line_start = _line_start_byte_for_program(prog, pos.line + 1)
+        if line_start is None:
+            continue
+        start_byte = line_start + len(line[:name_index].encode("utf-8"))
         span = Span(
             start_byte=start_byte,
             end_byte=start_byte + len(export_name.encode("utf-8")),
@@ -1174,6 +1264,19 @@ def _resolve_symbol_at(
                 cursor_span=name_span,
             )
 
+    for profile in prog.profile_defs.values():
+        for tool_name, name_span in _profile_tool_entry_spans(prog, profile):
+            if not _position_inside(pos, name_span):
+                continue
+            target = proc_by_name.get(tool_name)
+            return SymbolRef(
+                kind="agent_tool",
+                name=tool_name,
+                declaration_span=target.loc if target is not None else None,
+                scope_proc=None,
+                cursor_span=name_span,
+            )
+
     for item in prog.ordered_toplevel:
         if isinstance(item, UseDirectiveStmt) and item.loc is not None:
             if item.tool_names:
@@ -1216,6 +1319,19 @@ def _resolve_symbol_at(
                         scope_proc=None,
                         cursor_span=name_span,
                     )
+
+    for suite in _validation_suites(prog):
+        name_span = _validation_procedure_span(prog, suite)
+        if name_span is None or not _position_inside(pos, name_span):
+            continue
+        target = proc_by_name.get(suite.procedure_name)
+        return SymbolRef(
+            kind="procedure",
+            name=suite.procedure_name,
+            declaration_span=(target.loc if target is not None else None),
+            scope_proc=None,
+            cursor_span=name_span,
+        )
 
     export_name_hit = _exported_name_at_position(prog, pos)
     if export_name_hit is not None:
@@ -1301,7 +1417,7 @@ def _resolve_symbol_at(
             return r
     # Type defs (top-level).
     for td in prog.type_defs:
-        r = _resolve_in_type_def(td, pos, type_by_name)
+        r = _resolve_in_type_def(td, pos, type_by_name, imported_surface.values)
         if r is not None:
             return r
     return None
@@ -1314,11 +1430,20 @@ def _resolve_in_procedure(
     proc_by_name: dict,
     type_by_name: dict,
     imported_values: dict[str, ImportedValueInfo],
+    ancestor_procs: tuple[ProcedureDef, ...] = (),
 ) -> Optional[SymbolRef]:
     if proc.loc is None or not _position_inside(pos, proc.loc):
         return None
     for child in _nested_procedures(proc):
-        r = _resolve_in_procedure(prog, child, pos, proc_by_name, type_by_name, imported_values)
+        r = _resolve_in_procedure(
+            prog,
+            child,
+            pos,
+            proc_by_name,
+            type_by_name,
+            imported_values,
+            ancestor_procs + (proc,),
+        )
         if r is not None:
             return r
     if pos.line + 1 == proc.loc.start_line and _position_in_proc_name(proc, pos):
@@ -1338,11 +1463,20 @@ def _resolve_in_procedure(
                 scope_proc=proc,
                 cursor_span=pspan,
             )
-    r = _resolve_in_proc_signature_types(proc, pos, type_by_name)
+    r = _resolve_in_proc_signature_types(proc, pos, type_by_name, imported_values)
     if r is not None:
         return r
     for stmt in proc.body:
-        r = _resolve_in_stmt(prog, stmt, pos, proc, proc_by_name, type_by_name, imported_values)
+        r = _resolve_in_stmt(
+            prog,
+            stmt,
+            pos,
+            proc,
+            proc_by_name,
+            type_by_name,
+            imported_values,
+            ancestor_procs,
+        )
         if r is not None:
             return r
     return None
@@ -1357,8 +1491,7 @@ def _position_in_proc_name(proc: ProcedureDef, pos: lsp.Position) -> bool:
     assert proc.loc is not None
     if pos.line + 1 != proc.loc.start_line:
         return False
-    name_start_col = proc.loc.start_col + 1  # skip '@'
-    return name_start_col <= pos.character + 1 < name_start_col + len(proc.name)
+    return _position_inside(pos, _proc_name_span(proc))
 
 
 def _proc_name_span(proc: ProcedureDef) -> Span:
@@ -1374,21 +1507,75 @@ def _param_decls(proc: ProcedureDef) -> List[Tuple[str, Span]]:
     the procedure's first physical line. Cheap and good enough for
     cursor hit-testing on a single line.
     """
-    if proc.loc is None or not proc.params:
+    source = current_source()
+    if proc.loc is None or not proc.params or source is None:
         return []
-    return []  # Conservative for now: skip param-decl hit-testing in symbol
-    # resolution. The header-level hover branch covers the common case.
+    header_bytes = source.source.encode("utf-8")[proc.loc.start_byte :]
+    header = header_bytes.split(b"\n", 1)[0].decode("utf-8")
+    cursor = header.find("(") + 1
+    declarations: List[Tuple[str, Span]] = []
+    for name in proc.params:
+        match = re.search(rf"(?<!\w){re.escape(name)}(?!\w)", header[cursor:])
+        if match is None:
+            continue
+        start_char = cursor + match.start()
+        end_char = cursor + match.end()
+        start_offset = len(header[:start_char].encode("utf-8"))
+        end_offset = len(header[:end_char].encode("utf-8"))
+        declarations.append(
+            (
+                name,
+                Span(
+                    start_byte=proc.loc.start_byte + start_offset,
+                    end_byte=proc.loc.start_byte + end_offset,
+                    start_line=proc.loc.start_line,
+                    start_col=start_offset + 1,
+                    end_line=proc.loc.start_line,
+                    end_col=end_offset + 1,
+                    source_path=proc.loc.source_path,
+                    source_id=proc.loc.source_id,
+                ),
+            )
+        )
+        cursor = end_char
+    return declarations
+
+
+def _param_decl_span(proc: ProcedureDef, name: str) -> Optional[Span]:
+    return next((span for param_name, span in _param_decls(proc) if param_name == name), None)
+
+
+def _resolve_lexical_name(
+    proc: Optional[ProcedureDef],
+    ancestor_procs: tuple[ProcedureDef, ...],
+    name: str,
+) -> tuple[str, Span, ProcedureDef] | None:
+    """Find the nearest Kedi-local declaration visible from a procedure body."""
+    if proc is None:
+        return None
+    for candidate in reversed((*ancestor_procs, proc)):
+        if name in candidate.params:
+            declaration_span = _param_decl_span(candidate, name)
+            if declaration_span is not None:
+                return "parameter", declaration_span, candidate
+        declaration_span = _find_local_declaration(candidate, name)
+        if declaration_span is not None:
+            return "local", declaration_span, candidate
+    return None
 
 
 def _resolve_in_proc_signature_types(
-    proc: ProcedureDef, pos: lsp.Position, type_by_name: dict
+    proc: ProcedureDef,
+    pos: lsp.Position,
+    type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo],
 ) -> Optional[SymbolRef]:
     """Resolve type names used in a procedure signature."""
     for expr in (proc.param_type_exprs or {}).values():
-        r = _resolve_in_type_expr(expr, pos, type_by_name)
+        r = _resolve_in_type_expr(expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
-    return _resolve_in_type_expr(proc.return_type_expr, pos, type_by_name)
+    return _resolve_in_type_expr(proc.return_type_expr, pos, type_by_name, imported_values)
 
 
 def _resolve_in_stmt(
@@ -1399,6 +1586,7 @@ def _resolve_in_stmt(
     proc_by_name: dict,
     type_by_name: dict,
     imported_values: dict[str, ImportedValueInfo],
+    ancestor_procs: tuple[ProcedureDef, ...] = (),
 ) -> Optional[SymbolRef]:
     if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
         return None
@@ -1414,11 +1602,11 @@ def _resolve_in_stmt(
                 cursor_span=name_span,
             )
     if isinstance(stmt, AssignStmt) and stmt.type_expr is not None:
-        r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name)
+        r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
     if isinstance(stmt, AssignBlockStmt) and stmt.type_expr is not None:
-        r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name)
+        r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
     if isinstance(stmt, UseDirectiveStmt) and stmt.loc is not None:
@@ -1464,7 +1652,15 @@ def _resolve_in_stmt(
                     cursor_span=name_span,
                 )
     for seg in _segments_of(stmt):
-        r = _resolve_in_segment(seg, pos, proc, proc_by_name, type_by_name, imported_values)
+        r = _resolve_in_segment(
+            seg,
+            pos,
+            proc,
+            proc_by_name,
+            type_by_name,
+            imported_values,
+            ancestor_procs,
+        )
         if r is not None:
             return r
     return None
@@ -1477,22 +1673,24 @@ def _resolve_in_segment(
     proc_by_name: dict,
     type_by_name: dict,
     imported_values: dict[str, ImportedValueInfo],
+    ancestor_procs: tuple[ProcedureDef, ...] = (),
 ) -> Optional[SymbolRef]:
     if not hasattr(seg, "loc") or seg.loc is None or not _position_inside(pos, seg.loc):
         return None
     if isinstance(seg, InputSegment):
         # Could be a parameter, an output, or an assign-target reference.
         name_span = _input_name_span(seg) or seg.loc
-        if proc is not None and proc.params and seg.name in proc.params:
+        lexical = _resolve_lexical_name(proc, ancestor_procs, seg.name)
+        if lexical is not None:
+            kind, declaration_span, owner = lexical
             return SymbolRef(
-                kind="parameter",
+                kind=kind,
                 name=seg.name,
-                declaration_span=proc.loc,  # imprecise but useful
-                scope_proc=proc,
+                declaration_span=declaration_span,
+                scope_proc=owner,
                 cursor_span=name_span,
             )
-        decl = _find_local_declaration(proc, seg.name) if proc else None
-        if decl is None and seg.name in imported_values:
+        if seg.name in imported_values:
             return SymbolRef(
                 kind="imported_value",
                 name=seg.name,
@@ -1500,7 +1698,7 @@ def _resolve_in_segment(
                 scope_proc=proc,
                 cursor_span=name_span,
             )
-        if decl is None and seg.name == "args":
+        if seg.name == "args":
             return SymbolRef(
                 kind="runtime_value",
                 name=seg.name,
@@ -1511,17 +1709,23 @@ def _resolve_in_segment(
         return SymbolRef(
             kind="local",
             name=seg.name,
-            declaration_span=decl,
+            declaration_span=None,
             scope_proc=proc,
             cursor_span=name_span,
         )
     if isinstance(seg, CallSegment):
-        # Cursor on the call NAME? Identifier sits at start_col+1..+len(name).
-        name_start = seg.loc.start_col + 1  # skip '<'
-        if pos.line + 1 == seg.loc.start_line and (
-            name_start <= pos.character + 1 < name_start + len(seg.name)
-        ):
+        name_span = name_token_span(seg.loc, seg.name, prefix_len=1)
+        if _position_inside(pos, name_span):
             target = proc_by_name.get(seg.name)
+            if target is None and seg.name in imported_values:
+                imported_value = imported_values[seg.name]
+                return SymbolRef(
+                    kind="imported_value",
+                    name=seg.name,
+                    declaration_span=imported_value.declaration_span,
+                    scope_proc=proc,
+                    cursor_span=name_span,
+                )
             return SymbolRef(
                 kind="procedure",
                 name=seg.name,
@@ -1540,6 +1744,7 @@ def _resolve_in_segment(
                     proc_by_name,
                     type_by_name,
                     imported_values,
+                    ancestor_procs,
                 )
                 if r is not None:
                     return r
@@ -1556,20 +1761,23 @@ def _resolve_in_segment(
             )
         # type annotation
         if seg.type_expr is not None:
-            r = _resolve_in_type_expr(seg.type_expr, pos, type_by_name)
+            r = _resolve_in_type_expr(seg.type_expr, pos, type_by_name, imported_values)
             if r is not None:
                 return r
     return None
 
 
-def _resolve_in_type_def(td: TypeDef, pos: lsp.Position, type_by_name: dict) -> Optional[SymbolRef]:
+def _resolve_in_type_def(
+    td: TypeDef,
+    pos: lsp.Position,
+    type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo] | None = None,
+) -> Optional[SymbolRef]:
     if td.loc is None or not _position_inside(pos, td.loc):
         return None
-    # `~Name(...)` — the name starts at start_col + 1.
-    name_start = td.loc.start_col + 1
-    if pos.line + 1 == td.loc.start_line and (
-        name_start <= pos.character + 1 < name_start + len(td.name)
-    ):
+    # `~Name(...)` — the name follows the sigil.
+    name_span = name_token_span(td.loc, td.name, prefix_len=1)
+    if _position_inside(pos, name_span):
         return SymbolRef(
             kind="type",
             name=td.name,
@@ -1578,7 +1786,7 @@ def _resolve_in_type_def(td: TypeDef, pos: lsp.Position, type_by_name: dict) -> 
             cursor_span=name_token_span(td.loc, td.name, prefix_len=1),
         )
     for f in td.fields:
-        r = _resolve_in_type_expr(f.type_expr, pos, type_by_name)
+        r = _resolve_in_type_expr(f.type_expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
         if f.loc is not None and _position_inside(pos, f.loc):
@@ -1593,12 +1801,24 @@ def _resolve_in_type_def(td: TypeDef, pos: lsp.Position, type_by_name: dict) -> 
 
 
 def _resolve_in_type_expr(
-    expr: Optional[TypeExpr], pos: lsp.Position, type_by_name: dict
+    expr: Optional[TypeExpr],
+    pos: lsp.Position,
+    type_by_name: dict,
+    imported_values: dict[str, ImportedValueInfo] | None = None,
 ) -> Optional[SymbolRef]:
     if expr is None or expr.loc is None or not _position_inside(pos, expr.loc):
         return None
     if isinstance(expr, TypeRef):
         target = type_by_name.get(expr.name)
+        imported = (imported_values or {}).get(expr.name)
+        if target is None and imported is not None and _is_imported_python_class(imported):
+            return SymbolRef(
+                kind="imported_value",
+                name=expr.name,
+                declaration_span=imported.declaration_span,
+                scope_proc=None,
+                cursor_span=expr.loc,
+            )
         return SymbolRef(
             kind="type",
             name=expr.name,
@@ -1608,38 +1828,44 @@ def _resolve_in_type_expr(
         )
     if isinstance(expr, TypeApply):
         # `Name[arg,...]` — cursor on Name?
-        name_end_col = expr.loc.start_col + len(expr.name)
-        on_name = (
-            pos.line + 1 == expr.loc.start_line
-            and expr.loc.start_col <= pos.character + 1 < name_end_col
-        )
+        name_span = name_token_span(expr.loc, expr.name, prefix_len=0)
+        on_name = _position_inside(pos, name_span)
         if on_name:
             target = type_by_name.get(expr.name)
+            imported = (imported_values or {}).get(expr.name)
+            if target is None and imported is not None and _is_imported_python_class(imported):
+                return SymbolRef(
+                    kind="imported_value",
+                    name=expr.name,
+                    declaration_span=imported.declaration_span,
+                    scope_proc=None,
+                    cursor_span=name_span,
+                )
             return SymbolRef(
                 kind="type",
                 name=expr.name,
                 declaration_span=target.loc if target is not None else None,
                 scope_proc=None,
-                cursor_span=Span(
-                    start_byte=expr.loc.start_byte,
-                    end_byte=expr.loc.start_byte + len(expr.name),
-                    start_line=expr.loc.start_line,
-                    start_col=expr.loc.start_col,
-                    end_line=expr.loc.start_line,
-                    end_col=name_end_col,
-                    source_path=expr.loc.source_path,
-                ),
+                cursor_span=name_span,
             )
         for arg in expr.args:
-            r = _resolve_in_type_expr(arg, pos, type_by_name)
+            r = _resolve_in_type_expr(arg, pos, type_by_name, imported_values)
             if r is not None:
                 return r
     if isinstance(expr, TypeUnion):
         for child in (expr.left, expr.right):
-            r = _resolve_in_type_expr(child, pos, type_by_name)
+            r = _resolve_in_type_expr(child, pos, type_by_name, imported_values)
             if r is not None:
                 return r
     return None
+
+
+def _is_imported_python_class(value: ImportedValueInfo | None) -> bool:
+    return (
+        value is not None
+        and value.python_stub is not None
+        and value.python_stub.startswith("class ")
+    )
 
 
 def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional[Span]:
@@ -1681,6 +1907,7 @@ def _all_procedures(prog: Union[Program, ProgramWithValidation]) -> list[Procedu
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_hover(
     source: str, source_path: Optional[str], pos: lsp.Position
 ) -> Optional[lsp.Hover]:
@@ -1740,7 +1967,7 @@ def compute_hover(
             text = _python_module_scope_type_markdown(sym.name)
         else:
             text = f"**{sym.name}** — type not defined in this module (resolved at runtime)."
-    elif sym.kind == "parameter":
+    elif sym.kind in ("parameter", "param_decl"):
         proc_name = f" of `@{sym.scope_proc.name}`" if sym.scope_proc is not None else ""
         if sym.scope_proc is not None:
             text = f"**Parameter** `{sym.name}: {_proc_param_annotation(sym.scope_proc, sym.name)}`{proc_name}"
@@ -1758,10 +1985,7 @@ def compute_hover(
         text = f"**Module value** `{sym.name}` — top-level assignment exported by this module."
     elif sym.kind == "imported_value":
         imported_value = imported_surface.values.get(sym.name)
-        if imported_value is not None and imported_value.type_expr is not None:
-            text = f"**Imported value** `{sym.name}: {_type_expr_to_str(imported_value.type_expr)}`"
-        else:
-            text = f"**Imported value** `{sym.name}`"
+        text = _imported_value_markdown(sym.name, imported_value)
         if imported_value is not None and imported_value.module_name:
             text += f" — exported from `{imported_value.module_name}`."
         else:
@@ -1797,6 +2021,27 @@ def compute_hover(
         contents=lsp.MarkupContent(kind=lsp.MarkupKind.Markdown, value=text),
         range=range_,
     )
+
+
+def _imported_value_markdown(name: str, value: ImportedValueInfo | None) -> str:
+    if value is None:
+        return f"**Imported value** `{name}`"
+    if value.type_expr is not None:
+        return f"**Imported value** `{name}: {_type_expr_to_str(value.type_expr)}`"
+    if value.python_stub is None:
+        return f"**Imported value** `{name}`"
+
+    stub = value.python_stub
+    if stub.startswith("async def "):
+        signature = stub.removeprefix("async def ").removesuffix(": ...")
+        return f"**Imported value** `async {signature}` — Python async function."
+    if stub.startswith("def "):
+        signature = stub.removeprefix("def ").removesuffix(": ...")
+        return f"**Imported value** `{signature}` — Python function."
+    if stub.startswith("class "):
+        type_name = stub.splitlines()[0].removeprefix("class ").removesuffix(":")
+        return f"**Imported value** `{type_name}` — Python class."
+    return f"**Imported value** `{stub.removesuffix(' = ...')}` — Python value."
 
 
 def _generic_hover(prog, pos: lsp.Position) -> Optional[lsp.Hover]:
@@ -2543,6 +2788,16 @@ def _module_scope_python_names(prog: Program | ProgramWithValidation) -> set[str
 # =====================================================================
 
 
+def _location_for_span(uri: str, source_path: Optional[str], span: Span) -> lsp.Location:
+    target_uri = uri
+    if span.source_path:
+        span_path = Path(span.source_path).resolve()
+        if source_path is None or span_path != Path(source_path).resolve():
+            target_uri = span_path.as_uri()
+    return lsp.Location(uri=target_uri, range=_span_to_range(span))
+
+
+@with_source_coordinates(2)
 def compute_definition(
     source: str, uri: str, source_path: Optional[str], pos: lsp.Position
 ) -> Optional[lsp.Location]:
@@ -2553,12 +2808,7 @@ def compute_definition(
     sym = _resolve_symbol_at(prog, pos)
     if sym is None or sym.declaration_span is None:
         return None
-    target_uri = uri
-    if sym.declaration_span.source_path:
-        decl_path = Path(sym.declaration_span.source_path).resolve()
-        if source_path is None or decl_path != Path(source_path).resolve():
-            target_uri = decl_path.as_uri()
-    return lsp.Location(uri=target_uri, range=_span_to_range(sym.declaration_span))
+    return _location_for_span(uri, source_path, sym.declaration_span)
 
 
 # =====================================================================
@@ -2566,6 +2816,7 @@ def compute_definition(
 # =====================================================================
 
 
+@with_source_coordinates(2)
 def compute_references(
     source: str,
     uri: str,
@@ -2581,7 +2832,7 @@ def compute_references(
     if sym is None:
         return []
     spans = _find_all_references(prog, sym, include_declaration=include_declaration)
-    return [lsp.Location(uri=uri, range=_span_to_range(s)) for s in spans]
+    return [_location_for_span(uri, source_path, span) for span in spans]
 
 
 def _find_all_references(
@@ -2594,8 +2845,17 @@ def _find_all_references(
     if include_declaration and sym.declaration_span is not None:
         out.append(sym.declaration_span)
 
-    if sym.kind == "procedure":
-        for p in prog.procedures:
+    if sym.kind in ("procedure", "agent_tool"):
+        for profile in prog.profile_defs.values():
+            for tool_name, tool_span in _profile_tool_entry_spans(prog, profile):
+                if tool_name == sym.name:
+                    out.append(tool_span)
+        for suite in _validation_suites(prog):
+            if suite.procedure_name == sym.name:
+                suite_span = _validation_procedure_span(prog, suite)
+                if suite_span is not None:
+                    out.append(suite_span)
+        for p in _all_procedures(prog):
             for stmt in p.body:
                 for seg in _segments_of(stmt):
                     _collect_call_refs(seg, sym.name, out)
@@ -2610,7 +2870,7 @@ def _find_all_references(
             _collect_type_refs_in_type_def(td, sym.name, out)
         for stmt in prog.toplevel_body:
             _collect_type_refs_in_stmt(stmt, sym.name, out)
-        for p in prog.procedures:
+        for p in _all_procedures(prog):
             if p.return_type_expr is not None:
                 _collect_type_refs_in_expr(p.return_type_expr, sym.name, out)
             for v in (p.param_type_exprs or {}).values():
@@ -2618,16 +2878,20 @@ def _find_all_references(
                     _collect_type_refs_in_expr(v, sym.name, out)
             for stmt in p.body:
                 _collect_type_refs_in_stmt(stmt, sym.name, out)
-    elif sym.kind in (
-        "parameter",
-        "param_decl",
-        "local",
-        "output_decl",
-    ):
+    elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):
         if sym.scope_proc is not None:
-            for stmt in sym.scope_proc.body:
-                for seg in _segments_of(stmt):
-                    _collect_input_refs(seg, sym.name, out)
+            for proc, ancestors in _procedure_scope_entries(prog):
+                for stmt in proc.body:
+                    for seg in _segments_of(stmt):
+                        _collect_lexical_input_refs(
+                            seg,
+                            sym.name,
+                            proc,
+                            ancestors,
+                            sym.scope_proc,
+                            sym.declaration_span,
+                            out,
+                        )
     # Deduplicate spans by (start_byte, end_byte) — extra-safe.
     seen: set = set()
     uniq: List[Span] = []
@@ -2654,11 +2918,54 @@ def _collect_call_refs(seg, name: str, out: List[Span]) -> None:
 
 
 def _collect_input_refs(seg, name: str, out: List[Span]) -> None:
+    """Collect matching template substitutions, including nested call arguments."""
     if isinstance(seg, InputSegment) and seg.name == name and seg.loc is not None:
         out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
     elif isinstance(seg, CallSegment):
         for arg in seg.args:
             _collect_literal_arg_refs(arg, name, out, _collect_input_refs)
+
+
+def _procedure_scope_entries(
+    prog: Union[Program, ProgramWithValidation],
+) -> list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]]:
+    entries: list[tuple[ProcedureDef, tuple[ProcedureDef, ...]]] = []
+
+    def visit(proc: ProcedureDef, ancestors: tuple[ProcedureDef, ...]) -> None:
+        entries.append((proc, ancestors))
+        for child in _nested_procedures(proc):
+            visit(child, ancestors + (proc,))
+
+    for proc in prog.procedures:
+        visit(proc, ())
+    return entries
+
+
+def _collect_lexical_input_refs(
+    seg,
+    name: str,
+    proc: ProcedureDef,
+    ancestors: tuple[ProcedureDef, ...],
+    owner: ProcedureDef,
+    declaration_span: Optional[Span],
+    out: List[Span],
+) -> None:
+    if isinstance(seg, InputSegment) and seg.name == name and seg.loc is not None:
+        resolved = _resolve_lexical_name(proc, ancestors, name)
+        if resolved is not None and resolved[2] is owner and resolved[1] == declaration_span:
+            out.append(name_token_span(seg.loc, seg.name, prefix_len=1))
+    elif isinstance(seg, CallSegment):
+        for arg in seg.args:
+            for nested in iter_call_arg_nested(arg):
+                _collect_lexical_input_refs(
+                    nested,
+                    name,
+                    proc,
+                    ancestors,
+                    owner,
+                    declaration_span,
+                    out,
+                )
 
 
 def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
@@ -2681,18 +2988,7 @@ def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Sp
         out.append(expr.loc)
     elif isinstance(expr, TypeApply):
         if expr.name == name and expr.loc is not None:
-            name_end_col = expr.loc.start_col + len(expr.name)
-            out.append(
-                Span(
-                    start_byte=expr.loc.start_byte,
-                    end_byte=expr.loc.start_byte + len(expr.name),
-                    start_line=expr.loc.start_line,
-                    start_col=expr.loc.start_col,
-                    end_line=expr.loc.start_line,
-                    end_col=name_end_col,
-                    source_path=expr.loc.source_path,
-                )
-            )
+            out.append(name_token_span(expr.loc, expr.name, prefix_len=0))
         for arg in expr.args:
             _collect_type_refs_in_expr(arg, name, out)
     elif isinstance(expr, TypeUnion):
@@ -2705,6 +3001,7 @@ def _collect_type_refs_in_expr(expr: Optional[TypeExpr], name: str, out: List[Sp
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_prepare_rename(
     source: str, source_path: Optional[str], pos: lsp.Position
 ) -> Optional[lsp.Range]:
@@ -2735,6 +3032,7 @@ def compute_prepare_rename(
         return None
     if sym.kind not in (
         "procedure",
+        "agent_tool",
         "type",
         "type_field",
         "parameter",
@@ -2747,6 +3045,7 @@ def compute_prepare_rename(
     return _span_to_range(sym.cursor_span)
 
 
+@with_source_coordinates(2)
 def compute_rename(
     source: str,
     uri: str,
@@ -2836,6 +3135,7 @@ def compute_formatting(source: str) -> List[lsp.TextEdit]:
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_signature_help(
     source: str, source_path: Optional[str], pos: lsp.Position
 ) -> Optional[lsp.SignatureHelp]:
@@ -2951,6 +3251,7 @@ def _active_param_index(call: CallSegment, pos: lsp.Position) -> int:
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_inlay_hints(
     source: str, source_path: Optional[str], rng: lsp.Range
 ) -> List[lsp.InlayHint]:
@@ -2977,9 +3278,7 @@ def compute_inlay_hints(
                         continue
                     out.append(
                         lsp.InlayHint(
-                            position=lsp.Position(
-                                line=loc.start_line - 1, character=loc.start_col - 1
-                            ),
+                            position=_span_to_range(loc).start,
                             label=f"{target.params[i]}: ",
                             kind=lsp.InlayHintKind.Parameter,
                             padding_right=False,
@@ -2995,11 +3294,12 @@ def compute_inlay_hints(
                     return
                 # Position the hint AT the closing `]` so it reads as
                 # `[name: str]` visually.
+                segment_range = _span_to_range(seg.loc)
                 out.append(
                     lsp.InlayHint(
                         position=lsp.Position(
-                            line=seg.loc.end_line - 1,
-                            character=max(seg.loc.end_col - 2, 0),
+                            line=segment_range.end.line,
+                            character=max(segment_range.end.character - 1, 0),
                         ),
                         label=": str",
                         kind=lsp.InlayHintKind.Type,
@@ -3032,6 +3332,7 @@ def _in_range(loc: Span, rng: lsp.Range) -> bool:
 # =====================================================================
 
 
+@with_source_coordinates(1)
 def compute_document_symbols(source: str, source_path: Optional[str]) -> List[lsp.DocumentSymbol]:
     try:
         prog = parse_program(source, source_path=source_path)
@@ -3549,17 +3850,18 @@ def _emit_token_spans_for_range(
         emit(
             start_line,
             start_col,
-            max(0, len(src_lines[start_line]) - start_col),
+            max(0, utf16_length(src_lines[start_line]) - start_col),
             token_type,
             token_mods,
         )
     for line_idx in range(start_line + 1, end_line):
         if line_idx < len(src_lines):
-            emit(line_idx, 0, len(src_lines[line_idx]), token_type, token_mods)
+            emit(line_idx, 0, utf16_length(src_lines[line_idx]), token_type, token_mods)
     if end_col > 0 and end_line < len(src_lines):
         emit(end_line, 0, end_col, token_type, token_mods)
 
 
+@with_source_coordinates(1)
 def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp.SemanticTokens:
     """Run tree-sitter highlight queries and emit LSP semantic tokens.
 
@@ -3632,9 +3934,9 @@ def compute_semantic_tokens_full(source: str, source_path: Optional[str]) -> lsp
             src_lines=src_lines,
             emit=emit,
             start_line=kedi_sl,
-            start_col=kedi_sc,
+            start_col=byte_column_to_utf16(src_lines[kedi_sl], kedi_sc),
             end_line=kedi_el,
-            end_col=kedi_ec,
+            end_col=byte_column_to_utf16(src_lines[kedi_el], kedi_ec),
             token_type=ttype,
             token_mods=mods,
         )
@@ -3785,6 +4087,7 @@ def _emit_query_captures(
 # =====================================================================
 
 
+@with_source_coordinates(None)
 def compute_python_ranges(source: str) -> List[dict]:
     """Return byte / line ranges of every Python region in the document.
 
@@ -3801,9 +4104,10 @@ def compute_python_ranges(source: str) -> List[dict]:
     document that mirrors the Kedi file's coordinate space so requests
     can be forwarded to a Python language server without translation.
     """
-    return _collect_python_ranges(source, include_header_inline=False)
+    return _collect_python_ranges(source)
 
 
+@with_source_coordinates(None)
 def compute_header_python_ranges(source: str) -> List[dict]:
     return _collect_python_ranges(source, include_regular_inline=False)
 
@@ -3820,6 +4124,8 @@ def _collect_python_ranges(
 
     def visit(node: Node, parents: tuple[Node, ...] = ()) -> None:
         if node.type == "python_code":
+            if not include_regular_inline:
+                return
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
             from ..lang.parser.escapes import dedent_block
 
@@ -3827,7 +4133,7 @@ def _collect_python_ranges(
             out.append(
                 {
                     "kind": "fenced",
-                    "range": _node_range(node),
+                    "range": _node_range(node, source),
                     "text": dedented,
                 }
             )
@@ -3840,7 +4146,7 @@ def _collect_python_ranges(
             text = src_bytes[node.start_byte : node.end_byte].decode("utf-8", "replace")
             item = {
                 "kind": "inline",
-                "range": _node_range(node),
+                "range": _node_range(node, source),
                 "text": text,
             }
             if header_owner is not None:
@@ -3872,26 +4178,35 @@ def _position_in_range(pos: lsp.Position, range_: dict) -> bool:
     return True
 
 
-def _node_range(node: Node) -> dict:
+def _node_range(node: Node, source: str) -> dict:
+    start = tree_sitter_point_to_position(source, *node.start_point)
+    end = tree_sitter_point_to_position(source, *node.end_point)
     return {
-        "start": {"line": node.start_point[0], "character": node.start_point[1]},
-        "end": {"line": node.end_point[0], "character": node.end_point[1]},
+        "start": {"line": start.line, "character": start.character},
+        "end": {"line": end.line, "character": end.character},
     }
 
 
 def _header_inline_owner(parents: tuple[Node, ...]) -> Optional[dict]:
+    is_type_expression = any(parent.type == "type_python" for parent in parents)
     owner = next(
         (parent for parent in reversed(parents) if parent.type in {"param", "type_field"}),
         None,
     )
-    if owner is None:
-        return None
     container = next(
         (parent for parent in reversed(parents) if parent.type in {"procedure_def", "type_def"}),
         None,
     )
+    if owner is None:
+        is_output_type = any(parent.type == "output_segment" for parent in parents)
+        if not is_type_expression or is_output_type or container is None:
+            return None
+        owner_kind = "return_type"
+    else:
+        owner_kind = owner.type
     return {
-        "ownerKind": owner.type,
+        "ownerKind": owner_kind,
         "containerKind": container.type if container is not None else None,
         "containerLine": container.start_point[0] if container is not None else None,
+        "expressionKind": "type" if is_type_expression else "default",
     }

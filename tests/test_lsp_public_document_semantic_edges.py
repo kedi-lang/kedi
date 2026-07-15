@@ -56,3 +56,24 @@ def test_python_range_helpers() -> None:
     assert any(r.get("ownerKind") == "param" for r in header_ranges)
     assert all(r["text"] == "1" for r in header_ranges)
     assert any(r["text"] == "x" for r in all_ranges)
+    regular_only = features._collect_python_ranges(
+        "@p(x: int = `1`):\n  = <`x`>\n",
+        include_header_inline=False,
+    )
+    assert [item["text"] for item in regular_only] == ["x"]
+
+    return_ranges = features.compute_header_python_ranges("@p() -> `list[int]`:\n  = ok\n")
+    assert return_ranges == [
+        {
+            "kind": "inline",
+            "range": {
+                "start": {"line": 0, "character": 9},
+                "end": {"line": 0, "character": 18},
+            },
+            "text": "list[int]",
+            "ownerKind": "return_type",
+            "containerKind": "procedure_def",
+            "containerLine": 0,
+            "expressionKind": "type",
+        }
+    ]

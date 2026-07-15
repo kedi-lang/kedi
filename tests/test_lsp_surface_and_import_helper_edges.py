@@ -86,6 +86,30 @@ def test_import_name_span_edges(tmp_path: Path) -> None:
     assert features._import_name_span(wrong_line_prog, wrong_line_prog.imports[0]) is None
 
 
+def test_name_span_helpers_handle_missing_line_byte_offset(monkeypatch: pytest.MonkeyPatch) -> None:
+    from kedi.lang.parser import parse_program
+
+    use_prog = parse_program("> use: foo\n")
+    use = use_prog.toplevel_body[0]
+    import_prog = parse_program("> import: profiles\n")
+    module_import = import_prog.imports[0]
+    export_prog = parse_program("> export:\n  Name\n")
+
+    monkeypatch.setattr(features, "_line_start_byte_for_program", lambda *_args: None)
+
+    assert use.loc is not None
+    assert module_import.loc is not None
+    assert features._directive_name_span(use_prog, use.loc, "foo") is None
+    assert features._import_name_span(import_prog, module_import) is None
+    assert (
+        features._exported_name_at_position(
+            export_prog,
+            position_of("> export:\n  Name\n", "Name"),
+        )
+        is None
+    )
+
+
 def test_exported_name_at_position_edges(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -192,7 +216,21 @@ def test_load_imported_surface_reads_python_prelude_exports(tmp_path: Path) -> N
         "    return url\n"
         "\n"
         "class Helper:\n"
-        "    pass\n"
+        "    name: str\n"
+        "    @property\n"
+        "    def display_name(self) -> str:\n"
+        "        return self.name\n"
+        "    @classmethod\n"
+        "    def create(cls, name: str) -> Helper:\n"
+        "        return cls()\n"
+        "    @staticmethod\n"
+        "    def normalize(value: str) -> str:\n"
+        "        return value.strip()\n"
+        "    @custom\n"
+        "    def decorated(self) -> str:\n"
+        "        return self.name\n"
+        "    def format(self, prefix: str) -> str:\n"
+        "        return f'{prefix}{self.name}'\n"
         "\n"
         "answer: int = 42\n"
         "left, right = 1, 2\n"
@@ -220,7 +258,18 @@ def test_load_imported_surface_reads_python_prelude_exports(tmp_path: Path) -> N
         "def require(package_names: str | list[str], required_by: str | None=None) -> bool: ..."
     )
     assert surface.values["fetch_one"].python_stub == ("async def fetch_one(url: str) -> str: ...")
-    assert surface.values["Helper"].python_stub == "class Helper: ..."
+    assert surface.values["Helper"].python_stub == (
+        "class Helper:\n"
+        "    name: str\n"
+        "    @property\n"
+        "    def display_name(self) -> str: ...\n"
+        "    @classmethod\n"
+        "    def create(cls, name: str) -> Helper: ...\n"
+        "    @staticmethod\n"
+        "    def normalize(value: str) -> str: ...\n"
+        "    def decorated(self) -> str: ...\n"
+        "    def format(self, prefix: str) -> str: ..."
+    )
     assert surface.values["answer"].python_stub == "answer: int = ..."
     assert surface.values["left"].python_stub == "left: object = ..."
     assert surface.values["right"].python_stub == "right: object = ..."
@@ -228,7 +277,27 @@ def test_load_imported_surface_reads_python_prelude_exports(tmp_path: Path) -> N
     assert surface.values["no_return"].python_stub == "def no_return(value): ..."
     assert module_surface._unparse_or_any(None) == "Any"
     assert surface.values["require"].declaration_span.start_line == 2
-    assert surface.values["answer"].declaration_span.start_line == 11
+    assert surface.values["answer"].declaration_span.start_line == 25
+
+
+def test_python_name_span_falls_back_when_source_is_unreadable_or_line_is_missing(
+    tmp_path: Path,
+) -> None:
+    from kedi.lang.ast import Span
+
+    unreadable = Span(10, 20, 4, 1, 4, 10, source_path=str(tmp_path / "missing.py"))
+    unreadable_span = module_surface._python_name_span(unreadable, "value", 1, 3)
+    assert (unreadable_span.start_byte, unreadable_span.end_byte) == (10, 20)
+
+    source = tmp_path / "short.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    outside = Span(10, 20, 20, 1, 20, 10, source_path=str(source))
+    outside_span = module_surface._python_name_span(outside, "value", 5, 3)
+    assert (outside_span.start_byte, outside_span.end_byte) == (10, 20)
+
+    no_path = Span(10, 20, 4, 1, 4, 10)
+    no_path_span = module_surface._python_name_span(no_path, "value", 1, 3)
+    assert (no_path_span.start_byte, no_path_span.end_byte) == (10, 20)
 
 
 def test_load_imported_surface_ignores_invalid_python_prelude_exports(
@@ -253,3 +322,61 @@ def test_missing_import_diagnostics_and_unresolved_surface(tmp_path: Path) -> No
         "> import: no_such_module\n= ok\n", source_path=str(tmp_path / "main.kedi")
     )
     assert module_surface.imported_surface_for_program(unresolved_prog).modules == {}
+
+
+def test_profile_validation_and_imported_hover_helper_edges(tmp_path: Path) -> None:
+    from kedi.lang.ast import ProcedureDef, ProfileDefStmt, Program, Span, TestSuite
+
+    profile_source = "> profile: analyst:\n    > use:\n        search_docs\n\n        search_docs\n"
+    profile = ProfileDefStmt(
+        name="analyst",
+        tool_names=["search_docs", "search_docs"],
+        loc=Span(0, len(profile_source), 1, 1, 5, 20),
+    )
+    profile_spans = features._profile_tool_entry_spans(
+        Program(source_text=profile_source),
+        profile,
+    )
+    assert [(name, span.start_line) for name, span in profile_spans] == [
+        ("search_docs", 3),
+        ("search_docs", 5),
+    ]
+
+    assert features._validation_procedure_span(Program(), TestSuite("p")) is None
+    suite = TestSuite("p", loc=Span(0, 5, 1, 1, 1, 5))
+    assert features._validation_procedure_span(Program(), suite) is None
+
+    malformed_proc = ProcedureDef(
+        name="p",
+        params=["missing"],
+        loc=Span(0, 5, 1, 1, 1, 5),
+    )
+    from kedi.lsp.coordinates import source_coordinates
+
+    with source_coordinates("@p(other):\n  = ok\n", None):
+        assert features._param_decls(malformed_proc) == []
+        assert features._resolve_lexical_name(malformed_proc, (), "missing") is None
+
+    assert features._imported_value_markdown("missing", None) == "**Imported value** `missing`"
+    async_value = module_surface.ImportedValueInfo(
+        name="fetch",
+        declaration_span=Span(0, 5, 1, 1, 1, 6),
+        python_stub="async def fetch(url: str) -> str: ...",
+    )
+    assert "Python async function" in features._imported_value_markdown("fetch", async_value)
+
+    helpers = tmp_path / "helpers.kedi"
+    helpers.write_text(
+        "```\nclass External:\n    value: str\n```\n\n> export:\n  External\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    source = "> import: helpers\n@consume(value: External[str]):\n  = ok\n"
+    main.write_text(source, encoding="utf-8")
+    hover = features.compute_hover(
+        source,
+        str(main),
+        position_of(source, "External"),
+    )
+    assert hover is not None
+    assert "Python class" in hover.contents.value

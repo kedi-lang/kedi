@@ -17,6 +17,7 @@ from typing import Any, Iterable
 from lsprotocol import types as lsp
 
 from . import features
+from .coordinates import byte_column_to_utf16, utf16_length, utf16_to_index
 
 _TRIPLE_QUOTED_RE = re.compile(r"^[rRuUbB]*(?P<quote>'''|\"\"\")")
 
@@ -34,7 +35,13 @@ class _KediDocstring:
     source_range: lsp.Range
     kedi_source: str
     line_maps: tuple[_LineMap, ...]
-    external_symbols: dict[str, lsp.Range]
+    external_symbols: dict[str, "_ExternalSymbol"]
+
+
+@dataclass(frozen=True)
+class _ExternalSymbol:
+    range: lsp.Range
+    type_annotation: str
 
 
 def compute_kedi_docstring_ranges(source: str) -> list[dict[str, Any]]:
@@ -73,14 +80,27 @@ def compute_kedi_docstring_hover(
         return None
     doc, kedi_pos = found
     hover = features.compute_hover(doc.kedi_source, source_path, kedi_pos)
-    if hover is None:
+    if hover is not None:
+        payload: dict[str, Any] = {"contents": _hover_contents_to_markdown(hover.contents)}
+        if hover.range is not None:
+            mapped = _map_range_to_source(doc, hover.range)
+            if mapped is not None:
+                payload["range"] = _range_to_dict(mapped)
+        return payload
+
+    external = _external_symbol_at_position(doc, kedi_pos)
+    if external is None:
         return None
-    payload: dict[str, Any] = {"contents": _hover_contents_to_markdown(hover.contents)}
-    if hover.range is not None:
-        mapped = _map_range_to_source(doc, hover.range)
-        if mapped is not None:
-            payload["range"] = _range_to_dict(mapped)
-    return payload
+    return {
+        "contents": {
+            "kind": "markdown",
+            "value": (
+                f"**Query parameter** `{external.name}: {external.type_annotation}` — "
+                "available inside this Kedi docstring."
+            ),
+        },
+        "range": _range_to_dict(external.source_range),
+    }
 
 
 def compute_kedi_docstring_definition(
@@ -220,8 +240,10 @@ def _extract_kedi_docstring(
     if not kedi_source.strip():
         return None
 
+    source_lines = source.splitlines()
     base_line = node.lineno - 1
-    base_character = node.col_offset + match.end()
+    base_character = byte_column_to_utf16(source_lines[base_line], node.col_offset)
+    base_character += utf16_length(segment[: match.end()])
     line_maps = []
     for kedi_line, raw_index in enumerate(range(body_start, body_end)):
         source_line = base_line + raw_index
@@ -245,13 +267,13 @@ def _extract_kedi_docstring(
     last = line_maps[-1]
     source_end = lsp.Position(
         line=last.source_line,
-        character=last.source_start_character + len(last.text),
+        character=last.source_start_character + utf16_length(last.text),
     )
     return _KediDocstring(
         source_range=lsp.Range(start=source_start, end=source_end),
         kedi_source=kedi_source,
         line_maps=tuple(line_maps),
-        external_symbols=_function_param_ranges(function),
+        external_symbols=_function_param_ranges(function, source),
     )
 
 
@@ -289,7 +311,7 @@ def _map_position_to_kedi(doc: _KediDocstring, pos: lsp.Position) -> lsp.Positio
         if line_map.source_line != pos.line:
             continue
         start = line_map.source_start_character
-        end = start + len(line_map.text)
+        end = start + utf16_length(line_map.text)
         if pos.character < start or pos.character > end:
             return None
         return lsp.Position(line=line_map.kedi_line, character=pos.character - start)
@@ -308,7 +330,7 @@ def _map_position_to_source(doc: _KediDocstring, pos: lsp.Position) -> lsp.Posit
     for line_map in doc.line_maps:
         if line_map.kedi_line != pos.line:
             continue
-        if pos.character < 0 or pos.character > len(line_map.text):
+        if pos.character < 0 or pos.character > utf16_length(line_map.text):
             return None
         return lsp.Position(
             line=line_map.source_line,
@@ -332,8 +354,9 @@ def _map_location_to_source(
 
 def _function_param_ranges(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> dict[str, lsp.Range]:
-    ranges: dict[str, lsp.Range] = {}
+    source: str,
+) -> dict[str, _ExternalSymbol]:
+    ranges: dict[str, _ExternalSymbol] = {}
     args = [
         *function.args.posonlyargs,
         *function.args.args,
@@ -343,13 +366,19 @@ def _function_param_ranges(
         args.append(function.args.vararg)
     if function.args.kwarg is not None:
         args.append(function.args.kwarg)
+    source_lines = source.splitlines()
     for arg in args:
-        ranges[arg.arg] = lsp.Range(
-            start=lsp.Position(line=arg.lineno - 1, character=arg.col_offset),
-            end=lsp.Position(
-                line=arg.lineno - 1,
-                character=arg.col_offset + len(arg.arg),
+        line = source_lines[arg.lineno - 1] if arg.lineno - 1 < len(source_lines) else ""
+        start = byte_column_to_utf16(line, arg.col_offset)
+        ranges[arg.arg] = _ExternalSymbol(
+            range=lsp.Range(
+                start=lsp.Position(line=arg.lineno - 1, character=start),
+                end=lsp.Position(
+                    line=arg.lineno - 1,
+                    character=start + utf16_length(arg.arg),
+                ),
             ),
+            type_annotation=ast.unparse(arg.annotation) if arg.annotation is not None else "str",
         )
     return ranges
 
@@ -362,10 +391,10 @@ def _external_symbol_location(
     word = _word_at(doc.kedi_source, pos)
     if word is None:
         return None
-    range_ = doc.external_symbols.get(word)
-    if range_ is None:
+    symbol = doc.external_symbols.get(word)
+    if symbol is None:
         return None
-    return {"uri": uri, "range": _range_to_dict(range_)}
+    return {"uri": uri, "range": _range_to_dict(symbol.range)}
 
 
 def _external_symbol_references(
@@ -379,7 +408,7 @@ def _external_symbol_references(
         return []
     refs: list[dict[str, Any]] = []
     if include_declaration:
-        refs.append({"uri": uri, "range": _range_to_dict(doc.external_symbols[word])})
+        refs.append({"uri": uri, "range": _range_to_dict(doc.external_symbols[word].range)})
     for range_ in _word_ranges(doc.kedi_source, word):
         mapped = _map_range_to_source(doc, range_)
         if mapped is not None:
@@ -388,11 +417,16 @@ def _external_symbol_references(
 
 
 def _word_at(source: str, pos: lsp.Position) -> str | None:
+    word = _word_and_range_at(source, pos)
+    return word[0] if word is not None else None
+
+
+def _word_and_range_at(source: str, pos: lsp.Position) -> tuple[str, lsp.Range] | None:
     lines = source.splitlines()
     if pos.line < 0 or pos.line >= len(lines):
         return None
     line = lines[pos.line]
-    index = min(pos.character, len(line) - 1)
+    index = min(utf16_to_index(line, pos.character), len(line) - 1)
     if index < 0:
         return None
     if not _is_identifier_char(line[index]):
@@ -405,7 +439,37 @@ def _word_at(source: str, pos: lsp.Position) -> str | None:
     end = index + 1
     while end < len(line) and _is_identifier_char(line[end]):
         end += 1
-    return line[start:end]
+    return (
+        line[start:end],
+        lsp.Range(
+            start=lsp.Position(line=pos.line, character=utf16_length(line[:start])),
+            end=lsp.Position(line=pos.line, character=utf16_length(line[:end])),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _ExternalSymbolAtPosition:
+    name: str
+    type_annotation: str
+    source_range: lsp.Range
+
+
+def _external_symbol_at_position(
+    doc: _KediDocstring,
+    pos: lsp.Position,
+) -> _ExternalSymbolAtPosition | None:
+    word = _word_and_range_at(doc.kedi_source, pos)
+    if word is None:
+        return None
+    name, kedi_range = word
+    symbol = doc.external_symbols.get(name)
+    if symbol is None:
+        return None
+    mapped = _map_range_to_source(doc, kedi_range)
+    if mapped is None:
+        return None
+    return _ExternalSymbolAtPosition(name, symbol.type_annotation, mapped)
 
 
 def _word_ranges(source: str, word: str) -> list[lsp.Range]:
@@ -415,8 +479,14 @@ def _word_ranges(source: str, word: str) -> list[lsp.Range]:
         for match in pattern.finditer(line):
             ranges.append(
                 lsp.Range(
-                    start=lsp.Position(line=line_no, character=match.start()),
-                    end=lsp.Position(line=line_no, character=match.end()),
+                    start=lsp.Position(
+                        line=line_no,
+                        character=utf16_length(line[: match.start()]),
+                    ),
+                    end=lsp.Position(
+                        line=line_no,
+                        character=utf16_length(line[: match.end()]),
+                    ),
                 )
             )
     return ranges

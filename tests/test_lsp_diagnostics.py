@@ -77,6 +77,16 @@ def test_diagnostics_warns_when_annotated_has_extra_metadata():
     assert "extra Annotated metadata is ignored" in diags[0].message
 
 
+def test_diagnostics_ignore_comments_inside_directive_bodies():
+    mcp = "> mcp:\n    transport: http\n    # comment while editing\n    url: http://x\n"
+    settings = (
+        "> settings:\n    temperature: 0.2\n    ###\n    editing\n    ###\n    max_tokens: 5\n"
+    )
+
+    assert features.compute_diagnostics(mcp, "mcp.kedi") == []
+    assert features.compute_diagnostics(settings, "settings.kedi") == []
+
+
 def test_diagnostics_accept_tools_fixture() -> None:
     path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")
@@ -561,3 +571,25 @@ def test_diagnostics_accept_internal_registry_import(tmp_path):
     main.write_text(src, encoding="utf-8")
 
     assert features.compute_diagnostics(src, str(main)) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> mcp:\n    transport http\n",
+        "> settings:\n    temperature 0.2\n",
+    ],
+)
+def test_diagnostics_handle_incomplete_directive_fields(source: str) -> None:
+    diagnostics = features.compute_diagnostics(source, "example.kedi")
+
+    assert diagnostics
+    assert all(diagnostic.code == "K-PARSE" for diagnostic in diagnostics)
+
+
+def test_diagnostics_report_invalid_template_escape() -> None:
+    diagnostics = features.compute_diagnostics(">> value=a [result]\n", "example.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-TEXT-ESCAPE"
+    assert "Literal '=' must be escaped" in diagnostics[0].message

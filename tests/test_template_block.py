@@ -241,7 +241,7 @@ def test_raw_invoke_is_visible_in_virtual_python() -> None:
     src = "@p():\n  [answer] << Hello\n  ```\n  print(answer)\n  ```\n  = <answer>\n"
     doc = compute_python_virtual_document(src, "/tmp/raw.kedi")
 
-    assert "answer: str = ..." in doc["text"]
+    assert "answer: str = cast(str, _kedi_placeholder())" in doc["text"]
     assert any(symbol["name"] == "answer" for symbol in doc["symbols"])
     stmt = parse_program("[answer] << Hello <name>\n").toplevel_body[0]
     assert isinstance(stmt, RawInvokeStmt)

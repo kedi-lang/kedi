@@ -140,11 +140,25 @@ def test_cst_walker_defensive_edges(monkeypatch):
 
     missing = _FakeNode("identifier", has_error=True, is_missing=True)
     error_walker = _fake_walker()
-    error_walker._collect_tree_errors(missing)
+    error_walker._collect_pre_walk_tree_errors(missing)
     assert error_walker.diagnostics[-1].message == "missing 'identifier'"
     missing_newline = _FakeNode("_newline", has_error=True, is_missing=True)
-    error_walker._collect_tree_errors(missing_newline)
+    error_walker._collect_pre_walk_tree_errors(missing_newline)
     assert error_walker.diagnostics[-1].message == "missing 'identifier'"
+    optimize_source = b"> optimize: answer"
+    optimize_error = _FakeNode(
+        "ERROR",
+        has_error=True,
+        is_error=True,
+        start=0,
+        end=len(optimize_source),
+    )
+    optimize_walker = _fake_walker(optimize_source)
+    optimize_walker._record_tree_error(optimize_error)
+    assert optimize_walker.diagnostics[-1].message == (
+        "Optimize span 'answer' must have an indented block after it"
+    )
+    assert optimize_walker.diagnostics[-1].code == "K-OPT-EMPTY"
 
     export_walker = _fake_walker(b"> export:\n  name\n")
     export_body = _FakeNode(
@@ -1064,6 +1078,31 @@ def test_empty_inline_python_has_specific_diagnostic() -> None:
 
     assert any(
         "inline Python expression cannot be empty" in diagnostic.message
+        for diagnostic in info.value.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> mcp:\n    transport http\n",
+        "> settings:\n    temperature 0.2\n",
+    ],
+)
+def test_incomplete_directive_fields_raise_parse_errors(source: str) -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(source)
+
+    assert info.value.diagnostics
+    assert all(diagnostic.code == "K-PARSE" for diagnostic in info.value.diagnostics)
+
+
+def test_invalid_template_escape_raises_parse_error() -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(">> value=a [result]\n")
+
+    assert any(
+        diagnostic.code == "K-TEXT-ESCAPE" and "Literal '=' must be escaped" in diagnostic.message
         for diagnostic in info.value.diagnostics
     )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .ast import ProcedureDef, TypeApply, TypeExpr, TypePython, TypeRef, TypeUnion
+from .ast import ProcedureDef, TypeApply, TypeExpr, TypeLiteral, TypePython, TypeRef, TypeUnion
 
 
 def type_expr_to_python(
@@ -17,6 +17,8 @@ def type_expr_to_python(
         return expr.code or default
     if isinstance(expr, TypeRef):
         return expr.name or default
+    if isinstance(expr, TypeLiteral):
+        return expr.source or repr(expr.value)
     if isinstance(expr, TypeApply):
         args = ", ".join(type_expr_to_python(arg, None) for arg in expr.args)
         return f"{expr.name}[{args}]" if args else expr.name or default

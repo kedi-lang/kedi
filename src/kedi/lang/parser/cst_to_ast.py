@@ -122,13 +122,32 @@ def _span(
     end_line = node.end_point[0] + 1
     start_resolved = source_map.resolve_line(start_line) if source_map is not None else None
     end_resolved = source_map.resolve_line(end_line) if source_map is not None else None
+    start_byte = node.start_byte
+    end_byte = node.end_byte
+    mapped_end_line = end_resolved.source_line if end_resolved else end_line
+    if source_map is not None and start_resolved is not None:
+        local_end_line = start_resolved.source_line + end_line - start_line
+        local_start_byte = source_map.get_byte_offset(
+            start_resolved.source_path,
+            start_resolved.source_line,
+            node.start_point[1],
+        )
+        local_end_byte = source_map.get_byte_offset(
+            start_resolved.source_path,
+            local_end_line,
+            node.end_point[1],
+        )
+        if local_start_byte is not None and local_end_byte is not None:
+            start_byte = local_start_byte
+            end_byte = local_end_byte
+            mapped_end_line = local_end_line
     return Span(
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
+        start_byte=start_byte,
+        end_byte=end_byte,
         # tree-sitter Point.row/column are 0-based; convert to 1-based.
         start_line=start_resolved.source_line if start_resolved else start_line,
         start_col=node.start_point[1] + 1,
-        end_line=end_resolved.source_line if end_resolved else end_line,
+        end_line=mapped_end_line,
         end_col=node.end_point[1] + 1,
         source_path=start_resolved.source_path if start_resolved else source_path,
         source_id=start_resolved.source_id if start_resolved else source_path,
@@ -244,6 +263,13 @@ class _Walker:
         # `block_comment` regex is lenient about these conditions, so
         # we enforce them in Python.
         self._validate_block_comments()
+        if any(d.severity == "error" for d in self.diagnostics):
+            raise KediParseError(self.diagnostics)
+
+        # Incomplete editor input can produce directive-shaped nodes whose
+        # required fields are missing. Surface the tree-sitter errors before
+        # walking those nodes so live LSP requests never reach AST invariants.
+        self._collect_pre_walk_tree_errors(root)
         if any(d.severity == "error" for d in self.diagnostics):
             raise KediParseError(self.diagnostics)
 
@@ -389,13 +415,6 @@ class _Walker:
         if any(d.severity == "error" for d in self.diagnostics):
             raise KediParseError(self.diagnostics)
 
-        # Also: tree-sitter errors anywhere in the tree turn into
-        # diagnostics (we'll have raised already if any were severity
-        # "error", so reaching this point means none were).
-        self._collect_tree_errors(self.tree.root_node)
-        if any(d.severity == "error" for d in self.diagnostics):
-            raise KediParseError(self.diagnostics)
-
         prog.parser_warnings = [d for d in self.diagnostics if d.severity == "warning"]
         return prog
 
@@ -423,6 +442,13 @@ class _Walker:
                 code=code,
             )
         )
+
+    def _unescape_text_segment(self, node: Node, raw: str) -> tuple[str, set[int]]:
+        try:
+            return unescape_text_with_tracking(raw)
+        except ValueError as exc:
+            self._error(node, str(exc), code="K-TEXT-ESCAPE")
+            return raw, set()
 
     def _validate_effort_plain_value(self, node: Node, value: str) -> None:
         if is_valid_effort(value):
@@ -551,20 +577,40 @@ class _Walker:
             KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
         )
 
-    def _collect_tree_errors(self, node: Node) -> None:
-        """Walk the CST and surface every ERROR / MISSING node as a diagnostic."""
+    def _record_tree_error(self, node: Node) -> None:
+        """Convert one ERROR / MISSING node into a parser diagnostic."""
+        raw = _src_text(self.source, node).strip()
+        if raw.startswith("> optimize"):
+            parts = raw.split(":", 2)
+            name = parts[1].strip() if len(parts) > 1 else ""
+            self._error(
+                node,
+                f"Optimize span {name!r} must have an indented block after it",
+                code="K-OPT-EMPTY",
+            )
+            return
+        if node.is_missing:
+            msg = f"missing {node.type!r}"
+        else:
+            msg = self._parse_error_message(node, "unexpected syntax")
+        self._error(node, msg, code="K-PARSE")
+
+    def _collect_pre_walk_tree_errors(
+        self,
+        node: Node,
+        parent_type: str | None = None,
+    ) -> None:
+        """Catch structurally unsafe CST errors before AST field access."""
         if node.has_error and (node.type == "ERROR" or node.is_missing):
             if node.is_missing and node.type == "_newline":
                 return
-            if node.is_missing:
-                msg = f"missing {node.type!r}"
-            else:
-                msg = self._parse_error_message(node, "unexpected syntax")
-            self._error(node, msg, code="K-PARSE")
+            contextual_parents = {"source_file", "validation_body", "block"}
+            if node.is_missing or parent_type not in contextual_parents:
+                self._record_tree_error(node)
             return  # don't recurse into ERROR subtrees
         for child in node.children:
             if child.has_error:
-                self._collect_tree_errors(child)
+                self._collect_pre_walk_tree_errors(child, node.type)
 
     def _parse_error_message(self, node: Node, fallback: str) -> str:
         raw = _src_text(self.source, node)
@@ -1204,7 +1250,7 @@ class _Walker:
             # double up: it would also remove meaningful whitespace
             # that sits BETWEEN segments (e.g. the gap between `<x>`
             # and `mid` in ``  left   <x>   mid``).
-            text, escaped_positions = unescape_text_with_tracking(raw)
+            text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,
                 escaped_whitespace=escaped_positions,
@@ -1310,7 +1356,7 @@ class _Walker:
         """
         if node.type == "text_in_call_segment":
             raw = _src_text(self.source, node).strip(" \t")
-            text, escaped_positions = unescape_text_with_tracking(raw)
+            text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,
                 escaped_whitespace=escaped_positions,
@@ -1485,6 +1531,8 @@ class _Walker:
         assert body_node is not None
         fields: list[McpField] = []
         for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
             fields.append(self._walk_mcp_field(child))
         return McpDirectiveStmt(fields=fields, loc=self._span(node))
 
@@ -1516,6 +1564,8 @@ class _Walker:
         assert body_node is not None
         fields: list[SettingsField] = []
         for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
             fields.append(self._walk_settings_field(child))
         return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
 
