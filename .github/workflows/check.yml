@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [ stable ]
   push:
+     branches: [ stable ]
 
 jobs:
   type-check:
