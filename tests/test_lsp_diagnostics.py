@@ -546,9 +546,26 @@ def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")
     main = tmp_path / "main.kedi"
-    src = "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
+    src = "> import: profiles\n\n> export:\n  xd\n  get_proc\n"
     main.write_text(src, encoding="utf-8")
     assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_limit_recovered_parse_errors_to_the_faulting_line() -> None:
+    src = (
+        "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"
+    )
+
+    diagnostics = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.code == "K-PARSE"
+    assert diagnostic.message == "unexpected syntax"
+    assert diagnostic.range.start.line == 0
+    assert diagnostic.range.end.line == 0
+    assert diagnostic.range.start.character == 19
+    assert diagnostic.range.end.character == 35
 
 
 def test_diagnostics_report_missing_imported_module(tmp_path):

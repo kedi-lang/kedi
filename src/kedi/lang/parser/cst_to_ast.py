@@ -108,9 +108,6 @@ from .escapes import dedent_block, unescape_text_with_tracking
 # Utilities
 # ---------------------------------------------------------------------
 
-_HYPHENATED_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+")
-_LEADING_HYPHEN_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])-([A-Za-z_][A-Za-z0-9_]*)")
-
 
 def _span(
     node: Node,
@@ -164,14 +161,33 @@ def _identifier_name(source: bytes, node: Node) -> str:
     return _src_text(source, node)
 
 
-def _hyphenated_identifier(source: str) -> str | None:
-    match = _HYPHENATED_IDENTIFIER_RE.search(source)
-    if match is not None:
-        return match.group(0)
-    match = _LEADING_HYPHEN_IDENTIFIER_RE.search(source)
-    if match is not None:
-        return match.group(0)
-    return None
+def _hyphenated_identifier_from_error(source: bytes, node: Node) -> str | None:
+    """Recover an invalid identifier only from tokens adjacent to the error node."""
+    line_end = source.find(b"\n", node.start_byte)
+    if line_end < 0:
+        line_end = len(source)
+
+    for child in node.children:
+        if child.type != "identifier" or child.end_point[0] != node.start_point[0]:
+            continue
+        suffix = source[child.end_byte : line_end].decode("utf-8")
+        match = re.match(r"(?:-[A-Za-z0-9_]+)+", suffix)
+        if match is not None:
+            return _identifier_name(source, child) + match.group(0)
+
+    fragment = source[node.start_byte : line_end].decode("utf-8")
+    match = re.match(r"-[A-Za-z_][A-Za-z0-9_]*", fragment)
+    if match is None:
+        return None
+    previous = node.prev_named_sibling
+    if (
+        previous is not None
+        and previous.type == "identifier"
+        and previous.end_byte == node.start_byte
+        and previous.end_point[0] == node.start_point[0]
+    ):
+        return _identifier_name(source, previous) + match.group(0)
+    return match.group(0)
 
 
 def _named_children(node: Node) -> List[Node]:
@@ -593,7 +609,15 @@ class _Walker:
             msg = f"missing {node.type!r}"
         else:
             msg = self._parse_error_message(node, "unexpected syntax")
-        self._error(node, msg, code="K-PARSE")
+        span = self._span(node)
+        if node.start_point[0] != node.end_point[0]:
+            line_end = self.source.index(b"\n", node.start_byte)
+            span.end_byte = line_end
+            span.end_line = span.start_line
+            span.end_col = node.start_point[1] + (line_end - node.start_byte) + 1
+        self.diagnostics.append(
+            KediDiagnostic(severity="error", message=msg, span=span, code="K-PARSE")
+        )
 
     def _collect_pre_walk_tree_errors(
         self,
@@ -616,22 +640,13 @@ class _Walker:
         raw = _src_text(self.source, node)
         if "``" in raw:
             return "inline Python expression cannot be empty"
-        invalid_identifier = _hyphenated_identifier(
-            self._source_line(node)
-        ) or _hyphenated_identifier(raw)
+        invalid_identifier = _hyphenated_identifier_from_error(self.source, node)
         if invalid_identifier is not None:
             return (
                 f"invalid identifier {invalid_identifier!r}: '-' cannot be used in "
                 "Kedi identifiers; use '_' instead"
             )
         return fallback
-
-    def _source_line(self, node: Node) -> str:
-        lines = self.source.splitlines()
-        row = node.start_point[0]
-        if row < 0 or row >= len(lines):
-            return ""
-        return lines[row].decode("utf-8")
 
     # =================================================================
     # Module directives

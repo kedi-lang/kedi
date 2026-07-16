@@ -141,6 +141,9 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     >> answer [x]
 """
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
+    profile_model_hover = hover_text_at(src, "profile.kedi", "model", occurrence=2)
+    assert "reusable agent profile model override" in profile_model_hover
+    assert "`opus`" in profile_model_hover
     assert "> agent:" in hover_text_at(src, "profile.kedi", "agent", occurrence=1)
     assert "`agent_name`" in hover_text_at(src, "profile.kedi", "agent_name", occurrence=1)
     assert "> adapter:" in hover_text_at(src, "profile.kedi", "adapter", occurrence=1)

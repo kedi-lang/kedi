@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from kedi import module_registry
-from kedi.lang import compile_program, parse_program
+from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.module_registry import (
     describe_module_search_paths,
     internal_module_path,
@@ -21,12 +21,15 @@ def _compile_file(path: Path, *, adapter=None):
 
 
 def test_parser_reads_import_and_export_directives() -> None:
-    prog = parse_program(
-        "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
-    )
+    prog = parse_program("> import: profiles\n\n> export:\n  xd\n  get_proc\n")
 
     assert [item.module for item in prog.imports] == ["profiles"]
     assert prog.exports[0].names == ["xd", "get_proc"]
+
+
+def test_parser_rejects_text_after_import_module() -> None:
+    with pytest.raises(KediParseError):
+        parse_program("> import: profiles (file name without .kedi)\n")
 
 
 def test_parser_reads_star_export_directive() -> None:

@@ -100,6 +100,7 @@ from ..lang.ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
+    ProfileModelEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
     Program,
@@ -2332,6 +2333,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_agent_entry_markdown(node)
     if isinstance(node, ProfileAdapterEntry):
         return _profile_adapter_entry_markdown(node)
+    if isinstance(node, ProfileModelEntry):
+        return _profile_model_entry_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
@@ -2397,10 +2400,7 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
 
 
 def _model_directive_markdown(stmt: ModelDirectiveStmt) -> str:
-    if stmt.backtick_code is not None:
-        value = f"`{stmt.backtick_code}`"
-    else:
-        value = f"`{stmt.plain_value or ''}`"
+    value = _model_value_preview(stmt)
     return (
         f"**`> model:`** — set active agent model to {value} for subsequent "
         "statements in this indentation block."
@@ -2510,6 +2510,11 @@ def _profile_adapter_entry_markdown(entry: ProfileAdapterEntry) -> str:
     return f"**`> adapter:`** — reusable profile agent framework adapter: {value}."
 
 
+def _profile_model_entry_markdown(entry: ProfileModelEntry) -> str:
+    value = _model_value_preview(entry)
+    return f"**`> model:`** — reusable agent profile model override: {value}."
+
+
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return f"**`> system:`** — reusable agent profile instructions: {value}."
@@ -2521,6 +2526,12 @@ def _profile_effort_entry_markdown(entry: ProfileEffortEntry) -> str:
 
 
 def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str:
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
+
+
+def _model_value_preview(stmt: ModelDirectiveStmt | ProfileModelEntry) -> str:
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"
