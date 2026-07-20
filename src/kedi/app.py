@@ -12,6 +12,7 @@ from .agent_adapter.meta import AgentAdapter
 from .agent_adapter.registry import build_adapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
+from .lang.compiler import environment as compiler_environment
 from .lang.parser.diagnostics import KediParseError
 from .source_loading import load_kedi_source_bundle
 from .tests_runner import run_evals, run_tests
@@ -40,7 +41,11 @@ CliArgs = AttrDict[str, ArgType]
 
 
 def _runtime_globals(runtime_args: CliArgs | None) -> dict[str, Any]:
-    return {"args": runtime_args or AttrDict({}, default=None)}
+    return {
+        compiler_environment.cli_args_identifier(): (
+            runtime_args if runtime_args is not None else AttrDict({}, default=None)
+        )
+    }
 
 
 def _set_runtime_args(rt: Any, runtime_args: CliArgs | None) -> None:

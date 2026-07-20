@@ -61,6 +61,32 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_exposes_optimize_block_outputs_to_fenced_python():
+    src = (
+        "@solve_knapsack(items: str, capacity: int) -> int:\n"
+        "  > optimize: solver:\n"
+        "    >> <items>\n"
+        "    Knapsack capacity: <capacity>\n"
+        "    Reasoning: [reasoning: str]\n"
+        "    Total value: [value: int]\n"
+        "  = ```\n"
+        '  print(f"Reasoning for {items}:\\n\\n", reasoning)\n'
+        "  return value\n"
+        "  ```\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/knapsack.kedi", focus_line=7)
+
+    assert "reasoning: str = cast(str, _kedi_placeholder())" in virtual["text"]
+    assert "value: int = cast(int, _kedi_placeholder())" in virtual["text"]
+    assert 'print(f"Reasoning for {items}:\\n\\n", reasoning)' in virtual["text"]
+    assert "return value" in virtual["text"]
+    assert {(symbol["name"], symbol["kind"]) for symbol in virtual["symbols"]} >= {
+        ("reasoning", "local"),
+        ("value", "local"),
+    }
+
+
 def test_python_virtual_document_defaults_untyped_procedure_params_to_str_in_python_blocks():
     src = '@get_capital(country) -> str:\n  ```\n  print("called", country)\n  ```\n  = Stockholm\n'
     virtual = compute_python_virtual_document(src, "/tmp/sys.kedi")
@@ -1071,6 +1097,10 @@ def test_python_virtual_helper_edges(monkeypatch):
         ),
         [
             AssignStmt(name="a", expr=[TextSegment(text="ok")], loc=Span(0, 1, 1, 2, 1, 3)),
+            pv.TemplateLine(
+                segments=[OutputSegment(name="template_output", type_annotation="int")],
+                loc=Span(0, 1, 1, 1, 1, 1),
+            ),
             PythonBlock(code="x = 1", loc=Span(0, 1, 2, 1, 2, 7)),
             BacktickLineStmt(code="x = 1", loc=Span(0, 1, 2, 1, 2, 7)),
             BacktickLineStmt(code="y = 2", loc=Span(0, 1, 2, 1, 2, 7)),
@@ -1080,6 +1110,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         {},
     )
     assert "a: str = cast(str, _kedi_placeholder())" in stmt_builder.finish()
+    assert "template_output: int = cast(int, _kedi_placeholder())" in stmt_builder.finish()
     assert "x = 1" in stmt_builder.finish()
     pv._emit_statements(
         stmt_builder,

@@ -147,7 +147,7 @@ def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
     )
 
     assert hover is not None
-    assert hover.contents.value == "**Parameter** `value: str` of `@outer`"
+    assert hover.contents.value == "`value: str`\n\nParameter of `@outer`."
     assert definition is not None
     assert (definition.range.start.line, definition.range.start.character) == (0, 7)
     assert [

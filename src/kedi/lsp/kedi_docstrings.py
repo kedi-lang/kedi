@@ -95,8 +95,8 @@ def compute_kedi_docstring_hover(
         "contents": {
             "kind": "markdown",
             "value": (
-                f"**Query parameter** `{external.name}: {external.type_annotation}` — "
-                "available inside this Kedi docstring."
+                f"`{external.name}: {external.type_annotation}`\n\n"
+                "Python parameter available to this embedded Kedi program."
             ),
         },
         "range": _range_to_dict(external.source_range),

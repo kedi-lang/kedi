@@ -355,7 +355,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         captured_agent_profile=AgentProfile(model="opus"),
         loc=Span(0, 1, 1, 1, 1, 2),
     )
-    assert "captured model" in features._proc_signature_markdown(proc)
+    assert "Model in this scope: `opus`" in features._proc_signature_markdown(proc)
     empty_capture = ProcedureDef(
         name="p",
         params=[],
@@ -454,11 +454,13 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     )
     assert profile_system_backtick is not None
     assert "instructions['short']" in profile_system_backtick
+    assert features._system_value_preview(ProfileSystemEntry()) == "``"
 
     profile_mcp_hover = features._describe_ast_node(
         ProfileMcpEntry(fields=[McpField(name="env", backtick_code="env")])
     )
-    assert profile_mcp_hover is not None and "reusable profile MCP" in profile_mcp_hover
+    assert profile_mcp_hover is not None
+    assert "MCP server configuration stored in this profile" in profile_mcp_hover
     mcp_directive_hover = features._describe_ast_node(
         McpDirectiveStmt(fields=[McpField(name="headers", backtick_code="headers")])
     )
@@ -478,11 +480,15 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         model_members=[ProfileModelEntry(backtick_code="dyn", loc=member_span)],
     )
     assert "dyn" in (features._describe_ast_node(backtick_only) or "")
+    tools_signature = features._profile_signature_markdown(
+        ProfileDefStmt(name="tools", tool_names=["fetch", "search"])
+    )
+    assert "Tools: `fetch`, `search`" in tools_signature
     sparse_member = ProfileDefStmt(
         name="sparse",
         model_members=[ProfileModelEntry(loc=member_span)],
     )
-    assert "(no model members)" in (features._describe_ast_node(sparse_member) or "")
+    assert "Reusable agent profile." in (features._describe_ast_node(sparse_member) or "")
 
     proc_with_effort = ProcedureDef(
         name="with_effort",
@@ -490,6 +496,8 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         body=[],
         captured_agent_profile=AgentProfile(effort="high"),
     )
-    assert "captured effort" in (features._describe_ast_node(proc_with_effort) or "")
+    assert "Reasoning effort in this scope: `high`" in (
+        features._describe_ast_node(proc_with_effort) or ""
+    )
 
     capture_procedure_profiles(KediRuntime(), Program())

@@ -1807,11 +1807,19 @@ class _Walker:
         body_node = _field(node, "body")
         template_lines: List[TemplateLine] = []
         if body_node is not None:
-            for tline in _named_children(body_node):
-                if tline.type != "template_line":
-                    continue
-                tl = self._walk_template_line(tline)
-                template_lines.append(tl)
+            body_children = _named_children(body_node)
+            block_node = next(
+                (child for child in body_children if child.type == "template_block_stmt"),
+                None,
+            )
+            if block_node is not None:
+                template_lines = self._walk_template_block_stmt(block_node).lines
+            else:
+                for tline in body_children:
+                    if tline.type != "template_line":
+                        continue
+                    template_lines.append(self._walk_template_line(tline))
+                self._validate_template_block_scope(template_lines)
         if not template_lines:
             # Legacy invariant — preserve the exact substring so
             # ``pytest.raises(ValueError, match="must have an indented block")``
@@ -1821,10 +1829,11 @@ class _Walker:
                 f"Optimize span {name!r} must have an indented block after it",
                 code="K-OPT-EMPTY",
             )
-        # The optimize span's template_lines are ALSO appended to the
-        # procedure body so they execute normally during a run; the
-        # optimizer mutates these line objects in place.
-        proc.body.extend(template_lines)
+        # The optimize span's template lines also execute during a normal run.
+        # Keep them in one TemplateBlock so the whole span is one LLM call,
+        # matching ordinary `>>` continuation semantics. The optimizer still
+        # owns the individual line objects and mutates them in place.
+        proc.body.append(TemplateBlock(lines=template_lines, loc=self._span(node)))
         return OptimizeSpan(
             name=name,
             template_lines=template_lines,

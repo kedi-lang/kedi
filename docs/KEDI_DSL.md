@@ -23,6 +23,13 @@ If `country` contains "France", the prompt becomes:
 The capital of France is [capital].
 ```
 
+### CLI Arguments
+
+Command-line flags are available through the runtime-owned `args` binding (for example,
+`args.name`). `args` is reserved and cannot be assigned by Kedi or embedded Python. Embedders can
+configure a different reserved name with `kedi.lang.compiler.environment.CLI_ARGS_IDENTIFIER`
+before compiling a program.
+
 After execution, `[capital]` is filled by the LLM (e.g., "Paris") and the variable `capital` becomes available in scope:
 ```kedi
 >> The capital of <country> is [capital].
@@ -1164,7 +1171,7 @@ Mark specific template spans in a procedure for optimization using the `> optimi
 ````
 
 Rules:
-- `> optimize: name:` must be followed by an indented block containing template lines (prompt text with `<variables>`, `<calls>`, and `[outputs]`).
+- `> optimize: name:` must be followed by an indented block containing template lines (prompt text with `<variables>`, `<calls>`, and `[outputs]`). The whole indented span is newline-joined and executed as one LLM call, like a `>>` template block. The body may use an explicit leading `>>` or the legacy bare-line form; both have identical single-call behavior.
 - Multiple optimize spans can be defined per procedure.
 - Optimization requires:
   1. A matching `@eval: procedure_name` suite with training data (`> data:`)

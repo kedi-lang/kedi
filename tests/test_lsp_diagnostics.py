@@ -194,6 +194,32 @@ def test_diagnostics_errors_when_adapter_lacks_structured_output(
     assert diag.range.start.character == len(">> Capital is ")
 
 
+def test_legacy_template_lines_receive_adapter_capability_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_structured_output=False),
+    )
+    output = OutputSegment(name="capital", loc=Span(0, 1, 1, 1, 1, 8))
+    program = Program(source_text="Capital [capital]\n")
+
+    diagnostics = features._scan_capability_scope(
+        program,
+        [TemplateLine(segments=[output])],
+        features._AdapterDiagnosticState(shortname="codex", kind="agent-harness"),
+        {},
+        {},
+        set(),
+        {},
+    )
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CAPABILITY"
+    assert "structured template output fields" in diagnostics[0].message
+
+
 @pytest.mark.parametrize(
     ("src", "code", "message", "line", "character"),
     [

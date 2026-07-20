@@ -256,8 +256,12 @@ def test_hover_on_imported_python_symbols_preserves_type_metadata(tmp_path):
     main.write_text(src, encoding="utf-8")
 
     assert "`endpoint: str`" in hover_text_at(src, str(main), "endpoint")
-    assert "`fetch(value: int) -> str`" in hover_text_at(src, str(main), "fetch")
-    assert "`Record`" in hover_text_at(src, str(main), "Record")
+    fetch_hover = hover_text_at(src, str(main), "fetch")
+    assert "```python\nfetch(value: int) -> str\n```" in fetch_hover
+    assert "Python function." in fetch_hover
+    record_hover = hover_text_at(src, str(main), "Record")
+    assert "```python\nclass Record\n```" in record_hover
+    assert "Python class." in record_hover
 
     location = definition_at(
         src,
@@ -542,7 +546,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         ("global_note", 1, 1, "**Local** `global_note`"),
         ("@review_code", 1, 2, "Review code with CLI args and Python interop."),
         ("@line_count", 1, 2, "`@line_count()`"),
-        ("<language>", 1, 2, "**Parameter** `language: str`"),
+        ("<language>", 1, 2, "`language: str`"),
         ("<line_count()>", 1, 2, "`@line_count()`"),
         ("<args>", 1, 2, "**Runtime value** `args: AttrDict[str, ArgType]`"),
         ("[review: Review]", 1, 1, "**Output** `review`"),
@@ -680,28 +684,28 @@ def test_hover_on_annotated_explains_kedi_schema_metadata():
 
     body = hover_text_at(src, "example.kedi", "Annotated")
 
-    assert 'Annotated[type, "description"]' in body
-    assert "schema metadata" in body
+    assert 'Annotated[T, "description"]' in body
+    assert "field documentation" in body
     assert "runtime type" in body
-    assert "LLM adapter field descriptions" in body
+    assert "compatible model adapters" in body
 
 
 def test_hover_on_datetime_type_uses_datetime_namespace():
     src = "@p(started_at: datetime, day: date) -> timedelta:\n  = <started_at>\n"
 
-    assert "datetime.datetime" in hover_text_at(src, "example.kedi", "datetime")
-    assert "datetime.date" in hover_text_at(src, "example.kedi", "date")
-    assert "datetime.timedelta" in hover_text_at(src, "example.kedi", "timedelta")
-    assert "datetime.time" in hover_text_at("@p(clock: time):\n  = ok\n", "example.kedi", "time")
+    assert "ISO 8601" in hover_text_at(src, "example.kedi", "datetime")
+    assert "YYYY-MM-DD" in hover_text_at(src, "example.kedi", "date", occurrence=2)
+    assert "Duration" in hover_text_at(src, "example.kedi", "timedelta")
+    assert "Time of day" in hover_text_at("@p(clock: time):\n  = ok\n", "example.kedi", "time")
 
 
 def test_hover_on_runtime_schema_aliases():
     src = "@p(pattern: Regex, email: Email, site: HttpUrl, file: FileUrl):\n  = <email>\n"
 
-    assert "re.Pattern[str]" in hover_text_at(src, "example.kedi", "Regex")
-    assert "EmailStr" in hover_text_at(src, "example.kedi", "Email")
-    assert "HttpUrl" in hover_text_at(src, "example.kedi", "HttpUrl")
-    assert "FileUrl" in hover_text_at(src, "example.kedi", "FileUrl")
+    assert "regular-expression" in hover_text_at(src, "example.kedi", "Regex")
+    assert "email address" in hover_text_at(src, "example.kedi", "Email")
+    assert "HTTP or HTTPS URL" in hover_text_at(src, "example.kedi", "HttpUrl")
+    assert "file URL" in hover_text_at(src, "example.kedi", "FileUrl")
 
 
 def test_builtin_type_definition_and_rename_are_disabled():
@@ -758,8 +762,8 @@ def test_custom_type_definition_field_type_still_jumps_to_kedi_type():
 def test_unknown_type_hover_stays_runtime_resolved():
     src = "@p(x: UnknownType):\n  = <x>\n"
     body = hover_text_at(src, "example.kedi", "UnknownType")
-    assert "not defined in this module" in body
-    assert "resolved at runtime" in body
+    assert "Not resolved statically" in body
+    assert "runtime environment" in body
 
 
 def test_hover_on_unparseable_returns_none():
@@ -781,8 +785,8 @@ def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
     )
     body = hover_text_at(src, "example.kedi", "Person", occurrence=2)
     assert "Person" in body
-    assert "defined in the Python prelude" in body
-    assert "not defined in this module" not in body
+    assert "defined in this module's prelude" in body
+    assert "Not resolved statically" not in body
 
 
 def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():

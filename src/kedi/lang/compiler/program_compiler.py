@@ -418,12 +418,8 @@ class ProgramCompiler:
                         return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
                     code = toplevel_return.code
                     if "\n" in code or code.strip().startswith("return"):
-                        result = execute_python_block(
-                            code, self.rt, kwargs, span=toplevel_return.loc
-                        )
-                        return "" if result is None else str(result)
-                    value = evaluate_python_inline(self.rt, code, kwargs, span=toplevel_return.loc)
-                    return "" if value is None else str(value)
+                        return execute_python_block(code, self.rt, kwargs, span=toplevel_return.loc)
+                    return evaluate_python_inline(self.rt, code, kwargs, span=toplevel_return.loc)
 
     def _attach_validation(self, prog: Program) -> None:
         """Attach validation suites if present.

@@ -901,7 +901,7 @@ def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: P
 
     result = extract_output(template="John is 30 years old.", output_type=str)
 
-    assert result == str(Person(name="John", age=30))
+    assert result == Person(name="John", age=30)
     assert adapter.schemas[0] == {"output": Person}
 
 

@@ -94,11 +94,11 @@ def test_cli_command_parse_flag_and_parse_command() -> None:
     command_result = CliRunner().invoke(cli_module.main, ["parse", "-c", "= done"])
 
     assert flag_result.exit_code == 0
-    assert flag_result.output == ""
+    assert flag_result.output == "Parsed successfully.\n"
     assert short_flag_result.exit_code == 0
-    assert short_flag_result.output == ""
+    assert short_flag_result.output == "Parsed successfully.\n"
     assert command_result.exit_code == 0
-    assert command_result.output == ""
+    assert command_result.output == "Parsed successfully.\n"
 
 
 def test_cli_command_renders_parse_error() -> None:
@@ -173,11 +173,18 @@ def test_cli_parse_flag_parses_without_compile(
     short_flag_result = CliRunner().invoke(cli_module.main, [str(source), "-p"])
 
     assert command_result.exit_code == 0
-    assert command_result.output == ""
+    assert command_result.output == "Parsed successfully.\n"
     assert flag_result.exit_code == 0
-    assert flag_result.output == ""
+    assert flag_result.output == "Parsed successfully.\n"
     assert short_flag_result.exit_code == 0
-    assert short_flag_result.output == ""
+    assert short_flag_result.output == "Parsed successfully.\n"
+
+
+def test_cli_parse_success_uses_green_output() -> None:
+    result = CliRunner().invoke(cli_module.main, ["-c", "= done", "--parse"], color=True)
+
+    assert result.exit_code == 0
+    assert "\x1b[32mParsed successfully.\x1b[0m" in result.output
 
 
 def test_cli_optimize_success_and_failure_paths(

@@ -37,8 +37,11 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler import environment as compiler_env
 from kedi.lang.compiler.environment import (
+    KediEnv,
+    assert_not_cli_args_identifier,
     build_python_env,
     build_type_env,
+    cli_args_identifier,
     lookup_value,
 )
 from kedi.lang.compiler.evaluation import (
@@ -59,10 +62,140 @@ from kedi.lang.parser.escapes import (
     unescape_text_with_tracking,
 )
 from kedi.source_loading import CompositeSourceMap, SourceDocument
+from kedi.utils import AttrDict
 
 
 class Person(BaseModel):
     name: str
+
+
+def test_kedienv_reserves_configured_cli_args_identifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(compiler_env, "CLI_ARGS_IDENTIFIER", "cli_args")
+    cli_args = SimpleNamespace(name="Ada")
+    env = KediEnv()
+    env._set_cli_args(cli_args)
+
+    assert cli_args_identifier() == "cli_args"
+    assert env["cli_args"] is cli_args
+    assert_not_cli_args_identifier("ordinary")
+
+    for mutate in (
+        lambda: env.__setitem__("cli_args", "override"),
+        lambda: env.update({"cli_args": "override"}),
+        lambda: env.update(cli_args="override"),
+        lambda: env.setdefault("cli_args", "override"),
+        lambda: env.__ior__({"cli_args": "override"}),
+        lambda: env.__or__({"cli_args": "override"}),
+        lambda: KediEnv({"ordinary": "value"}).__ror__({"cli_args": "override"}),
+        lambda: KediEnv.fromkeys(["cli_args"], "override"),
+        lambda: env.__delitem__("cli_args"),
+        lambda: env.pop("cli_args"),
+        env.popitem,
+        env.clear,
+    ):
+        with pytest.raises(ValueError, match="Reserved identifier|reserved CLI"):
+            mutate()
+
+    with pytest.raises(ValueError, match="Reserved identifier"):
+        KediEnv({"cli_args": "override"})
+
+    env["args"] = "ordinary value"
+    assert env["args"] == "ordinary value"
+
+    rt = KediRuntime()
+    rt.set_initial_globals({"cli_args": cli_args})
+    assert build_python_env(rt, {})["cli_args"] is cli_args
+    with pytest.raises(ValueError, match="Reserved identifier"):
+        build_python_env(rt, {"cli_args": "override"})
+
+
+@pytest.mark.parametrize("identifier", [None, "not-valid", "class"])
+def test_cli_args_identifier_requires_a_valid_python_name(
+    monkeypatch: pytest.MonkeyPatch, identifier: object
+) -> None:
+    monkeypatch.setattr(compiler_env, "CLI_ARGS_IDENTIFIER", identifier)
+
+    with pytest.raises(ValueError, match="valid, non-keyword Python identifier"):
+        cli_args_identifier()
+
+
+def test_kedienv_keeps_regular_dictionary_operations_available() -> None:
+    env = KediEnv({"existing": 1})
+
+    assert env.setdefault("existing", 2) == 1
+    assert env.setdefault("added", 3) == 3
+    assert env | {"right": 4} == {"existing": 1, "added": 3, "right": 4}
+    assert {"left": 0} | env == {"left": 0, "existing": 1, "added": 3}
+    assert env.copy() == {"existing": 1, "added": 3}
+    assert KediEnv.fromkeys(["first", "second"], 5) == {"first": 5, "second": 5}
+
+    env |= {"merged": 6}
+    assert env.pop("merged") == 6
+    del env["added"]
+    assert env.popitem() == ("existing", 1)
+    env.clear()
+    assert env == {}
+
+    with pytest.raises(KeyError, match="dictionary is empty"):
+        env.popitem()
+
+
+def test_reserved_cli_args_cannot_be_overwritten_by_kedi_or_python() -> None:
+    cli_args = SimpleNamespace(name="Ada")
+
+    assignment_runtime = compile_kedi_program(
+        parse_program("[args] = overwritten\n"),
+        runtime_globals={"args": cli_args},
+    )
+    with pytest.raises(Exception, match="Reserved identifier 'args'"):
+        assignment_runtime.run_main()
+
+    output_runtime = compile_kedi_program(
+        parse_program(">> [args]\n"),
+        runtime_globals={"args": cli_args},
+    )
+    with pytest.raises(Exception, match="Reserved identifier 'args'"):
+        output_runtime.run_main()
+
+    raw_invoke_runtime = compile_kedi_program(
+        parse_program("[args] << hello\n"),
+        runtime_globals={"args": cli_args},
+    )
+    with pytest.raises(Exception, match="Reserved identifier 'args'"):
+        raw_invoke_runtime.run_main()
+
+    python_runtime = KediRuntime()
+    python_runtime.set_initial_globals({"args": cli_args})
+    with pytest.raises(ValueError, match="Reserved identifier 'args'"):
+        python_runtime.executor.execute_side_effects(python_runtime, "args = 'override'", {})
+
+
+def test_empty_cli_args_retain_their_runtime_identity() -> None:
+    from kedi.app import _runtime_globals
+
+    cli_args = AttrDict({}, default=None)
+    assert _runtime_globals(cli_args)["args"] is cli_args
+
+    runtime = compile_kedi_program(
+        parse_program("@identity(value: int) -> int:\n  = `value`\n= `identity(1)`\n"),
+        runtime_globals=_runtime_globals(cli_args),
+    )
+    runtime.set_initial_globals(_runtime_globals(cli_args))
+    assert runtime.run_main() == 1
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("= `1`\n", 1),
+        ("= ```\nreturn [1, 2, 3]\n```\n", [1, 2, 3]),
+        ("= <`1`>\n", "1"),
+    ],
+)
+def test_run_main_preserves_native_top_level_python_returns(source: str, expected: Any) -> None:
+    runtime = compile_kedi_program(parse_program(source))
+
+    assert runtime.run_main() == expected
 
 
 def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -390,7 +523,7 @@ def test_program_compiler_private_helpers_and_inline_toplevel(tmp_path: Path) ->
     assert compiler._program_path(prog) == source_path.resolve()
 
     inline_rt = compile_kedi_program(parse_program("= `1 + 1`\n"), adapter=None)
-    assert inline_rt.run_main() == "2"
+    assert inline_rt.run_main() == 2
 
 
 def test_procedure_compiler_type_and_environment_edges() -> None:
@@ -639,6 +772,12 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
     monkeypatch.undo()
 
     executor = StatementExecutor(rt)
+    template_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        executor.compiler,
+        "compile_template_line",
+        lambda _stmt: lambda **kwargs: template_calls.append(kwargs),
+    )
     nested_a = ProcedureDef(name="nested_a", params=[], body=[])
     nested_b = ProcedureDef(name="nested_b", params=[], body=[])
     nested_c = ProcedureDef(name="nested_c", params=[], body=[])
@@ -649,6 +788,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
             params=[],
             body=[
                 TypeDefStmt(typedef=None),
+                TemplateLine(segments=[TextSegment(text="legacy template")]),
                 ProcDefStmt(proc=nested_a),
                 ProcDefStmt(proc=nested_a),
                 ProcDefStmt(proc=nested_b),
@@ -660,6 +800,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         ),
         {},
     )
+    assert template_calls == [{}]
     assert "nested_b" not in rt._procedures
     assert "nested_c" not in rt._procedures
     top_proc = ProcedureDef(

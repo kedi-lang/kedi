@@ -11,7 +11,8 @@ def test_hover_reports_missing_import_target(tmp_path) -> None:
     missing_src = "> import: missing\n= ok\n"
     main.write_text(missing_src, encoding="utf-8")
     hover = hover_text_at(missing_src, str(main), "missing")
-    assert "import target not found" in hover
+    assert "could not be resolved" in hover
+    assert "> import: missing" in hover
 
 
 def test_hover_on_type_and_exported_value() -> None:
