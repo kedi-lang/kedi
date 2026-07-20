@@ -61,6 +61,30 @@ def test_python_virtual_document_models_procedure_scope():
     )
 
 
+def test_python_virtual_document_models_procedure_local_type():
+    src = (
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = ```\n"
+        '  return Inner(name="Ada")\n'
+        "  ```\n"
+        "  = <`item.name`>\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/local_type.kedi")
+    ast.parse(virtual["text"])
+    assert "    class Inner:" in virtual["text"]
+    assert "        name: str" in virtual["text"]
+    assert "        def __init__(self, name: str) -> None: ..." in virtual["text"]
+    assert 'return Inner(name="Ada")' in virtual["text"]
+    assert any(
+        symbol["kind"] == "type"
+        and symbol["name"] == "Inner"
+        and symbol["sourceRange"]["start"] == {"line": 1, "character": 3}
+        for symbol in virtual["symbols"]
+    )
+
+
 def test_python_virtual_document_exposes_optimize_block_outputs_to_fenced_python():
     src = (
         "@solve_knapsack(items: str, capacity: int) -> int:\n"

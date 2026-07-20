@@ -29,6 +29,16 @@ def test_document_symbols_lists_validation_blocks():
     assert any("@test: p" in n for n in names)
 
 
+def test_document_symbols_nest_procedure_local_types():
+    src = "@outer() -> str:\n  ~Inner(name: str)\n  = ok\n"
+
+    symbols = features.compute_document_symbols(src, "/tmp/x.kedi")
+
+    outer = next(symbol for symbol in symbols if symbol.name == "outer")
+    assert outer.children is not None
+    assert [child.name for child in outer.children] == ["Inner"]
+
+
 def test_imported_procedure_references_preserve_the_declaration_uri(tmp_path: Path) -> None:
     module = tmp_path / "module.kedi"
     module.write_text(
@@ -78,7 +88,7 @@ def test_references_include_nested_procedure_calls_and_type_annotations() -> Non
         (location.range.start.line, location.range.start.character)
         for location in helper_references
     ] == [
-        (2, 0),
+        (2, 1),
         (9, 20),
     ]
 
@@ -93,11 +103,150 @@ def test_references_include_nested_procedure_calls_and_type_annotations() -> Non
         (location.range.start.line, location.range.start.character)
         for location in person_references
     ] == [
-        (0, 0),
+        (0, 1),
         (5, 12),
         (6, 14),
         (7, 13),
     ]
+
+
+def test_references_keep_shadowed_local_and_top_level_types_separate() -> None:
+    source = (
+        "~Inner(global_name: str)\n"
+        "\n"
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = <value>\n"
+        "  = <item>\n"
+        "\n"
+        "[item: Inner] = <value>\n"
+    )
+    uri = "file:///tmp/x.kedi"
+
+    global_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=1),
+        include_declaration=True,
+    )
+    local_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=3, character=3),
+        include_declaration=True,
+    )
+
+    assert [
+        (location.range.start.line, location.range.start.character)
+        for location in global_references
+    ] == [(0, 1), (7, 7)]
+    assert [
+        (location.range.start.line, location.range.start.character) for location in local_references
+    ] == [(3, 3), (4, 9)]
+
+
+def test_references_and_definitions_keep_shadowed_procedures_separate() -> None:
+    source = (
+        "@helper() -> str:\n"
+        "  = global\n"
+        "\n"
+        "@outer() -> str:\n"
+        "  @helper() -> str:\n"
+        "    = local\n"
+        "  = <helper()>\n"
+        "\n"
+        "@other() -> str:\n"
+        "  = <helper()>\n"
+    )
+    uri = "file:///tmp/x.kedi"
+
+    global_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=1),
+        include_declaration=True,
+    )
+    local_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=4, character=3),
+        include_declaration=True,
+    )
+    global_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=9, character=7),
+    )
+    local_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=6, character=7),
+    )
+
+    assert [
+        (location.range.start.line, location.range.start.character)
+        for location in global_references
+    ] == [(0, 1), (9, 5)]
+    assert [
+        (location.range.start.line, location.range.start.character) for location in local_references
+    ] == [(4, 3), (6, 5)]
+    assert global_definition is not None
+    assert global_definition.range.start.line == 0
+    assert local_definition is not None
+    assert local_definition.range.start.line == 4
+
+
+def test_rename_only_edits_matching_type_identifier_tokens() -> None:
+    source = (
+        "~Inner(global_name: str)\n"
+        "\n"
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = <value>\n"
+        "  = <item>\n"
+        "\n"
+        "[item: Inner] = <value>\n"
+    )
+    uri = "file:///tmp/x.kedi"
+
+    edit = features.compute_rename(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=3, character=3),
+        "LocalInner",
+    )
+
+    assert edit is not None and edit.changes is not None
+    assert [
+        (item.range.start.line, item.range.start.character, item.range.end.character)
+        for item in edit.changes[uri]
+    ] == [(3, 3, 8), (4, 9, 14)]
+
+
+def test_rename_type_field_edits_only_the_field_identifier() -> None:
+    source = "~Person(name: str)\n"
+    uri = "file:///tmp/x.kedi"
+
+    edit = features.compute_rename(
+        source,
+        uri,
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=8),
+        "display_name",
+    )
+
+    assert edit is not None and edit.changes is not None
+    assert [
+        (item.range.start.line, item.range.start.character, item.range.end.character)
+        for item in edit.changes[uri]
+    ] == [(0, 8, 12)]
 
 
 def test_procedure_parameter_header_resolves_to_its_declaration() -> None:

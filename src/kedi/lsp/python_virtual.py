@@ -43,6 +43,7 @@ from ..lang.ast import (
     TestCase,
     TypeApply,
     TypeDef,
+    TypeDefStmt,
     TypeExpr,
     TypeField,
     TypePython,
@@ -719,16 +720,17 @@ def _emit_type_stub(
     builder: VirtualBuilder,
     typedef: TypeDef,
     header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
+    prefix: str = "",
 ) -> None:
-    line = builder.add(f"class {typedef.name}:")
+    line = builder.add(f"{prefix}class {typedef.name}:")
     builder.add_symbol(
         kind="type",
         name=typedef.name,
         source_range=_type_name_range(typedef),
-        virtual_range=_line_range(line, len("class "), typedef.name),
+        virtual_range=_line_range(line, len(prefix) + len("class "), typedef.name),
     )
     if not typedef.fields:
-        builder.add("    pass")
+        builder.add(f"{prefix}    pass")
     else:
         field_ranges = header_ranges.get("type_field", {}).get(_container_line(typedef), [])
         type_ranges = [item["range"] for item in field_ranges if item["expressionKind"] == "type"]
@@ -736,7 +738,7 @@ def _emit_type_stub(
             item["range"] for item in field_ranges if item["expressionKind"] == "default"
         ]
         for field in typedef.fields:
-            field_line_text = f"    {_type_field_to_python(field)}"
+            field_line_text = f"{prefix}    {_type_field_to_python(field)}"
             field_line = builder.add(field_line_text)
             if isinstance(field.type_expr, TypePython) and type_ranges:
                 _add_default_expr_region(
@@ -755,7 +757,7 @@ def _emit_type_stub(
                     line_text=field_line_text,
                     expr=field.default_expr,
                 )
-        builder.add(f"    def __init__({_type_init_params(typedef)}) -> None: ...")
+        builder.add(f"{prefix}    def __init__({_type_init_params(typedef)}) -> None: ...")
 
 
 def _emit_proc_stub(builder: VirtualBuilder, proc: ProcedureDef, prefix: str = "") -> None:
@@ -889,6 +891,8 @@ def _emit_statements(
     for stmt in statements:
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
             _emit_nested_procedure(builder, cursor, stmt.proc, scope, indent, header_ranges)
+        elif isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
+            _emit_type_stub(builder, stmt.typedef, header_ranges, prefix=indent)
         elif isinstance(stmt, AssignBlockStmt):
             _emit_assign_block(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, AssignStmt):

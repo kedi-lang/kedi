@@ -129,6 +129,57 @@ def test_hover_on_nested_procedure_header_shows_signature():
     assert "str" in body
 
 
+def test_hover_and_definition_on_procedure_local_type():
+    src = (
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = ```\n"
+        '  return Inner(name="Ada")\n'
+        "  ```\n"
+        "  = <`item.name`>\n"
+    )
+
+    declaration = hover_text_at(src, "example.kedi", "Inner", occurrence=1)
+    reference = hover_text_at(src, "example.kedi", "Inner", occurrence=2)
+    field = hover_text_at(src, "example.kedi", "name", occurrence=1)
+    assert "~Inner(name: str)" in declaration
+    assert "~Inner(name: str)" in reference
+    assert "Field" in field and "name: str" in field
+
+    location = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "Inner",
+        occurrence=2,
+    )
+    assert location is not None
+    assert location.range.start.line == 1
+
+
+def test_hover_on_procedure_local_type_respects_shadowing():
+    src = (
+        "~Inner(global_name: str)\n\n"
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = <value>\n"
+        "  = <item>\n\n"
+        "[item: Inner] = <value>\n"
+    )
+
+    assert "global_name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=1)
+    assert "name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=2)
+    assert "name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=3)
+    assert "global_name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=4)
+
+
+def test_hover_on_test_case_name_describes_the_case():
+    src = '@p():\n  = ok\n\n@test: p:\n  > case: basic:\n    `assert p() == "ok"`\n'
+    body = hover_text_at(src, "example.kedi", "basic")
+    assert "Test case" in body
+    assert "basic" in body
+
+
 def test_hover_on_nested_text_segment_works():
     src = "@foo():\n  @bar():\n    >> Hello world\n    = Done\n  = dn\n"
     body = hover_text_at(src, "example.kedi", "world")

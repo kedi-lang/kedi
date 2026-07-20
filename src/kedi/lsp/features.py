@@ -116,10 +116,12 @@ from ..lang.ast import (
     SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,
+    TestCase,
     TestSuite,
     TextSegment,
     TypeApply,
     TypeDef,
+    TypeDefStmt,
     TypeExpr,
     TypeField,
     TypeLiteral,
@@ -1232,7 +1234,7 @@ def _resolve_symbol_at(
 ) -> Optional[SymbolRef]:
     """Identify what the cursor is on. Returns ``None`` if nothing useful."""
     imported_surface = imported_surface_for_program(prog)
-    proc_by_name = {p.name: p for p in _all_procedures(prog)}
+    proc_by_name = {p.name: p for p in prog.procedures}
     proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
     type_by_name.update(imported_surface.types)
@@ -1435,13 +1437,21 @@ def _resolve_in_procedure(
 ) -> Optional[SymbolRef]:
     if proc.loc is None or not _position_inside(pos, proc.loc):
         return None
+    scoped_type_by_name = {
+        **type_by_name,
+        **{typedef.name: typedef for typedef in _direct_type_defs(proc)},
+    }
+    scoped_proc_by_name = {
+        **proc_by_name,
+        **{child.name: child for child in _nested_procedures(proc)},
+    }
     for child in _nested_procedures(proc):
         r = _resolve_in_procedure(
             prog,
             child,
             pos,
-            proc_by_name,
-            type_by_name,
+            scoped_proc_by_name,
+            scoped_type_by_name,
             imported_values,
             ancestor_procs + (proc,),
         )
@@ -1464,7 +1474,7 @@ def _resolve_in_procedure(
                 scope_proc=proc,
                 cursor_span=pspan,
             )
-    r = _resolve_in_proc_signature_types(proc, pos, type_by_name, imported_values)
+    r = _resolve_in_proc_signature_types(proc, pos, scoped_type_by_name, imported_values)
     if r is not None:
         return r
     for stmt in proc.body:
@@ -1473,8 +1483,8 @@ def _resolve_in_procedure(
             stmt,
             pos,
             proc,
-            proc_by_name,
-            type_by_name,
+            scoped_proc_by_name,
+            scoped_type_by_name,
             imported_values,
             ancestor_procs,
         )
@@ -1591,6 +1601,8 @@ def _resolve_in_stmt(
 ) -> Optional[SymbolRef]:
     if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
         return None
+    if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
+        return _resolve_in_type_def(stmt.typedef, pos, type_by_name, imported_values)
     # AssignStmt / AssignBlockStmt target name
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
         name_span = assignment_name_span(stmt)
@@ -1890,6 +1902,51 @@ def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
     ]
 
 
+def _direct_type_defs(proc: ProcedureDef) -> list[TypeDef]:
+    return [
+        stmt.typedef
+        for stmt in proc.body
+        if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None
+    ]
+
+
+def _all_type_defs(prog: Program | ProgramWithValidation) -> list[TypeDef]:
+    type_defs = list(prog.type_defs)
+
+    def visit(proc: ProcedureDef) -> None:
+        type_defs.extend(_direct_type_defs(proc))
+        for child in _nested_procedures(proc):
+            visit(child)
+
+    for proc in prog.procedures:
+        visit(proc)
+    return type_defs
+
+
+def _type_def_for_declaration(
+    prog: Program | ProgramWithValidation,
+    declaration_span: Optional[Span],
+) -> Optional[TypeDef]:
+    if declaration_span is None:
+        return None
+    return next(
+        (typedef for typedef in _all_type_defs(prog) if typedef.loc == declaration_span),
+        None,
+    )
+
+
+def _procedure_for_declaration(
+    prog: Program | ProgramWithValidation,
+    declaration_span: Optional[Span],
+) -> Optional[ProcedureDef]:
+    if declaration_span is None:
+        return None
+    return next(
+        (proc for proc in _all_procedures(prog) if proc.loc == declaration_span),
+        None,
+    )
+
+
 def _all_procedures(prog: Union[Program, ProgramWithValidation]) -> list[ProcedureDef]:
     out: list[ProcedureDef] = []
 
@@ -1934,7 +1991,7 @@ def compute_hover(
 
     range_ = _span_to_range(sym.cursor_span)
     imported_surface = imported_surface_for_program(prog)
-    proc_by_name = {p.name: p for p in _all_procedures(prog)}
+    proc_by_name = {p.name: p for p in prog.procedures}
     proc_by_name.update(imported_surface.procedures)
     type_by_name = {t.name: t for t in prog.type_defs}
     type_by_name.update(imported_surface.types)
@@ -1951,7 +2008,9 @@ def compute_hover(
             if module_info.docstring:
                 text += f"\n\n{module_info.docstring}"
     elif sym.kind == "agent_tool":
-        target = proc_by_name.get(sym.name)
+        target = _procedure_for_declaration(prog, sym.declaration_span) or proc_by_name.get(
+            sym.name
+        )
         if target is not None:
             text = _agent_tool_markdown(sym.name, target)
         else:
@@ -1960,13 +2019,15 @@ def compute_hover(
                 f"No procedure named `{sym.name}` is available in the current module or its imports."
             )
     elif sym.kind == "procedure":
-        target = proc_by_name.get(sym.name)
+        target = _procedure_for_declaration(prog, sym.declaration_span) or proc_by_name.get(
+            sym.name
+        )
         if target is not None:
             text = _proc_signature_markdown(target)
         else:
             text = f"**{sym.name}** — procedure not found in this module."
     elif sym.kind == "type":
-        target = type_by_name.get(sym.name)
+        target = _type_def_for_declaration(prog, sym.declaration_span) or type_by_name.get(sym.name)
         if target is not None:
             text = _type_signature_markdown(target)
         elif (origin := _known_lsp_type_origin(sym.name)) is not None:
@@ -2017,7 +2078,7 @@ def compute_hover(
         target_field = next(
             (
                 field
-                for typedef in prog.type_defs
+                for typedef in _all_type_defs(prog)
                 for field in typedef.fields
                 if field.loc == sym.declaration_span and field.name == sym.name
             ),
@@ -2383,6 +2444,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return f"**`@eval: {node.procedure_name}:`** — evaluation block."
     if isinstance(node, TestSuite):
         return f"**`@test: {node.procedure_name}:`** — test block."
+    if isinstance(node, TestCase):
+        return f"**Test case** `{node.name}` — assertion body evaluated by its test suite."
     if isinstance(node, EvalDataset):
         return f"**Dataset** `> data: {node.name}` — input rows for evaluation."
     if isinstance(node, EvalMetric):
@@ -2904,41 +2967,49 @@ def _find_all_references(
 ) -> List[Span]:
     out: List[Span] = []
     if include_declaration and sym.declaration_span is not None:
-        out.append(sym.declaration_span)
+        out.append(_declaration_identifier_span(prog, sym))
 
     if sym.kind in ("procedure", "agent_tool"):
+        candidates: List[Span] = []
         for profile in prog.profile_defs.values():
             for tool_name, tool_span in _profile_tool_entry_spans(prog, profile):
                 if tool_name == sym.name:
-                    out.append(tool_span)
+                    candidates.append(tool_span)
         for suite in _validation_suites(prog):
             if suite.procedure_name == sym.name:
                 suite_span = _validation_procedure_span(prog, suite)
                 if suite_span is not None:
-                    out.append(suite_span)
+                    candidates.append(suite_span)
         for p in _all_procedures(prog):
             for stmt in p.body:
                 for seg in _segments_of(stmt):
-                    _collect_call_refs(seg, sym.name, out)
+                    _collect_call_refs(seg, sym.name, candidates)
         for stmt in prog.toplevel_body:
             for seg in _segments_of(stmt):
-                _collect_call_refs(seg, sym.name, out)
+                _collect_call_refs(seg, sym.name, candidates)
         if prog.toplevel_return is not None:
             for seg in _segments_of(prog.toplevel_return):
-                _collect_call_refs(seg, sym.name, out)
+                _collect_call_refs(seg, sym.name, candidates)
+        out.extend(
+            candidate for candidate in candidates if _reference_resolves_to(prog, candidate, sym)
+        )
     elif sym.kind == "type":
-        for td in prog.type_defs:
-            _collect_type_refs_in_type_def(td, sym.name, out)
+        candidates = []
+        for td in _all_type_defs(prog):
+            _collect_type_refs_in_type_def(td, sym.name, candidates)
         for stmt in prog.toplevel_body:
-            _collect_type_refs_in_stmt(stmt, sym.name, out)
+            _collect_type_refs_in_stmt(stmt, sym.name, candidates)
         for p in _all_procedures(prog):
             if p.return_type_expr is not None:
-                _collect_type_refs_in_expr(p.return_type_expr, sym.name, out)
+                _collect_type_refs_in_expr(p.return_type_expr, sym.name, candidates)
             for v in (p.param_type_exprs or {}).values():
                 if v is not None:
-                    _collect_type_refs_in_expr(v, sym.name, out)
+                    _collect_type_refs_in_expr(v, sym.name, candidates)
             for stmt in p.body:
-                _collect_type_refs_in_stmt(stmt, sym.name, out)
+                _collect_type_refs_in_stmt(stmt, sym.name, candidates)
+        out.extend(
+            candidate for candidate in candidates if _reference_resolves_to(prog, candidate, sym)
+        )
     elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):
         if sym.scope_proc is not None:
             for proc, ancestors in _procedure_scope_entries(prog):
@@ -2963,6 +3034,47 @@ def _find_all_references(
         seen.add(key)
         uniq.append(s)
     return uniq
+
+
+def _declaration_identifier_span(
+    prog: Program | ProgramWithValidation,
+    sym: SymbolRef,
+) -> Span:
+    assert sym.declaration_span is not None
+    if current_source() is None:
+        return sym.declaration_span
+    if sym.kind in ("procedure", "agent_tool"):
+        proc = _procedure_for_declaration(prog, sym.declaration_span)
+        if proc is not None:
+            return _proc_name_span(proc)
+        return name_token_span(sym.declaration_span, sym.name, prefix_len=1)
+    if sym.kind == "type":
+        return name_token_span(sym.declaration_span, sym.name, prefix_len=1)
+    if sym.kind == "type_field":
+        return name_token_span(sym.declaration_span, sym.name, prefix_len=0)
+    return sym.declaration_span
+
+
+def _reference_resolves_to(
+    prog: Program | ProgramWithValidation,
+    candidate: Span,
+    target: SymbolRef,
+) -> bool:
+    if current_source() is None:
+        return True
+    resolved = _resolve_symbol_at(
+        prog,
+        lsp.Position(line=candidate.start_line - 1, character=candidate.start_col - 1),
+    )
+    if resolved is None:  # pragma: no cover - collectors only emit resolvable syntax spans
+        return False
+    procedure_kinds = {"procedure", "agent_tool"}
+    same_kind = (
+        resolved.kind == target.kind
+        or resolved.kind in procedure_kinds
+        and target.kind in procedure_kinds
+    )
+    return same_kind and resolved.declaration_span == target.declaration_span
 
 
 def _collect_literal_arg_refs(arg: CallArg, name: str, out: List[Span], collector) -> None:
@@ -3144,12 +3256,6 @@ def compute_rename(
     edits: List[lsp.TextEdit] = []
     for s in spans:
         edits.append(lsp.TextEdit(range=_span_to_range(s), new_text=new_name))
-    # Always include the declaration identifier explicitly.
-    if sym.cursor_span is not None:
-        decl_edit = lsp.TextEdit(range=_span_to_range(sym.cursor_span), new_text=new_name)
-        # de-dupe
-        if not any(e.range == decl_edit.range and e.new_text == decl_edit.new_text for e in edits):
-            edits.append(decl_edit)
     return lsp.WorkspaceEdit(changes={uri: edits})
 
 
@@ -3421,6 +3527,8 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
 
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
             children.append(_proc_symbol(stmt.proc))
+        elif isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
+            children.append(_type_def_symbol(stmt.typedef))
     for span in proc.optimize_spans:
         if span.loc is not None:
             children.append(
