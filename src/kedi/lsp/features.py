@@ -1913,11 +1913,14 @@ def compute_hover(
     source: str, source_path: Optional[str], pos: lsp.Position
 ) -> Optional[lsp.Hover]:
     """Markdown hover for the symbol under the cursor."""
+    # Embedded Python owns hover inside its exact source regions. Returning a Kedi
+    # fallback here races the editor's Pyright/Pylance forwarding provider and can
+    # mask the Python symbol/type information with a generic statement hover.
+    if _position_in_python_hover_region(source, pos):
+        return None
     try:
         prog = parse_program(source, source_path=source_path)
     except KediParseError:
-        return None
-    if _position_in_header_inline_python(source, pos):
         return None
     if (doc_hover := _docstring_hover(prog, pos)) is not None:
         return doc_hover
@@ -2311,7 +2314,7 @@ def _describe_ast_node(node) -> Optional[str]:
     if isinstance(node, ReturnBlockStmt):
         return (
             "**Python return**\n\n"
-            "The fenced block's return value becomes the procedure or program result."
+            "The Python value becomes the procedure or program result without string rendering."
         )
     if isinstance(node, BacktickLineStmt):
         return "**Inline Python statement** `` `…` `` — side-effecting Python line."
@@ -4175,6 +4178,7 @@ def _collect_python_ranges(
     *,
     include_header_inline: bool = True,
     include_regular_inline: bool = True,
+    include_directive_inline: bool = True,
 ) -> List[dict]:
     tree: Tree = _ts_parse(source.encode("utf-8") if isinstance(source, str) else source)
     src_bytes = source.encode("utf-8") if isinstance(source, str) else source
@@ -4196,6 +4200,10 @@ def _collect_python_ranges(
                 }
             )
         elif node.type == "python_inline_body":
+            if not include_directive_inline and any(
+                parent.type.endswith("_directive") for parent in parents
+            ):
+                return
             header_owner = _header_inline_owner(parents)
             if header_owner is not None and not include_header_inline:
                 return
@@ -4217,11 +4225,11 @@ def _collect_python_ranges(
     return out
 
 
-def _position_in_header_inline_python(source: str, pos: lsp.Position) -> bool:
-    for region in compute_header_python_ranges(source):
-        if _position_in_range(pos, region["range"]):
-            return True
-    return False
+def _position_in_python_hover_region(source: str, pos: lsp.Position) -> bool:
+    return any(
+        _position_in_range(pos, region["range"])
+        for region in _collect_python_ranges(source, include_directive_inline=False)
+    )
 
 
 def _position_in_range(pos: lsp.Position, range_: dict) -> bool:

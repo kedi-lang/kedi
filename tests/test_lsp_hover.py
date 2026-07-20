@@ -103,6 +103,24 @@ def test_hover_on_header_default_expression_defers_to_python():
     assert hover_at(src, "example.kedi", "get_name") is None
 
 
+def test_hover_inside_fenced_python_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> int:\n  = ```\n  return solve_knapsack(items, 10)\n  ```\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
+def test_hover_inside_inline_python_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> int:\n  = `solve_knapsack(items, 10)`\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
+def test_hover_inside_inline_python_substitution_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> str:\n  = <`solve_knapsack(items, 10)`>\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
 def test_hover_on_nested_procedure_header_shows_signature():
     src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
     body = hover_text_at(src, "example.kedi", "@bar")

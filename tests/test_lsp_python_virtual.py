@@ -87,6 +87,24 @@ def test_python_virtual_document_exposes_optimize_block_outputs_to_fenced_python
     }
 
 
+def test_python_virtual_document_maps_native_inline_toplevel_return() -> None:
+    src = (
+        "@solve_knapsack(items: str, capacity: int) -> int:\n"
+        "  = `capacity`\n"
+        "\n"
+        '= `solve_knapsack("A", 10)`\n'
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/knapsack.kedi", focus_line=3)
+
+    assert 'solve_knapsack("A", 10)' in virtual["text"]
+    assert any(
+        mapping["kind"] == "inline"
+        and mapping["sourceRange"]["start"] == {"line": 3, "character": 3}
+        for mapping in virtual["mappings"]
+    )
+
+
 def test_python_virtual_document_defaults_untyped_procedure_params_to_str_in_python_blocks():
     src = '@get_capital(country) -> str:\n  ```\n  print("called", country)\n  ```\n  = Stockholm\n'
     virtual = compute_python_virtual_document(src, "/tmp/sys.kedi")

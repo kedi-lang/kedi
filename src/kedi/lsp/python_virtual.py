@@ -1016,8 +1016,16 @@ def _emit_return(
 ) -> None:
     if isinstance(stmt, ReturnBlockStmt):
         region = cursor.next("fenced", stmt.loc)
+        if region is None:
+            # Native single-backtick returns intentionally share the
+            # ReturnBlockStmt AST node so runtime values keep their Python type.
+            # Preserve that expression in the virtual document as well.
+            region = cursor.next("inline", stmt.loc)
         if region is not None:
-            builder.add_mapped_region(region, indent)
+            if region.kind == "fenced":
+                builder.add_mapped_region(region, indent)
+            else:
+                _emit_inline_expression_stub(builder, region, indent)
         return
     _emit_segments(builder, cursor, stmt, scope, indent)
 
