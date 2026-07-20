@@ -38,6 +38,13 @@ class ProfileEffortMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileApprovalMember:
+    kind: Literal["approval"] = "approval"
+    plain_value: str | None = None
+    backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -71,6 +78,7 @@ class ProfileDefinition:
         | ProfileAdapterMember
         | ProfileModelMember
         | ProfileEffortMember
+        | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember

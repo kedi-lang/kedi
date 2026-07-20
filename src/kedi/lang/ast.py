@@ -281,6 +281,12 @@ class EffortDirectiveStmt(Stmt):
 
 
 @dataclass
+class ApprovalDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -337,6 +343,7 @@ class ProfileDefStmt(Stmt):
     adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
+    approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
@@ -370,6 +377,13 @@ class ProfileAdapterEntry:
 
 @dataclass
 class ProfileEffortEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileApprovalEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)

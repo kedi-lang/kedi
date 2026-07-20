@@ -187,6 +187,23 @@ def test_hover_on_nested_text_segment_works():
     assert "Hello world" in body
 
 
+def test_hover_on_approval_directive_describes_static_and_dynamic_policies():
+    static_source = "> approval: allow\n"
+    static_body = hover_text_at(static_source, "example.kedi", "allow")
+    assert "mutating tools" in static_body
+    assert "ApprovalDecision" in static_body
+
+    dynamic_source = "> approval: `approve_tool`\n"
+    dynamic_body = hover_text_at(dynamic_source, "example.kedi", "approve_tool")
+    assert "inline Python callable" in dynamic_body
+
+
+def test_hover_on_profile_approval_entry_describes_profile_scope():
+    source = "> profile: guarded:\n  > approval: deny\n"
+    body = hover_text_at(source, "example.kedi", "deny")
+    assert "stored in this profile" in body
+
+
 def test_hover_and_definition_on_imported_procedure(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text(

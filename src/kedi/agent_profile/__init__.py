@@ -4,6 +4,7 @@ from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
     AgentToolOverrideUnsupported,
+    eval_approval_directive,
     eval_adapter_directive,
     eval_agent_directive,
     eval_effort_directive,
@@ -17,6 +18,7 @@ from .profile import AgentProfile
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
+    ProfileApprovalMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
@@ -47,6 +49,7 @@ __all__ = [
     "AgentProfile",
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",
+    "ProfileApprovalMember",
     "ACP_AGENT_SETTING_KEYS",
     "CLAUDE_AGENT_SETTING_KEYS",
     "CODEX_AGENT_SETTING_KEYS",
@@ -71,6 +74,7 @@ __all__ = [
     "current_block_agent_profile",
     "dspy_lm_settings",
     "eval_adapter_directive",
+    "eval_approval_directive",
     "eval_agent_directive",
     "eval_effort_directive",
     "eval_mcp_directive",

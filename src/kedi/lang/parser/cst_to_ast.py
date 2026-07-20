@@ -42,6 +42,7 @@ from ...source_loading import CompositeSourceMap
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    ApprovalDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -65,6 +66,7 @@ from ..ast import (
     ProcedureDef,
     ProfileAdapterEntry,
     ProfileAgentEntry,
+    ProfileApprovalEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
@@ -343,6 +345,10 @@ class _Walker:
                 stmt = self._walk_effort_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "approval_directive":
+                stmt = self._walk_approval_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
                 stmt = self._walk_system_directive(child)
                 prog.toplevel_body.append(stmt)
@@ -474,6 +480,16 @@ class _Walker:
             node,
             f"effort directive must be one of: {expected}",
             code="K-EFFORT-VALUE",
+        )
+
+    def _validate_approval_plain_value(self, node: Node, value: str) -> None:
+        if value in {"allow", "deny"}:
+            return
+        self._error(
+            node,
+            "approval directive must be 'allow', 'deny', or an inline Python handler; "
+            "'edit' is only valid as ApprovalDecision.edit(...) from a handler",
+            code="K-APPROVAL-VALUE",
         )
 
     def _validate_mcp_transport_plain_value(self, node: Node, value: str) -> None:
@@ -798,6 +814,8 @@ class _Walker:
             return self._walk_adapter_directive(node)
         if t == "effort_directive":
             return self._walk_effort_directive(node)
+        if t == "approval_directive":
+            return self._walk_approval_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -1504,6 +1522,14 @@ class _Walker:
         self._validate_effort_plain_value(value_node, plain)
         return EffortDirectiveStmt(plain_value=plain, loc=self._span(node))
 
+    def _walk_approval_directive(self, node: Node) -> ApprovalDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        if plain is not None:
+            value_node = _field(node, "value")
+            assert value_node is not None
+            self._validate_approval_plain_value(value_node, plain)
+        return ApprovalDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -1644,6 +1670,7 @@ class _Walker:
         agent_members: list[ProfileAgentEntry] = []
         adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
+        approval_members: list[ProfileApprovalEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
@@ -1721,6 +1748,15 @@ class _Walker:
                                 loc=self._span(child),
                             )
                         )
+                elif child.type == "approval_directive":
+                    approval_stmt = self._walk_approval_directive(child)
+                    approval_members.append(
+                        ProfileApprovalEntry(
+                            plain_value=approval_stmt.plain_value,
+                            backtick_code=approval_stmt.backtick_code,
+                            loc=self._span(child),
+                        )
+                    )
                 elif child.type == "system_directive":
                     system_stmt = self._walk_system_directive(child)
                     if system_stmt.template_lines:
@@ -1775,6 +1811,7 @@ class _Walker:
             and not agent_members
             and not adapter_members
             and not effort_members
+            and not approval_members
             and not system_members
             and not mcp_members
             and not settings_members
@@ -1782,7 +1819,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -1791,6 +1828,7 @@ class _Walker:
             adapter_members=adapter_members,
             model_members=members,
             effort_members=effort_members,
+            approval_members=approval_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,

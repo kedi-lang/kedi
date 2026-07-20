@@ -19,6 +19,14 @@ from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, 
 import dotenv
 from typing_extensions import Sentinel
 
+from .agent_adapter.approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalMode,
+    ApprovalPolicy,
+    ApprovalRequest,
+    ToolRisk,
+)
 from .agent_adapter import AgentAdapter, AgentAdapterKind
 from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.registry import adapter_factory, build_adapter, known_adapter_shortnames
@@ -37,6 +45,7 @@ AdapterLike: TypeAlias = AgentAdapter[Any] | LazyAdapter
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
+_TOOL_RISK_ATTR = "__kedi_tool_risk__"
 _TYPE_INJECT_ATTR = "__kedi_type_inject__"
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 _TYPE_REGISTRY: dict[str, dict[str, builtins.type[Any]]] = {}
@@ -202,6 +211,21 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),
         tuple(profile.tools),
         tuple(_stable_repr(server) for server in profile.mcp_servers),
+        _approval_identity(profile.approval),
+    )
+
+
+def _approval_identity(approval_policy: ApprovalPolicy | None) -> tuple[Any, ...] | None:
+    if approval_policy is None:
+        return None
+    handler = approval_policy.handler
+    if handler is None:
+        return approval_policy.mode, None
+    return (
+        approval_policy.mode,
+        getattr(handler, "__module__", None),
+        getattr(handler, "__qualname__", None),
+        id(handler),
     )
 
 
@@ -250,6 +274,7 @@ def _agent_profile_overrides(
     settings: Mapping[str, Any] | None,
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
+    approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
     return tool_map, AgentProfile(
@@ -261,7 +286,26 @@ def _agent_profile_overrides(
         settings=dict(settings or {}),
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
+        approval=_coerce_approval(approval_policy),
     )
+
+
+def _coerce_approval(
+    value: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+) -> ApprovalPolicy | None:
+    if value is None:
+        return None
+    if isinstance(value, ApprovalPolicy):
+        return value
+    if isinstance(value, str):
+        if value == "allow":
+            return ApprovalPolicy.allow()
+        if value == "deny":
+            return ApprovalPolicy.deny()
+        raise TypeError("approval must be 'allow', 'deny', ApprovalPolicy, or an approval handler")
+    if callable(value):
+        return ApprovalPolicy.dynamic(value)
+    raise TypeError("approval must be 'allow', 'deny', ApprovalPolicy, or an approval handler")
 
 
 def _known_adapter_names(kind: AgentAdapterKind) -> tuple[str, ...]:
@@ -489,6 +533,7 @@ def _build_config(
     tools: Sequence[Callable[..., Any]],
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
     adapter_kwargs: Mapping[str, Any],
     parallel: bool | None = None,
     max_workers: int | None = None,
@@ -557,6 +602,7 @@ def _build_config(
         settings=dict(settings or {}),
         tools=tuple(_tool_mapping(tools)),
         mcp_servers=tuple(mcp_servers),
+        approval=_coerce_approval(approval),
     )
     profile = base_profile.merge(profile_patch)
     return _APIConfig(
@@ -590,6 +636,7 @@ def configure(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -612,6 +659,7 @@ def configure(
             tools=tools,
             env=env,
             mcp_servers=mcp_servers,
+            approval=approval,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -621,6 +669,24 @@ def configure(
 
 def reset_config() -> None:
     _config_var.set(_DEFAULT_CONFIG)
+
+
+def approval(handler: ApprovalHandler) -> ApprovalHandler:
+    """Register ``handler`` as the current Python API's default approval policy.
+
+    Explicit ``approval=`` values on :func:`query`, :func:`bind`, or
+    :func:`context` take precedence for their own scope.
+    """
+
+    policy = ApprovalPolicy.dynamic(handler)
+    config = _config_var.get()
+    _config_var.set(
+        dataclasses.replace(
+            config,
+            profile=config.profile.merge(AgentProfile(approval=policy)),
+        )
+    )
+    return handler
 
 
 class _KediContext:
@@ -656,6 +722,7 @@ def context(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -673,6 +740,7 @@ def context(
             tools=tools,
             env=env,
             mcp_servers=mcp_servers,
+            approval=approval,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -701,6 +769,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    risk: ToolRisk = "mutating",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -710,9 +779,12 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    risk: ToolRisk = "mutating",
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     if retries < 0:
         raise ValueError("tool retries must be >= 0")
+    if risk not in ("read_only", "mutating", "sensitive"):
+        raise ValueError("tool risk must be 'read_only', 'mutating', or 'sensitive'")
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
         tool_name = name or _callable_name(inner)
@@ -750,6 +822,7 @@ def tool(
             wrapped = sync_wrapper
 
         setattr(wrapped, _TOOL_NAME_ATTR, tool_name)
+        setattr(wrapped, _TOOL_RISK_ATTR, risk)
         if tool_description is not None:
             setattr(wrapped, _TOOL_DESCRIPTION_ATTR, tool_description)
             wrapped.__doc__ = tool_description
@@ -803,6 +876,7 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -819,6 +893,7 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     selection = _resolve_selection(adapter=adapter, agent=agent)
@@ -834,6 +909,7 @@ def query(
         settings=settings,
         tools=tools,
         mcp_servers=mcp_servers,
+        approval_policy=approval,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -872,6 +948,7 @@ def bind(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     cache: bool = False,
     reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -888,6 +965,7 @@ def bind(
         settings=settings,
         tools=tools,
         mcp_servers=mcp_servers,
+        approval_policy=approval,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -919,10 +997,16 @@ def bind(
 
 __all__ = [
     "AdapterLike",
+    "ApprovalDecision",
+    "ApprovalHandler",
+    "ApprovalMode",
+    "ApprovalPolicy",
+    "ApprovalRequest",
     "AgentName",
     "CacheInfo",
     "FrameworkAdapterName",
     "bind",
+    "approval",
     "cache_info",
     "clear_cache",
     "configure",

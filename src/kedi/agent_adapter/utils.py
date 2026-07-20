@@ -4,14 +4,16 @@ import asyncio
 import contextvars
 import copy
 import inspect
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Callable, Coroutine, Iterator, TypeVar, cast
+from typing import Any, Awaitable, Callable, Iterator, Mapping, TypeVar, cast
 
 from pydantic import BaseModel
 from pydantic_ai.tools import Tool
 
+from .approval import ToolRisk
 from ..core import CallExpr, InputExpr, KediRuntime
 from ..lang.ast import ProcedureDef, Program, ProgramWithValidation
 from ..lang.compiler.type_system import KediType, coerce_model_value
@@ -33,22 +35,26 @@ _KEDI_TOOL_CALL_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
 _T = TypeVar("_T")
 
 
-def run_sync(coro: Coroutine[Any, Any, _T]) -> _T:
-    """Run ``coro`` to completion from sync code, even inside a running loop.
+def run_sync(awaitable: Awaitable[_T]) -> _T:
+    """Run an awaitable to completion from sync code, even inside a running loop.
 
     When no event loop is running this is just :func:`asyncio.run`. When called
     from within a running loop (``asyncio.run`` would raise there) the coroutine
     is executed on its own loop in a dedicated worker thread.
     """
+
+    async def resolve() -> _T:
+        return await awaitable
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return asyncio.run(resolve())
     # Copy the caller's context so a dspy.context(lm=...) override reaches the worker.
     ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as executor:
         # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().
-        return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, coro)).result())
+        return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, resolve())).result())
 
 
 def inside_kedi_tool_call() -> bool:
@@ -93,6 +99,8 @@ def kedi_procedure_tool_spec(
             description=tool_description,
         ),
         proc=proc,
+        risk=_procedure_tool_risk(proc),
+        risk_resolver=_procedure_tool_risk_resolver(proc),
     )
 
 
@@ -101,7 +109,37 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     description = getattr(fn, "__kedi_tool_description__", None)
     if not isinstance(description, str):
         description = _callable_description(fn)
-    return ToolSpec(fn=fn, name=name, description=description)
+    risk = getattr(fn, "__kedi_tool_risk__", "mutating")
+    if risk not in ("read_only", "mutating", "sensitive"):
+        raise ValueError(f"invalid Kedi tool risk {risk!r} for {name!r}")
+    return ToolSpec(fn=fn, name=name, description=description, risk=risk)
+
+
+def _procedure_tool_risk(proc: ProcedureDef) -> ToolRisk:
+    """Classify bundled filesystem reads; all other Kedi procedures are mutating by default."""
+
+    source_path = proc.loc.source_path if proc.loc is not None else None
+    if source_path is not None and Path(source_path).name == "filesystem.kedi":
+        if proc.name in {"read_text_file", "path_exists", "list_directory", "get_file_info"}:
+            return "read_only"
+    return "mutating"
+
+
+def _procedure_tool_risk_resolver(
+    proc: ProcedureDef,
+) -> Callable[[Mapping[str, Any]], ToolRisk] | None:
+    """Return an argument-aware risk classifier for bundled filesystem reads."""
+
+    source_path = proc.loc.source_path if proc.loc is not None else None
+    if source_path is None or Path(source_path).name != "filesystem.kedi":
+        return None
+    if proc.name != "read_text_file":
+        return None
+
+    def filesystem_read_risk(arguments: Mapping[str, Any]) -> ToolRisk:
+        return "sensitive" if arguments.get("secret_files") is True else "read_only"
+
+    return filesystem_read_risk
 
 
 def kedi_procedure_to_pydantic_tool(
@@ -188,7 +226,7 @@ def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
     def _sync_tool(*args: Any, **kwargs: Any) -> Any:
         result = target(*args, **kwargs)
         if inspect.isawaitable(result):
-            return run_sync(cast(Coroutine[Any, Any, Any], result))
+            return run_sync(cast(Awaitable[Any], result))
         return result
 
     setattr(_sync_tool, _DSPY_SYNC_TOOL_MARKER, True)

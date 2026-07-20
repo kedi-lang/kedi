@@ -76,6 +76,7 @@ from ..agent_profile.settings import (
 from ..lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    ApprovalDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -97,6 +98,7 @@ from ..lang.ast import (
     ProcedureDef,
     ProfileAdapterEntry,
     ProfileAgentEntry,
+    ProfileApprovalEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
@@ -2234,6 +2236,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.effort_members:
                 visit(member)
+            for member in node.approval_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             for member in node.mcp_members:
@@ -2397,6 +2401,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _adapter_directive_markdown(node)
     if isinstance(node, EffortDirectiveStmt):
         return _effort_directive_markdown(node)
+    if isinstance(node, ApprovalDirectiveStmt):
+        return _approval_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
@@ -2415,6 +2421,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_model_entry_markdown(node)
     if isinstance(node, ProfileEffortEntry):
         return _profile_effort_entry_markdown(node)
+    if isinstance(node, ProfileApprovalEntry):
+        return _profile_approval_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
@@ -2512,6 +2520,16 @@ def _effort_directive_markdown(stmt: EffortDirectiveStmt) -> str:
         f"`> effort:` {value}\n\n"
         "Requests this reasoning effort for subsequent model calls in the current scope. "
         "Support depends on the active adapter and model."
+    )
+
+
+def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
+    value = _approval_value_preview(stmt)
+    return (
+        f"`> approval:` {value}\n\n"
+        "Controls registered tool calls in the current scope. `allow` permits mutating "
+        "tools; `deny` refuses them. An inline Python callable may return an "
+        "`ApprovalDecision` to allow, deny, or edit arguments."
     )
 
 
@@ -2630,7 +2648,21 @@ def _profile_effort_entry_markdown(entry: ProfileEffortEntry) -> str:
     )
 
 
+def _profile_approval_entry_markdown(entry: ProfileApprovalEntry) -> str:
+    value = _approval_value_preview(entry)
+    return (
+        f"`> approval:` {value}\n\n"
+        "Tool-call approval policy stored in this profile. Applied when the profile is used."
+    )
+
+
 def _effort_value_preview(stmt: EffortDirectiveStmt | ProfileEffortEntry) -> str:
+    if stmt.backtick_code is not None:
+        return f"`{stmt.backtick_code}`"
+    return f"`{stmt.plain_value or ''}`"
+
+
+def _approval_value_preview(stmt: ApprovalDirectiveStmt | ProfileApprovalEntry) -> str:
     if stmt.backtick_code is not None:
         return f"`{stmt.backtick_code}`"
     return f"`{stmt.plain_value or ''}`"

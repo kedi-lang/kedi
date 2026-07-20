@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..effort import EffortValue
 from .mcp import McpServerSpec
@@ -24,6 +25,7 @@ class AgentProfile:
     settings: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerSpec, ...] = ()
+    approval: ApprovalPolicy | None = None
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -48,6 +50,8 @@ class AgentProfile:
             updates["tools"] = _merge_tool_names(self.tools, other.tools)
         if other.mcp_servers:
             updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
+        if other.approval is not None:
+            updates["approval"] = other.approval
         if not updates:
             return self
         return replace(self, **updates)

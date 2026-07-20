@@ -10,6 +10,7 @@ from ...agent_profile.compile import build_profile_registry, capture_procedure_p
 from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
+    eval_approval_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -25,6 +26,7 @@ from ...source_loading import load_kedi_source_bundle
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    ApprovalDirectiveStmt,
     EffortDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
@@ -379,6 +381,9 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, EffortDirectiveStmt):
                         active = active.merge(eval_effort_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, ApprovalDirectiveStmt):
+                        active = active.merge(eval_approval_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, SystemDirectiveStmt):
                         active = active.merge(eval_system_directive(self.rt, item, kwargs))

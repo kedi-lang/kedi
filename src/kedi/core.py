@@ -810,6 +810,7 @@ class KediRuntime:
             return ()
 
         from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.tool_override import with_approval
         from .agent_adapter.utils import (
             kedi_procedure_tool_spec,
             python_callable_tool_spec,
@@ -836,7 +837,14 @@ class KediRuntime:
             if tool_fn is None:
                 raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
             specs.append(python_callable_tool_spec(tool_name, tool_fn))
-        return tuple(specs)
+        return tuple(
+            with_approval(
+                spec,
+                policy=profile.approval,
+                adapter_shortname=getattr(adapter, "shortname", None),
+            )
+            for spec in specs
+        )
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

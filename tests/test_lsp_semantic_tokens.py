@@ -104,6 +104,24 @@ def test_semantic_tokens_cover_annotated_description_string():
     )
 
 
+def test_semantic_tokens_cover_approval_directive_values():
+    src = "> approval: allow\n> approval: `approve_tool`\n"
+    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in tokens)
+    assert any(
+        line == 0 and col == 12 and token_type == string_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and col == 13 and token_type == variable_type
+        for line, col, _, token_type, _ in tokens
+    )
+
+
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
     tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)

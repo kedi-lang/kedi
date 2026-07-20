@@ -750,7 +750,7 @@ Dataset items can follow two conventions:
 ## Agent Profiles and Tools
 
 Kedi routes LLM calls through agent adapters. Use `> adapter:`, `> agent:`,
-`> model:`, `> effort:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
+`> model:`, `> effort:`, `> approval:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
 to choose adapter implementations, choose models, set reasoning effort, set
 agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
 
@@ -760,6 +760,7 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
 > adapter: pydantic
 > model: groq:qwen/qwen3-32b
 > effort: low
+> approval: allow
 > system: Answer concisely and avoid extra narration.
 
 > profile: fast:
@@ -816,6 +817,30 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; plain values or
   `` `expression` `` are allowed. Pydantic AI maps `max` to `xhigh`.
   DSPy receives the value directly as `reasoning_effort`.
+- `> approval: allow` / `> approval: deny` — configure tool-call approval for
+  subsequent agent calls in the current scope. `allow` permits registered
+  mutating tools; `deny` refuses them. Without an explicit policy, Kedi allows
+  read-only tools automatically and refuses mutating or sensitive tools.
+  A dynamic Python handler can inspect and allow, deny, or edit a call:
+
+  ````kedi
+  ```
+  from kedi import ApprovalDecision
+
+  def approve_tool(request):
+      if request.tool_name == "write_report":
+          return ApprovalDecision.edit({**request.arguments, "path": "reports/safe.txt"})
+      return ApprovalDecision.deny(reason="tool is not allowed here")
+  ```
+
+  > approval: `approve_tool`
+  ````
+
+  The handler receives an immutable request with `tool_name`, `arguments`,
+  `risk`, adapter metadata, and tool metadata. It must return
+  `ApprovalDecision.allow()`, `ApprovalDecision.deny()`, or
+  `ApprovalDecision.edit({...})`. `edit` is available only from a handler;
+  `> approval: edit` is invalid.
 - `> system: text` — set active agent instructions for subsequent procedure
   captures and prompt calls.
 - `> settings:` — set active model configuration for subsequent procedure
@@ -860,8 +885,8 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> agent:`,
-  `> adapter:`, `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`,
-  and/or `> use:` members.
+  `> adapter:`, `> model:`, `> effort:`, `> approval:`, `> system:`,
+  `> settings:`, `> mcp:`, and/or `> use:` members.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
@@ -969,6 +994,23 @@ Pydantic AI). Adapters without tool support surface capability warnings in the
 LSP; harness adapters that cannot accept external tools may ignore registrations
 until their underlying protocol gains tool support.
 
+### Tool approval and sensitive files
+
+Kedi classifies tool calls as `read_only`, `mutating`, or `sensitive`. Custom
+Python tools default to `mutating`; choose a different classification with the
+Python API when appropriate:
+
+```python
+@kedi.tool(risk="read_only")
+def list_public_files() -> list[str]:
+    ...
+```
+
+The bundled filesystem module treats normal reads as read-only, but refuses
+`.env` and `.env.*` files by default. Requesting one requires
+`secret_files=True`, which upgrades that call to sensitive and therefore needs
+an explicit `allow` policy or a dynamic approval decision.
+
 ## Python API
 
 Kedi can be embedded in Python without creating a separate CLI entrypoint. The
@@ -1013,6 +1055,12 @@ Rules:
 - `model=`, `adapter=`, and `agent=` override the configured backend only for
   that callable. Use `adapter=` for frameworks (`pydantic`, `dspy`,
   `langchain`) and `agent=` for harnesses (`claude`, `codex`, `acp`).
+- `approval=` accepts `"allow"`, `"deny"`, an `ApprovalPolicy`, or a callable.
+  `query` and `bind` apply it only to that callable's registered tools.
+- `@kedi.approval` registers a callable as the current Python API's default
+  dynamic policy, equivalent to configuring that handler for subsequent calls.
+  An explicit `approval=` on `query`, `bind`, or `kedi.context(...)` takes
+  precedence in that scope.
 
 Dynamic output types can be passed as normal Python values:
 
@@ -1075,6 +1123,7 @@ kedi.configure(
     effort="low",
     settings={"temperature": 0.2},
     tools=[search_docs],
+    approval="allow",
     env={"audience": "maintainers"},
 )
 ```
@@ -1098,6 +1147,27 @@ If no backend is passed explicitly, `configure()` reads `KEDI_AGENT` or
 `KEDI_ADAPTER_MODEL` supplies the model for either selection. `kedi.context(...)`
 temporarily merges the same options and restores the previous configuration
 when the block exits. It supports both sync and async context managers.
+
+For a dynamic policy, decorate a Python handler and return one explicit
+decision. The decorator registers it as the default policy. Kedi passes an
+immutable request; only `edit` may replace arguments:
+
+```python
+import kedi
+
+
+@kedi.approval
+def protect_writes(request: kedi.ApprovalRequest) -> kedi.ApprovalDecision:
+    if request.tool_name == "write_report":
+        return kedi.ApprovalDecision.edit(
+            {**request.arguments, "path": "reports/latest.md"}
+        )
+    return kedi.ApprovalDecision.deny(reason="tool is outside this task")
+
+
+with kedi.context(approval=protect_writes):
+    run_task()
+```
 
 `McpServerSpec` is available from the root package for Python configuration:
 

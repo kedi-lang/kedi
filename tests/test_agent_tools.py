@@ -419,6 +419,7 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
 @tool_proc(query: str) -> str:
     = <query>
 > use: tool_proc
+> approval: allow
 >> value [x]
 = <x>
 """
@@ -520,6 +521,7 @@ async def fetch(url: str) -> str:
     ```
 
 > use: web_fetch
+> approval: allow
 >> value [x]
 = <x>
 """
