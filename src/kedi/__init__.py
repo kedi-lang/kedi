@@ -1,6 +1,9 @@
 from ._version import __version__
 from .api import (
+    AdapterLike,
+    AgentName,
     CacheInfo,
+    FrameworkAdapterName,
     bind,
     cache_info,
     clear_cache,
@@ -12,6 +15,7 @@ from .api import (
     tool,
     type,
 )
+from .agent_profile import McpServerSpec
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (
@@ -24,7 +28,11 @@ from .promise import KediPromise, KediPromiseLeak, force
 
 __all__ = [
     "__version__",
+    "AdapterLike",
+    "AgentName",
     "CacheInfo",
+    "FrameworkAdapterName",
+    "McpServerSpec",
     "bind",
     "cache_info",
     "clear_cache",

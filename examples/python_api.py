@@ -56,7 +56,11 @@ kedi.configure(
 )
 
 
-@kedi.query(cache=True, settings={"temperature": 0.2})
+@kedi.query(
+    adapter="pydantic",
+    cache=True,
+    settings={"temperature": 0.2},
+)
 def summarize(topic: str) -> str:
     """kedi
     > use: search_local_docs

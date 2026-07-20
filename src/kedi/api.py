@@ -14,23 +14,26 @@ from collections.abc import Mapping, Sequence
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Literal, ParamSpec, TypeVar, cast, overload
+from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, overload
 
 import dotenv
 from typing_extensions import Sentinel
 
-from .agent_adapter import AgentAdapter
+from .agent_adapter import AgentAdapter, AgentAdapterKind
 from .agent_adapter.adapters.lazy import LazyAdapter
-from .agent_adapter.registry import build_adapter
+from .agent_adapter.registry import adapter_factory, build_adapter, known_adapter_shortnames
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .effort import EffortValue
+from .errors import KediExecutionError
 from .lang import compile_program, parse_program
 
 P = ParamSpec("P")
 R = TypeVar("R")
 ClassT = TypeVar("ClassT", bound=builtins.type[Any])
 
-AdapterName = Literal["pydantic", "dspy", "langchain", "claude", "codex"]
+FrameworkAdapterName = Literal["pydantic", "dspy", "langchain"]
+AgentName = Literal["claude", "codex", "acp"]
+AdapterLike: TypeAlias = AgentAdapter[Any] | LazyAdapter
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
@@ -43,8 +46,9 @@ _RESPONSE_CACHE: dict[str, Any] = {}
 
 @dataclass(frozen=True)
 class _APIConfig:
-    adapter: AgentAdapter[Any] | LazyAdapter | None = None
-    adapter_name: AdapterName = "pydantic"
+    adapter: AdapterLike | None = None
+    adapter_kind: AgentAdapterKind = "agent-framework"
+    adapter_shortname: str = "pydantic"
     model: str | None = None
     adapter_kwargs: Mapping[str, Any] = field(default_factory=dict)
     profile: AgentProfile = field(default_factory=AgentProfile.empty)
@@ -190,6 +194,9 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
     """Everything about a resolved profile that changes the model's answer."""
     return (
         profile.model,
+        profile.adapter_kind,
+        profile.adapter_shortname,
+        _stable_repr(profile.agent_command),
         profile.effort,
         profile.system,
         tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),
@@ -208,8 +215,7 @@ def _response_cache_key(
     kwargs: Mapping[str, Any],
     config_env: Mapping[str, Any],
     env: Mapping[str, Any],
-    adapter_name: str,
-    model: str | None,
+    adapter_identity: tuple[Any, ...],
     adapter_kwargs: Mapping[str, Any],
     profile: AgentProfile,
     tool_names: Sequence[str],
@@ -226,8 +232,7 @@ def _response_cache_key(
         tuple((key, _stable_repr(value)) for key, value in sorted(env.items())),
         # The resolved backend + profile + tools decide the answer; omitting them returns a stale
         # cached response across kedi.context(model=...)/configure(...)/different system or tools.
-        adapter_name,
-        model,
+        adapter_identity,
         tuple((key, _stable_repr(value)) for key, value in sorted(adapter_kwargs.items())),
         _profile_identity(profile),
         tuple(tool_names),
@@ -237,6 +242,9 @@ def _response_cache_key(
 
 def _agent_profile_overrides(
     *,
+    model: str | None | object,
+    adapter_kind: AgentAdapterKind | None,
+    adapter_shortname: str | None,
     system: str | None,
     effort: EffortValue | None,
     settings: Mapping[str, Any] | None,
@@ -245,12 +253,86 @@ def _agent_profile_overrides(
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
     return tool_map, AgentProfile(
+        model=None if model is _UNSET else cast(str | None, model),
+        adapter_kind=adapter_kind,
+        adapter_shortname=adapter_shortname,
         effort=effort,
         system=system,
         settings=dict(settings or {}),
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
     )
+
+
+def _known_adapter_names(kind: AgentAdapterKind) -> tuple[str, ...]:
+    return tuple(name for name in known_adapter_shortnames() if adapter_factory(name).kind == kind)
+
+
+def _selection_metadata(
+    value: str | AdapterLike,
+    *,
+    expected_kind: AgentAdapterKind,
+    parameter: str,
+) -> tuple[str, AgentAdapterKind, AdapterLike | None]:
+    if isinstance(value, str):
+        try:
+            factory = adapter_factory(value)
+        except KediExecutionError as exc:
+            known = ", ".join(_known_adapter_names(expected_kind))
+            raise ValueError(f"unknown {parameter} {value!r}; expected one of: {known}") from exc
+        if factory.kind != expected_kind:
+            other = "agent" if expected_kind == "agent-framework" else "adapter"
+            raise ValueError(
+                f"{value!r} is an {factory.kind}; pass it with {other}= instead of {parameter}="
+            )
+        return value, factory.kind, None
+
+    kind = getattr(value, "kind", None)
+    shortname = getattr(value, "shortname", None)
+    if kind not in ("agent-framework", "agent-harness") or not isinstance(shortname, str):
+        raise TypeError(
+            f"{parameter} instances must implement AgentAdapter and define kind and shortname"
+        )
+    if kind != expected_kind:
+        other = "agent" if expected_kind == "agent-framework" else "adapter"
+        raise ValueError(
+            f"{shortname!r} is an {kind}; pass it with {other}= instead of {parameter}="
+        )
+    return shortname, kind, value
+
+
+def _resolve_selection(
+    *,
+    adapter: FrameworkAdapterName | AdapterLike | object,
+    agent: AgentName | AdapterLike | object,
+) -> tuple[str, AgentAdapterKind, AdapterLike | None] | None:
+    if adapter is not _UNSET and agent is not _UNSET:
+        raise ValueError("adapter and agent are mutually exclusive")
+    if agent is not _UNSET:
+        return _selection_metadata(
+            cast(str | AdapterLike, agent),
+            expected_kind="agent-harness",
+            parameter="agent",
+        )
+    if adapter is not _UNSET:
+        return _selection_metadata(
+            cast(str | AdapterLike, adapter),
+            expected_kind="agent-framework",
+            parameter="adapter",
+        )
+    return None
+
+
+def _adapter_identity(
+    adapter: AdapterLike,
+    *,
+    kind: AgentAdapterKind,
+    shortname: str,
+) -> tuple[Any, ...]:
+    if isinstance(adapter, LazyAdapter):
+        return kind, shortname, "registry"
+    adapter_type = builtins.type(adapter)
+    return kind, shortname, adapter_type.__module__, adapter_type.__qualname__, id(adapter)
 
 
 def _resolve_bind_file(file: str | os.PathLike[str], fn: Callable[..., Any]) -> Path:
@@ -282,6 +364,7 @@ def _decorate_kedi_program(
     tool_map: Mapping[str, Callable[..., Any]],
     env: Mapping[str, Any],
     profile_override: AgentProfile,
+    adapter_override: AdapterLike | None,
     use_main: bool,
     cache: bool,
 ) -> Callable[P, R]:
@@ -292,6 +375,7 @@ def _decorate_kedi_program(
         if reload_program is not None:
             active_program, active_source_hash = reload_program()
         profile = config.profile.merge(profile_override)
+        active_adapter = adapter_override or _build_adapter(config)
         tool_namespace = {
             *config.tools,
             *tool_map,
@@ -305,8 +389,11 @@ def _decorate_kedi_program(
             kwargs=kwargs,
             config_env=config.env,
             env=env,
-            adapter_name=config.adapter_name,
-            model=config.model,
+            adapter_identity=_adapter_identity(
+                active_adapter,
+                kind=profile.adapter_kind or config.adapter_kind,
+                shortname=profile.adapter_shortname or config.adapter_shortname,
+            ),
             adapter_kwargs=config.adapter_kwargs,
             profile=profile,
             tool_names=sorted(tool_namespace),
@@ -316,7 +403,6 @@ def _decorate_kedi_program(
             # so a caller mutating a returned object must not corrupt the shared cached entry.
             return cast(R, _isolate_cached(_RESPONSE_CACHE[cache_key]))
 
-        adapter = _build_adapter(config)
         bound_globals = _bound_runtime_globals(inner, args, kwargs)
         tool_collisions = tool_namespace & set(bound_globals)
         if tool_collisions:
@@ -341,7 +427,7 @@ def _decorate_kedi_program(
             engine = shared_thread_engine(max_workers=config.max_workers)
         runtime = compile_program(
             active_program,
-            adapter=adapter,
+            adapter=active_adapter,
             runtime_globals=runtime_globals,
             engine=engine,
         )
@@ -377,11 +463,17 @@ def _decorate_kedi_program(
     return sync_wrapper
 
 
-def _lazy_adapter(adapter_name: AdapterName, model: str | None, adapter_kwargs: Mapping[str, Any]):
-    def factory() -> AgentAdapter[Any]:
-        return build_adapter(adapter_name, model, **dict(adapter_kwargs))
+def _lazy_adapter(
+    shortname: str,
+    model: str | None,
+    adapter_kwargs: Mapping[str, Any],
+) -> LazyAdapter:
+    metadata = adapter_factory(shortname)
 
-    return LazyAdapter(factory)
+    def factory() -> AgentAdapter[Any]:
+        return build_adapter(shortname, model, **dict(adapter_kwargs))
+
+    return LazyAdapter(factory, kind=metadata.kind, shortname=metadata.shortname)
 
 
 def _build_config(
@@ -389,7 +481,8 @@ def _build_config(
     base: _APIConfig | None,
     load_env: bool,
     model: str | None | object,
-    adapter: AdapterName | AgentAdapter[Any] | LazyAdapter | object,
+    adapter: FrameworkAdapterName | AdapterLike | object,
+    agent: AgentName | AdapterLike | object,
     system: str | None,
     effort: EffortValue | None,
     settings: Mapping[str, Any] | None,
@@ -408,49 +501,57 @@ def _build_config(
     resolved_parallel = base_parallel if parallel is None else parallel
     resolved_max_workers = base_max_workers if max_workers is None else max_workers
 
+    selection = _resolve_selection(adapter=adapter, agent=agent)
+    selection_is_explicit = selection is not None
+
     if base is None:
-        adapter_default: AdapterName | AgentAdapter[Any] | LazyAdapter = (
-            cast(AdapterName, os.getenv("KEDI_ADAPTER") or "pydantic")
-            if adapter is _UNSET
-            else cast(AdapterName | AgentAdapter[Any] | LazyAdapter, adapter)
-        )
-        model_default = os.getenv("KEDI_ADAPTER_MODEL") or None if model is _UNSET else model
+        if selection is None:
+            env_adapter = os.getenv("KEDI_ADAPTER")
+            env_agent = os.getenv("KEDI_AGENT")
+            if env_adapter and env_agent:
+                raise ValueError("KEDI_ADAPTER and KEDI_AGENT are mutually exclusive")
+            selection = _resolve_selection(
+                adapter=cast(FrameworkAdapterName, env_adapter or "pydantic")
+                if not env_agent
+                else _UNSET,
+                agent=cast(AgentName, env_agent) if env_agent else _UNSET,
+            )
+        assert selection is not None
+        model_default = (os.getenv("KEDI_ADAPTER_MODEL") or None) if model is _UNSET else model
         base_profile = AgentProfile.empty()
         base_tools: Mapping[str, Callable[..., Any]] = {}
         base_env: Mapping[str, Any] = {}
         base_adapter_kwargs: Mapping[str, Any] = {}
     else:
-        adapter_default = (
-            (base.adapter if base.adapter is not None else base.adapter_name)
-            if adapter is _UNSET
-            else cast(AdapterName | AgentAdapter[Any] | LazyAdapter, adapter)
-        )
+        if selection is None:
+            selection = (base.adapter_shortname, base.adapter_kind, base.adapter)
         model_default = base.model if model is _UNSET else model
         base_profile = base.profile
         base_tools = base.tools
         base_env = base.env
         base_adapter_kwargs = base.adapter_kwargs
 
-    adapter_obj: AgentAdapter[Any] | LazyAdapter | None
-    adapter_name: AdapterName
-    if isinstance(adapter_default, str):
-        if adapter_default not in ("pydantic", "dspy", "langchain", "claude", "codex"):
-            raise ValueError(
-                "adapter must be 'pydantic', 'dspy', 'langchain', 'claude', 'codex', "
-                "or an AgentAdapter instance"
-            )
-        adapter_name = cast(AdapterName, adapter_default)
-        merged_kwargs = {**dict(base_adapter_kwargs), **dict(adapter_kwargs)}
-        adapter_obj = _lazy_adapter(adapter_name, cast(str | None, model_default), merged_kwargs)
+    shortname, kind, selected_instance = selection
+    same_selection = (
+        base is not None and shortname == base.adapter_shortname and kind == base.adapter_kind
+    )
+    inherited_kwargs = base_adapter_kwargs if not selection_is_explicit or same_selection else {}
+    merged_kwargs = {**dict(inherited_kwargs), **dict(adapter_kwargs)}
+    if selected_instance is None:
+        adapter_obj: AdapterLike | None = _lazy_adapter(
+            shortname,
+            cast(str | None, model_default),
+            merged_kwargs,
+        )
     else:
-        adapter_obj = adapter_default
-        adapter_name = "pydantic"
-        merged_kwargs = dict(adapter_kwargs)
+        adapter_obj = selected_instance
 
     tool_map = {**dict(base_tools), **_tool_mapping(tools)}
     merged_env = {**dict(base_env), **dict(env or {})}
     profile_patch = AgentProfile(
         model=cast(str | None, model_default),
+        adapter_kind=kind,
+        adapter_shortname=shortname,
         effort=effort,
         system=system,
         settings=dict(settings or {}),
@@ -460,7 +561,8 @@ def _build_config(
     profile = base_profile.merge(profile_patch)
     return _APIConfig(
         adapter=adapter_obj,
-        adapter_name=adapter_name,
+        adapter_kind=kind,
+        adapter_shortname=shortname,
         model=cast(str | None, model_default),
         adapter_kwargs=merged_kwargs,
         profile=profile,
@@ -471,16 +573,17 @@ def _build_config(
     )
 
 
-def _build_adapter(config: _APIConfig) -> AgentAdapter[Any] | LazyAdapter:
+def _build_adapter(config: _APIConfig) -> AdapterLike:
     if config.adapter is None:
-        return _lazy_adapter(config.adapter_name, config.model, config.adapter_kwargs)
+        return _lazy_adapter(config.adapter_shortname, config.model, config.adapter_kwargs)
     return config.adapter
 
 
 def configure(
     *,
     model: str | None | object = _UNSET,
-    adapter: AdapterName | AgentAdapter[Any] | LazyAdapter | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
@@ -502,6 +605,7 @@ def configure(
             load_env=True,
             model=model,
             adapter=adapter,
+            agent=agent,
             system=system,
             effort=effort,
             settings=settings,
@@ -544,7 +648,8 @@ class _KediContext:
 def context(
     *,
     model: str | None | object = _UNSET,
-    adapter: AdapterName | AgentAdapter[Any] | LazyAdapter | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
@@ -561,6 +666,7 @@ def context(
             load_env=False,
             model=model,
             adapter=adapter,
+            agent=agent,
             system=system,
             effort=effort,
             settings=settings,
@@ -688,6 +794,9 @@ def query(fn: Callable[P, R]) -> Callable[P, R]: ...
 @overload
 def query(
     *,
+    model: str | None | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
@@ -701,6 +810,9 @@ def query(
 def query(
     fn: Callable[P, R] | None = None,
     *,
+    model: str | None | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
@@ -709,7 +821,14 @@ def query(
     mcp_servers: Sequence[McpServerSpec] = (),
     cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
+    selection = _resolve_selection(adapter=adapter, agent=agent)
+    adapter_shortname, adapter_kind, adapter_override = (
+        selection if selection is not None else (None, None, None)
+    )
     tool_map, profile_override = _agent_profile_overrides(
+        model=model,
+        adapter_kind=adapter_kind,
+        adapter_shortname=adapter_shortname,
         system=system,
         effort=effort,
         settings=settings,
@@ -731,6 +850,7 @@ def query(
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
+            adapter_override=adapter_override,
             use_main=False,
             cache=cache,
         )
@@ -743,6 +863,9 @@ def query(
 def bind(
     *,
     file: str | os.PathLike[str],
+    model: str | None | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
@@ -752,7 +875,14 @@ def bind(
     cache: bool = False,
     reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    selection = _resolve_selection(adapter=adapter, agent=agent)
+    adapter_shortname, adapter_kind, adapter_override = (
+        selection if selection is not None else (None, None, None)
+    )
     tool_map, profile_override = _agent_profile_overrides(
+        model=model,
+        adapter_kind=adapter_kind,
+        adapter_shortname=adapter_shortname,
         system=system,
         effort=effort,
         settings=settings,
@@ -779,6 +909,7 @@ def bind(
             tool_map=tool_map,
             env=dict(env or {}),
             profile_override=profile_override,
+            adapter_override=adapter_override,
             use_main=True,
             cache=cache,
         )
@@ -787,7 +918,10 @@ def bind(
 
 
 __all__ = [
+    "AdapterLike",
+    "AgentName",
     "CacheInfo",
+    "FrameworkAdapterName",
     "bind",
     "cache_info",
     "clear_cache",

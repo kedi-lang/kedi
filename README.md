@@ -99,6 +99,7 @@ def search_docs(query: str) -> str:
 
 kedi.configure(
     model="openrouter:google/gemini-3-flash-preview",
+    adapter="pydantic",
     tools=[search_docs],
     env={"audience": "maintainers"},
 )
@@ -119,6 +120,11 @@ Use `kedi.context(...)` for temporary profile/env overrides, `cache=True` for
 call-result caching, `kedi.cache_info()` / `kedi.clear_cache()` for cache
 inspection, and `@kedi.bind(file="program.kedi", reload=True)` when you want a
 Python function backed by an editable Kedi source file.
+
+Use `adapter=` for framework backends (`pydantic`, `dspy`, `langchain`) and
+`agent=` for harness backends (`claude`, `codex`, `acp`). Both can be selected
+globally with `kedi.configure`, temporarily with `kedi.context`, or for one
+`@kedi.query` / `@kedi.bind` callable together with a local `model=` override.
 
 ### Agent Profiles
 

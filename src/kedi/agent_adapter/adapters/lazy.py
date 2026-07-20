@@ -22,10 +22,6 @@ AvailableAdapter = (
 
 
 class LazyAdapter:
-    kind: AgentAdapterKind = "agent-framework"
-    shortname = "lazy"
-    capabilities = AdapterCapabilities()
-
     """Builds the real adapter on first LLM use so the program runs exactly once.
 
     Programs fully covered by generated/native code never construct an adapter (no
@@ -34,8 +30,18 @@ class LazyAdapter:
     structurally satisfying SupportsProfileOverride / SupportsToolRegistration.
     """
 
-    def __init__(self, factory: Callable[[], Any]) -> None:
+    def __init__(
+        self,
+        factory: Callable[[], Any],
+        *,
+        kind: AgentAdapterKind = "agent-framework",
+        shortname: str = "lazy",
+        capabilities: AdapterCapabilities | None = None,
+    ) -> None:
         self._factory = factory
+        self.kind = kind
+        self.shortname = shortname
+        self.capabilities = capabilities or AdapterCapabilities()
         self._real: Any = None
         self._lock = Lock()
 

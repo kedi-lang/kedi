@@ -11,6 +11,7 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 import kedi
 import kedi.api as api_module
+import kedi.agent_adapter.registry as adapter_registry
 from kedi import (
     bind,
     cache_info,
@@ -40,6 +41,9 @@ class Person(BaseModel):
 
 
 class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
+    kind = "agent-framework"
+    shortname = "test"
+
     def __init__(self) -> None:
         self.templates: list[str] = []
         self.schemas: list[dict[str, ResolvedKediType]] = []
@@ -123,6 +127,11 @@ class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
         self.templates.append(prompt)
         self.instructions.append(kwargs.get("instructions"))
         return f"response:{prompt}"
+
+
+class HarnessApiAdapter(ApiAdapter):
+    kind = "agent-harness"
+    shortname = "test-harness"
 
 
 def lookup() -> str:
@@ -255,8 +264,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
     kwargs_b = {"value": AddressReprValue("same")}
 
     identity: dict[str, Any] = {
-        "adapter_name": "pydantic",
-        "model": None,
+        "adapter_identity": ("agent-framework", "test", "tests", "ApiAdapter", 1),
         "adapter_kwargs": {},
         "profile": AgentProfile.empty(),
         "tool_names": (),
@@ -1128,5 +1136,175 @@ def test_configure_dspy_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_configure_rejects_unknown_adapter_name() -> None:
-    with pytest.raises(ValueError, match="adapter must be"):
+    with pytest.raises(ValueError, match="unknown adapter"):
         configure(adapter="unknown")  # type: ignore[arg-type]
+
+
+def test_framework_and_harness_selections_are_distinct() -> None:
+    with pytest.raises(ValueError, match="pass it with agent="):
+        configure(adapter="claude")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="pass it with adapter="):
+        configure(agent="pydantic")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        configure(adapter="pydantic", agent="claude")
+
+    with pytest.raises(ValueError, match="pass it with agent="):
+        configure(adapter=HarnessApiAdapter())
+    with pytest.raises(ValueError, match="pass it with adapter="):
+        configure(agent=ApiAdapter())
+
+
+def test_configure_accepts_harness_agent_instance() -> None:
+    harness = HarnessApiAdapter()
+    configure(agent=harness, model="harness:model")
+
+    @query
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    assert harness.models == ["harness:model"]
+
+
+def test_query_locally_overrides_framework_and_model() -> None:
+    outer = ApiAdapter()
+    local = ApiAdapter()
+    local.shortname = "local-framework"
+    configure(adapter=outer, model="outer:model")
+
+    @query(adapter=local, model="local:model")
+    def local_answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    @query
+    def outer_answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert local_answer() == "ok"
+    assert outer_answer() == "ok"
+    assert local.models == ["local:model"]
+    assert outer.models == ["outer:model"]
+
+
+def test_query_locally_overrides_agent_harness() -> None:
+    outer = ApiAdapter()
+    harness = HarnessApiAdapter()
+    configure(adapter=outer, model="outer:model")
+
+    @query(agent=harness, model="harness:model")
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    assert harness.models == ["harness:model"]
+    assert outer.templates == []
+
+
+def test_query_selects_harness_by_shortname(monkeypatch: pytest.MonkeyPatch) -> None:
+    harness = HarnessApiAdapter()
+    configure(adapter=ApiAdapter())
+    monkeypatch.setattr(adapter_registry, "build_adapter", lambda *args, **kwargs: harness)
+
+    @query(agent="codex", model="gpt-test")
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    assert harness.models == ["gpt-test"]
+
+
+def test_bind_locally_overrides_agent_harness(tmp_path: Path) -> None:
+    source = tmp_path / "bound.kedi"
+    source.write_text(">> Return [answer].\n= <answer>\n", encoding="utf-8")
+    harness = HarnessApiAdapter()
+    configure(adapter=ApiAdapter())
+
+    @bind(file=source, agent=harness, model="harness:model")
+    def answer() -> str: ...
+
+    assert answer() == "ok"
+    assert harness.models == ["harness:model"]
+
+
+def test_response_cache_splits_by_adapter_instance() -> None:
+    first = ApiAdapter()
+    second = ApiAdapter()
+    configure(adapter=first)
+
+    @query(cache=True)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    with context(adapter=second):
+        assert answer() == "ok"
+    assert len(first.templates) == 1
+    assert len(second.templates) == 1
+
+
+def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.delenv("KEDI_ADAPTER", raising=False)
+    monkeypatch.setenv("KEDI_AGENT", "claude")
+
+    configure()
+
+    config = api_module._config_var.get()
+    assert config.adapter_kind == "agent-harness"
+    assert config.adapter_shortname == "claude"
+    assert config.adapter is not None
+    assert config.adapter.kind == "agent-harness"
+    assert config.adapter.shortname == "claude"
+
+
+def test_configure_rejects_conflicting_environment_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setenv("KEDI_ADAPTER", "pydantic")
+    monkeypatch.setenv("KEDI_AGENT", "claude")
+
+    with pytest.raises(ValueError, match="KEDI_ADAPTER and KEDI_AGENT"):
+        configure()
+
+
+def test_configure_rejects_unknown_agent_and_incomplete_adapter() -> None:
+    with pytest.raises(ValueError, match="unknown agent"):
+        configure(agent="unknown")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="define kind and shortname"):
+        configure(adapter=object())  # type: ignore[arg-type]
+
+
+def test_profile_cache_identity_includes_adapter_selection_and_command() -> None:
+    base = AgentProfile(model="same")
+    selected = AgentProfile(
+        model="same",
+        adapter_kind="agent-harness",
+        adapter_shortname="acp",
+        agent_command=("uv", "run", "agent"),
+    )
+
+    assert api_module._profile_identity(base) != api_module._profile_identity(selected)
+
+
+def test_public_python_api_exports_adapter_types_and_mcp_spec() -> None:
+    assert kedi.AdapterLike is api_module.AdapterLike
+    assert kedi.McpServerSpec.__name__ == "McpServerSpec"

@@ -1010,6 +1010,9 @@ Rules:
   substitutions such as ``[output: `output_type`]``.
 - `cache=True` enables response caching for identical source, arguments, and
   env. Parse caching is always keyed by the exact source hash.
+- `model=`, `adapter=`, and `agent=` override the configured backend only for
+  that callable. Use `adapter=` for frameworks (`pydantic`, `dspy`,
+  `langchain`) and `agent=` for harnesses (`claude`, `codex`, `acp`).
 
 Dynamic output types can be passed as normal Python values:
 
@@ -1056,8 +1059,9 @@ Rules:
 - The bound function body is ignored.
 - `reload=True` rereads and reparses the file on each call when the source hash
   changes. Without `reload=True`, the file is read when the decorator runs.
-- `bind` accepts the same profile override parameters as `query`: `system`,
-  `effort`, `settings`, `tools`, `env`, `mcp_servers`, and `cache`.
+- `bind` accepts the same profile override parameters as `query`: `model`,
+  `adapter`, `agent`, `system`, `effort`, `settings`, `tools`, `env`,
+  `mcp_servers`, and `cache`.
 
 ### Configuration and Context
 
@@ -1075,11 +1079,37 @@ kedi.configure(
 )
 ```
 
-If `model` or `adapter` are not passed explicitly, `configure()` reads
-`KEDI_ADAPTER_MODEL` and `KEDI_ADAPTER` from the environment after loading
-`.env`. `kedi.context(...)` temporarily merges the same options and restores
-the previous configuration when the block exits. It supports both sync and async
-context managers.
+Framework adapters and agent harnesses use separate parameters:
+
+```python
+kedi.configure(adapter="pydantic", model="openai:gpt-4o-mini")
+
+with kedi.context(agent="codex", model="gpt-5"):
+    run_task()
+```
+
+`adapter=` accepts agent frameworks (`pydantic`, `dspy`, `langchain`);
+`agent=` accepts agent harnesses (`claude`, `codex`, `acp`). Passing both is an
+error. Adapter instances follow the same rule according to their `kind`
+metadata.
+
+If no backend is passed explicitly, `configure()` reads `KEDI_AGENT` or
+`KEDI_ADAPTER` after loading `.env`; the two variables are mutually exclusive.
+`KEDI_ADAPTER_MODEL` supplies the model for either selection. `kedi.context(...)`
+temporarily merges the same options and restores the previous configuration
+when the block exits. It supports both sync and async context managers.
+
+`McpServerSpec` is available from the root package for Python configuration:
+
+```python
+from kedi import McpServerSpec
+
+kedi.configure(
+    mcp_servers=[
+        McpServerSpec(transport="http", url="http://127.0.0.1:8000/mcp"),
+    ]
+)
+```
 
 Runtime env precedence is:
 1. configured tools and query/bind-local tools
