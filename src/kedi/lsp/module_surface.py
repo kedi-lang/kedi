@@ -290,7 +290,7 @@ def _python_stmt_exports(stmt: py_ast.stmt) -> list[tuple[str, str, int, int]]:
         return [
             (
                 stmt.name,
-                f"class {stmt.name}: ...",
+                _python_class_stub(stmt),
                 stmt.lineno,
                 stmt.col_offset + len("class "),
             )
@@ -332,6 +332,22 @@ def _python_function_stub(stmt: py_ast.FunctionDef | py_ast.AsyncFunctionDef) ->
     return f"{prefix} {stmt.name}({args}){ret}: ..."
 
 
+def _python_class_stub(stmt: py_ast.ClassDef) -> str:
+    lines = [f"class {stmt.name}:"]
+    for item in stmt.body:
+        if isinstance(item, py_ast.AnnAssign) and isinstance(item.target, py_ast.Name):
+            lines.append(f"    {item.target.id}: {_unparse_or_any(item.annotation)}")
+        elif isinstance(item, (py_ast.FunctionDef, py_ast.AsyncFunctionDef)):
+            for decorator in item.decorator_list:
+                decorator_name = py_ast.unparse(decorator)
+                if decorator_name in {"property", "classmethod", "staticmethod"}:
+                    lines.append(f"    @{decorator_name}")
+            lines.append(f"    {_python_function_stub(item)}")
+    if len(lines) == 1:
+        lines.append("    pass")
+    return "\n".join(lines)
+
+
 def _unparse_or_any(expr: py_ast.AST | None) -> str:
     if expr is None:
         return "Any"
@@ -341,9 +357,22 @@ def _unparse_or_any(expr: py_ast.AST | None) -> str:
 def _python_name_span(loc: Span, name: str, lineno: int, col_offset: int) -> Span:
     start_line = loc.start_line + lineno
     start_col = col_offset + 1
+    start_byte = loc.start_byte
+    end_byte = loc.end_byte
+    if loc.source_path:
+        try:
+            source = Path(loc.source_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            source = None
+        if source is not None:
+            source_lines = source.splitlines(keepends=True)
+            if 0 < start_line <= len(source_lines):
+                line_start = len("".join(source_lines[: start_line - 1]).encode("utf-8"))
+                start_byte = line_start + col_offset
+                end_byte = start_byte + len(name.encode("utf-8"))
     return Span(
-        start_byte=loc.start_byte,
-        end_byte=loc.start_byte,
+        start_byte=start_byte,
+        end_byte=end_byte,
         start_line=start_line,
         start_col=start_col,
         end_line=start_line,

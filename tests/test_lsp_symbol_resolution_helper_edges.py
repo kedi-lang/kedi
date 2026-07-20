@@ -58,7 +58,7 @@ def sample_proc(tmp_path: Path) -> ProcedureDef:
 
 
 def test_collect_call_and_input_refs_follow_nested_args(tmp_path: Path) -> None:
-    from kedi.lang.ast import CallArg, CallSegment, InputSegment, Span
+    from kedi.lang.ast import CallArg, CallSegment, InputSegment, Span, TextSegment
 
     nested_arg = CallArg(loc=make_edge_span(tmp_path))
     setattr(
@@ -102,6 +102,8 @@ def test_collect_call_and_input_refs_follow_nested_args(tmp_path: Path) -> None:
         "needle",
         inputs,
     )
+    features._collect_input_refs(InputSegment(name="other"), "needle", inputs)
+    features._collect_input_refs(TextSegment(text="plain"), "needle", inputs)
     assert len(inputs) == 2
 
 
@@ -536,6 +538,7 @@ def test_smallest_enclosing_validation_program(
 def test_find_all_references_for_procedures_and_types(
     tmp_path: Path,
     person_type_ref: TypeRef,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.ast import (
         AssignStmt,
@@ -546,6 +549,7 @@ def test_find_all_references_for_procedures_and_types(
         TemplateLine,
         TypeDef,
         TypeField,
+        TestSuite,
     )
 
     ref_prog = Program(
@@ -596,6 +600,26 @@ def test_find_all_references_for_procedures_and_types(
         ],
     )
     duplicate_span = make_edge_span(tmp_path)
+    monkeypatch.setattr(
+        features,
+        "_profile_tool_entry_spans",
+        lambda prog, profile: [("other", duplicate_span), ("target", duplicate_span)],
+    )
+    monkeypatch.setattr(
+        features,
+        "_validation_suites",
+        lambda prog: [
+            TestSuite("other"),
+            TestSuite("target"),
+            TestSuite("target", loc=duplicate_span),
+        ],
+    )
+    monkeypatch.setattr(
+        features,
+        "_validation_procedure_span",
+        lambda prog, suite: suite.loc,
+    )
+    ref_prog.profile_defs["profile"] = cast(Any, object())
     proc_refs = features._find_all_references(
         ref_prog,
         features.SymbolRef("procedure", "target", duplicate_span, None, duplicate_span),
@@ -616,6 +640,48 @@ def test_find_all_references_for_procedures_and_types(
         )
         == []
     )
+
+
+def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Path) -> None:
+    from kedi.lang.ast import AssignStmt, CallSegment, InputSegment, LiteralArg, ProcedureDef
+
+    declaration = make_edge_span(tmp_path)
+    owner = ProcedureDef(
+        name="owner",
+        params=[],
+        body=[AssignStmt(name="value", loc=declaration)],
+        loc=make_edge_span(tmp_path),
+    )
+    segment = CallSegment(
+        name="outer",
+        args=[
+            LiteralArg(render_segments=[InputSegment(name="value", loc=make_edge_span(tmp_path))])
+        ],
+        loc=make_edge_span(tmp_path),
+    )
+    refs = []
+    declaration_span = features._find_local_declaration(owner, "value")
+    assert declaration_span is not None
+    features._collect_lexical_input_refs(
+        segment,
+        "value",
+        owner,
+        (),
+        owner,
+        declaration_span,
+        refs,
+    )
+    assert refs
+    features._collect_lexical_input_refs(
+        InputSegment(name="value", loc=make_edge_span(tmp_path)),
+        "value",
+        owner,
+        (),
+        ProcedureDef(name="other", params=[]),
+        declaration_span,
+        refs,
+    )
+    assert len(refs) == 1
 
 
 def test_document_symbol_helpers(tmp_path: Path) -> None:

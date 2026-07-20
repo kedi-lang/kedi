@@ -29,6 +29,7 @@ dependencies = [
     "langchain-mcp-adapters",
     "basedpyright>=1.39.6",
     "nodejs-wheel>=24.16.0",
+    "openinference-instrumentation-dspy>=0.1.37",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},

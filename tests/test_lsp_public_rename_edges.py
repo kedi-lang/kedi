@@ -15,17 +15,17 @@ def test_rename_returns_none_without_symbol(tmp_path) -> None:
     assert prepare_rename_at("= ok\n", "/tmp/x.kedi", "ok") is None
     assert rename_at("= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", "ok", "x") is None
     assert prepare_rename_at(missing_src, str(main), "missing") is None
-    assert prepare_rename_at("@p(x: int):\n  = <x>\n", "/tmp/x.kedi", "x") is None
-    assert (
-        rename_at(
-            "@p(x: int):\n  = <x>\n",
-            "file:///tmp/x.kedi",
-            "/tmp/x.kedi",
-            "x",
-            "y",
-        )
-        is None
+    parameter_source = "@p(x: int):\n  = <x>\n"
+    assert prepare_rename_at(parameter_source, "/tmp/x.kedi", "x") is not None
+    parameter_rename = rename_at(
+        parameter_source,
+        "file:///tmp/x.kedi",
+        "/tmp/x.kedi",
+        "x",
+        "y",
     )
+    assert parameter_rename is not None and parameter_rename.changes is not None
+    assert len(parameter_rename.changes["file:///tmp/x.kedi"]) == 2
 
 
 def test_rename_rejects_external_imported_value(tmp_path, monkeypatch) -> None:

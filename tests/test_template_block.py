@@ -49,6 +49,69 @@ def test_parse_template_block_multiline() -> None:
     assert all(isinstance(line, TemplateLine) for line in block.lines)
 
 
+def test_optimize_span_executes_its_lines_as_one_template_block() -> None:
+    src = (
+        "@summarize(topic: str) -> str:\n"
+        "  > optimize: prompt:\n"
+        "    Give a concise summary of <topic>.\n"
+        "    Return it as [summary].\n"
+        "  = <summary>\n"
+        "\n"
+        "= <summarize(Kedi)>\n"
+    )
+    adapter = MockAdapter()
+    program = parse_program(src)
+    proc = program.procedures[0]
+
+    assert len(proc.optimize_spans) == 1
+    assert len(proc.optimize_spans[0].template_lines) == 2
+    assert isinstance(proc.body[0], TemplateBlock)
+    assert proc.body[0].lines is proc.optimize_spans[0].template_lines
+
+    runtime = compile_program(program, adapter=adapter)
+    assert runtime.run_main() == "summary-value"
+    assert len(adapter.instruction_calls) == 1
+
+
+def test_optimize_span_accepts_explicit_template_block_syntax() -> None:
+    src = (
+        "@summarize(topic: str) -> str:\n"
+        "  > optimize: prompt:\n"
+        "    >> Give a concise summary of <topic>.\n"
+        "    Return it as [summary].\n"
+        "  = <summary>\n"
+        "\n"
+        "= <summarize(Kedi)>\n"
+    )
+    adapter = MockAdapter()
+    program = parse_program(src)
+    proc = program.procedures[0]
+
+    assert len(proc.optimize_spans) == 1
+    assert len(proc.optimize_spans[0].template_lines) == 2
+    assert isinstance(proc.body[0], TemplateBlock)
+    assert proc.body[0].lines is proc.optimize_spans[0].template_lines
+
+    runtime = compile_program(program, adapter=adapter)
+    assert runtime.run_main() == "summary-value"
+    assert len(adapter.instruction_calls) == 1
+
+
+def test_optimize_span_cannot_read_its_own_pending_output() -> None:
+    src = (
+        "@plan() -> str:\n"
+        "  > optimize: prompt:\n"
+        "    Pick a European [city].\n"
+        "    Describe <city> as [description].\n"
+        "  = <description>\n"
+    )
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(src)
+
+    assert any(d.code == "K-TEMPLATE-BLOCK-FORWARD-OUTPUT" for d in exc.value.diagnostics)
+
+
 def test_merge_template_block_lines_joins_with_newline() -> None:
     block = parse_program(">> line one [x]\nline two <seed>\n").toplevel_body[0]
     assert isinstance(block, TemplateBlock)
@@ -241,7 +304,7 @@ def test_raw_invoke_is_visible_in_virtual_python() -> None:
     src = "@p():\n  [answer] << Hello\n  ```\n  print(answer)\n  ```\n  = <answer>\n"
     doc = compute_python_virtual_document(src, "/tmp/raw.kedi")
 
-    assert "answer: str = ..." in doc["text"]
+    assert "answer: str = cast(str, _kedi_placeholder())" in doc["text"]
     assert any(symbol["name"] == "answer" for symbol in doc["symbols"])
     stmt = parse_program("[answer] << Hello <name>\n").toplevel_body[0]
     assert isinstance(stmt, RawInvokeStmt)

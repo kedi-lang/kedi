@@ -6,6 +6,7 @@ Handles variable lookup, environment building, and context management.
 from __future__ import annotations
 
 import builtins
+import keyword
 import linecache
 import re
 import typing
@@ -81,7 +82,33 @@ KEDI_DATETIME_TYPES = {
 }
 
 
-class KediEnv(dict):
+# The runtime injects parsed CLI arguments under this name. Applications embedding Kedi may
+# configure a different identifier before compiling a program; the chosen name stays reserved.
+CLI_ARGS_IDENTIFIER: str = "args"
+
+
+def cli_args_identifier() -> str:
+    """Return the configured CLI argument binding name after validating it."""
+    identifier = CLI_ARGS_IDENTIFIER
+    if (
+        not isinstance(identifier, str)
+        or not identifier.isidentifier()
+        or keyword.iskeyword(identifier)
+    ):
+        raise ValueError("CLI_ARGS_IDENTIFIER must be a valid, non-keyword Python identifier")
+    return identifier
+
+
+def assert_not_cli_args_identifier(name: str) -> None:
+    """Reject writes that would replace the runtime-owned CLI argument binding."""
+    identifier = cli_args_identifier()
+    if name == identifier:
+        raise ValueError(
+            f"Reserved identifier {identifier!r} belongs to CLI arguments and cannot be overwritten"
+        )
+
+
+class KediEnv(dict[str, Any]):
     """Exec namespace that resolves ``KediPromise`` values lazily, on lookup.
 
     CPython routes ``LOAD_NAME`` (module/exec top level) and ``LOAD_GLOBAL`` (function and
@@ -90,6 +117,82 @@ class KediEnv(dict):
     references that name — never all of them up front. Resolved values are cached back so repeated
     lookups are cheap and identity is stable.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        dict.__init__(self)
+        if args or kwargs:
+            self.update(*args, **kwargs)
+
+    def _set_cli_args(self, value: Any) -> None:
+        """Install the runtime-owned CLI binding without exposing an override path."""
+        dict.__setitem__(self, cli_args_identifier(), value)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        assert_not_cli_args_identifier(key)
+        dict.__setitem__(self, key, value)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        pending = dict(*args, **kwargs)
+        for key in pending:
+            assert_not_cli_args_identifier(key)
+        dict.update(self, pending)
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        assert_not_cli_args_identifier(key)
+        if key in self:
+            return dict.__getitem__(self, key)
+        dict.__setitem__(self, key, default)
+        return default
+
+    def __ior__(self, other: Any) -> "KediEnv":
+        self.update(other)
+        return self
+
+    def __or__(self, other: Any) -> "KediEnv":
+        merged = self.copy()
+        merged.update(other)
+        return merged
+
+    def __ror__(self, other: Any) -> "KediEnv":
+        merged = KediEnv(other)
+        dict.update(merged, self)
+        return merged
+
+    @classmethod
+    def fromkeys(cls, iterable: Any, value: Any = None) -> "KediEnv":
+        env = cls()
+        for key in iterable:
+            env[key] = value
+        return env
+
+    def copy(self) -> "KediEnv":
+        copied = KediEnv()
+        dict.update(copied, self)
+        return copied
+
+    def __delitem__(self, key: str) -> None:
+        assert_not_cli_args_identifier(key)
+        dict.__delitem__(self, key)
+
+    def pop(self, key: str, *default: Any) -> Any:
+        assert_not_cli_args_identifier(key)
+        return dict.pop(self, key, *default)
+
+    def popitem(self) -> tuple[str, Any]:
+        if cli_args_identifier() in self:
+            raise ValueError("The reserved CLI argument binding cannot be removed")
+        try:
+            key = next(reversed(self))
+        except StopIteration as exc:
+            raise KeyError("popitem(): dictionary is empty") from exc
+        value = dict.__getitem__(self, key)
+        dict.__delitem__(self, key)
+        return key, value
+
+    def clear(self) -> None:
+        if cli_args_identifier() in self:
+            raise ValueError("The reserved CLI argument binding cannot be removed")
+        dict.clear(self)
 
     def __getitem__(self, key: str) -> Any:
         value = dict.__getitem__(self, key)
@@ -156,7 +259,7 @@ def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     raise KeyError(f"Unknown variable: {name}")
 
 
-def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
+def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
     """Build execution environment for Python code with full context.
 
     Returns a :class:`KediEnv` so promise outputs resolve lazily, only when the executing Python
@@ -164,22 +267,36 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, An
     avoids a self-deadlock: a tool running inside a produce job must not eagerly resolve the
     in-flight template's own (still-running) output promise.
     """
-    env: dict[str, Any] = KediEnv()
+    env = KediEnv()
     env["__builtins__"] = builtins.__dict__
+
+    identifier = cli_args_identifier()
+    missing = object()
+    runtime_args = rt._initial_globals_env.get(identifier, missing)
+    if runtime_args is not missing:
+        env._set_cli_args(runtime_args)
+
+    def merge(source: dict[str, Any]) -> None:
+        for name, value in source.items():
+            if name == identifier:
+                if value is runtime_args:
+                    continue
+                assert_not_cli_args_identifier(name)
+            env[name] = value
 
     # Layer environments: imports -> prelude -> globals -> current -> local
     for source in (rt._import_env, rt._prelude_env, rt._globals_env):
         if source is not None:
-            env.update(source)
+            merge(source)
 
     try:
         current = rt._current_env.get()
         if isinstance(current, dict):
-            env.update(current)
+            merge(current)
     except Exception:
         pass
 
-    env.update(local_env)
+    merge(local_env)
 
     # Add type environment
     _add_type_env(rt, env, local_env)

@@ -71,10 +71,22 @@ def test_hover_on_regular_block_comment_stays_none():
     assert hover_at(src, "example.kedi", "Not a docstring.") is None
 
 
-def test_python_ranges_exclude_header_inline_defaults():
+def test_python_ranges_include_header_inline_defaults():
     src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
     ranges = features.compute_python_ranges(src)
     assert ranges == [
+        {
+            "kind": "inline",
+            "range": {
+                "start": {"line": 0, "character": 21},
+                "end": {"line": 0, "character": 31},
+            },
+            "text": "get_name()",
+            "ownerKind": "param",
+            "containerKind": "procedure_def",
+            "containerLine": 0,
+            "expressionKind": "default",
+        },
         {
             "kind": "inline",
             "range": {
@@ -82,7 +94,7 @@ def test_python_ranges_exclude_header_inline_defaults():
                 "end": {"line": 1, "character": 22},
             },
             "text": 'f"Hello, {name}!"',
-        }
+        },
     ]
 
 
@@ -91,12 +103,81 @@ def test_hover_on_header_default_expression_defers_to_python():
     assert hover_at(src, "example.kedi", "get_name") is None
 
 
+def test_hover_inside_fenced_python_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> int:\n  = ```\n  return solve_knapsack(items, 10)\n  ```\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
+def test_hover_inside_inline_python_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> int:\n  = `solve_knapsack(items, 10)`\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
+def test_hover_inside_inline_python_substitution_defers_to_python_provider() -> None:
+    src = "@solve(items: str) -> str:\n  = <`solve_knapsack(items, 10)`>\n"
+
+    assert hover_at(src, "example.kedi", "solve_knapsack") is None
+
+
 def test_hover_on_nested_procedure_header_shows_signature():
     src = "@foo():\n  @bar(name: str) -> str:\n    = <name>\n  = done\n"
     body = hover_text_at(src, "example.kedi", "@bar")
     assert "bar" in body
     assert "name: str" in body
     assert "str" in body
+
+
+def test_hover_and_definition_on_procedure_local_type():
+    src = (
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = ```\n"
+        '  return Inner(name="Ada")\n'
+        "  ```\n"
+        "  = <`item.name`>\n"
+    )
+
+    declaration = hover_text_at(src, "example.kedi", "Inner", occurrence=1)
+    reference = hover_text_at(src, "example.kedi", "Inner", occurrence=2)
+    field = hover_text_at(src, "example.kedi", "name", occurrence=1)
+    assert "~Inner(name: str)" in declaration
+    assert "~Inner(name: str)" in reference
+    assert "Field" in field and "name: str" in field
+
+    location = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "Inner",
+        occurrence=2,
+    )
+    assert location is not None
+    assert location.range.start.line == 1
+
+
+def test_hover_on_procedure_local_type_respects_shadowing():
+    src = (
+        "~Inner(global_name: str)\n\n"
+        "@outer() -> str:\n"
+        "  ~Inner(name: str)\n"
+        "  [item: Inner] = <value>\n"
+        "  = <item>\n\n"
+        "[item: Inner] = <value>\n"
+    )
+
+    assert "global_name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=1)
+    assert "name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=2)
+    assert "name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=3)
+    assert "global_name: str" in hover_text_at(src, "example.kedi", "Inner", occurrence=4)
+
+
+def test_hover_on_test_case_name_describes_the_case():
+    src = '@p():\n  = ok\n\n@test: p:\n  > case: basic:\n    `assert p() == "ok"`\n'
+    body = hover_text_at(src, "example.kedi", "basic")
+    assert "Test case" in body
+    assert "basic" in body
 
 
 def test_hover_on_nested_text_segment_works():
@@ -129,6 +210,41 @@ def test_hover_and_definition_on_imported_procedure(tmp_path):
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
     assert location.range.start.line == 0
+
+
+def test_profile_tool_member_resolves_to_its_procedure():
+    src = (
+        "@search_docs(query: str) -> str:\n"
+        "  = done\n"
+        "\n"
+        "> profile: analyst:\n"
+        "    > use:\n"
+        "        search_docs\n"
+    )
+    declaration_body = hover_text_at(src, "example.kedi", "search_docs", occurrence=1)
+    assert "@search_docs(query: str)" in declaration_body
+    body = hover_text_at(src, "example.kedi", "search_docs", occurrence=2)
+    assert "@search_docs(query: str)" in body
+
+    location = definition_at(
+        src,
+        "file:///example.kedi",
+        "example.kedi",
+        "search_docs",
+        occurrence=2,
+    )
+    assert location is not None
+    assert location.range.start.line == 0
+
+    refs = references_at(
+        src,
+        "file:///example.kedi",
+        "example.kedi",
+        "search_docs",
+        True,
+        occurrence=2,
+    )
+    assert {location.range.start.line for location in refs} == {0, 5}
 
 
 def test_hover_on_imported_type_in_annotation(tmp_path):
@@ -179,6 +295,52 @@ def test_hover_on_imported_value(tmp_path):
     assert location is not None
     assert location.uri == profiles.resolve().as_uri()
     assert location.range.start.line == 0
+
+
+def test_hover_on_imported_python_symbols_preserves_type_metadata(tmp_path):
+    helpers = tmp_path / "helpers.kedi"
+    helpers.write_text(
+        "```\n"
+        "def fetch(value: int) -> str:\n"
+        "    return str(value)\n"
+        "\n"
+        "class Record:\n"
+        "    pass\n"
+        "\n"
+        "endpoint: str = 'https://example.com'\n"
+        "```\n"
+        "> export:\n"
+        "  fetch\n"
+        "  Record\n"
+        "  endpoint\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = (
+        "> import: helpers\n"
+        "[record: Record] = `Record()`\n"
+        ">> Use <endpoint> and <fetch(`1`)>\n"
+        "= done\n"
+    )
+    main.write_text(src, encoding="utf-8")
+
+    assert "`endpoint: str`" in hover_text_at(src, str(main), "endpoint")
+    fetch_hover = hover_text_at(src, str(main), "fetch")
+    assert "```python\nfetch(value: int) -> str\n```" in fetch_hover
+    assert "Python function." in fetch_hover
+    record_hover = hover_text_at(src, str(main), "Record")
+    assert "```python\nclass Record\n```" in record_hover
+    assert "Python class." in record_hover
+
+    location = definition_at(
+        src,
+        main.resolve().as_uri(),
+        str(main),
+        "fetch",
+    )
+    assert location is not None
+    assert location.uri == helpers.resolve().as_uri()
+    assert location.range.start.line == 1
 
 
 def test_hover_and_definition_on_imported_module_name_uses_module_docstring(tmp_path):
@@ -233,6 +395,33 @@ def test_hover_and_definition_on_internal_registry_module_name():
     assert location.range.start.line == 0
 
 
+def test_definition_of_cached_reexport_uses_cache_local_range(tmp_path):
+    generated = tmp_path / "generated.kedi"
+    generated.write_text("@root() -> str:\n  = ok\n", encoding="utf-8")
+    cache = generated.with_suffix(".cache.kedi")
+    cache.write_text(
+        "@cached() -> str:\n  = generated\n> export:\n  cached\n",
+        encoding="utf-8",
+    )
+    reexport = tmp_path / "reexport.kedi"
+    reexport.write_text("> import: generated\n> export: *\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: reexport\n= <cached()>\n"
+    main.write_text(source, encoding="utf-8")
+
+    location = definition_at(
+        source,
+        main.resolve().as_uri(),
+        str(main),
+        "cached",
+    )
+
+    assert location is not None
+    assert location.uri == cache.resolve().as_uri()
+    assert location.range.start.line == 0
+    assert location.range.start.character == 0
+
+
 def test_hover_on_imported_module_name_ignores_nonleading_comment_as_docstring(
     tmp_path,
 ):
@@ -270,6 +459,45 @@ def test_hover_and_definition_on_exported_procedure_name():
     )
     assert location is not None
     assert location.range.start.line == 0
+
+
+def test_validation_suite_procedure_name_resolves_like_a_procedure_reference():
+    src = (
+        "@build(name: str) -> str:\n"
+        "  = <name>\n\n"
+        "@test: build:\n"
+        "  > case: basic:\n"
+        '    `assert build("Ada") is not None`\n\n'
+        "@eval: build:\n"
+        "  > data: examples:\n"
+        "    = ```\n"
+        '    return [("Ada", None)]\n'
+        "    ```\n"
+    )
+
+    test_hover = hover_text_at(src, "example.kedi", "build", occurrence=2)
+    eval_hover = hover_text_at(src, "example.kedi", "build", occurrence=4)
+    assert "name: str" in test_hover
+    assert "name: str" in eval_hover
+
+    test_definition = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "build",
+        occurrence=2,
+    )
+    eval_definition = definition_at(
+        src,
+        "file:///tmp/example.kedi",
+        "example.kedi",
+        "build",
+        occurrence=4,
+    )
+    assert test_definition is not None
+    assert eval_definition is not None
+    assert test_definition.range.start.line == 0
+    assert eval_definition.range.start.line == 0
 
 
 def test_hover_and_definition_on_exported_value_name():
@@ -387,7 +615,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         ("global_note", 1, 1, "**Local** `global_note`"),
         ("@review_code", 1, 2, "Review code with CLI args and Python interop."),
         ("@line_count", 1, 2, "`@line_count()`"),
-        ("<language>", 1, 2, "**Parameter** `language: str`"),
+        ("<language>", 1, 2, "`language: str`"),
         ("<line_count()>", 1, 2, "`@line_count()`"),
         ("<args>", 1, 2, "**Runtime value** `args: AttrDict[str, ArgType]`"),
         ("[review: Review]", 1, 1, "**Output** `review`"),
@@ -484,7 +712,9 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
     virtual = compute_python_virtual_document(src, source_path)
     ast.parse(virtual["text"])
     text = virtual["text"]
-    assert "args: AttrDict[str, ArgType] = ..." in text
+    assert (
+        "args: AttrDict[str, ArgType] = cast(AttrDict[str, ArgType], _kedi_placeholder())"
+    ) in text
     assert "global_note: str = (" in text
     assert "def review_code(language: str = args.language" in text
     assert "print(args.debug)" in text
@@ -523,28 +753,28 @@ def test_hover_on_annotated_explains_kedi_schema_metadata():
 
     body = hover_text_at(src, "example.kedi", "Annotated")
 
-    assert 'Annotated[type, "description"]' in body
-    assert "schema metadata" in body
+    assert 'Annotated[T, "description"]' in body
+    assert "field documentation" in body
     assert "runtime type" in body
-    assert "LLM adapter field descriptions" in body
+    assert "compatible model adapters" in body
 
 
 def test_hover_on_datetime_type_uses_datetime_namespace():
     src = "@p(started_at: datetime, day: date) -> timedelta:\n  = <started_at>\n"
 
-    assert "datetime.datetime" in hover_text_at(src, "example.kedi", "datetime")
-    assert "datetime.date" in hover_text_at(src, "example.kedi", "date")
-    assert "datetime.timedelta" in hover_text_at(src, "example.kedi", "timedelta")
-    assert "datetime.time" in hover_text_at("@p(clock: time):\n  = ok\n", "example.kedi", "time")
+    assert "ISO 8601" in hover_text_at(src, "example.kedi", "datetime")
+    assert "YYYY-MM-DD" in hover_text_at(src, "example.kedi", "date", occurrence=2)
+    assert "Duration" in hover_text_at(src, "example.kedi", "timedelta")
+    assert "Time of day" in hover_text_at("@p(clock: time):\n  = ok\n", "example.kedi", "time")
 
 
 def test_hover_on_runtime_schema_aliases():
     src = "@p(pattern: Regex, email: Email, site: HttpUrl, file: FileUrl):\n  = <email>\n"
 
-    assert "re.Pattern[str]" in hover_text_at(src, "example.kedi", "Regex")
-    assert "EmailStr" in hover_text_at(src, "example.kedi", "Email")
-    assert "HttpUrl" in hover_text_at(src, "example.kedi", "HttpUrl")
-    assert "FileUrl" in hover_text_at(src, "example.kedi", "FileUrl")
+    assert "regular-expression" in hover_text_at(src, "example.kedi", "Regex")
+    assert "email address" in hover_text_at(src, "example.kedi", "Email")
+    assert "HTTP or HTTPS URL" in hover_text_at(src, "example.kedi", "HttpUrl")
+    assert "file URL" in hover_text_at(src, "example.kedi", "FileUrl")
 
 
 def test_builtin_type_definition_and_rename_are_disabled():
@@ -601,8 +831,8 @@ def test_custom_type_definition_field_type_still_jumps_to_kedi_type():
 def test_unknown_type_hover_stays_runtime_resolved():
     src = "@p(x: UnknownType):\n  = <x>\n"
     body = hover_text_at(src, "example.kedi", "UnknownType")
-    assert "not defined in this module" in body
-    assert "resolved at runtime" in body
+    assert "Not resolved statically" in body
+    assert "runtime environment" in body
 
 
 def test_hover_on_unparseable_returns_none():
@@ -624,8 +854,8 @@ def test_hover_on_prelude_defined_python_type_is_not_runtime_unknown():
     )
     body = hover_text_at(src, "example.kedi", "Person", occurrence=2)
     assert "Person" in body
-    assert "defined in the Python prelude" in body
-    assert "not defined in this module" not in body
+    assert "defined in this module's prelude" in body
+    assert "Not resolved statically" not in body
 
 
 def test_hover_on_top_level_python_block_type_is_not_runtime_unknown():

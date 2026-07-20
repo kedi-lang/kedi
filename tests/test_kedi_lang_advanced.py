@@ -437,8 +437,9 @@ def test_value_returning_python_block_in_return(monkeypatch: Any) -> None:
 
 def test_value_returning_python_block_in_return_expression(monkeypatch: Any) -> None:
     src = "= ```\nreturn [1,2,3] + [4]\n```\n"
-    out = _run(monkeypatch, src)
-    assert out.replace(" ", "") in ("[1,2,3,4]", "[1,2,3,4]")
+    runtime = _compile(src)
+
+    assert runtime.run_main() == [1, 2, 3, 4]
 
 
 def test_procedure_return_type_annotation_native_return(monkeypatch: Any) -> None:

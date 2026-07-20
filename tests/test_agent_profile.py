@@ -989,10 +989,10 @@ def test_top_level_system_renders_inline_python_substitution() -> None:
     src = """
 ```
 from types import SimpleNamespace
-args = SimpleNamespace(name="Mert")
+person = SimpleNamespace(name="Mert")
 ```
 > system:
-    Your name is <`args.name`>.
+    Your name is <`person.name`>.
 >> answer [x]
 """
     adapter = _adapter()

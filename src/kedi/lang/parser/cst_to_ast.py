@@ -108,9 +108,6 @@ from .escapes import dedent_block, unescape_text_with_tracking
 # Utilities
 # ---------------------------------------------------------------------
 
-_HYPHENATED_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)+")
-_LEADING_HYPHEN_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])-([A-Za-z_][A-Za-z0-9_]*)")
-
 
 def _span(
     node: Node,
@@ -122,13 +119,32 @@ def _span(
     end_line = node.end_point[0] + 1
     start_resolved = source_map.resolve_line(start_line) if source_map is not None else None
     end_resolved = source_map.resolve_line(end_line) if source_map is not None else None
+    start_byte = node.start_byte
+    end_byte = node.end_byte
+    mapped_end_line = end_resolved.source_line if end_resolved else end_line
+    if source_map is not None and start_resolved is not None:
+        local_end_line = start_resolved.source_line + end_line - start_line
+        local_start_byte = source_map.get_byte_offset(
+            start_resolved.source_path,
+            start_resolved.source_line,
+            node.start_point[1],
+        )
+        local_end_byte = source_map.get_byte_offset(
+            start_resolved.source_path,
+            local_end_line,
+            node.end_point[1],
+        )
+        if local_start_byte is not None and local_end_byte is not None:
+            start_byte = local_start_byte
+            end_byte = local_end_byte
+            mapped_end_line = local_end_line
     return Span(
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
+        start_byte=start_byte,
+        end_byte=end_byte,
         # tree-sitter Point.row/column are 0-based; convert to 1-based.
         start_line=start_resolved.source_line if start_resolved else start_line,
         start_col=node.start_point[1] + 1,
-        end_line=end_resolved.source_line if end_resolved else end_line,
+        end_line=mapped_end_line,
         end_col=node.end_point[1] + 1,
         source_path=start_resolved.source_path if start_resolved else source_path,
         source_id=start_resolved.source_id if start_resolved else source_path,
@@ -145,14 +161,33 @@ def _identifier_name(source: bytes, node: Node) -> str:
     return _src_text(source, node)
 
 
-def _hyphenated_identifier(source: str) -> str | None:
-    match = _HYPHENATED_IDENTIFIER_RE.search(source)
-    if match is not None:
-        return match.group(0)
-    match = _LEADING_HYPHEN_IDENTIFIER_RE.search(source)
-    if match is not None:
-        return match.group(0)
-    return None
+def _hyphenated_identifier_from_error(source: bytes, node: Node) -> str | None:
+    """Recover an invalid identifier only from tokens adjacent to the error node."""
+    line_end = source.find(b"\n", node.start_byte)
+    if line_end < 0:
+        line_end = len(source)
+
+    for child in node.children:
+        if child.type != "identifier" or child.end_point[0] != node.start_point[0]:
+            continue
+        suffix = source[child.end_byte : line_end].decode("utf-8")
+        match = re.match(r"(?:-[A-Za-z0-9_]+)+", suffix)
+        if match is not None:
+            return _identifier_name(source, child) + match.group(0)
+
+    fragment = source[node.start_byte : line_end].decode("utf-8")
+    match = re.match(r"-[A-Za-z_][A-Za-z0-9_]*", fragment)
+    if match is None:
+        return None
+    previous = node.prev_named_sibling
+    if (
+        previous is not None
+        and previous.type == "identifier"
+        and previous.end_byte == node.start_byte
+        and previous.end_point[0] == node.start_point[0]
+    ):
+        return _identifier_name(source, previous) + match.group(0)
+    return match.group(0)
 
 
 def _named_children(node: Node) -> List[Node]:
@@ -244,6 +279,13 @@ class _Walker:
         # `block_comment` regex is lenient about these conditions, so
         # we enforce them in Python.
         self._validate_block_comments()
+        if any(d.severity == "error" for d in self.diagnostics):
+            raise KediParseError(self.diagnostics)
+
+        # Incomplete editor input can produce directive-shaped nodes whose
+        # required fields are missing. Surface the tree-sitter errors before
+        # walking those nodes so live LSP requests never reach AST invariants.
+        self._collect_pre_walk_tree_errors(root)
         if any(d.severity == "error" for d in self.diagnostics):
             raise KediParseError(self.diagnostics)
 
@@ -389,13 +431,6 @@ class _Walker:
         if any(d.severity == "error" for d in self.diagnostics):
             raise KediParseError(self.diagnostics)
 
-        # Also: tree-sitter errors anywhere in the tree turn into
-        # diagnostics (we'll have raised already if any were severity
-        # "error", so reaching this point means none were).
-        self._collect_tree_errors(self.tree.root_node)
-        if any(d.severity == "error" for d in self.diagnostics):
-            raise KediParseError(self.diagnostics)
-
         prog.parser_warnings = [d for d in self.diagnostics if d.severity == "warning"]
         return prog
 
@@ -423,6 +458,13 @@ class _Walker:
                 code=code,
             )
         )
+
+    def _unescape_text_segment(self, node: Node, raw: str) -> tuple[str, set[int]]:
+        try:
+            return unescape_text_with_tracking(raw)
+        except ValueError as exc:
+            self._error(node, str(exc), code="K-TEXT-ESCAPE")
+            return raw, set()
 
     def _validate_effort_plain_value(self, node: Node, value: str) -> None:
         if is_valid_effort(value):
@@ -551,41 +593,60 @@ class _Walker:
             KediDiagnostic(severity="error", message=message, span=span, code=code, snippet=line)
         )
 
-    def _collect_tree_errors(self, node: Node) -> None:
-        """Walk the CST and surface every ERROR / MISSING node as a diagnostic."""
+    def _record_tree_error(self, node: Node) -> None:
+        """Convert one ERROR / MISSING node into a parser diagnostic."""
+        raw = _src_text(self.source, node).strip()
+        if raw.startswith("> optimize"):
+            parts = raw.split(":", 2)
+            name = parts[1].strip() if len(parts) > 1 else ""
+            self._error(
+                node,
+                f"Optimize span {name!r} must have an indented block after it",
+                code="K-OPT-EMPTY",
+            )
+            return
+        if node.is_missing:
+            msg = f"missing {node.type!r}"
+        else:
+            msg = self._parse_error_message(node, "unexpected syntax")
+        span = self._span(node)
+        if node.start_point[0] != node.end_point[0]:
+            line_end = self.source.index(b"\n", node.start_byte)
+            span.end_byte = line_end
+            span.end_line = span.start_line
+            span.end_col = node.start_point[1] + (line_end - node.start_byte) + 1
+        self.diagnostics.append(
+            KediDiagnostic(severity="error", message=msg, span=span, code="K-PARSE")
+        )
+
+    def _collect_pre_walk_tree_errors(
+        self,
+        node: Node,
+        parent_type: str | None = None,
+    ) -> None:
+        """Catch structurally unsafe CST errors before AST field access."""
         if node.has_error and (node.type == "ERROR" or node.is_missing):
             if node.is_missing and node.type == "_newline":
                 return
-            if node.is_missing:
-                msg = f"missing {node.type!r}"
-            else:
-                msg = self._parse_error_message(node, "unexpected syntax")
-            self._error(node, msg, code="K-PARSE")
+            contextual_parents = {"source_file", "validation_body", "block"}
+            if node.is_missing or parent_type not in contextual_parents:
+                self._record_tree_error(node)
             return  # don't recurse into ERROR subtrees
         for child in node.children:
             if child.has_error:
-                self._collect_tree_errors(child)
+                self._collect_pre_walk_tree_errors(child, node.type)
 
     def _parse_error_message(self, node: Node, fallback: str) -> str:
         raw = _src_text(self.source, node)
         if "``" in raw:
             return "inline Python expression cannot be empty"
-        invalid_identifier = _hyphenated_identifier(
-            self._source_line(node)
-        ) or _hyphenated_identifier(raw)
+        invalid_identifier = _hyphenated_identifier_from_error(self.source, node)
         if invalid_identifier is not None:
             return (
                 f"invalid identifier {invalid_identifier!r}: '-' cannot be used in "
                 "Kedi identifiers; use '_' instead"
             )
         return fallback
-
-    def _source_line(self, node: Node) -> str:
-        lines = self.source.splitlines()
-        row = node.start_point[0]
-        if row < 0 or row >= len(lines):
-            return ""
-        return lines[row].decode("utf-8")
 
     # =================================================================
     # Module directives
@@ -1204,7 +1265,7 @@ class _Walker:
             # double up: it would also remove meaningful whitespace
             # that sits BETWEEN segments (e.g. the gap between `<x>`
             # and `mid` in ``  left   <x>   mid``).
-            text, escaped_positions = unescape_text_with_tracking(raw)
+            text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,
                 escaped_whitespace=escaped_positions,
@@ -1310,7 +1371,7 @@ class _Walker:
         """
         if node.type == "text_in_call_segment":
             raw = _src_text(self.source, node).strip(" \t")
-            text, escaped_positions = unescape_text_with_tracking(raw)
+            text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,
                 escaped_whitespace=escaped_positions,
@@ -1485,6 +1546,8 @@ class _Walker:
         assert body_node is not None
         fields: list[McpField] = []
         for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
             fields.append(self._walk_mcp_field(child))
         return McpDirectiveStmt(fields=fields, loc=self._span(node))
 
@@ -1516,6 +1579,8 @@ class _Walker:
         assert body_node is not None
         fields: list[SettingsField] = []
         for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
             fields.append(self._walk_settings_field(child))
         return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
 
@@ -1742,11 +1807,19 @@ class _Walker:
         body_node = _field(node, "body")
         template_lines: List[TemplateLine] = []
         if body_node is not None:
-            for tline in _named_children(body_node):
-                if tline.type != "template_line":
-                    continue
-                tl = self._walk_template_line(tline)
-                template_lines.append(tl)
+            body_children = _named_children(body_node)
+            block_node = next(
+                (child for child in body_children if child.type == "template_block_stmt"),
+                None,
+            )
+            if block_node is not None:
+                template_lines = self._walk_template_block_stmt(block_node).lines
+            else:
+                for tline in body_children:
+                    if tline.type != "template_line":
+                        continue
+                    template_lines.append(self._walk_template_line(tline))
+                self._validate_template_block_scope(template_lines)
         if not template_lines:
             # Legacy invariant — preserve the exact substring so
             # ``pytest.raises(ValueError, match="must have an indented block")``
@@ -1756,10 +1829,11 @@ class _Walker:
                 f"Optimize span {name!r} must have an indented block after it",
                 code="K-OPT-EMPTY",
             )
-        # The optimize span's template_lines are ALSO appended to the
-        # procedure body so they execute normally during a run; the
-        # optimizer mutates these line objects in place.
-        proc.body.extend(template_lines)
+        # The optimize span's template lines also execute during a normal run.
+        # Keep them in one TemplateBlock so the whole span is one LLM call,
+        # matching ordinary `>>` continuation semantics. The optimizer still
+        # owns the individual line objects and mutates them in place.
+        proc.body.append(TemplateBlock(lines=template_lines, loc=self._span(node)))
         return OptimizeSpan(
             name=name,
             template_lines=template_lines,

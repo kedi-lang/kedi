@@ -83,6 +83,7 @@ class _FakeNode:
         self.end_byte = end
         self.start_point = (0, start)
         self.end_point = (0, end)
+        self.prev_named_sibling = None
         self.id = _FakeNode._next_id
         _FakeNode._next_id += 1
         self._field_names_by_id = {child.id: name for name, child in self._fields.items()}
@@ -109,8 +110,8 @@ def _fake_walker(source: bytes = b"name") -> Any:
 
 def test_cst_walker_defensive_edges(monkeypatch):
     assert cst_module._decode_block_comment_body("###") == ""
-    assert cst_module._hyphenated_identifier("plain_identifier") is None
-    assert cst_module._hyphenated_identifier("-profile") == "-profile"
+    leading_hyphen = _FakeNode("ERROR", end=8)
+    assert cst_module._hyphenated_identifier_from_error(b"-profile", leading_hyphen) == "-profile"
 
     field_child = _FakeNode("field_child")
     other_child = _FakeNode("other_child")
@@ -134,17 +135,27 @@ def test_cst_walker_defensive_edges(monkeypatch):
     walker._validate_block_comments()
     walker._line_error(0, "bad")
     assert walker.diagnostics == []
-    out_of_bounds = _FakeNode("ERROR")
-    out_of_bounds.start_point = (10, 0)
-    assert walker._source_line(cast(Any, out_of_bounds)) == ""
-
     missing = _FakeNode("identifier", has_error=True, is_missing=True)
     error_walker = _fake_walker()
-    error_walker._collect_tree_errors(missing)
+    error_walker._collect_pre_walk_tree_errors(missing)
     assert error_walker.diagnostics[-1].message == "missing 'identifier'"
     missing_newline = _FakeNode("_newline", has_error=True, is_missing=True)
-    error_walker._collect_tree_errors(missing_newline)
+    error_walker._collect_pre_walk_tree_errors(missing_newline)
     assert error_walker.diagnostics[-1].message == "missing 'identifier'"
+    optimize_source = b"> optimize: answer"
+    optimize_error = _FakeNode(
+        "ERROR",
+        has_error=True,
+        is_error=True,
+        start=0,
+        end=len(optimize_source),
+    )
+    optimize_walker = _fake_walker(optimize_source)
+    optimize_walker._record_tree_error(optimize_error)
+    assert optimize_walker.diagnostics[-1].message == (
+        "Optimize span 'answer' must have an indented block after it"
+    )
+    assert optimize_walker.diagnostics[-1].code == "K-OPT-EMPTY"
 
     export_walker = _fake_walker(b"> export:\n  name\n")
     export_body = _FakeNode(
@@ -1069,6 +1080,31 @@ def test_empty_inline_python_has_specific_diagnostic() -> None:
 
 
 @pytest.mark.parametrize(
+    "source",
+    [
+        "> mcp:\n    transport http\n",
+        "> settings:\n    temperature 0.2\n",
+    ],
+)
+def test_incomplete_directive_fields_raise_parse_errors(source: str) -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(source)
+
+    assert info.value.diagnostics
+    assert all(diagnostic.code == "K-PARSE" for diagnostic in info.value.diagnostics)
+
+
+def test_invalid_template_escape_raises_parse_error() -> None:
+    with pytest.raises(KediParseError) as info:
+        parse_program(">> value=a [result]\n")
+
+    assert any(
+        diagnostic.code == "K-TEXT-ESCAPE" and "Literal '=' must be escaped" in diagnostic.message
+        for diagnostic in info.value.diagnostics
+    )
+
+
+@pytest.mark.parametrize(
     ("source", "invalid_name"),
     [
         ("> profile: my-profile:\n    > model: x\n", "my-profile"),
@@ -1087,6 +1123,21 @@ def test_hyphenated_identifiers_have_specific_diagnostic(source: str, invalid_na
         and "'-' cannot be used" in diagnostic.message
         for diagnostic in info.value.diagnostics
     )
+
+
+def test_parse_error_does_not_blame_hyphens_inside_recovered_directives() -> None:
+    source = (
+        "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"
+    )
+
+    with pytest.raises(KediParseError) as info:
+        parse_program(source)
+
+    diagnostic = info.value.diagnostics[0]
+    assert diagnostic.message == "unexpected syntax"
+    assert diagnostic.span.start_line == 1
+    assert diagnostic.span.end_line == 1
+    assert diagnostic.span.start_col == 20
 
 
 def test_multiline_agent_directive_rejects_multiple_entries() -> None:

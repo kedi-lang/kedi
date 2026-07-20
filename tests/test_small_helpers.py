@@ -165,6 +165,10 @@ def test_source_loading_maps_empty_and_missing_lines(tmp_path: Path) -> None:
     assert loaded.source_map.resolve_line(0) is None
     assert loaded.source_map.get_line(str(tmp_path / "absent.kedi"), 1) is None
     assert loaded.source_map.get_line(str(first), 99) is None
+    assert loaded.source_map.get_byte_offset(str(first), 2, 1) == 5
+    assert loaded.source_map.get_byte_offset(str(first), 2, 99) == 7
+    assert loaded.source_map.get_byte_offset(str(first), 99, 0) is None
+    assert loaded.source_map.get_byte_offset(str(tmp_path / "absent.kedi"), 1, 0) is None
     assert loaded.source_map.has_path(str(second))
     assert not loaded.source_map.has_path(str(tmp_path / "missing.kedi"))
 

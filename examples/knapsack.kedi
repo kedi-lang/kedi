@@ -1,12 +1,35 @@
+###
+# Run command:
+
+# kedi knapsack.kedi --eval --optimize --optimizer gepa\
+# --optimizer-reflection-model openrouter:google/gemini-3-flash-preview --optimizer-max-metric-calls 30
+###
+
+```
+from datetime import datetime
+
+date = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+import logfire
+
+logfire.configure()
+logfire.instrument_dspy()
+logfire.instrument_pydantic_ai()
+```
+
+> model: openrouter:google/gemini-3-flash-preview
+
 @solve_knapsack(items: str, capacity: int) -> int:
   > optimize: solver:
-    <items>
+    >> <items>
     Knapsack capacity: <capacity>
     Pick items to maximize total value without exceeding capacity.
     Reasoning: [reasoning: str]
     Total value: [value: int]
 
-  = `value`
+  = ```
+  print(f"Reasoning for {items!r}:\n\n", reasoning)
+  return value
+  ```
 
 @eval: solve_knapsack:
   > data: problems:

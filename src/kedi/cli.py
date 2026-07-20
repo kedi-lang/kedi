@@ -218,6 +218,7 @@ def main(
                     source_path=str(source_path),
                     source_map=bundle.source_map,
                 )
+            click.secho("Parsed successfully.", fg="green")
             return 0
 
         if command_source is not None:

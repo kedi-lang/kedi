@@ -77,6 +77,16 @@ def test_diagnostics_warns_when_annotated_has_extra_metadata():
     assert "extra Annotated metadata is ignored" in diags[0].message
 
 
+def test_diagnostics_ignore_comments_inside_directive_bodies():
+    mcp = "> mcp:\n    transport: http\n    # comment while editing\n    url: http://x\n"
+    settings = (
+        "> settings:\n    temperature: 0.2\n    ###\n    editing\n    ###\n    max_tokens: 5\n"
+    )
+
+    assert features.compute_diagnostics(mcp, "mcp.kedi") == []
+    assert features.compute_diagnostics(settings, "settings.kedi") == []
+
+
 def test_diagnostics_accept_tools_fixture() -> None:
     path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")
@@ -182,6 +192,32 @@ def test_diagnostics_errors_when_adapter_lacks_structured_output(
     assert "structured template output fields" in diag.message
     assert diag.range.start.line == 2
     assert diag.range.start.character == len(">> Capital is ")
+
+
+def test_legacy_template_lines_receive_adapter_capability_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_structured_output=False),
+    )
+    output = OutputSegment(name="capital", loc=Span(0, 1, 1, 1, 1, 8))
+    program = Program(source_text="Capital [capital]\n")
+
+    diagnostics = features._scan_capability_scope(
+        program,
+        [TemplateLine(segments=[output])],
+        features._AdapterDiagnosticState(shortname="codex", kind="agent-harness"),
+        {},
+        {},
+        set(),
+        {},
+    )
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CAPABILITY"
+    assert "structured template output fields" in diagnostics[0].message
 
 
 @pytest.mark.parametrize(
@@ -536,9 +572,26 @@ def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     profiles = tmp_path / "profiles.kedi"
     profiles.write_text("> export:\n  xd\n", encoding="utf-8")
     main = tmp_path / "main.kedi"
-    src = "> import: profiles (file name without .kedi)\n\n> export:\n  xd\n  get_proc\n"
+    src = "> import: profiles\n\n> export:\n  xd\n  get_proc\n"
     main.write_text(src, encoding="utf-8")
     assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_limit_recovered_parse_errors_to_the_faulting_line() -> None:
+    src = (
+        "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"
+    )
+
+    diagnostics = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.code == "K-PARSE"
+    assert diagnostic.message == "unexpected syntax"
+    assert diagnostic.range.start.line == 0
+    assert diagnostic.range.end.line == 0
+    assert diagnostic.range.start.character == 19
+    assert diagnostic.range.end.character == 35
 
 
 def test_diagnostics_report_missing_imported_module(tmp_path):
@@ -561,3 +614,25 @@ def test_diagnostics_accept_internal_registry_import(tmp_path):
     main.write_text(src, encoding="utf-8")
 
     assert features.compute_diagnostics(src, str(main)) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> mcp:\n    transport http\n",
+        "> settings:\n    temperature 0.2\n",
+    ],
+)
+def test_diagnostics_handle_incomplete_directive_fields(source: str) -> None:
+    diagnostics = features.compute_diagnostics(source, "example.kedi")
+
+    assert diagnostics
+    assert all(diagnostic.code == "K-PARSE" for diagnostic in diagnostics)
+
+
+def test_diagnostics_report_invalid_template_escape() -> None:
+    diagnostics = features.compute_diagnostics(">> value=a [result]\n", "example.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-TEXT-ESCAPE"
+    assert "Literal '=' must be escaped" in diagnostics[0].message

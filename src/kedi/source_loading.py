@@ -56,6 +56,26 @@ class CompositeSourceMap:
             return None
         return None
 
+    def get_byte_offset(
+        self,
+        source_path: str,
+        line_number: int,
+        byte_column: int,
+    ) -> int | None:
+        """Return a document-local UTF-8 byte offset for a source point."""
+        for document in self.documents:
+            if document.path != source_path:
+                continue
+            raw = document.text.encode("utf-8")
+            line_starts = [0]
+            line_starts.extend(index + 1 for index, value in enumerate(raw) if value == 10)
+            if not 1 <= line_number <= len(line_starts):
+                return None
+            line_start = line_starts[line_number - 1]
+            line_end = line_starts[line_number] - 1 if line_number < len(line_starts) else len(raw)
+            return line_start + max(0, min(byte_column, line_end - line_start))
+        return None
+
     def has_path(self, source_path: str) -> bool:
         return any(document.path == source_path for document in self.documents)
 

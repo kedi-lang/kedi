@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import tree_sitter_kedi
+from tree_sitter import Language, Parser, Query, QueryCursor
+
 from kedi.lsp import features
 from tests.lsp_helpers import decode_semantic_tokens
 
@@ -97,6 +102,60 @@ def test_semantic_tokens_cover_annotated_description_string():
         and token_type == string_type
         for line_no, col, length, token_type, _ in decoded
     )
+
+
+def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
+    src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
+    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 1 and col == 20 and length == len("answer") and token_type == variable_type
+        for line, col, length, token_type, _ in tokens
+    )
+
+
+def test_semantic_tokens_keep_template_substitution_delimiters_consistent():
+    src = ">> Compare <left> with <right> and <`value`>.\n"
+    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
+    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
+
+    for column in (11, 16, 23, 29):
+        assert any(
+            line == 0 and col == column and length == 1 and token_type == operator_type
+            for line, col, length, token_type, _ in tokens
+        )
+
+
+def test_tree_sitter_highlights_mark_both_template_angle_delimiters_special():
+    root = Path(__file__).resolve().parents[1]
+    canonical = (root / "tree-sitter-kedi/queries/highlights.scm").read_text(encoding="utf-8")
+    binding = (
+        root / "tree-sitter-kedi/bindings/python/tree_sitter_kedi/queries/highlights.scm"
+    ).read_text(encoding="utf-8")
+    zed = (root / "kedi-zed/languages/kedi/highlights.scm").read_text(encoding="utf-8")
+
+    assert canonical == binding
+    assert '["@" "~" "<" ">"] @punctuation.special' in canonical
+    assert '  "<"\n  ">"\n  "```"\n  "`"\n] @punctuation.special' in zed
+
+
+def test_tree_sitter_highlights_capture_both_template_angle_delimiters_special():
+    source = b">> Text <topic> <compose(`topic`)> [answer: str] <`value`>\n"
+    root = Path(__file__).resolve().parents[1]
+    language = Language(tree_sitter_kedi.language())
+    query = Query(
+        language,
+        (root / "tree-sitter-kedi/queries/highlights.scm").read_text(encoding="utf-8"),
+    )
+    captures = QueryCursor(query).captures(Parser(language).parse(source).root_node)
+    special = {
+        source[node.start_byte : node.end_byte].decode("utf-8")
+        for node in captures["punctuation.special"]
+    }
+
+    assert "<" in special
+    assert ">" in special
 
 
 # ---------------------------------------------------------------------

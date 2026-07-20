@@ -44,6 +44,107 @@ def test_kedi_docstring_hover_maps_back_to_python_docstring() -> None:
     assert hover["range"]["start"]["line"] == 12
 
 
+def test_kedi_docstring_hover_defaults_untyped_outer_parameter_to_str() -> None:
+    source = '''import kedi
+
+@kedi.query
+def get_capital(country):
+    """kedi
+    ```
+    print(country, 123)
+    ```
+    = Ankara
+    """
+    ...
+'''
+
+    hover = kedi_docstrings.compute_kedi_docstring_hover(
+        source,
+        "/tmp/api.py",
+        lsp.Position(line=6, character=10),
+    )
+
+    assert hover is not None
+    assert "`country: str`" in hover["contents"]["value"]
+    assert hover["range"] == {
+        "start": {"line": 6, "character": 10},
+        "end": {"line": 6, "character": 17},
+    }
+
+
+def test_kedi_docstring_hover_uses_outer_python_parameter_annotation() -> None:
+    source = '''import kedi
+
+@kedi.query
+def get_capital(country: bytes):
+    """kedi
+    ```
+    print(country)
+    ```
+    = Ankara
+    """
+    ...
+'''
+
+    hover = kedi_docstrings.compute_kedi_docstring_hover(
+        source,
+        "/tmp/api.py",
+        lsp.Position(line=6, character=10),
+    )
+
+    assert hover is not None
+    assert "`country: bytes`" in hover["contents"]["value"]
+
+
+def test_kedi_docstring_outer_parameter_hover_tracks_the_active_occurrence() -> None:
+    source = '''import kedi
+
+@kedi.query
+def echo(country):
+    """kedi
+    ```
+    print(country, country)
+    ```
+    = done
+    """
+    ...
+'''
+
+    hover = kedi_docstrings.compute_kedi_docstring_hover(
+        source,
+        "/tmp/api.py",
+        lsp.Position(line=6, character=19),
+    )
+
+    assert hover is not None
+    assert hover["range"] == {
+        "start": {"line": 6, "character": 19},
+        "end": {"line": 6, "character": 26},
+    }
+
+
+def test_kedi_docstring_unicode_positions_map_to_output_field() -> None:
+    source = '''def greet(name: str):
+    """kedi
+    >> İstanbul için [answer: str] from <name>.
+    = <answer>
+    """
+    return name
+'''
+    hover = kedi_docstrings.compute_kedi_docstring_hover(
+        source,
+        "/tmp/greet.py",
+        lsp.Position(line=2, character=22),
+    )
+
+    assert hover is not None
+    assert "**Output** `answer`" in hover["contents"]["value"]
+    assert hover["range"] == {
+        "start": {"line": 2, "character": 22},
+        "end": {"line": 2, "character": 28},
+    }
+
+
 def test_kedi_docstring_definition_and_references_are_remapped() -> None:
     uri = "file:///tmp/api.py"
     usage = position_of(PY_SOURCE, "template>")
@@ -285,11 +386,18 @@ def test_kedi_docstring_monkeypatched_feature_fallbacks(monkeypatch) -> None:
         "compute_hover",
         lambda source, source_path, pos: None,
     )
+    fallback_hover = kedi_docstrings.compute_kedi_docstring_hover(
+        PY_SOURCE,
+        "/tmp/api.py",
+        position_of(PY_SOURCE, "template>"),
+    )
+    assert fallback_hover is not None
+    assert "`template: str`" in fallback_hover["contents"]["value"]
     assert (
         kedi_docstrings.compute_kedi_docstring_hover(
             PY_SOURCE,
             "/tmp/api.py",
-            position_of(PY_SOURCE, "template>"),
+            position_of(PY_SOURCE, "Extract"),
         )
         is None
     )
@@ -344,6 +452,35 @@ def test_kedi_docstring_monkeypatched_feature_fallbacks(monkeypatch) -> None:
 
 def test_kedi_docstring_private_mapping_helpers_cover_boundaries(monkeypatch) -> None:
     doc = next(iter(kedi_docstrings._iter_kedi_docstrings(PY_SOURCE)))
+
+    assert (
+        kedi_docstrings._external_symbol_at_position(
+            doc,
+            position_of(doc.kedi_source, "Extract"),
+        )
+        is None
+    )
+    assert (
+        kedi_docstrings._external_symbol_at_position(
+            doc,
+            lsp.Position(line=0, character=0),
+        )
+        is None
+    )
+    external_name = next(iter(doc.external_symbols))
+    synthetic_external = kedi_docstrings._KediDocstring(
+        source_range=doc.source_range,
+        kedi_source=external_name,
+        line_maps=(),
+        external_symbols=doc.external_symbols,
+    )
+    assert (
+        kedi_docstrings._external_symbol_at_position(
+            synthetic_external,
+            lsp.Position(line=0, character=0),
+        )
+        is None
+    )
 
     function = ast_parse_function("def f():\n    pass\n")
     assert (

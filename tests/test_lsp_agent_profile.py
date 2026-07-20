@@ -141,6 +141,9 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     >> answer [x]
 """
     assert "> model:" in hover_text_at(src, "profile.kedi", "model", occurrence=1)
+    profile_model_hover = hover_text_at(src, "profile.kedi", "model", occurrence=2)
+    assert "Model override stored in this profile" in profile_model_hover
+    assert "`opus`" in profile_model_hover
     assert "> agent:" in hover_text_at(src, "profile.kedi", "agent", occurrence=1)
     assert "`agent_name`" in hover_text_at(src, "profile.kedi", "agent_name", occurrence=1)
     assert "> adapter:" in hover_text_at(src, "profile.kedi", "adapter", occurrence=1)
@@ -153,10 +156,12 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "LangChain model settings" in parallel_tool_calls_hover
     assert "Input segment" in hover_text_at(src, "profile.kedi", "tone", occurrence=1)
     assert "Keep answers short." in hover_text_at(src, "profile.kedi", "Keep")
-    assert "reusable profile MCP" in hover_text_at(src, "profile.kedi", "mcp", occurrence=1)
+    assert "MCP server configuration stored in this profile" in hover_text_at(
+        src, "profile.kedi", "mcp", occurrence=1
+    )
     assert "Command used" in hover_text_at(src, "profile.kedi", "profile-mcp")
     assert "Text segment" in hover_text_at(src, "profile.kedi", "Prefer")
-    assert "reusable profile model configuration" in hover_text_at(
+    assert "Model configuration stored in this profile" in hover_text_at(
         src, "profile.kedi", "settings", occurrence=2
     )
     temperature_hover = hover_text_at(src, "profile.kedi", "temperature")
@@ -165,7 +170,9 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "LangChain model settings" in temperature_hover
     assert "DSPy `LM` only" in hover_text_at(src, "profile.kedi", "num_retries")
     assert "> mcp:" in hover_text_at(src, "profile.kedi", "mcp", occurrence=3)
-    assert "MCP field" in hover_text_at(src, "profile.kedi", "transport")
+    transport_hover = hover_text_at(src, "profile.kedi", "transport")
+    assert "Connection transport for this MCP server" in transport_hover
+    assert "streamable-http" in transport_hover
     assert "stdio" in hover_text_at(src, "profile.kedi", "stdio")
     assert "Command used" in hover_text_at(src, "profile.kedi", "vsh")
     assert "String argument list" in hover_text_at(src, "profile.kedi", "args")
@@ -173,8 +180,8 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "haiku" in hover_text_at(src, "profile.kedi", "haiku")
     assert "Agent profile" in hover_text_at(src, "profile.kedi", "light", occurrence=1)
     assert "> use:" in hover_text_at(src, "profile.kedi", "light", occurrence=2)
-    assert "reusable profile agent harness adapter" in hover_text_at(src, "profile.kedi", "codex")
-    assert "reusable profile agent framework adapter" in hover_text_at(
+    assert "Agent harness stored in this profile" in hover_text_at(src, "profile.kedi", "codex")
+    assert "Model framework stored in this profile" in hover_text_at(
         src, "profile.kedi", "pydantic"
     )
     assert "> agent:" in hover_text_at(src, "profile.kedi", "agent_name", occurrence=2)
@@ -253,7 +260,7 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
         name="empty_settings",
         settings_members=[ProfileSettingsEntry(fields=[])],
     )
-    assert "(no settings members)" in features._profile_signature_markdown(profile)
+    assert "Reusable agent profile." in features._profile_signature_markdown(profile)
 
 
 def test_profile_docstring_replaces_default_profile_hover() -> None:
@@ -279,8 +286,8 @@ def test_profile_docstring_replaces_default_profile_hover() -> None:
     assert "Reusable agent settings" not in doc_comment_hover
 
     fallback_hover = hover_text_at(src, "profile.kedi", "fallback")
-    assert "Reusable agent settings" in fallback_hover
-    assert "`> model:` members: `haiku`" in fallback_hover
+    assert "Reusable agent profile." in fallback_hover
+    assert "Model: `haiku`" in fallback_hover
 
 
 def test_use_hover_when_module_has_no_exported_profiles(tmp_path: Path) -> None:
@@ -445,7 +452,7 @@ def test_hover_on_missing_agent_tool() -> None:
     src = "> use:\n    missing\n@main():\n    >> x [y]\n"
     body = hover_text_at(src, "main.kedi", "missing")
     assert "Agent tool" in body
-    assert "not found" in body
+    assert "No procedure named `missing`" in body
 
 
 def test_profile_def_symbol_skips_members_without_loc() -> None:
@@ -484,7 +491,7 @@ def test_hover_on_profile_name_in_multiline_use_is_tool_entry() -> None:
 """
     body = hover_text_at(src, "main.kedi", "light", occurrence=2)
     assert "Agent tool" in body
-    assert "not found" in body
+    assert "No procedure named `light`" in body
 
 
 def test_hover_on_tool_inside_procedure_multiline_use() -> None:
@@ -512,6 +519,12 @@ def test_hover_on_toplevel_procedure_used_as_single_line_tool() -> None:
 """
     body = hover_text_at(src, "main.kedi", "foo", occurrence=2)
     assert "Agent tool" in body
+
+
+def test_hover_on_single_line_use_explains_tools_and_profiles() -> None:
+    body = hover_text_at("> use: profile_or_tool\n", "main.kedi", "use")
+    assert "procedure target" in body
+    assert "profile target" in body
 
 
 def test_hover_on_procedure_used_as_single_line_tool() -> None:
@@ -566,7 +579,7 @@ def test_hover_on_profile_name_inside_procedure_multiline_use_is_tool_entry() ->
 """
     body = hover_text_at(src, "main.kedi", "light", occurrence=2)
     assert "Agent tool" in body
-    assert "not found" in body
+    assert "No procedure named `light`" in body
 
 
 def test_hover_on_tool_name_in_multiline_use() -> None:
@@ -597,7 +610,7 @@ def test_hover_on_multiline_use_tools() -> None:
     >> answer [x]
 """
     body = hover_text_at(src, "tools.kedi", "use")
-    assert "register Kedi procedures as agent tools" in body
+    assert "Registers Kedi procedures as agent tools" in body
     assert "web_fetch" in body
 
 
@@ -673,4 +686,4 @@ def test_profile_def_symbol_without_tools() -> None:
     signature = features._profile_signature_markdown(
         ProfileDefStmt(name="empty", system_members=[ProfileSystemEntry()])
     )
-    assert "(no system members)" in signature
+    assert "Reusable agent profile." in signature

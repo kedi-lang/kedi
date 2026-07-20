@@ -80,10 +80,13 @@ class StatementCompiler:
             with self.rt.trace_frame(KediTraceFrame(kind="template", label=label, span=stmt.loc)):
                 # If an override is provided, short-circuit LLM invocation and inject values.
                 if stmt.optimized_output_override is not None:
+                    from .environment import assert_not_cli_args_identifier
+
                     env = self.rt._current_env.get()
                     if env is None:
                         raise RuntimeError("Template override requires active runtime environment")
                     for key, value in stmt.optimized_output_override.items():
+                        assert_not_cli_args_identifier(key)
                         env[key] = value
                         kwargs[key] = value
                     return stmt.optimized_output_override
@@ -225,6 +228,9 @@ class StatementCompiler:
 
     def _set_value(self, name: str, value: Any, closure_env: dict[str, Any]) -> None:
         """Set a value in both closure and runtime environments."""
+        from .environment import assert_not_cli_args_identifier
+
+        assert_not_cli_args_identifier(name)
         closure_env[name] = value
         env = self.rt._current_env.get()
         if env is not None:

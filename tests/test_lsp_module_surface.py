@@ -108,3 +108,22 @@ def test_module_surface_resolves_imported_program(tmp_path) -> None:
 
     assert "child" in surface.modules
     assert "child" in surface.procedures
+
+
+def test_module_surface_uses_cache_local_definition_offsets(tmp_path: Path) -> None:
+    module = tmp_path / "generated.kedi"
+    module.write_text("@root() -> str:\n  = ok\n", encoding="utf-8")
+    cache = module.with_suffix(".cache.kedi")
+    cache.write_text(
+        "@cached() -> str:\n  = generated\n> export:\n  cached\n",
+        encoding="utf-8",
+    )
+
+    surface = module_surface.load_imported_surface(module, set(), "generated")
+    span = surface.procedures["cached"].loc
+
+    assert span is not None
+    assert span.source_path == str(cache.resolve())
+    assert span.start_line == 1
+    assert span.start_byte == 0
+    assert span.end_byte == len("@cached() -> str:\n  = generated\n".encode("utf-8"))

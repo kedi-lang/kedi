@@ -522,6 +522,10 @@ class KediRuntime:
         *,
         capture_key: str | None,
     ) -> Dict[str, Any]:
+        if capture_key is not None:
+            from .lang.compiler.environment import assert_not_cli_args_identifier
+
+            assert_not_cli_args_identifier(capture_key)
         parallel = bool(getattr(self._engine, "parallel", False))
 
         from .agent_profile import current_block_agent_profile
@@ -607,6 +611,11 @@ class KediRuntime:
                     deps.append(text._future)
 
         required = [out.key for out in outputs]
+        if required:
+            from .lang.compiler.environment import assert_not_cli_args_identifier
+
+            for key in required:
+                assert_not_cli_args_identifier(key)
 
         if not required:
             if not parts:
