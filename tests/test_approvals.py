@@ -355,6 +355,27 @@ def test_dsl_dynamic_approval_handler_is_evaluated_from_python_environment() -> 
     assert seen == ["write_file"]
 
 
+def test_dsl_dynamic_approval_handler_is_available_from_the_prelude() -> None:
+    source = """```
+from kedi import ApprovalDecision
+
+def approval_handler(_request):
+    return ApprovalDecision.allow()
+```
+
+@write_file(path: str) -> str:
+  = <path>
+
+> use: write_file
+> approval: `approval_handler`
+>> Write [answer]
+= <answer>
+"""
+    runtime = compile_program(parse_program(source), adapter=_ToolCallingAdapter())
+
+    assert runtime.run_main() == "safe.txt"
+
+
 def test_procedure_approval_directive_is_applied_in_its_call_scope() -> None:
     source = """@write_file(path: str) -> str:
   = <path>

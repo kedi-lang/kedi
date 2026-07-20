@@ -239,7 +239,7 @@ def eval_approval_directive(
     env: dict[str, Any],
 ) -> AgentProfile:
     if stmt.backtick_code is not None:
-        handler = rt.executor.evaluate_type_expression(rt, stmt.backtick_code, env)
+        handler = rt.executor.evaluate_inline(rt, stmt.backtick_code, env)
         if not callable(handler):
             raise TypeError(
                 "approval directive inline Python must evaluate to a callable approval handler, "
@@ -371,7 +371,7 @@ def _member_to_patch(
         return AgentProfile(effort=effort)
     if member.kind == "approval":
         if member.backtick_code is not None:
-            handler = rt.executor.evaluate_type_expression(rt, member.backtick_code, env)
+            handler = rt.executor.evaluate_inline(rt, member.backtick_code, env)
             if not callable(handler):
                 raise TypeError(
                     "profile approval inline Python must evaluate to a callable approval handler, "
