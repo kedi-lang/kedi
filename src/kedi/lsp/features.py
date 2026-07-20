@@ -145,11 +145,15 @@ from .ast_spans import name_token_span
 from .coordinates import (
     byte_column_to_utf16,
     current_source,
-    position_inside as _position_inside,
-    span_to_range as _span_to_range,
     tree_sitter_point_to_position,
     utf16_length,
     with_source_coordinates,
+)
+from .coordinates import (
+    position_inside as _position_inside,
+)
+from .coordinates import (
+    span_to_range as _span_to_range,
 )
 from .module_surface import (
     ImportedSurface,

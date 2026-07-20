@@ -547,9 +547,9 @@ def test_find_all_references_for_procedures_and_types(
         Program,
         ReturnStmt,
         TemplateLine,
+        TestSuite,
         TypeDef,
         TypeField,
-        TestSuite,
     )
 
     ref_prog = Program(
