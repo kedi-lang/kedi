@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 import kedi
-import kedi.api as api_module
 import kedi.agent_adapter.registry as adapter_registry
+import kedi.api as api_module
 from kedi import (
     bind,
     cache_info,
