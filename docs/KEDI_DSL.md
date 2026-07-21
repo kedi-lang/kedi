@@ -184,7 +184,14 @@ Substitutions read values and insert them into templates using `<...>`:
 
 # Inline Python expression (note the backticks)
 >> Sum is <`2 + 3`>
+
+# Bare inline Python segments are also valid in templates
+>> Review this code `"def add(a: int, b: int) -> int: return a + b"`.
 ```
+
+Inside a template, both `<`...`>` and bare `` `...` `` evaluate Python and insert
+its string value. Bare backticks are useful when the expression contains characters
+such as `>` or `[]` that would otherwise need escaping in literal template text.
 
 ### Outputs (L-values)
 

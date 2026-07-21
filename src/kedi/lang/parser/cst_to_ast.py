@@ -882,9 +882,13 @@ class _Walker:
         type_expr = self._walk_type_expr(type_node) if type_node is not None else None
 
         rhs_node = _field(node, "rhs")
-        # RHS is either an inline_python_expr or a template_expr.
-        if rhs_node is not None and rhs_node.type == "inline_python_expr":
-            code = self._walk_inline_python_expr(rhs_node)
+        # A sole backtick RHS preserves its native Python value. The
+        # tree-sitter grammar also admits inline expressions as template
+        # segments, so accept either CST shape here without changing the
+        # long-standing native assignment semantics.
+        native_expr = self._sole_inline_python_expr(rhs_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
             seg = PythonExprNativeSegment(code=code, loc=self._span(rhs_node))
             return AssignStmt(
                 name=name,
@@ -975,8 +979,9 @@ class _Walker:
         # ``ReturnStmt`` whose value happens to include a backtick
         # segment alongside other content (which IS a ReturnStmt with
         # a single PythonExprNativeSegment, rendered to string).
-        if value_node is not None and value_node.type == "inline_python_expr":
-            code = self._walk_inline_python_expr(value_node)
+        native_expr = self._sole_inline_python_expr(value_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
             return ReturnBlockStmt(code=code, loc=self._span(node))
         segs = self._walk_template_expr(value_node) if value_node is not None else []
         return ReturnStmt(segments=segs, loc=self._span(node))
@@ -1241,6 +1246,18 @@ class _Walker:
         self._strip_leading_template_indent(segs)
         return segs
 
+    @staticmethod
+    def _sole_inline_python_expr(node: Node | None) -> Node | None:
+        """Return the sole inline expression in a native assignment/return RHS."""
+        if node is None:
+            return None
+        if node.type == "inline_python_expr":
+            return node
+        children = _named_children(node)
+        if len(children) == 1 and children[0].type == "inline_python_expr":
+            return children[0]
+        return None
+
     def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
@@ -1313,6 +1330,11 @@ class _Walker:
                     return PythonExprSegment(code=code, loc=self._span(node))
             self._error(node, "python_expr_segment missing inline_python_expr child")
             return PythonExprSegment(code="", loc=self._span(node))
+        if t == "inline_python_expr":
+            return PythonExprSegment(
+                code=self._walk_inline_python_expr(node),
+                loc=self._span(node),
+            )
         self._error(node, f"unexpected segment {t!r}")
         # Fallback so callers don't need None checks.
         return TextSegment(text="", loc=self._span(node))
