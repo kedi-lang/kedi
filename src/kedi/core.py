@@ -545,9 +545,7 @@ class KediRuntime:
 
             profile = current_block_agent_profile()
             override_ctx = nullcontext()
-            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
-                adapter.default_model()
-            ):
+            if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
 
             tool_adapter: Any = None
@@ -673,9 +671,7 @@ class KediRuntime:
             # (_assert_profile_override_supported); here we only enter the override scope.
             profile = current_block_agent_profile()
             override_ctx = nullcontext()
-            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
-                adapter.default_model()
-            ):
+            if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
 
             # Register the pre-resolved (scope-correct) tool specs inside the adapter's per-call

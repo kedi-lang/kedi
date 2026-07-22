@@ -182,6 +182,20 @@ def test_raw_invoke_capture_runs_adapter_invoke() -> None:
     assert len(adapter.instruction_calls) == 1
 
 
+def test_raw_invoke_supports_adapter_without_profile_override() -> None:
+    class InvokeOnlyAdapter:
+        def invoke_sync(self, *, prompt: str, **_kwargs: Any) -> str:
+            assert prompt == "Hello"
+            return "ok"
+
+    rt = compile_program(
+        parse_program("[answer] << Hello\n= <answer>\n"),
+        adapter=InvokeOnlyAdapter(),
+    )
+
+    assert rt.run_main() == "ok"
+
+
 def test_raw_invoke_capture_runs_inside_procedure_body() -> None:
     src = "@p(name):\n  [answer] << Hello <name>\n  = <answer>\n\n= <p(Ada)>\n"
     adapter = MockAdapter()

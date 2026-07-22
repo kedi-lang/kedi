@@ -236,3 +236,4 @@ plans/
 /*.py
 .uv-cache
 /kedi-mcp
+/references

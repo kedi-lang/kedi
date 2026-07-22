@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from pydantic_ai.models.test import TestModel
 
 import kedi
 import kedi.api as kedi_api
 from kedi.agent_adapter import approval as approval_module
 from kedi.agent_adapter import utils as adapter_utils
+from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -24,6 +27,7 @@ from kedi.agent_adapter.utils import (
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
+from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.model import eval_approval_directive, eval_profile_definition
 from kedi.agent_profile.registry import ProfileApprovalMember, ProfileDefinition
 from kedi.core import KediRuntime
@@ -552,6 +556,66 @@ def test_dsl_static_approval_reaches_the_registered_tool() -> None:
     runtime = compile_program(parse_program(source), adapter=_ToolCallingAdapter())
 
     assert runtime.run_main() == "safe.txt"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> model: same-model\n> approval: allow\n>> Return [answer].\n= <answer>\n",
+        "> model: same-model\n> approval: allow\n[answer] << Return ok.\n= <answer>\n",
+    ],
+)
+def test_runtime_enters_approval_profile_without_a_model_override(source: str) -> None:
+    class ProfileAwareAdapter:
+        def __init__(self) -> None:
+            self.active_profile = AgentProfile.empty()
+            self.entered_profiles: list[AgentProfile] = []
+
+        def default_model(self) -> str:
+            return "same-model"
+
+        @contextmanager
+        def profile_override(self, profile: AgentProfile) -> Iterator[None]:
+            previous = self.active_profile
+            self.active_profile = profile
+            self.entered_profiles.append(profile)
+            try:
+                yield
+            finally:
+                self.active_profile = previous
+
+        def produce_sync(self, **_kwargs: object) -> AttrDict[str, str]:
+            assert self.active_profile.approval == ApprovalPolicy.allow()
+            return AttrDict({"answer": "ok"})
+
+        def invoke_sync(self, **_kwargs: object) -> str:
+            assert self.active_profile.approval == ApprovalPolicy.allow()
+            return "ok"
+
+    adapter = ProfileAwareAdapter()
+    runtime = compile_program(parse_program(source), adapter=adapter)
+
+    assert runtime.run_main() == "ok"
+    assert len(adapter.entered_profiles) == 1
+    assert adapter.active_profile == AgentProfile.empty()
+
+
+def test_static_approval_reaches_pydantic_native_handler_without_an_override() -> None:
+    source = """@write_status(name: str) -> str:
+  = saved-<name>
+
+> use: write_status
+> approval: allow
+
+[response] << Call write_status.
+= <response>
+"""
+    runtime = compile_program(
+        parse_program(source),
+        adapter=PydanticAdapter(TestModel(call_tools=["write_status"])),
+    )
+
+    assert runtime.run_main() == '{"write_status":"saved-a"}'
 
 
 def test_dsl_static_deny_prevents_the_registered_tool() -> None:
