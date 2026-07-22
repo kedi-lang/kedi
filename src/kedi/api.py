@@ -212,6 +212,7 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple(profile.tools),
         tuple(_stable_repr(server) for server in profile.mcp_servers),
         _approval_identity(profile.approval),
+        profile.skills,
     )
 
 
@@ -275,6 +276,7 @@ def _agent_profile_overrides(
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
     approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    skills: bool | None,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
     return tool_map, AgentProfile(
@@ -287,6 +289,7 @@ def _agent_profile_overrides(
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval_policy),
+        skills=skills,
     )
 
 
@@ -534,6 +537,7 @@ def _build_config(
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    skills: bool | None,
     adapter_kwargs: Mapping[str, Any],
     parallel: bool | None = None,
     max_workers: int | None = None,
@@ -603,6 +607,7 @@ def _build_config(
         tools=tuple(_tool_mapping(tools)),
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval),
+        skills=skills,
     )
     profile = base_profile.merge(profile_patch)
     return _APIConfig(
@@ -637,6 +642,7 @@ def configure(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -660,6 +666,7 @@ def configure(
             env=env,
             mcp_servers=mcp_servers,
             approval=approval,
+            skills=skills,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -723,6 +730,7 @@ def context(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -741,6 +749,7 @@ def context(
             env=env,
             mcp_servers=mcp_servers,
             approval=approval,
+            skills=skills,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -877,6 +886,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -894,6 +904,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     selection = _resolve_selection(adapter=adapter, agent=agent)
@@ -910,6 +921,7 @@ def query(
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
+        skills=skills,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -949,6 +961,7 @@ def bind(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
     reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -966,6 +979,7 @@ def bind(
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
+        skills=skills,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:

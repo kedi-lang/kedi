@@ -39,6 +39,61 @@ def complete_turn(turn_id: str, text: str) -> None:
 thread_count = 0
 turn_count = 0
 pending_tools: dict[int, str] = {}
+pending_approvals: dict[int, str] = {}
+
+
+def request_native_approval(
+    *,
+    request_id: int,
+    turn_id: str,
+    thread_id: str,
+    kind: str,
+) -> None:
+    method: str
+    params: dict[str, Any] = {
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "itemId": f"approval-{turn_id}",
+        "startedAtMs": 0,
+    }
+    if kind == "command-read":
+        method = "item/commandExecution/requestApproval"
+        params.update(
+            {
+                "command": "cat README.md",
+                "cwd": "/tmp/project",
+                "commandActions": [
+                    {
+                        "type": "read",
+                        "command": "cat README.md",
+                        "name": "cat",
+                        "path": "/tmp/project/README.md",
+                    }
+                ],
+            }
+        )
+    elif kind == "command-write":
+        method = "item/commandExecution/requestApproval"
+        params.update(
+            {
+                "command": "rm notes.txt",
+                "cwd": "/tmp/project",
+                "commandActions": [{"type": "unknown", "command": "rm notes.txt"}],
+            }
+        )
+    elif kind == "file":
+        method = "item/fileChange/requestApproval"
+        params["grantRoot"] = "/tmp/project"
+    elif kind == "permissions":
+        method = "item/permissions/requestApproval"
+        params["cwd"] = "/tmp/project"
+        params["reason"] = "network access"
+        params["permissions"] = {"network": {"enabled": True}, "fileSystem": None}
+    else:
+        raise ValueError(f"unsupported fake approval kind: {kind}")
+    pending_approvals[request_id] = turn_id
+    send({"id": request_id, "method": method, "params": params})
+
 
 for raw_line in sys.stdin:
     message = json.loads(raw_line)
@@ -128,6 +183,15 @@ for raw_line in sys.stdin:
                 }
             )
             continue
+        if prompt.startswith("approval:"):
+            _, kind = prompt.split(":", 1)
+            request_native_approval(
+                request_id=20_000 + turn_count,
+                turn_id=turn_id,
+                thread_id=message["params"]["threadId"],
+                kind=kind,
+            )
+            continue
         complete_turn(turn_id, json.dumps({"answer": prompt}, ensure_ascii=False))
         continue
     if method == "turn/interrupt":
@@ -143,6 +207,13 @@ for raw_line in sys.stdin:
         complete_turn(
             turn_id,
             json.dumps({"answer": content, "success": result["success"]}, ensure_ascii=False),
+        )
+        continue
+    if request_id in pending_approvals and "result" in message:
+        turn_id = pending_approvals.pop(request_id)
+        complete_turn(
+            turn_id,
+            json.dumps({"answer": json.dumps(message["result"]), "success": True}),
         )
         continue
     if request_id is not None:

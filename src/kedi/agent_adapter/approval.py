@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
@@ -151,9 +152,44 @@ def resolve_tool_approval(
     assert policy.handler is not None
     result = policy.handler(request)
     if inspect.isawaitable(result):
-        from .utils import run_sync
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_resolve_awaitable(cast(Awaitable[ApprovalDecision], result)))
+        if inspect.iscoroutine(result):
+            result.close()
+        raise RuntimeError(
+            "async approval handlers require an async tool wrapper when called from an event loop"
+        )
+    return _validated_decision(result)
 
-        result = run_sync(cast(Awaitable[ApprovalDecision], result))
+
+async def resolve_tool_approval_async(
+    policy: ApprovalPolicy | None,
+    request: ApprovalRequest,
+) -> ApprovalDecision:
+    """Resolve one tool invocation without leaving the caller's event loop."""
+
+    if request.risk == "read_only":
+        return ApprovalDecision.allow(reason="read-only tool")
+    if policy is None:
+        return ApprovalDecision.deny(reason="no approval policy configured")
+    if policy.mode == "allow":
+        return ApprovalDecision.allow(reason="static allow policy")
+    if policy.mode == "deny":
+        return ApprovalDecision.deny(reason="static deny policy")
+    assert policy.handler is not None
+    result = policy.handler(request)
+    if inspect.isawaitable(result):
+        result = await result
+    return _validated_decision(result)
+
+
+async def _resolve_awaitable(result: Awaitable[ApprovalDecision]) -> ApprovalDecision:
+    return _validated_decision(await result)
+
+
+def _validated_decision(result: object) -> ApprovalDecision:
     if not isinstance(result, ApprovalDecision):
         raise InvalidApprovalDecision(
             f"approval handler must return ApprovalDecision, got {type(result).__name__}"

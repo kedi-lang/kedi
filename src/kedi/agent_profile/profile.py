@@ -10,6 +10,7 @@ from ..effort import EffortValue
 from .mcp import McpServerSpec
 
 AgentCommand = str | tuple[str, ...]
+SKILLS_USE_TARGET = "skills"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,6 +27,7 @@ class AgentProfile:
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerSpec, ...] = ()
     approval: ApprovalPolicy | None = None
+    skills: bool | None = None
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -52,6 +54,8 @@ class AgentProfile:
             updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
         if other.approval is not None:
             updates["approval"] = other.approval
+        if other.skills is not None:
+            updates["skills"] = other.skills
         if not updates:
             return self
         return replace(self, **updates)

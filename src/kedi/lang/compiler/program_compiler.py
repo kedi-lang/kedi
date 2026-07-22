@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
+from ...agent_profile.profile import SKILLS_USE_TARGET
 from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
 from ...agent_profile.model import (
     eval_adapter_directive,
@@ -236,7 +237,7 @@ class ProgramCompiler:
         names: list[str] = []
         for member in profile.members:
             if member.kind == "tools":
-                names.extend(member.tool_names)
+                names.extend(name for name in member.tool_names if name != SKILLS_USE_TARGET)
         return tuple(names)
 
     def _export_names(self, prog: Program, imported_rt: KediRuntime) -> list[str]:

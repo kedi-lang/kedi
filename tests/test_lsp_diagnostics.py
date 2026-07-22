@@ -377,6 +377,27 @@ def test_diagnostics_warn_when_adapter_lacks_tool_registration(
     assert diag.range.start.character == len("> use: ")
 
 
+def test_diagnostics_warn_when_adapter_lacks_skill_tool_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_tool_registration=False),
+    )
+    src = "> agent: codex\n\n> use: skills\n"
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-ADAPTER-CAPABILITY"
+    assert diag.severity == lsp.DiagnosticSeverity.Warning
+    assert "skill tool registration" in diag.message
+    assert diag.range.start.line == 2
+    assert diag.range.start.character == len("> use: ")
+
+
 def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:
     src = "> agent: codex\n\n> mcp:\n    command: fs-mcp\n"
 
@@ -389,6 +410,67 @@ def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:
     assert "MCP server directives" in diag.message
     assert diag.range.start.line == 2
     assert diag.range.start.character == 2
+
+
+def test_diagnostics_warn_when_adapter_cannot_apply_native_approval_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_native_approvals=False),
+    )
+    src = "> adapter: dspy\n> approval: deny\n"
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-ADAPTER-NATIVE-APPROVAL"
+    assert diag.severity == lsp.DiagnosticSeverity.Warning
+    assert "builtin or MCP tools" in diag.message
+    assert "Kedi-registered tools remain protected" in diag.message
+    assert diag.range.start.line == 1
+    assert diag.range.start.character == len("> approval: ")
+
+
+def test_diagnostics_track_approval_policy_across_later_adapter_and_profile_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_native_approvals=False),
+    )
+    src = (
+        "> approval: allow\n"
+        "> adapter: dspy\n\n"
+        "> profile: guarded:\n"
+        "    > approval: deny\n\n"
+        "> use: guarded\n"
+    )
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 2
+    assert {diag.code for diag in diags} == {"K-ADAPTER-NATIVE-APPROVAL"}
+    assert {(diag.range.start.line, diag.range.start.character) for diag in diags} == {
+        (0, len("> approval: ")),
+        (4, len("    > approval: ")),
+    }
+
+
+def test_native_approval_warning_targets_an_inline_handler_value() -> None:
+    src = "> agent: acp\n> approval: `approval_handler`\n"
+
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    diag = diags[0]
+    assert diag.code == "K-ADAPTER-NATIVE-APPROVAL"
+    assert diag.range.start.line == 1
+    assert diag.range.start.character == len("> approval: ")
+    assert diag.range.end.character == len("> approval: `approval_handler`")
 
 
 def test_diagnostics_warn_for_acp_unsupported_capabilities_from_registry() -> None:
@@ -520,6 +602,7 @@ def test_adapter_capability_diagnostic_helpers_cover_defensive_edges() -> None:
             features.ProfileAdapterEntry(plain_value="pydantic"),
             features.ProfileAdapterEntry(plain_value=None, loc=Span(5, 6, 6, 1, 6, 2)),
         ],
+        approval_members=[features.ProfileApprovalEntry(plain_value="deny")],
     )
     assert features._profile_adapter_state(partial_profile).shortname is None
     assert features._adapter_state_from_plain_value(None, "agent-harness") is None
@@ -555,6 +638,49 @@ def test_adapter_capability_diagnostic_helpers_cover_defensive_edges() -> None:
         )
         is None
     )
+
+
+def test_native_approval_diagnostic_helpers_cover_suppression_and_value_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = "> approval: deny   \n"
+    loc = Span(
+        start_byte=0,
+        end_byte=len(source.encode("utf-8")),
+        start_line=1,
+        start_col=1,
+        end_line=1,
+        end_col=len(source),
+        source_path="example.kedi",
+    )
+    prog = Program(source_text=source)
+    state = features._AdapterDiagnosticState(
+        shortname="dspy",
+        kind="agent-framework",
+        approval_loc=loc,
+    )
+
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_native_approvals=False),
+    )
+    warned_spans: set[tuple[str | None, int, int]] = set()
+    diagnostics = features._native_approval_capability_diagnostics(prog, state, warned_spans)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].range.end.character == len("> approval: deny")
+    assert features._native_approval_capability_diagnostics(prog, state, warned_spans) == []
+
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_native_approvals=True),
+    )
+    assert features._native_approval_capability_diagnostics(prog, state, set()) == []
+
+    assert features._directive_value_span(Program(), loc) is None
+    assert features._directive_value_span(Program(source_text="> approval deny\n"), loc) is None
+    assert features._directive_value_span(Program(source_text="> approval:   \n"), loc) is None
 
 
 def test_diagnostics_report_invalid_model_setting_key() -> None:

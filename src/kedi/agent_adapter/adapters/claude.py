@@ -17,8 +17,15 @@ from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
+from ..approval import ToolRisk, resolve_tool_approval_async
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..tool_override import ToolScope, ToolSpec
+from ..tool_override import (
+    ToolScope,
+    ToolSpec,
+    approval_request_for_tool,
+    arguments_target_secret_file,
+    arguments_after_approval,
+)
 
 OutputDataT = Any
 CLAUDE_CODE_TOOLS_PRESET: Mapping[str, str] = {
@@ -30,6 +37,8 @@ CLAUDE_CODE_SYSTEM_PROMPT_PRESET: Mapping[str, str] = {
     "preset": "claude_code",
 }
 CLAUDE_CODE_PERMISSION_MODE = "acceptEdits"
+_CLAUDE_READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSearch"})
+_CLAUDE_KEDI_MCP_TOOL_PREFIX = "mcp__kedi__"
 
 
 class ClaudeAdapter:
@@ -45,6 +54,8 @@ class ClaudeAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_native_approvals=True,
+        supports_native_approval_handler=True,
         settings=CLAUDE_AGENT_SETTING_KEYS,
     )
 
@@ -237,6 +248,12 @@ class ClaudeAdapter:
                 options_kwargs["allowed_tools"] = [*existing_allowed, *allowed_tools]
             else:
                 options_kwargs["allowed_tools"] = allowed_tools
+        options_kwargs["hooks"] = _with_kedi_approval_hook(
+            sdk,
+            options_kwargs.get("hooks"),
+            profile=self.active_profile,
+            tools=self.scoped_tools,
+        )
         options_cls = getattr(sdk, "ClaudeAgentOptions")
         return options_cls(**options_kwargs)
 
@@ -320,7 +337,8 @@ def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
     description = tool.description or tool.name
 
     async def _call(args: dict[str, Any]) -> dict[str, Any]:
-        result = tool.fn(**args)
+        arguments = _validated_tool_arguments(tool, args)
+        result = tool.fn(**arguments)
         if inspect.isawaitable(result):
             result = await cast(Coroutine[Any, Any, Any], result)
         return {
@@ -335,6 +353,127 @@ def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
     _call.__name__ = tool.name
     _call.__doc__ = description
     return decorator(name=tool.name, description=description, input_schema=json_schema)(_call)
+
+
+def _with_kedi_approval_hook(
+    sdk: Any,
+    existing_hooks: object,
+    *,
+    profile: AgentProfile,
+    tools: Sequence[ToolSpec],
+) -> dict[str, list[Any]]:
+    """Append a PreToolUse policy bridge without discarding caller-provided hooks."""
+
+    if existing_hooks is None:
+        hooks: dict[str, list[Any]] = {}
+    elif isinstance(existing_hooks, Mapping):
+        hooks = {}
+        for event, matchers in existing_hooks.items():
+            if not isinstance(matchers, (list, tuple)):
+                raise TypeError("Claude hook matchers must be lists or tuples.")
+            hooks[str(event)] = list(matchers)
+    else:
+        raise TypeError("Claude hooks must be a mapping of hook events to matcher lists.")
+
+    matcher_cls = _claude_hook_matcher_class(sdk)
+    hooks.setdefault("PreToolUse", []).append(
+        matcher_cls(
+            matcher=None,
+            hooks=[_claude_pre_tool_use_hook(profile=profile, tools=tools)],
+        )
+    )
+    return hooks
+
+
+def _claude_hook_matcher_class(sdk: Any) -> Any:
+    """Return the public Claude SDK hook matcher type."""
+
+    matcher_cls = getattr(sdk, "HookMatcher", None)
+    if matcher_cls is None:
+        raise RuntimeError("claude-agent-sdk does not expose its public HookMatcher type")
+    return matcher_cls
+
+
+def _claude_pre_tool_use_hook(
+    *,
+    profile: AgentProfile,
+    tools: Sequence[ToolSpec],
+) -> Any:
+    """Build a Claude hook that applies Kedi policy to every native tool call."""
+
+    known_tools = _claude_tool_specs_by_native_name(tools)
+
+    async def decide(hook_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        if not isinstance(hook_input, Mapping):
+            return _claude_hook_deny("Claude supplied invalid PreToolUse hook input.")
+        tool_name = hook_input.get("tool_name")
+        arguments = hook_input.get("tool_input")
+        if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
+            return _claude_hook_deny("Claude supplied an incomplete tool permission request.")
+
+        tool = known_tools.get(tool_name, _claude_native_tool_spec(tool_name))
+        try:
+            original_arguments = _validated_tool_arguments(tool, arguments)
+            request = approval_request_for_tool(tool, original_arguments, "claude")
+            decision = await resolve_tool_approval_async(profile.approval, request)
+            if decision.decision == "deny":
+                return _claude_hook_deny(decision.reason or f"Kedi denied tool {tool.name!r}.")
+            final_arguments = arguments_after_approval(tool, original_arguments, decision)
+        except Exception as exc:
+            return _claude_hook_deny(f"Kedi rejected tool {tool.name!r}: {exc}")
+
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": final_arguments,
+            }
+        }
+
+    return decide
+
+
+def _claude_hook_deny(reason: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }
+
+
+def _claude_tool_specs_by_native_name(tools: Sequence[ToolSpec]) -> dict[str, ToolSpec]:
+    specs: dict[str, ToolSpec] = {}
+    for tool in tools:
+        specs[tool.name] = tool
+        specs[f"{_CLAUDE_KEDI_MCP_TOOL_PREFIX}{tool.name}"] = tool
+    return specs
+
+
+def _claude_native_tool_spec(name: str) -> ToolSpec:
+    risk: ToolRisk = "read_only" if name in _CLAUDE_READ_ONLY_TOOLS else "mutating"
+    return ToolSpec(
+        fn=lambda **_kwargs: None,
+        name=name,
+        description="Claude native or MCP tool",
+        metadata={"source": "claude-native"},
+        risk=risk,
+        risk_resolver=_claude_native_tool_risk,
+    )
+
+
+def _claude_native_tool_risk(arguments: Mapping[str, Any]) -> ToolRisk:
+    return "sensitive" if arguments_target_secret_file(arguments) else "read_only"
+
+
+def _validated_tool_arguments(
+    tool: ToolSpec,
+    arguments: Mapping[str, Any],
+) -> dict[str, Any]:
+    if tool.argument_validator is None:
+        return dict(arguments)
+    return tool.argument_validator(arguments)
 
 
 def _tool_result_text(value: Any) -> str:

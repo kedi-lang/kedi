@@ -17,12 +17,20 @@ from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
+from ..approval import (
+    ApprovalDecision,
+    ApprovalPolicy,
+    ApprovalRequest,
+    ToolRisk,
+    resolve_tool_approval_async,
+)
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..tool_override import ToolScope, ToolSpec
+from ..tool_override import ToolScope, ToolSpec, arguments_target_secret_file, with_approval
 from ._codex_app_server import (
     CodexAppServerClient,
     CodexAppServerProtocolError,
     CodexTurnResult,
+    ServerApprovalHandler,
 )
 
 OutputDataT = Any
@@ -43,6 +51,7 @@ class _CodexRun:
     thread_params: dict[str, Any]
     turn_params: dict[str, Any]
     tools: dict[str, Any]
+    native_approval_handler: ServerApprovalHandler
     timeout: float
     output_type: type[Any] | None = None
 
@@ -60,6 +69,8 @@ class CodexAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_native_approvals=True,
+        supports_native_approval_handler=False,
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )
@@ -129,6 +140,8 @@ class CodexAdapter:
             tools=run.tools,
             tool_context=copy_context(),
             turn_timeout=run.timeout,
+            approval_handler=run.native_approval_handler,
+            approval_context=copy_context(),
         )
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
@@ -140,6 +153,8 @@ class CodexAdapter:
             tools=run.tools,
             tool_context=copy_context(),
             turn_timeout=run.timeout,
+            approval_handler=run.native_approval_handler,
+            approval_context=copy_context(),
         )
         return result.text
 
@@ -157,6 +172,8 @@ class CodexAdapter:
             tools=run.tools,
             tool_context=copy_context(),
             turn_timeout=run.timeout,
+            approval_handler=run.native_approval_handler,
+            approval_context=copy_context(),
         )
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
@@ -168,6 +185,8 @@ class CodexAdapter:
             tools=run.tools,
             tool_context=copy_context(),
             turn_timeout=run.timeout,
+            approval_handler=run.native_approval_handler,
+            approval_context=copy_context(),
         )
         return result.text
 
@@ -222,7 +241,8 @@ class CodexAdapter:
         output_schema: dict[str, Any] | None,
         output_type: type[Any] | None,
     ) -> _CodexRun:
-        if self.active_profile.mcp_servers:
+        profile = self.active_profile
+        if profile.mcp_servers:
             raise NotImplementedError(
                 "CodexAdapter does not yet support Kedi MCP server declarations."
             )
@@ -233,17 +253,33 @@ class CodexAdapter:
             raise TypeError("Codex instructions must be a string.")
         settings = {
             **self._settings,
-            **codex_agent_settings(self.active_profile.settings),
+            **codex_agent_settings(profile.settings),
             **self._validated_settings(run_kwargs),
         }
-        model = self.active_profile.model or self._model
-        system = instructions if instructions is not None else self.active_profile.system
-        tools = {tool.name: tool.fn for tool in self.scoped_tools}
-        dynamic_tools = [_dynamic_tool_spec(tool) for tool in self.scoped_tools]
+        model = profile.model or self._model
+        system = instructions if instructions is not None else profile.system
+        approved_tools = tuple(
+            with_approval(
+                tool,
+                policy=profile.approval,
+                adapter_shortname=self.shortname,
+            )
+            for tool in self.scoped_tools
+        )
+        tools = {tool.name: tool.fn for tool in approved_tools}
+        dynamic_tools = [_dynamic_tool_spec(tool) for tool in approved_tools]
 
         thread_params: dict[str, Any] = {
             "ephemeral": True,
-            "approvalPolicy": settings.get("approval_policy", "never"),
+            "approvalPolicy": (
+                "untrusted"
+                if profile.approval is not None
+                # Leave the App Server in approval-requesting mode by default so
+                # the Kedi bridge can enforce the same default-safe policy for
+                # Codex builtin and MCP tools as it does for Kedi ToolSpecs.
+                # An explicit Codex setting remains an intentional opt-out.
+                else settings.get("approval_policy", "untrusted")
+            ),
             "sandbox": _codex_sandbox_value(settings.get("sandbox", CODEX_DEFAULT_SANDBOX)),
             "cwd": str(settings.get("cwd", os.getcwd())),
             "serviceName": "kedi",
@@ -264,8 +300,8 @@ class CodexAdapter:
         }
         if output_schema is not None:
             turn_params["outputSchema"] = output_schema
-        if self.active_profile.effort is not None:
-            turn_params["effort"] = pydantic_effort_value(self.active_profile.effort)
+        if profile.effort is not None:
+            turn_params["effort"] = pydantic_effort_value(profile.effort)
         _copy_setting(settings, "summary", turn_params, "summary")
         timeout = settings.get("timeout", self._turn_timeout)
         if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
@@ -274,6 +310,7 @@ class CodexAdapter:
             thread_params=thread_params,
             turn_params=turn_params,
             tools=tools,
+            native_approval_handler=_codex_native_approval_handler(profile.approval),
             timeout=float(timeout),
             output_type=output_type,
         )
@@ -353,6 +390,108 @@ def _parse_structured_result(result: CodexTurnResult, output_type: type[Any]) ->
     if issubclass(output_type, BaseModel):
         return output_type.model_validate(value)
     return value
+
+
+def _codex_native_approval_handler(policy: ApprovalPolicy | None) -> ServerApprovalHandler:
+    async def decide(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
+        request = _codex_native_approval_request(method, params)
+        decision = await resolve_tool_approval_async(policy, request)
+        return _codex_native_approval_response(method, params, decision)
+
+    return decide
+
+
+def _codex_native_approval_request(
+    method: str,
+    params: Mapping[str, Any],
+) -> ApprovalRequest:
+    tool_name, risk, description = _codex_native_approval_details(method, params)
+    return ApprovalRequest.create(
+        tool_name=tool_name,
+        arguments=params,
+        risk=risk,
+        adapter_shortname="codex",
+        description=description,
+        metadata={"source": "codex-app-server", "method": method},
+    )
+
+
+def _codex_native_approval_details(
+    method: str,
+    params: Mapping[str, Any],
+) -> tuple[str, ToolRisk, str]:
+    if method == "item/commandExecution/requestApproval":
+        return (
+            "codex.command_execution",
+            _codex_command_risk(params),
+            "Codex requested approval to execute a shell command.",
+        )
+    if method == "item/fileChange/requestApproval":
+        risk: ToolRisk = "sensitive" if arguments_target_secret_file(params) else "mutating"
+        return (
+            "codex.file_change",
+            risk,
+            "Codex requested approval to change files.",
+        )
+    if method == "item/permissions/requestApproval":
+        return (
+            "codex.permissions",
+            "sensitive",
+            "Codex requested additional filesystem or network permissions.",
+        )
+    raise ValueError(f"Unsupported Codex native approval method: {method}")
+
+
+def _codex_command_risk(params: Mapping[str, Any]) -> ToolRisk:
+    if arguments_target_secret_file(params):
+        return "sensitive"
+    if any(
+        params.get(name) is not None
+        for name in (
+            "additionalPermissions",
+            "networkApprovalContext",
+            "proposedExecpolicyAmendment",
+            "proposedNetworkPolicyAmendments",
+        )
+    ):
+        return "sensitive"
+    actions = params.get("commandActions")
+    if (
+        isinstance(actions, list)
+        and actions
+        and all(_is_read_only_command_action(action) for action in actions)
+    ):
+        return "read_only"
+    return "mutating"
+
+
+def _is_read_only_command_action(action: object) -> bool:
+    if not isinstance(action, Mapping):
+        return False
+    return cast(Mapping[str, Any], action).get("type") in {
+        "read",
+        "listFiles",
+        "search",
+    }
+
+
+def _codex_native_approval_response(
+    method: str,
+    params: Mapping[str, Any],
+    decision: ApprovalDecision,
+) -> dict[str, Any]:
+    if decision.decision != "allow":
+        # App Server approval requests cannot carry Kedi's edited arguments. Declining is the
+        # only safe behavior for an edit decision as well as an explicit denial.
+        if method == "item/permissions/requestApproval":
+            return {"permissions": {}, "scope": "turn"}
+        return {"decision": "decline"}
+    if method == "item/permissions/requestApproval":
+        permissions = params.get("permissions")
+        if not isinstance(permissions, Mapping):
+            return {"permissions": {}, "scope": "turn"}
+        return {"permissions": dict(permissions), "scope": "turn"}
+    return {"decision": "accept"}
 
 
 def _copy_setting(

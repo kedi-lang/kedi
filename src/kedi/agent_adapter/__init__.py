@@ -1,17 +1,6 @@
-from typing import Any
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
 
-from . import adapters
-from .adapters import (
-    ACPAdapter,
-    BrowserModelBridge,
-    ClaudeAdapter,
-    CodexAdapter,
-    DSPyAdapter,
-    LangChainAdapter,
-    LazyAdapter,
-    PydanticAdapter,
-    WebGPUAdapter,
-)
 from .meta import (
     AdapterCapabilities,
     AdapterCapability,
@@ -20,6 +9,44 @@ from .meta import (
     T,
 )
 from .tool_override import SupportsToolRegistration, ToolSpec
+
+if TYPE_CHECKING:
+    from . import adapters
+    from .adapters import (
+        ACPAdapter,
+        BrowserModelBridge,
+        ClaudeAdapter,
+        CodexAdapter,
+        DSPyAdapter,
+        LangChainAdapter,
+        LazyAdapter,
+        PydanticAdapter,
+        WebGPUAdapter,
+    )
+
+
+_ADAPTER_EXPORTS = frozenset(
+    {
+        "ACPAdapter",
+        "BrowserModelBridge",
+        "ClaudeAdapter",
+        "CodexAdapter",
+        "DSPyAdapter",
+        "LangChainAdapter",
+        "LazyAdapter",
+        "PydanticAdapter",
+        "WebGPUAdapter",
+    }
+)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "adapters" or name in _ADAPTER_EXPORTS:
+        adapter_module = import_module(".adapters", __name__)
+        value = adapter_module if name == "adapters" else getattr(adapter_module, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def kedi_procedure_to_pydantic_tool(*args: Any, **kwargs: Any) -> Any:

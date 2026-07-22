@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+from pathlib import Path
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -532,7 +533,7 @@ class KediRuntime:
 
         block_profile = current_block_agent_profile()
         adapter = self._resolve_adapter(block_profile)
-        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         self._assert_profile_override_supported(block_profile, adapter)
 
         def _call_invoke() -> str:
@@ -560,8 +561,9 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                if profile.system is not None:
-                    run_kwargs["instructions"] = profile.system
+                instructions = self._agent_instructions(profile)
+                if instructions is not None:
+                    run_kwargs["instructions"] = instructions
                 with override_ctx:
                     return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
 
@@ -647,7 +649,7 @@ class KediRuntime:
 
         block_profile = current_block_agent_profile()
         adapter = self._resolve_adapter(block_profile)
-        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         # Validate the profile override on the main thread too, so it raises synchronously at the
         # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
         # at drain (wrapped, differently typed) when _produce runs on a parallel worker.
@@ -689,8 +691,9 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                if profile.system is not None:
-                    run_kwargs["instructions"] = profile.system
+                instructions = self._agent_instructions(profile)
+                if instructions is not None:
+                    run_kwargs["instructions"] = instructions
 
                 with override_ctx:
                     result = adapter.produce_sync(
@@ -837,6 +840,8 @@ class KediRuntime:
             if tool_fn is None:
                 raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
             specs.append(python_callable_tool_spec(tool_name, tool_fn))
+        if self._adapter_uses_native_approvals(adapter):
+            return tuple(specs)
         return tuple(
             with_approval(
                 spec,
@@ -845,6 +850,62 @@ class KediRuntime:
             )
             for spec in specs
         )
+
+    def _resolve_agent_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
+        """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
+        specs = self._resolve_tool_specs(profile, adapter)
+        if not getattr(profile, "skills", False):
+            return specs
+
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_profile import AgentToolOverrideUnsupported
+
+        if not isinstance(adapter, SupportsToolRegistration):
+            raise AgentToolOverrideUnsupported(
+                "Active adapter does not support skill tool registration"
+            )
+        from .agent_adapter.skills import skill_tool_specs
+        from .agent_adapter.tool_override import with_approval
+
+        skill_specs = skill_tool_specs(self._skill_root())
+        if not self._adapter_uses_native_approvals(adapter):
+            skill_specs = tuple(
+                with_approval(
+                    spec,
+                    policy=profile.approval,
+                    adapter_shortname=getattr(adapter, "shortname", None),
+                )
+                for spec in skill_specs
+            )
+        return (*specs, *skill_specs)
+
+    @staticmethod
+    def _adapter_uses_native_approvals(adapter: Any) -> bool:
+        from .agent_adapter.meta import AdapterCapabilities
+
+        capabilities = getattr(adapter, "capabilities", None)
+        return isinstance(capabilities, AdapterCapabilities) and capabilities.supports(
+            "native_approvals"
+        )
+
+    def _skill_root(self) -> Path:
+        """Resolve skills beside the executed Kedi source, else from the process CWD."""
+        program_loc = getattr(self._program, "loc", None)
+        source_path = getattr(program_loc, "source_path", None)
+        if isinstance(source_path, str) and not source_path.startswith("<"):
+            return Path(source_path).resolve().parent / ".agents" / "skills"
+        return Path.cwd() / ".agents" / "skills"
+
+    @staticmethod
+    def _agent_instructions(profile: Any) -> str | None:
+        """Append the skill contract without replacing user-provided system instructions."""
+        instructions = getattr(profile, "system", None)
+        if not getattr(profile, "skills", False):
+            return instructions
+        from .agent_adapter.skills import skill_instructions
+
+        skill_prompt = skill_instructions()
+        return skill_prompt if instructions is None else f"{instructions}\n\n{skill_prompt}"
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

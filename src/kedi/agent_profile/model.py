@@ -9,7 +9,7 @@ from ..agent_adapter.approval import ApprovalPolicy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import AgentCommand, AgentProfile
+from .profile import AgentCommand, AgentProfile, SKILLS_USE_TARGET
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -393,7 +393,10 @@ def _member_to_patch(
         )
         return AgentProfile(system=system)
     if member.kind == "tools":
-        return AgentProfile(tools=member.tool_names)
+        tool_names = tuple(name for name in member.tool_names if name != SKILLS_USE_TARGET)
+        return AgentProfile(
+            tools=tool_names, skills=True if SKILLS_USE_TARGET in member.tool_names else None
+        )
     if member.kind == "mcp":
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     if member.kind == "settings":

@@ -169,6 +169,9 @@ change earlier procedures.
 - `> mcp:` — load MCP tools; string fields can be plain strings or inline Python like `` `os.getenv("STDIO_COMMAND")` ``
 - `> profile: name:` — define a reusable profile with nested `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members
 - `> use: name` or `> use: \`name\`` — register a **procedure** as an agent tool when the name matches a procedure; otherwise merge a profile by **profile name** (not the importing module name)
+- `> use: skills` — opt into explicit project-local skill discovery through
+  `list_skills` and `read_skill`. Skills live in `.agents/skills/<name>/SKILL.md`;
+  their contents are read on demand rather than injected into every prompt.
 - Multiline `> use:` lists procedure tools explicitly:
 
 ````kedi

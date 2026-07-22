@@ -8,9 +8,22 @@ import pytest
 
 import kedi
 import kedi.api as kedi_api
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy, ToolApprovalDenied
+from kedi.agent_adapter import approval as approval_module
+from kedi.agent_adapter import utils as adapter_utils
+from kedi.agent_adapter.approval import (
+    ApprovalDecision,
+    ApprovalPolicy,
+    ApprovalRequest,
+    ToolApprovalDenied,
+    resolve_tool_approval,
+    resolve_tool_approval_async,
+)
 from kedi.agent_adapter.tool_override import ToolSpec, with_approval
-from kedi.agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+from kedi.agent_adapter.utils import (
+    _procedure_tool_risk,
+    kedi_procedure_tool_spec,
+    python_callable_tool_spec,
+)
 from kedi.agent_profile.model import eval_approval_directive, eval_profile_definition
 from kedi.agent_profile.registry import ProfileApprovalMember, ProfileDefinition
 from kedi.core import KediRuntime
@@ -75,14 +88,45 @@ def test_dynamic_handler_can_edit_arguments_and_receives_immutable_request() -> 
 
 
 def test_dynamic_handler_may_be_async() -> None:
-    @kedi.approval
-    async def permit(_request):  # type: ignore[no-untyped-def]
-        await asyncio.sleep(0)
-        return ApprovalDecision.allow()
+    async def scenario() -> None:
+        @kedi.approval
+        async def permit(_request: object) -> ApprovalDecision:
+            await asyncio.sleep(0)
+            return ApprovalDecision.allow()
 
-    tool = with_approval(_tool(), policy=ApprovalPolicy.dynamic(permit), adapter_shortname="test")
+        tool = with_approval(
+            _tool(), policy=ApprovalPolicy.dynamic(permit), adapter_shortname="test"
+        )
 
-    assert tool.fn(path="notes.txt", content="ok") == "notes.txt:ok"
+        assert await tool.fn(path="notes.txt", content="ok") == "notes.txt:ok"
+
+    asyncio.run(scenario())
+
+
+def test_async_handler_stays_on_the_callers_event_loop() -> None:
+    async def scenario() -> None:
+        lock = asyncio.Lock()
+        await lock.acquire()
+
+        async def permit(_request: object) -> ApprovalDecision:
+            async with lock:
+                return ApprovalDecision.allow()
+
+        tool = with_approval(
+            _tool(), policy=ApprovalPolicy.dynamic(permit), adapter_shortname="test"
+        )
+        release = asyncio.create_task(_release_lock(lock))
+        try:
+            assert await tool.fn(path="notes.txt", content="ok") == "notes.txt:ok"
+        finally:
+            await release
+
+    asyncio.run(scenario())
+
+
+async def _release_lock(lock: asyncio.Lock) -> None:
+    await asyncio.sleep(0)
+    lock.release()
 
 
 def test_approval_decorator_registers_the_default_python_api_policy() -> None:
@@ -110,6 +154,103 @@ def test_argument_aware_tool_risk_requires_approval_for_sensitive_access() -> No
         guarded.fn(secret_files=True)
 
 
+def test_risk_resolver_can_only_elevate_static_risk() -> None:
+    tool = ToolSpec(
+        fn=lambda: "secret",  # noqa: E731
+        name="sensitive_tool",
+        risk="sensitive",
+        risk_resolver=lambda _arguments: "read_only",
+    )
+
+    guarded = with_approval(tool, policy=None, adapter_shortname="test")
+    with pytest.raises(ToolApprovalDenied, match="no approval policy configured"):
+        guarded.fn()
+
+
+def test_secret_file_writes_require_approval_before_mutation() -> None:
+    writes: list[str] = []
+
+    def write_text_file(*, file_path: str, content: str) -> str:
+        writes.append(file_path)
+        return file_path
+
+    def policy(request: object) -> ApprovalDecision:
+        risk = getattr(request, "risk")
+        return ApprovalDecision.deny() if risk == "sensitive" else ApprovalDecision.allow()
+
+    tool = ToolSpec(
+        fn=write_text_file,
+        name="write_text_file",
+        risk="mutating",
+        risk_resolver=lambda arguments: (
+            "sensitive" if Path(str(arguments["file_path"])).name.startswith(".env") else "mutating"
+        ),
+    )
+    guarded = with_approval(tool, policy=ApprovalPolicy.dynamic(policy), adapter_shortname="test")
+
+    assert guarded.fn(file_path="notes.txt", content="ok") == "notes.txt"
+    with pytest.raises(ToolApprovalDenied):
+        guarded.fn(file_path=".env.local", content="TOKEN=hidden")
+    assert writes == ["notes.txt"]
+
+
+def test_edited_python_tool_arguments_are_revalidated() -> None:
+    calls: list[int] = []
+
+    def typed_tool(*, count: int = 1) -> int:
+        calls.append(count)
+        return count
+
+    def valid_edit(_request: object) -> ApprovalDecision:
+        return ApprovalDecision.edit({"count": 2})
+
+    guarded = with_approval(
+        python_callable_tool_spec("typed_tool", typed_tool),
+        policy=ApprovalPolicy.dynamic(valid_edit),
+        adapter_shortname="test",
+    )
+    assert guarded.fn(count=0) == 2
+    assert calls == [2]
+
+    def invalid_edit(_request: object) -> ApprovalDecision:
+        return ApprovalDecision.edit({"count": "not-an-int"})
+
+    blocked = with_approval(
+        python_callable_tool_spec("typed_tool", typed_tool),
+        policy=ApprovalPolicy.dynamic(invalid_edit),
+        adapter_shortname="test",
+    )
+    with pytest.raises(Exception, match="valid integer"):
+        blocked.fn(count=0)
+    assert calls == [2]
+
+
+def test_edited_kedi_tool_arguments_are_revalidated_against_custom_types() -> None:
+    program = parse_program("~Count(value: int)\n@take(count: Count) -> int:\n  = `count.value`\n")
+    runtime = compile_program(program)
+    spec = kedi_procedure_tool_spec(runtime, program.procedures[0])
+
+    guarded = with_approval(
+        spec,
+        policy=ApprovalPolicy.dynamic(
+            lambda _request: ApprovalDecision.edit({"count": {"value": "not-an-int"}})
+        ),
+        adapter_shortname="test",
+    )
+
+    with pytest.raises(TypeError, match="does not match annotated type"):
+        guarded.fn(count={"value": 1})
+
+
+def test_user_owned_filesystem_name_is_not_treated_as_builtin(tmp_path: Path) -> None:
+    program = parse_program(
+        "@read_text_file(file_path: str) -> str:\n  = user_owned\n",
+        source_path=str(tmp_path / "filesystem.kedi"),
+    )
+
+    assert _procedure_tool_risk(program.procedures[0]) == "mutating"
+
+
 def test_filesystem_secret_read_requires_approval(tmp_path: Path) -> None:
     filesystem_path = Path(kedi.__file__).parent / "modules" / "filesystem.kedi"
     source = filesystem_path.read_text(encoding="utf-8").replace(
@@ -122,6 +263,7 @@ def test_filesystem_secret_read_requires_approval(tmp_path: Path) -> None:
     )
     runtime = compile_program(program)
     read_proc = next(proc for proc in program.procedures if proc.name == "read_text_file")
+    patch_proc = next(proc for proc in program.procedures if proc.name == "apply_patch")
     spec = kedi_procedure_tool_spec(runtime, read_proc)
     secret_path = tmp_path / ".env"
     secret_path.write_text("TOKEN=hidden\n", encoding="utf-8")
@@ -134,6 +276,17 @@ def test_filesystem_secret_read_requires_approval(tmp_path: Path) -> None:
     assert allowed.fn(file_path=str(secret_path), secret_files=True) == "TOKEN=hidden\n"
     with pytest.raises(KediExecutionError, match="secret_files=True"):
         allowed.fn(file_path=str(secret_path), secret_files=False)
+
+    patch_spec = kedi_procedure_tool_spec(runtime, patch_proc)
+    protected_patch = with_approval(patch_spec, policy=None, adapter_shortname="test")
+    with pytest.raises(ToolApprovalDenied, match="no approval policy configured"):
+        protected_patch.fn(
+            operation="update",
+            file_path=str(secret_path),
+            old_text="TOKEN=hidden",
+            new_text="TOKEN=changed",
+        )
+    assert secret_path.read_text(encoding="utf-8") == "TOKEN=hidden\n"
 
 
 def test_non_edit_decisions_reject_edited_arguments() -> None:
@@ -179,6 +332,93 @@ def test_tool_wrapper_rejects_positional_arguments_and_invalid_risk() -> None:
     )
     with pytest.raises(ValueError, match="invalid Kedi tool risk"):
         with_approval(invalid_risk, policy=ApprovalPolicy.allow(), adapter_shortname="test").fn()
+
+
+def test_sync_and_async_approval_resolvers_await_dynamic_handlers() -> None:
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={"path": "notes.txt"},
+        risk="mutating",
+        adapter_shortname="test",
+        description=None,
+        metadata=None,
+    )
+
+    async def permit(_request: ApprovalRequest) -> ApprovalDecision:
+        await asyncio.sleep(0)
+        return ApprovalDecision.allow()
+
+    policy = ApprovalPolicy.dynamic(permit)
+    assert resolve_tool_approval(policy, request).decision == "allow"
+    assert asyncio.run(resolve_tool_approval_async(policy, request)).decision == "allow"
+    assert approval_module._resolve_awaitable is not None
+
+    async def reject_sync_resolution_inside_an_event_loop() -> None:
+        with pytest.raises(
+            RuntimeError, match="async approval handlers require an async tool wrapper"
+        ):
+            resolve_tool_approval(policy, request)
+
+    asyncio.run(reject_sync_resolution_inside_an_event_loop())
+
+    class _CustomAwaitable:
+        def __await__(self):
+            if False:
+                yield None
+            return ApprovalDecision.allow()
+
+    def non_coroutine_awaitable(_request: ApprovalRequest) -> _CustomAwaitable:
+        return _CustomAwaitable()
+
+    async def reject_non_coroutine_awaitable_inside_an_event_loop() -> None:
+        with pytest.raises(
+            RuntimeError, match="async approval handlers require an async tool wrapper"
+        ):
+            resolve_tool_approval(ApprovalPolicy.dynamic(non_coroutine_awaitable), request)
+
+    asyncio.run(reject_non_coroutine_awaitable_inside_an_event_loop())
+
+
+def test_async_approval_wrapper_rejects_positional_arguments() -> None:
+    async def write_file(*, path: str, content: str) -> str:
+        return f"{path}:{content}"
+
+    guarded = with_approval(
+        ToolSpec(fn=write_file, name="write_file"),
+        policy=ApprovalPolicy.allow(),
+        adapter_shortname="test",
+    )
+
+    with pytest.raises(TypeError, match="only accepts keyword"):
+        asyncio.run(guarded.fn("notes.txt", "blocked"))
+
+
+def test_python_callable_validator_preserves_untyped_variadic_keyword_arguments() -> None:
+    def collect(value, *extra, **metadata):  # type: ignore[no-untyped-def]
+        return value, extra, metadata
+
+    spec = python_callable_tool_spec("collect", collect)
+    assert spec.argument_validator is not None
+    assert spec.argument_validator({"value": "ok", "source": "test"}) == {
+        "value": "ok",
+        "source": "test",
+    }
+
+
+def test_builtin_filesystem_identity_fails_closed_when_paths_cannot_resolve(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    program = parse_program(
+        "@read_text_file(file_path: str) -> str:\n  = user_owned\n",
+        source_path=str(tmp_path / "filesystem.kedi"),
+    )
+
+    def raise_os_error(_self: Path, *args: object, **kwargs: object) -> Path:
+        raise OSError("cannot resolve")
+
+    monkeypatch.setattr(adapter_utils.Path, "resolve", raise_os_error)
+    assert not adapter_utils._is_builtin_filesystem_procedure(program.procedures[0])
 
 
 def test_python_tool_risk_and_api_approval_inputs_are_validated() -> None:

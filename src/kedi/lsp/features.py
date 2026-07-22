@@ -32,7 +32,7 @@ import importlib.resources
 import re
 import typing as _typing
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import List, Optional, Tuple, Union
@@ -729,6 +729,8 @@ def _missing_import_diagnostics(
 class _AdapterDiagnosticState:
     shortname: str | None = None
     kind: AgentAdapterKind | None = None
+    approval_loc: Span | None = None
+    approval_plain_value: str | None = None
 
 
 def _adapter_capability_diagnostics(
@@ -745,12 +747,14 @@ def _adapter_capability_diagnostics(
     type_defs.update(imported_surface.types)
 
     diagnostics: list[lsp.Diagnostic] = []
+    warned_approval_spans: set[tuple[str | None, int, int]] = set()
     for profile in prog.profile_defs.values():
         diagnostics.extend(
             _profile_capability_diagnostics(
                 prog,
                 profile,
                 _profile_adapter_state(profile),
+                warned_approval_spans,
             )
         )
 
@@ -763,25 +767,45 @@ def _adapter_capability_diagnostics(
             profile_states,
             proc_names,
             type_defs,
+            warned_approval_spans,
         )
     )
     return diagnostics
 
 
 def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
-    members: list[tuple[int, AgentAdapterKind, str | None]] = []
+    members: list[
+        tuple[
+            int,
+            AgentAdapterKind | None,
+            str | None,
+            Span | None,
+        ]
+    ] = []
     for member in profile.agent_members:
         if member.loc is not None:
-            members.append((member.loc.start_byte, "agent-harness", member.plain_value))
+            members.append((member.loc.start_byte, "agent-harness", member.plain_value, None))
     for member in profile.adapter_members:
         if member.loc is not None:
-            members.append((member.loc.start_byte, "agent-framework", member.plain_value))
+            members.append((member.loc.start_byte, "agent-framework", member.plain_value, None))
+    for member in profile.approval_members:
+        if member.loc is not None:
+            members.append((member.loc.start_byte, None, member.plain_value, member.loc))
 
     state = _AdapterDiagnosticState()
-    for _, expected_kind, shortname in sorted(members):
+    for _, expected_kind, plain_value, approval_loc in sorted(members):
+        if approval_loc is not None:
+            state = replace(
+                state,
+                approval_loc=approval_loc,
+                approval_plain_value=plain_value,
+            )
+            continue
+        assert expected_kind is not None
+        shortname = plain_value
         selected = _adapter_state_from_plain_value(shortname, expected_kind)
         if selected is not None:
-            state = selected
+            state = _merge_adapter_state(state, selected)
     return state
 
 
@@ -804,7 +828,14 @@ def _merge_adapter_state(
     outer: _AdapterDiagnosticState,
     inner: _AdapterDiagnosticState,
 ) -> _AdapterDiagnosticState:
-    return inner if inner.shortname is not None else outer
+    selected = inner if inner.shortname is not None else outer
+    approval_owner = inner if inner.approval_loc is not None else outer
+    return _AdapterDiagnosticState(
+        shortname=selected.shortname,
+        kind=selected.kind,
+        approval_loc=approval_owner.approval_loc,
+        approval_plain_value=approval_owner.approval_plain_value,
+    )
 
 
 def _adapter_supports(
@@ -824,6 +855,7 @@ def _profile_capability_diagnostics(
     prog: Program | ProgramWithValidation,
     profile: ProfileDefStmt,
     state: _AdapterDiagnosticState,
+    warned_approval_spans: set[tuple[str | None, int, int]],
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     for member in profile.agent_members:
@@ -853,6 +885,13 @@ def _profile_capability_diagnostics(
                 "MCP server directives",
             )
         )
+    diagnostics.extend(
+        _native_approval_capability_diagnostics(
+            prog,
+            state,
+            warned_approval_spans,
+        )
+    )
     return diagnostics
 
 
@@ -864,9 +903,12 @@ def _scan_capability_scope(
     profile_states: dict[str, _AdapterDiagnosticState],
     proc_names: set[str],
     type_defs: dict[str, TypeDef],
+    warned_approval_spans: set[tuple[str | None, int, int]] | None = None,
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     active = state
+    if warned_approval_spans is None:
+        warned_approval_spans = set()
 
     for stmt in statements:
         if isinstance(stmt, AgentDirectiveStmt):
@@ -880,7 +922,14 @@ def _scan_capability_scope(
             )
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-harness")
             if selected is not None:
-                active = selected
+                active = _merge_adapter_state(active, selected)
+                diagnostics.extend(
+                    _native_approval_capability_diagnostics(
+                        prog,
+                        active,
+                        warned_approval_spans,
+                    )
+                )
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
             diagnostics.extend(
@@ -893,7 +942,28 @@ def _scan_capability_scope(
             )
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
             if selected is not None:
-                active = selected
+                active = _merge_adapter_state(active, selected)
+                diagnostics.extend(
+                    _native_approval_capability_diagnostics(
+                        prog,
+                        active,
+                        warned_approval_spans,
+                    )
+                )
+            continue
+        if isinstance(stmt, ApprovalDirectiveStmt):
+            active = replace(
+                active,
+                approval_loc=stmt.loc,
+                approval_plain_value=stmt.plain_value,
+            )
+            diagnostics.extend(
+                _native_approval_capability_diagnostics(
+                    prog,
+                    active,
+                    warned_approval_spans,
+                )
+            )
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -917,7 +987,17 @@ def _scan_capability_scope(
                 )
             )
             if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
-                active = _merge_adapter_state(active, profile_states.get(stmt.name, active))
+                active = _merge_adapter_state(
+                    active,
+                    profile_states.get(stmt.name, _AdapterDiagnosticState()),
+                )
+                diagnostics.extend(
+                    _native_approval_capability_diagnostics(
+                        prog,
+                        active,
+                        warned_approval_spans,
+                    )
+                )
             continue
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
@@ -935,6 +1015,7 @@ def _scan_capability_scope(
                     profile_states,
                     proc_names,
                     type_defs,
+                    warned_approval_spans,
                 )
             )
             continue
@@ -948,6 +1029,7 @@ def _scan_capability_scope(
                     profile_states,
                     proc_names,
                     type_defs,
+                    warned_approval_spans,
                 )
             )
             continue
@@ -1027,6 +1109,13 @@ def _use_capability_diagnostics(
         return []
 
     target_span = _use_single_target_span(prog, stmt) or stmt.loc
+    if stmt.name == "skills":
+        return _unsupported_capability_diagnostics(
+            state,
+            "tool_registration",
+            [target_span],
+            "skill tool registration",
+        )
     if stmt.name in proc_names:
         return _unsupported_capability_diagnostics(
             state,
@@ -1208,6 +1297,85 @@ def _unsupported_capability_diagnostics(
     ]
 
 
+def _native_approval_capability_diagnostics(
+    prog: Program | ProgramWithValidation,
+    state: _AdapterDiagnosticState,
+    warned_spans: set[tuple[str | None, int, int]],
+) -> list[lsp.Diagnostic]:
+    """Warn when a selected adapter cannot govern its own builtin or MCP tools.
+
+    Kedi-registered ``ToolSpec`` callables still receive the common approval
+    wrapper. The warning is intentionally limited to adapter-native calls,
+    whose approval surface is unavailable for the selected adapter.
+    """
+    loc = state.approval_loc
+    if loc is None or state.shortname is None:
+        return []
+    if _adapter_supports(state, "native_approvals") is not False:
+        return []
+
+    span = _approval_value_span(prog, loc, state.approval_plain_value) or loc
+    key = (span.source_path, span.start_byte, span.end_byte)
+    if key in warned_spans:
+        return []
+    warned_spans.add(key)
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(span),
+            severity=lsp.DiagnosticSeverity.Warning,
+            code="K-ADAPTER-NATIVE-APPROVAL",
+            source="kedi",
+            message=(
+                f"Adapter '{state.shortname}' cannot apply this approval policy to its "
+                "builtin or MCP tools. Kedi-registered tools remain protected by Kedi."
+            ),
+        )
+    ]
+
+
+def _approval_value_span(
+    prog: Program | ProgramWithValidation,
+    loc: Span,
+    plain_value: str | None,
+) -> Span | None:
+    if plain_value:
+        return _directive_name_span(prog, loc, plain_value)
+    return _directive_value_span(prog, loc)
+
+
+def _directive_value_span(
+    prog: Program | ProgramWithValidation,
+    loc: Span,
+) -> Span | None:
+    """Return the non-whitespace value portion of one single-line directive."""
+    line = _program_line_text(prog, loc.start_line, loc.source_path)
+    line_start = _line_start_byte(prog, loc.start_line)
+    if line is None or line_start is None:
+        return None
+    colon_index = line.find(":")
+    if colon_index < 0:
+        return None
+    start_index = colon_index + 1
+    while start_index < len(line) and line[start_index].isspace():
+        start_index += 1
+    end_index = len(line)
+    while end_index > start_index and line[end_index - 1].isspace():
+        end_index -= 1
+    if start_index == end_index:
+        return None
+    start_byte = line_start + len(line[:start_index].encode("utf-8"))
+    end_byte = line_start + len(line[:end_index].encode("utf-8"))
+    return Span(
+        start_byte=start_byte,
+        end_byte=end_byte,
+        start_line=loc.start_line,
+        start_col=start_index + 1,
+        end_line=loc.start_line,
+        end_col=end_index + 1,
+        source_path=loc.source_path,
+    )
+
+
 def _directive_keyword_span(
     prog: Program | ProgramWithValidation,
     loc: Span | None,
@@ -1311,6 +1479,14 @@ def _resolve_symbol_at(
             elif item.name:
                 name_span = _use_single_target_span(prog, item)
                 if name_span is not None and _position_inside(pos, name_span):
+                    if item.name == "skills":
+                        return SymbolRef(
+                            kind="agent_skills",
+                            name="skills",
+                            declaration_span=None,
+                            scope_proc=None,
+                            cursor_span=name_span,
+                        )
                     if item.name in proc_by_name:
                         target = proc_by_name[item.name]
                         return SymbolRef(
@@ -1652,6 +1828,14 @@ def _resolve_in_stmt(
         elif stmt.name:
             name_span = _use_single_target_span(prog, stmt)
             if name_span is not None and _position_inside(pos, name_span):
+                if stmt.name == "skills":
+                    return SymbolRef(
+                        kind="agent_skills",
+                        name="skills",
+                        declaration_span=None,
+                        scope_proc=proc,
+                        cursor_span=name_span,
+                    )
                 if stmt.name in proc_by_name:
                     target = proc_by_name[stmt.name]
                     return SymbolRef(
@@ -2100,6 +2284,8 @@ def compute_hover(
             text = _profile_signature_markdown(profile_def)
         else:
             text = _missing_agent_profile_hover(sym.name, imported_surface)
+    elif sym.kind == "agent_skills":
+        text = _use_directive_markdown(UseDirectiveStmt(target="skills"))
     else:
         text = f"**{sym.kind}** `{sym.name}`"
     return lsp.Hover(
@@ -2478,6 +2664,14 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
         return (
             f"`> use:`\n\nRegisters Kedi procedures as agent tools: {tools}.\n\n"
             "Inner `> use:` directives override outer tools in the current scope."
+        )
+    if stmt.name == "skills":
+        return (
+            "`> use: skills`\n\n"
+            "Enables project-local skills for subsequent agent calls. The agent can use "
+            "`list_skills` to discover `.agents/skills/<name>/SKILL.md` files, then "
+            "`read_skill` to load one skill's instructions on demand. Skill contents are "
+            "never injected automatically."
         )
     return (
         f"`> use: {stmt.name}`\n\n"

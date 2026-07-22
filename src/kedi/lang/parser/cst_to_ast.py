@@ -410,9 +410,9 @@ class _Walker:
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "template_block_stmt":
-                stmt = self._walk_template_block_stmt(child)
-                prog.toplevel_body.append(stmt)
-                prog.ordered_toplevel.append(stmt)
+                for stmt in self._walk_template_block_statements(child):
+                    prog.toplevel_body.append(stmt)
+                    prog.ordered_toplevel.append(stmt)
             elif t == "template_line":
                 stmt = self._walk_template_line(child, deprecated=True)
                 prog.toplevel_body.append(stmt)
@@ -772,6 +772,9 @@ class _Walker:
 
     def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
         for child in _named_children(block_node):
+            if child.type == "template_block_stmt":
+                proc.body.extend(self._walk_template_block_statements(child))
+                continue
             stmt = self._walk_stmt(child, proc)
             if stmt is None:
                 continue
@@ -842,7 +845,9 @@ class _Walker:
         if t == "backtick_line_stmt":
             return self._walk_backtick_line_stmt(node)
         if t == "template_block_stmt":
-            return self._walk_template_block_stmt(node)
+            block = self._walk_template_block_stmt(node)
+            self._validate_template_block_scope(block.lines)
+            return block
         if t == "template_line":
             return self._walk_template_line(node, deprecated=True)
         if t in ("block_comment", "line_comment"):
@@ -889,7 +894,7 @@ class _Walker:
         native_expr = self._sole_inline_python_expr(rhs_node)
         if native_expr is not None:
             code = self._walk_inline_python_expr(native_expr)
-            seg = PythonExprNativeSegment(code=code, loc=self._span(rhs_node))
+            seg = PythonExprNativeSegment(code=code, loc=self._span(native_expr))
             return AssignStmt(
                 name=name,
                 expr=[seg],
@@ -1055,8 +1060,58 @@ class _Walker:
             lines.append(self._template_line_from_expr(head))
         for cont in node.children_by_field_name("continuation"):
             lines.append(self._template_line_from_expr(cont))
-        self._validate_template_block_scope(lines)
         return TemplateBlock(lines=lines, loc=self._span(node))
+
+    def _walk_template_block_statements(self, node: Node) -> List[Stmt]:
+        """Split legacy backtick statements out of a ``>>`` continuation.
+
+        A bare inline Python expression is a valid prompt segment after ``>>``.
+        Historically, however, a continuation containing a Python *statement*
+        (for example ``value = value.strip()``) remained a standalone
+        backtick statement. Tree-sitter deliberately parses both forms as a
+        template continuation so plain expressions can stay in the block; this
+        AST pass restores the statement boundary without restricting Python
+        expression syntax in the grammar.
+        """
+
+        block = self._walk_template_block_stmt(node)
+        statements: List[Stmt] = []
+        pending_lines: List[TemplateLine] = []
+
+        for index, line in enumerate(block.lines):
+            code = self._standalone_backtick_continuation_code(line) if index else None
+            if code is None:
+                pending_lines.append(line)
+                continue
+            if pending_lines:
+                statements.append(self._validated_template_block(pending_lines, block.loc))
+                pending_lines = []
+            statements.append(BacktickLineStmt(code=code, loc=line.loc))
+
+        if pending_lines:
+            statements.append(self._validated_template_block(pending_lines, block.loc))
+        return statements
+
+    def _validated_template_block(
+        self, lines: List[TemplateLine], loc: Span | None
+    ) -> TemplateBlock:
+        self._validate_template_block_scope(lines)
+        return TemplateBlock(lines=lines, loc=loc)
+
+    @staticmethod
+    def _standalone_backtick_continuation_code(line: TemplateLine) -> str | None:
+        """Return code when a continuation is a Python statement, not an expression."""
+
+        if len(line.segments) != 1 or not isinstance(line.segments[0], PythonExprSegment):
+            return None
+        code = line.segments[0].code
+        try:
+            parsed = py_ast.parse(code, mode="exec")
+        except SyntaxError:
+            return None
+        if len(parsed.body) != 1 or isinstance(parsed.body[0], py_ast.Expr):
+            return None
+        return code
 
     def _validate_template_block_scope(self, lines: List[TemplateLine]) -> None:
         produced_names: set[str] = set()

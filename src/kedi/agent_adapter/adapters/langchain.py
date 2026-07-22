@@ -19,8 +19,15 @@ from ...effort import pydantic_effort_value
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
+from ..approval import ToolRisk, resolve_tool_approval_async
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..tool_override import ToolScope, ToolSpec
+from ..tool_override import (
+    ToolScope,
+    ToolSpec,
+    approval_request_for_tool,
+    arguments_target_secret_file,
+    arguments_after_approval,
+)
 
 
 class LangChainAdapter:
@@ -36,6 +43,8 @@ class LangChainAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_native_approvals=True,
+        supports_native_approval_handler=True,
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 
@@ -50,20 +59,36 @@ class LangChainAdapter:
         self._model_settings = langchain_model_settings(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
         self._tool_scope = ToolScope()
+        self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_langchain_profile_stack_{id(self)}",
             default=(),
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
-        return self._tool_scope.tool_scope(tools)
+        @contextmanager
+        def scoped() -> Iterator[None]:
+            with self._tool_scope.tool_scope(), self._tool_spec_scope.tool_scope():
+                for tool in tools:
+                    if isinstance(tool, ToolSpec):
+                        self.register_tool(tool)
+                    else:
+                        self._tool_scope.register_tool(tool)
+                yield
+
+        return scoped()
 
     def register_tool(self, tool: ToolSpec) -> None:
         self._tool_scope.register_tool(_langchain_tool_from_spec(tool))
+        self._tool_spec_scope.register_tool(tool)
 
     @property
     def scoped_tools(self) -> tuple[Any, ...]:
         return self._tool_scope.scoped_tools
+
+    @property
+    def scoped_tool_specs(self) -> tuple[ToolSpec, ...]:
+        return cast(tuple[ToolSpec, ...], self._tool_spec_scope.scoped_tools)
 
     @property
     def active_profile(self) -> AgentProfile:
@@ -100,6 +125,7 @@ class LangChainAdapter:
             tools=tools,
             response_format=resolved_output_type,
             system_prompt=instructions,
+            middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": [{"role": "user", "content": template}], **kwargs}
         result = await agent.ainvoke(payload)
@@ -114,6 +140,7 @@ class LangChainAdapter:
             tools=tools,
             response_format=None,
             system_prompt=instructions or self.active_profile.system,
+            middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": [{"role": "user", "content": prompt}], **kwargs}
         return _langchain_text_response(await agent.ainvoke(payload))
@@ -186,6 +213,7 @@ class LangChainAdapter:
         tools: Sequence[Any],
         response_format: type[Any] | None,
         system_prompt: str | None,
+        middleware: Sequence[Any] = (),
     ) -> Any:
         try:
             from langchain.agents import create_agent
@@ -197,6 +225,7 @@ class LangChainAdapter:
             "model": model,
             "tools": list(tools),
             "system_prompt": system_prompt,
+            "middleware": list(middleware),
         }
         if response_format is not None:
             kwargs["response_format"] = response_format
@@ -206,6 +235,16 @@ class LangChainAdapter:
         return [
             *self.scoped_tools,
             *await self._mcp_tools_for_profile(self.active_profile),
+        ]
+
+    def _approval_middleware_for_run(self, tools: Sequence[Any]) -> list[Any]:
+        if not tools:
+            return []
+        return [
+            _langchain_approval_middleware(
+                profile=self.active_profile,
+                tools=self.scoped_tool_specs,
+            )
         ]
 
     async def _mcp_tools_for_profile(self, profile: AgentProfile) -> list[Any]:
@@ -231,27 +270,132 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         ) from exc
 
     description = tool.description or tool.name
-    native_tool = StructuredTool.from_function(
-        func=_langchain_sync_tool_function(tool.fn),
-        name=tool.name,
-        description=description,
-        args_schema=tool.json_schema,
-    )
+    kwargs: dict[str, Any] = {
+        "name": tool.name,
+        "description": description,
+        "args_schema": tool.json_schema,
+    }
+    if _is_async_callable(tool.fn):
+        kwargs["coroutine"] = _langchain_async_tool_function(tool)
+    else:
+        kwargs["func"] = _langchain_sync_tool_function(tool)
+    native_tool = StructuredTool.from_function(**kwargs)
     native_tool.metadata = tool.metadata
     return native_tool
 
 
-def _langchain_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
-    @wraps(fn)
+def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
+    @wraps(tool.fn)
     def _tool(*args: Any, **kwargs: Any) -> Any:
         from ..utils import run_sync
 
-        result = fn(*args, **kwargs)
+        result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
         if inspect.isawaitable(result):
             return run_sync(cast(Coroutine[Any, Any, Any], result))
         return result
 
     return _tool
+
+
+def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
+    @wraps(tool.fn)
+    async def _tool(*args: Any, **kwargs: Any) -> Any:
+        result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return _tool
+
+
+def _langchain_approval_middleware(
+    *,
+    profile: AgentProfile,
+    tools: Sequence[ToolSpec],
+) -> Any:
+    """Bridge Kedi approval decisions into LangChain's native tool-call hook."""
+
+    try:
+        from langchain.agents.middleware import AgentMiddleware
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "LangChainAdapter approval support requires langchain. Install with: uv add langchain"
+        ) from exc
+
+    known_tools = {tool.name: tool for tool in tools}
+
+    class KediApprovalMiddleware(AgentMiddleware):
+        async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
+            tool_call = request.tool_call
+            tool_name = tool_call.get("name") if isinstance(tool_call, Mapping) else None
+            arguments = tool_call.get("args") if isinstance(tool_call, Mapping) else None
+            tool_call_id = tool_call.get("id") if isinstance(tool_call, Mapping) else None
+            if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
+                return _langchain_tool_error(
+                    tool_name if isinstance(tool_name, str) else "unknown",
+                    tool_call_id,
+                    "LangChain emitted an incomplete tool call.",
+                )
+
+            tool = known_tools.get(tool_name, _langchain_external_tool_spec(tool_name))
+            try:
+                original_arguments = _validated_tool_arguments(tool, arguments)
+                approval = await resolve_tool_approval_async(
+                    profile.approval,
+                    approval_request_for_tool(tool, original_arguments, "langchain"),
+                )
+                final_arguments = arguments_after_approval(tool, original_arguments, approval)
+            except Exception as exc:
+                return _langchain_tool_error(tool_name, tool_call_id, str(exc))
+
+            return await handler(
+                request.override(
+                    tool_call={
+                        **dict(tool_call),
+                        "args": final_arguments,
+                    }
+                )
+            )
+
+    return KediApprovalMiddleware()
+
+
+def _langchain_tool_error(tool_name: str, tool_call_id: object, message: str) -> Any:
+    from langchain.messages import ToolMessage
+
+    return ToolMessage(
+        content=message,
+        name=tool_name,
+        tool_call_id=str(tool_call_id or "kedi-approval"),
+        status="error",
+    )
+
+
+def _validated_tool_arguments(tool: ToolSpec, arguments: Mapping[str, Any]) -> dict[str, Any]:
+    if tool.argument_validator is None:
+        return dict(arguments)
+    return tool.argument_validator(arguments)
+
+
+def _is_async_callable(fn: Callable[..., Any]) -> bool:
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(
+        getattr(fn, "__call__", None)
+    )
+
+
+def _langchain_external_tool_spec(name: str) -> ToolSpec:
+    return ToolSpec(
+        fn=lambda **_kwargs: None,
+        name=name,
+        description="External LangChain or MCP tool",
+        metadata={"source": "langchain-external"},
+        risk="mutating",
+        risk_resolver=_langchain_external_tool_risk,
+    )
+
+
+def _langchain_external_tool_risk(arguments: Mapping[str, Any]) -> ToolRisk:
+    return "sensitive" if arguments_target_secret_file(arguments) else "mutating"
 
 
 def _langchain_mcp_server_configs(profile: AgentProfile) -> dict[str, dict[str, Any]]:

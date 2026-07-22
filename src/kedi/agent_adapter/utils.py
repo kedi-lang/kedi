@@ -8,9 +8,9 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Awaitable, Callable, Iterator, Mapping, TypeVar, cast
+from typing import Any, Awaitable, Callable, Iterator, Mapping, TypeVar, cast, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from pydantic_ai.tools import Tool
 
 from .approval import ToolRisk
@@ -24,6 +24,7 @@ from ..lang.procedure_schema import (
     procedure_return_json_schema,
     program_procedure_json_schemas,
 )
+from ..module_registry import internal_module_path
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
@@ -33,6 +34,9 @@ _KEDI_TOOL_CALL_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
 )
 
 _T = TypeVar("_T")
+_FILESYSTEM_READ_ONLY_PROCEDURES = frozenset(
+    {"read_text_file", "path_exists", "list_directory", "get_file_info"}
+)
 
 
 def run_sync(awaitable: Awaitable[_T]) -> _T:
@@ -86,8 +90,9 @@ def kedi_procedure_tool_spec(
         parsed_docstring.description,
         local_env=local_env,
     )
+    tool_fn = _make_tool_function(rt, proc)
     return ToolSpec(
-        fn=_make_tool_function(rt, proc),
+        fn=tool_fn,
         name=proc.name,
         description=tool_description,
         json_schema=json_schema,
@@ -101,6 +106,7 @@ def kedi_procedure_tool_spec(
         proc=proc,
         risk=_procedure_tool_risk(proc),
         risk_resolver=_procedure_tool_risk_resolver(proc),
+        argument_validator=_procedure_tool_argument_validator(rt, proc, tool_fn),
     )
 
 
@@ -112,16 +118,20 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     risk = getattr(fn, "__kedi_tool_risk__", "mutating")
     if risk not in ("read_only", "mutating", "sensitive"):
         raise ValueError(f"invalid Kedi tool risk {risk!r} for {name!r}")
-    return ToolSpec(fn=fn, name=name, description=description, risk=risk)
+    return ToolSpec(
+        fn=fn,
+        name=name,
+        description=description,
+        risk=risk,
+        argument_validator=_python_callable_argument_validator(fn),
+    )
 
 
 def _procedure_tool_risk(proc: ProcedureDef) -> ToolRisk:
     """Classify bundled filesystem reads; all other Kedi procedures are mutating by default."""
 
-    source_path = proc.loc.source_path if proc.loc is not None else None
-    if source_path is not None and Path(source_path).name == "filesystem.kedi":
-        if proc.name in {"read_text_file", "path_exists", "list_directory", "get_file_info"}:
-            return "read_only"
+    if _is_builtin_filesystem_procedure(proc) and proc.name in _FILESYSTEM_READ_ONLY_PROCEDURES:
+        return "read_only"
     return "mutating"
 
 
@@ -130,16 +140,44 @@ def _procedure_tool_risk_resolver(
 ) -> Callable[[Mapping[str, Any]], ToolRisk] | None:
     """Return an argument-aware risk classifier for bundled filesystem reads."""
 
+    if not _is_builtin_filesystem_procedure(proc):
+        return None
+    if proc.name not in {"read_text_file", "write_text_file", "apply_patch", "remove_file"}:
+        return None
+
+    if proc.name == "read_text_file":
+
+        def filesystem_read_risk(arguments: Mapping[str, Any]) -> ToolRisk:
+            if arguments.get("secret_files") is True and _targets_secret_file(arguments):
+                return "sensitive"
+            return "read_only"
+
+        return filesystem_read_risk
+
+    def filesystem_write_risk(arguments: Mapping[str, Any]) -> ToolRisk:
+        return "sensitive" if _targets_secret_file(arguments) else "mutating"
+
+    return filesystem_write_risk
+
+
+def _is_builtin_filesystem_procedure(proc: ProcedureDef) -> bool:
     source_path = proc.loc.source_path if proc.loc is not None else None
-    if source_path is None or Path(source_path).name != "filesystem.kedi":
-        return None
-    if proc.name != "read_text_file":
-        return None
+    bundled_path = internal_module_path("filesystem")
+    if source_path is None or bundled_path is None:
+        return False
+    try:
+        return Path(source_path).resolve() == bundled_path.resolve()
+    except OSError:
+        return False
 
-    def filesystem_read_risk(arguments: Mapping[str, Any]) -> ToolRisk:
-        return "sensitive" if arguments.get("secret_files") is True else "read_only"
 
-    return filesystem_read_risk
+def _targets_secret_file(arguments: Mapping[str, Any]) -> bool:
+    raw_path = arguments.get("file_path")
+    return isinstance(raw_path, str) and _is_secret_file_name(Path(raw_path).name)
+
+
+def _is_secret_file_name(name: str) -> bool:
+    return name == ".env" or name.startswith(".env.")
 
 
 def kedi_procedure_to_pydantic_tool(
@@ -305,24 +343,74 @@ def _invoke_procedure_with_kwargs(
     fn: Any,
     kwargs: dict[str, Any],
 ) -> Any:
-    sig = inspect.signature(fn)
-    bound = sig.bind_partial(**kwargs)
-    bound.apply_defaults()
-    local_env = dict(bound.arguments)
-    _coerce_tool_arguments(rt, proc, local_env)
-    call_kwargs = {name: local_env[name] for name in bound.arguments}
-
-    token = rt._current_env.set(local_env)
+    call_kwargs = _validated_procedure_kwargs(rt, proc, fn, kwargs)
+    token = rt._current_env.set(dict(call_kwargs))
     try:
         result = fn(**call_kwargs)
     finally:
         rt._current_env.reset(token)
 
     return (
-        rt._evaluate_value(result, local_env)
+        rt._evaluate_value(result, dict(call_kwargs))
         if isinstance(result, (InputExpr, CallExpr))
         else result
     )
+
+
+def _procedure_tool_argument_validator(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    tool_fn: Callable[..., Any],
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    proc_fn = getattr(tool_fn, "__wrapped__", tool_fn)
+
+    def validate(arguments: Mapping[str, Any]) -> dict[str, Any]:
+        return _validated_procedure_kwargs(rt, proc, proc_fn, dict(arguments))
+
+    return validate
+
+
+def _validated_procedure_kwargs(
+    rt: KediRuntime,
+    proc: ProcedureDef,
+    fn: Callable[..., Any],
+    kwargs: Mapping[str, Any],
+) -> dict[str, Any]:
+    sig = inspect.signature(fn)
+    bound = sig.bind(**kwargs)
+    bound.apply_defaults()
+    local_env = dict(bound.arguments)
+    _coerce_tool_arguments(rt, proc, local_env)
+    return {name: local_env[name] for name in bound.arguments}
+
+
+def _python_callable_argument_validator(
+    fn: Callable[..., Any],
+) -> Callable[[Mapping[str, Any]], dict[str, Any]]:
+    signature = inspect.signature(fn)
+    try:
+        type_hints = get_type_hints(fn)
+    except (NameError, TypeError):
+        type_hints = {}
+
+    def validate(arguments: Mapping[str, Any]) -> dict[str, Any]:
+        bound = signature.bind(**arguments)
+        bound.apply_defaults()
+        validated: dict[str, Any] = {}
+        for name, parameter in signature.parameters.items():
+            if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+                continue
+            value = bound.arguments.get(name)
+            if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+                validated.update(value or {})
+                continue
+            annotation = type_hints.get(name, parameter.annotation)
+            if annotation is not inspect.Parameter.empty:
+                value = TypeAdapter(annotation).validate_python(value)
+            validated[name] = value
+        return validated
+
+    return validate
 
 
 def _coerce_tool_arguments(

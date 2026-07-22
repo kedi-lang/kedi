@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import KediExecutionError
 from .model import eval_profile_definition
-from .profile import AgentProfile
+from .profile import AgentProfile, SKILLS_USE_TARGET
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
@@ -36,6 +36,8 @@ def eval_use_directive(
     definition = registry.get(name)
     if definition is not None:
         return eval_profile_definition(rt, definition, env)
+    if name == SKILLS_USE_TARGET:
+        return AgentProfile(skills=True)
     raise KediExecutionError(f"Unknown use target: {name!r}")
 
 

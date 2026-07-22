@@ -14,7 +14,10 @@ from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
+from pydantic_ai.capabilities import HandleDeferredToolCalls
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolCallPart, ToolDenied
+from pydantic_ai.toolsets import ApprovalRequiredToolset, FunctionToolset
 
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
 from kedi.agent_adapter import AdapterCapabilities, WebGPUAdapter
@@ -23,9 +26,11 @@ from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
+from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
+    CodexAdapter,
     DSPyAdapter,
     LangChainAdapter,
     PydanticAdapter,
@@ -33,8 +38,14 @@ from kedi.agent_adapter.adapters import (
 )
 from kedi.agent_adapter.adapters import claude as claude_adapter_module
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
+from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
-from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
+from kedi.agent_adapter.tool_override import (
+    ToolScope,
+    ToolSpec,
+    approval_request_for_tool,
+    arguments_target_secret_file,
+)
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
     kedi_procedure_tool_spec,
@@ -105,6 +116,8 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert ClaudeAdapter.kind == "agent-harness"
     assert ClaudeAdapter.shortname == "claude"
     assert ClaudeAdapter.capabilities.supports("mcp")
+    assert LangChainAdapter.capabilities.supports("native_approvals")
+    assert LangChainAdapter.capabilities.supports("native_approval_handler")
 
 
 def test_adapter_capabilities_support_boolean_fields() -> None:
@@ -300,19 +313,29 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
     langchain = ModuleType("langchain")
     chat_models = ModuleType("langchain.chat_models")
     agents = ModuleType("langchain.agents")
+    middleware = ModuleType("langchain.agents.middleware")
     langchain_core = ModuleType("langchain_core")
     langchain_core_tools = ModuleType("langchain_core.tools")
+    messages = ModuleType("langchain.messages")
     langchain_mcp_adapters = ModuleType("langchain_mcp_adapters")
     langchain_mcp_client = ModuleType("langchain_mcp_adapters.client")
 
     setattr(chat_models, "init_chat_model", fake_init_chat_model)
     setattr(agents, "create_agent", fake_create_agent)
+    setattr(middleware, "AgentMiddleware", type("AgentMiddleware", (), {}))
+    setattr(
+        messages,
+        "ToolMessage",
+        lambda **kwargs: SimpleNamespace(**kwargs),
+    )
     setattr(langchain_core_tools, "StructuredTool", FakeStructuredTool)
     setattr(langchain_mcp_client, "MultiServerMCPClient", FakeMCPClient)
 
     monkeypatch.setitem(sys.modules, "langchain", langchain)
     monkeypatch.setitem(sys.modules, "langchain.chat_models", chat_models)
     monkeypatch.setitem(sys.modules, "langchain.agents", agents)
+    monkeypatch.setitem(sys.modules, "langchain.agents.middleware", middleware)
+    monkeypatch.setitem(sys.modules, "langchain.messages", messages)
     monkeypatch.setitem(sys.modules, "langchain_core", langchain_core)
     monkeypatch.setitem(sys.modules, "langchain_core.tools", langchain_core_tools)
     monkeypatch.setitem(sys.modules, "langchain_mcp_adapters", langchain_mcp_adapters)
@@ -357,7 +380,7 @@ def test_langchain_adapter_produces_with_structured_output_and_profile(
             )
         )
 
-    assert cast(Any, result).answer == "ok"
+    assert result.answer == "ok"
     assert events["models"] == [
         {
             "model": "openai:gpt-4o-mini",
@@ -479,7 +502,292 @@ def test_langchain_adapter_wraps_async_tools(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     assert events["tools"][0]["description"] == "lookup"
-    assert events["tools"][0]["func"]("docs") == "async:docs"
+    assert asyncio.run(events["tools"][0]["coroutine"]("docs")) == "async:docs"
+
+
+def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    calls: list[dict[str, Any]] = []
+
+    def update_count(*, count: int) -> int:
+        return count
+
+    async def handler(request: Any) -> str:
+        calls.append(dict(request.tool_call))
+        return "tool result"
+
+    def request_for(*, name: str, arguments: dict[str, Any]) -> Any:
+        return ToolCallRequest(
+            tool_call={"name": name, "args": arguments, "id": "call-1", "type": "tool_call"},
+            tool=None,
+            state={},
+            runtime=cast(Any, None),
+        )
+
+    tool = python_callable_tool_spec("update_count", update_count)
+    edit_policy = ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.edit({"count": 3}))
+    edit_middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=edit_policy),
+        tools=(tool,),
+    )
+    assert (
+        asyncio.run(
+            edit_middleware.awrap_tool_call(
+                request_for(name="update_count", arguments={"count": 1}), handler
+            )
+        )
+        == "tool result"
+    )
+    assert calls == [
+        {
+            "name": "update_count",
+            "args": {"count": 3},
+            "id": "call-1",
+            "type": "tool_call",
+        }
+    ]
+
+    deny_middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=ApprovalPolicy.deny()),
+        tools=(tool,),
+    )
+    denied = asyncio.run(
+        deny_middleware.awrap_tool_call(
+            request_for(name="update_count", arguments={"count": 1}), handler
+        )
+    )
+    assert denied.status == "error"
+    assert "denied" in denied.content
+    assert len(calls) == 1
+
+    external = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile.empty(),
+        tools=(),
+    )
+    denied_external = asyncio.run(
+        external.awrap_tool_call(
+            request_for(name="external_mcp_tool", arguments={"path": ".env"}), handler
+        )
+    )
+    assert denied_external.status == "error"
+    assert len(calls) == 1
+
+    allowed_external = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=ApprovalPolicy.allow()),
+        tools=(),
+    )
+    assert (
+        asyncio.run(
+            allowed_external.awrap_tool_call(
+                request_for(name="external_mcp_tool", arguments={"path": "notes.txt"}),
+                handler,
+            )
+        )
+        == "tool result"
+    )
+    assert len(calls) == 2
+
+
+def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+
+    def lookup(query: str) -> str:
+        return query
+
+    spec = python_callable_tool_spec("lookup", lookup)
+    adapter = LangChainAdapter(model={"fake": "model"})
+    with adapter.tool_scope((spec,)):
+        assert adapter.scoped_tool_specs == (spec,)
+    assert events["tools"][0]["name"] == "lookup"
+
+    class SyncCallableReturningAwaitable:
+        def __call__(self, query: str):  # type: ignore[no-untyped-def]
+            async def result() -> str:
+                return f"async:{query}"
+
+            return result()
+
+    sync_wrapper = langchain_adapter_module._langchain_sync_tool_function(
+        ToolSpec(fn=SyncCallableReturningAwaitable(), name="sync_wrapper")
+    )
+    assert sync_wrapper(query="docs") == "async:docs"
+
+    async_wrapper = langchain_adapter_module._langchain_async_tool_function(
+        ToolSpec(fn=lambda *, query: query, name="async_wrapper")
+    )
+    assert asyncio.run(async_wrapper(query="docs")) == "docs"
+
+    middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile.empty(), tools=()
+    )
+    malformed = asyncio.run(
+        middleware.awrap_tool_call(
+            SimpleNamespace(tool_call={"name": None}),
+            lambda _request: pytest.fail("malformed calls must not reach the tool"),
+        )
+    )
+    assert malformed.status == "error"
+
+    def invalid_arguments(_arguments: Any) -> dict[str, Any]:
+        raise ValueError("invalid arguments")
+
+    failing_middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile.empty(),
+        tools=(ToolSpec(fn=lookup, name="lookup", argument_validator=invalid_arguments),),
+    )
+    rejected = asyncio.run(
+        failing_middleware.awrap_tool_call(
+            SimpleNamespace(tool_call={"name": "lookup", "args": {"query": "docs"}, "id": "call"}),
+            lambda _request: pytest.fail("invalid calls must not reach the tool"),
+        )
+    )
+    assert rejected.status == "error"
+    assert "invalid arguments" in rejected.content
+
+    assert arguments_target_secret_file([{"path": ".env"}, 1])
+    assert not arguments_target_secret_file(1)
+
+    monkeypatch.setitem(sys.modules, "langchain.agents.middleware", None)
+    with pytest.raises(ModuleNotFoundError, match="approval support requires langchain"):
+        langchain_adapter_module._langchain_approval_middleware(
+            profile=AgentProfile.empty(), tools=()
+        )
+
+
+def test_claude_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FallbackHookMatcher:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    with pytest.raises(RuntimeError, match="does not expose"):
+        claude_adapter_module._claude_hook_matcher_class(SimpleNamespace())
+    assert (
+        claude_adapter_module._claude_hook_matcher_class(
+            SimpleNamespace(HookMatcher=FallbackHookMatcher)
+        )
+        is FallbackHookMatcher
+    )
+
+    with pytest.raises(TypeError, match="mapping"):
+        claude_adapter_module._with_kedi_approval_hook(
+            SimpleNamespace(HookMatcher=FallbackHookMatcher),
+            "invalid",
+            profile=AgentProfile.empty(),
+            tools=(),
+        )
+    with pytest.raises(TypeError, match="lists or tuples"):
+        claude_adapter_module._with_kedi_approval_hook(
+            SimpleNamespace(HookMatcher=FallbackHookMatcher),
+            {"PreToolUse": "invalid"},
+            profile=AgentProfile.empty(),
+            tools=(),
+        )
+
+    preserved = claude_adapter_module._with_kedi_approval_hook(
+        SimpleNamespace(HookMatcher=FallbackHookMatcher),
+        {"PostToolUse": ("existing",)},
+        profile=AgentProfile.empty(),
+        tools=(),
+    )
+    assert preserved["PostToolUse"] == ["existing"]
+
+    hook = claude_adapter_module._claude_pre_tool_use_hook(
+        profile=AgentProfile.empty(),
+        tools=(),
+    )
+    assert (
+        asyncio.run(hook("invalid", None, None))["hookSpecificOutput"]["permissionDecision"]
+        == "deny"
+    )
+    assert (
+        asyncio.run(hook({"tool_name": 1, "tool_input": {}}, None, None))["hookSpecificOutput"][
+            "permissionDecision"
+        ]
+        == "deny"
+    )
+
+    def lookup(query: str) -> str:
+        return query
+
+    def invalid_arguments(_arguments: Any) -> dict[str, Any]:
+        raise ValueError("invalid arguments")
+
+    invalid_hook = claude_adapter_module._claude_pre_tool_use_hook(
+        profile=AgentProfile.empty(),
+        tools=(ToolSpec(fn=lookup, name="lookup", argument_validator=invalid_arguments),),
+    )
+    rejected = asyncio.run(
+        invalid_hook({"tool_name": "lookup", "tool_input": {"query": "docs"}}, None, None)
+    )
+    assert rejected["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "invalid arguments" in rejected["hookSpecificOutput"]["permissionDecisionReason"]
+    assert arguments_target_secret_file([{"path": ".env.local"}, 1])
+    assert not arguments_target_secret_file(1)
+
+
+def test_pydantic_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    _set_profile_stack(adapter)
+
+    combined = adapter._with_deferred_approval_capability(("existing",))
+    assert combined[0] == "existing"
+    with pytest.raises(TypeError, match="list or tuple"):
+        adapter._with_deferred_approval_capability("invalid")
+
+    class BadCall:
+        tool_call_id = "bad-call"
+        tool_name = "lookup"
+
+        @staticmethod
+        def args_as_dict() -> dict[str, Any]:
+            raise ValueError("bad JSON")
+
+    class Requests:
+        approvals = [BadCall()]
+
+        @staticmethod
+        def build_results(*, approvals: dict[str, Any]) -> dict[str, Any]:
+            return approvals
+
+    denied = asyncio.run(adapter._handle_deferred_tool_calls(None, Requests()))
+    assert isinstance(denied["bad-call"], ToolDenied)
+
+    def sync_tool(*, query: str) -> str:
+        return query
+
+    sync_wrapper = pydantic_adapter_module._validated_tool_function(
+        ToolSpec(fn=sync_tool, name="sync_tool")
+    )
+    with pytest.raises(TypeError, match="only accepts keyword"):
+        sync_wrapper("docs")
+
+    monkeypatch.setattr(pydantic_adapter_module, "_is_async_callable", lambda _fn: True)
+    async_wrapper = pydantic_adapter_module._validated_tool_function(
+        ToolSpec(fn=sync_tool, name="async_tool")
+    )
+    assert asyncio.run(async_wrapper(query="docs")) == "docs"
+    with pytest.raises(TypeError, match="only accepts keyword"):
+        asyncio.run(async_wrapper("docs"))
+
+    async def async_tool(*, query: str) -> str:
+        return f"async:{query}"
+
+    monkeypatch.setattr(
+        pydantic_adapter_module,
+        "_is_async_callable",
+        pydantic_adapter_module._is_async_callable,
+    )
+    actual_async_wrapper = pydantic_adapter_module._validated_tool_function(
+        ToolSpec(fn=async_tool, name="actual_async_tool")
+    )
+    assert asyncio.run(actual_async_wrapper(query="docs")) == "async:docs"
+    assert pydantic_adapter_module._validated_tool_arguments(
+        ToolSpec(fn=sync_tool, name="plain"), {"query": "docs"}
+    ) == {"query": "docs"}
 
 
 def test_langchain_mcp_configs_cover_transports_and_errors() -> None:
@@ -672,6 +980,16 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self.kwargs = kwargs
             events["options"].append(kwargs)
 
+    class FakeHookMatcher:
+        def __init__(
+            self,
+            *,
+            matcher: str | None = None,
+            hooks: list[Any] | None = None,
+        ) -> None:
+            self.matcher = matcher
+            self.hooks = hooks or []
+
     class FakeResultMessage:
         def __init__(
             self,
@@ -711,6 +1029,7 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     sdk = ModuleType("claude_agent_sdk")
     setattr(sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
+    setattr(sdk, "HookMatcher", FakeHookMatcher)
     setattr(sdk, "ResultMessage", FakeResultMessage)
     setattr(sdk, "query", fake_query)
     setattr(sdk, "tool", fake_tool)
@@ -792,6 +1111,7 @@ def test_claude_adapter_produces_with_schema_profile_tools_and_mcp(
     }
     assert options["mcp_servers"]["kedi"] == events["servers"][0]
     assert options["allowed_tools"] == ["existing-tool", "mcp__kedi__lookup"]
+    assert len(options["hooks"]["PreToolUse"]) == 1
 
     tool_result = asyncio.run(events["tools"][0]({"query": "docs"}))
     assert tool_result == {"content": [{"type": "text", "text": '{"found": "docs"}'}]}
@@ -855,6 +1175,96 @@ def test_claude_adapter_allows_permission_mode_to_override_builtin_default(
     adapter.produce_sync("template", output_schema={"answer": str})
 
     assert events["options"][0]["permission_mode"] == "plan"
+
+
+def test_claude_adapter_native_approval_hook_covers_builtin_mcp_and_kedi_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    calls: list[int] = []
+
+    def save_count(*, count: int) -> str:
+        calls.append(count)
+        return f"saved:{count}"
+
+    def edit_count(_request: object) -> ApprovalDecision:
+        return ApprovalDecision.edit({"count": 2})
+
+    adapter = ClaudeAdapter(model="claude")
+    spec = python_callable_tool_spec("save_count", save_count)
+    with (
+        adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(edit_count))),
+        adapter.tool_scope((spec,)),
+    ):
+        adapter.produce_sync("template", output_schema={"answer": str})
+
+    options = events["options"][0]
+    matcher = options["hooks"]["PreToolUse"][0]
+    hook = matcher.hooks[0]
+    result = asyncio.run(
+        hook(
+            {"tool_name": "mcp__kedi__save_count", "tool_input": {"count": 0}},
+            "tool-call",
+            {},
+        )
+    )
+    assert result["hookSpecificOutput"] == {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": {"count": 2},
+    }
+    assert asyncio.run(events["tools"][0]({"count": 2})) == {
+        "content": [{"type": "text", "text": "saved:2"}]
+    }
+    assert calls == [2]
+
+    denied_adapter = ClaudeAdapter(model="claude")
+    with denied_adapter.profile_override(AgentProfile(approval=ApprovalPolicy.deny())):
+        denied_adapter.invoke_sync(prompt="template")
+    denied_hook = events["options"][1]["hooks"]["PreToolUse"][0].hooks[0]
+    denied = asyncio.run(
+        denied_hook(
+            {"tool_name": "mcp__external__write", "tool_input": {"path": "notes.txt"}},
+            "tool-call",
+            {},
+        )
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    read_only_adapter = ClaudeAdapter(model="claude")
+    read_only_adapter.invoke_sync(prompt="template")
+    read_only_hook = events["options"][2]["hooks"]["PreToolUse"][0].hooks[0]
+    allowed_read = asyncio.run(
+        read_only_hook(
+            {"tool_name": "Read", "tool_input": {"file_path": "notes.txt"}},
+            "tool-call",
+            {},
+        )
+    )
+    denied_secret_read = asyncio.run(
+        read_only_hook(
+            {"tool_name": "Read", "tool_input": {"file_path": ".env"}},
+            "tool-call",
+            {},
+        )
+    )
+    assert allowed_read["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert denied_secret_read["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    allowed_adapter = ClaudeAdapter(model="claude")
+    with allowed_adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        allowed_adapter.invoke_sync(prompt="template")
+    allowed_hook = events["options"][3]["hooks"]["PreToolUse"][0].hooks[0]
+    allowed_external = asyncio.run(
+        allowed_hook(
+            {"tool_name": "mcp__external__write", "tool_input": {"path": "notes.txt"}},
+            "tool-call",
+            {},
+        )
+    )
+    assert allowed_external["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert ClaudeAdapter.capabilities.supports("native_approvals")
+    assert ClaudeAdapter.capabilities.supports("native_approval_handler")
 
 
 def test_claude_adapter_preserves_supported_string_formats() -> None:
@@ -1044,14 +1454,37 @@ def test_claude_adapter_is_available_from_runtime_builders() -> None:
     assert lazy.default_model() == "claude-sonnet-4"
 
 
-def test_pydantic_adapter_profile_stack_is_context_local() -> None:
-    adapter = PydanticAdapter(model=None)
+@pytest.mark.parametrize(
+    "adapter_factory",
+    [
+        pytest.param(lambda: PydanticAdapter(model=None), id="pydantic"),
+        pytest.param(lambda: ClaudeAdapter(model=None), id="claude"),
+        pytest.param(lambda: LangChainAdapter(model={"fake": "model"}), id="langchain"),
+        pytest.param(
+            lambda: CodexAdapter(command=("codex", "app-server")),
+            id="codex",
+        ),
+    ],
+)
+def test_native_adapter_profile_stacks_are_nested_and_context_local(
+    adapter_factory: Any,
+) -> None:
+    adapter = adapter_factory()
     seen: list[dict[str, Any]] = []
     entered_b = threading.Event()
     finish = threading.Event()
 
+    outer = AgentProfile(settings={"temperature": 0.1})
+    inner = AgentProfile(settings={"temperature": 0.2})
+    with adapter.profile_override(outer):
+        assert adapter.active_profile is outer
+        with adapter.profile_override(inner):
+            assert adapter.active_profile is inner
+        assert adapter.active_profile is outer
+    assert adapter.active_profile == AgentProfile.empty()
+
     def run_a() -> None:
-        with adapter.profile_override(AgentProfile(settings={"temperature": 0.1})):
+        with adapter.profile_override(outer):
             entered_b.wait(1)
             seen.append(dict(adapter.active_profile.settings))
             finish.set()
@@ -1305,13 +1738,21 @@ def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> Non
 def test_pydantic_adapter_includes_active_profile_mcp_toolsets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(PydanticAdapter, "_mcp_toolsets_for_profile", lambda *_: ["mcp-toolset"])
+    class FakeMcpToolset:
+        def approval_required(self) -> str:
+            return "approval-required-mcp-toolset"
+
+    monkeypatch.setattr(
+        PydanticAdapter,
+        "_mcp_toolsets_for_profile",
+        lambda *_: [FakeMcpToolset()],
+    )
 
     adapter = object.__new__(PydanticAdapter)
     adapter._tool_scope = ToolScope()
     _set_profile_stack(adapter, AgentProfile(mcp_servers=(McpServerSpec(command="vsh"),)))
 
-    assert adapter._toolsets_for_run() == ["mcp-toolset"]
+    assert adapter._toolsets_for_run() == ["approval-required-mcp-toolset"]
 
 
 def test_dspy_adapter_configures_lm_and_builds_signature(
@@ -1696,4 +2137,192 @@ def test_pydantic_adapter_registers_kedi_and_python_tools() -> None:
     tools = adapter.scoped_tools
     assert [tool.name for tool in tools] == ["search", "lookup"]
     assert tools[0].metadata is not None
-    assert tools[1].function is lookup
+    assert tools[1].function.__wrapped__ is lookup
+    assert tools[1].function(query="kedi") == "kedi"
+
+
+def test_pydantic_adapter_deferred_approval_revalidates_edited_kedi_tool_arguments() -> None:
+    calls: list[int] = []
+
+    def increment(*, count: int) -> int:
+        calls.append(count)
+        return count + 1
+
+    def edit_count(_request: object) -> ApprovalDecision:
+        return ApprovalDecision.edit({"count": 2})
+
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    _set_profile_stack(adapter, AgentProfile(approval=ApprovalPolicy.dynamic(edit_count)))
+    adapter.register_tool(python_callable_tool_spec("increment", increment))
+
+    requests = DeferredToolRequests(
+        approvals=[ToolCallPart("increment", {"count": 0}, tool_call_id="increment-call")]
+    )
+    results = asyncio.run(adapter._handle_deferred_tool_calls(None, requests))
+
+    approval = results.approvals["increment-call"]
+    assert isinstance(approval, ToolApproved)
+    assert approval.override_args == {"count": 2}
+    assert adapter.scoped_tools[0].function(**approval.override_args) == 3
+    assert calls == [2]
+
+
+def test_pydantic_adapter_deferred_approval_denies_and_handles_external_tools() -> None:
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    _set_profile_stack(adapter, AgentProfile(approval=ApprovalPolicy.deny()))
+    adapter.register_tool(
+        ToolSpec(
+            fn=lambda *, path: path,
+            name="write_file",
+            risk="mutating",
+        )
+    )
+    denied_requests = DeferredToolRequests(
+        approvals=[ToolCallPart("write_file", {"path": "notes.txt"}, tool_call_id="denied-call")]
+    )
+
+    denied = asyncio.run(adapter._handle_deferred_tool_calls(None, denied_requests))
+    assert isinstance(denied.approvals["denied-call"], ToolDenied)
+
+    _set_profile_stack(adapter, AgentProfile(approval=ApprovalPolicy.allow()))
+    external_requests = DeferredToolRequests(
+        approvals=[ToolCallPart("mcp_search", {"query": "kedi"}, tool_call_id="mcp-call")]
+    )
+    allowed = asyncio.run(adapter._handle_deferred_tool_calls(None, external_requests))
+
+    external_approval = allowed.approvals["mcp-call"]
+    assert isinstance(external_approval, ToolApproved)
+    assert external_approval.override_args == {"query": "kedi"}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_risk"),
+    [
+        ({"path": "notes.txt"}, "mutating"),
+        ({"path": ".env"}, "sensitive"),
+        ({"target": {"path": ".env.local"}}, "sensitive"),
+        ({"files": ["notes.txt", {"path": ".env.production"}]}, "sensitive"),
+    ],
+)
+def test_pydantic_external_tool_approval_elevates_secret_paths(
+    arguments: dict[str, Any], expected_risk: str
+) -> None:
+    request = approval_request_for_tool(
+        pydantic_adapter_module._external_tool_spec("external_read"),
+        arguments,
+        "pydantic",
+    )
+
+    assert request.risk == expected_risk
+
+
+def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_toolsets() -> None:
+    adapter = object.__new__(PydanticAdapter)
+    adapter._tool_scope = ToolScope()
+    _set_profile_stack(adapter)
+    adapter.register_tool(ToolSpec(fn=lambda: "ok", name="read_status", risk="read_only"))
+
+    run_kwargs = adapter._run_kwargs({})
+
+    assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
+    assert len(run_kwargs["capabilities"]) == 1
+    assert isinstance(run_kwargs["capabilities"][0], HandleDeferredToolCalls)
+    assert PydanticAdapter.capabilities.supports("native_approvals")
+    assert PydanticAdapter.capabilities.supports("native_approval_handler")
+
+
+def test_pydantic_adapter_runs_the_native_deferred_edit_flow() -> None:
+    calls: list[str] = []
+
+    def write_status(*, name: str) -> str:
+        calls.append(name)
+        return f"saved:{name}"
+
+    def rename_tool_target(_request: object) -> ApprovalDecision:
+        return ApprovalDecision.edit({"name": "approved"})
+
+    adapter = PydanticAdapter(TestModel(call_tools=["write_status"]))
+    with adapter.profile_override(
+        AgentProfile(approval=ApprovalPolicy.dynamic(rename_tool_target))
+    ):
+        with adapter.tool_scope((python_callable_tool_spec("write_status", write_status),)):
+            result = asyncio.run(adapter.invoke(prompt="Call write_status."))
+
+    assert result == '{"write_status":"saved:approved"}'
+    assert calls == ["approved"]
+
+
+def test_pydantic_adapter_denies_constructor_native_tools_before_invocation() -> None:
+    calls: list[int] = []
+
+    def native_tool(x: int = 1) -> int:
+        calls.append(x)
+        return x + 1
+
+    adapter = PydanticAdapter(TestModel(call_tools=["native_tool"]), tools=[native_tool])
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.deny())):
+        result = asyncio.run(adapter.invoke(prompt="Call native_tool."))
+
+    assert "denied" in result
+    assert calls == []
+
+
+def test_pydantic_adapter_denies_inherited_toolsets_before_invocation() -> None:
+    calls: list[int] = []
+
+    def native_tool(x: int = 1) -> int:
+        calls.append(x)
+        return x + 1
+
+    adapter = PydanticAdapter(
+        TestModel(call_tools=["native_tool"]),
+        toolsets=[FunctionToolset(tools=[native_tool])],
+    )
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.deny())):
+        result = asyncio.run(adapter.invoke(prompt="Call native_tool."))
+
+    assert "denied" in result
+    assert calls == []
+
+
+def test_pydantic_adapter_wraps_native_toolset_overrides_and_nested_runs() -> None:
+    def native_tool() -> str:
+        return "ok"
+
+    adapter = PydanticAdapter(TestModel(), tools=[native_tool])
+
+    nested_kwargs: dict[str, object] = {}
+    adapter._add_nested_native_toolsets(nested_kwargs)
+    assert len(nested_kwargs["toolsets"]) == 1
+    assert isinstance(nested_kwargs["toolsets"][0], ApprovalRequiredToolset)
+
+    nested_kwargs = {"toolsets": ()}
+    adapter._add_nested_native_toolsets(nested_kwargs)
+    assert len(nested_kwargs["toolsets"]) == 1
+
+    with pytest.raises(TypeError, match="must be a sequence"):
+        adapter._add_nested_native_toolsets({"toolsets": "invalid"})
+
+    with adapter.override(tools=[native_tool]):
+        assert adapter._has_native_approval_tools()
+
+    inherited_adapter = PydanticAdapter(TestModel())
+    with inherited_adapter.override(toolsets=[FunctionToolset(tools=[native_tool])]):
+        assert inherited_adapter._application_toolset_count() == 2
+        assert inherited_adapter._has_native_approval_tools()
+
+    wrapped = pydantic_adapter_module._approval_required_toolset(FunctionToolset())
+    assert pydantic_adapter_module._approval_required_toolset(wrapped) is wrapped
+
+
+def test_runtime_leaves_pydantic_tools_unwrapped_for_native_approval() -> None:
+    program = parse_program("@write_file(path: str) -> str:\n  = <path>\n")
+    adapter = PydanticAdapter(TestModel())
+    runtime = compile_program(program, adapter=adapter)
+    profile = AgentProfile(tools=("write_file",), approval=ApprovalPolicy.deny())
+
+    tool = runtime._resolve_tool_specs(profile, adapter)[0]
+
+    assert tool.fn(path="notes.txt") == "notes.txt"

@@ -13,9 +13,19 @@ from contextlib import suppress
 from contextvars import Context
 from dataclasses import dataclass, field
 from threading import Event, Lock, RLock, Thread, current_thread
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
 JsonObject = dict[str, Any]
+AwaitResult = Callable[[Context, Awaitable[Any]], Any]
+ServerApprovalHandler = Callable[[str, Mapping[str, Any]], Any]
+
+_NATIVE_APPROVAL_METHODS = frozenset(
+    {
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+    }
+)
 
 
 class CodexAppServerError(RuntimeError):
@@ -40,6 +50,14 @@ class CodexTurnResult:
 class _ToolBinding:
     fn: Callable[..., Any]
     context: Context
+    await_result: AwaitResult | None = None
+
+
+@dataclass(frozen=True)
+class _ApprovalBinding:
+    handler: ServerApprovalHandler
+    context: Context
+    await_result: AwaitResult | None = None
 
 
 @dataclass
@@ -74,6 +92,7 @@ class CodexAppServerClient:
         self._pending: dict[int, Future[JsonObject]] = {}
         self._turns: dict[str, _TurnState] = {}
         self._thread_tools: dict[str, dict[str, _ToolBinding]] = {}
+        self._thread_approvals: dict[str, _ApprovalBinding] = {}
         self._stderr_tail: deque[str] = deque(maxlen=40)
         self._next_request_id = 1
         self._initialized = False
@@ -88,7 +107,10 @@ class CodexAppServerClient:
         tools: Mapping[str, Callable[..., Any]],
         tool_context: Context,
         turn_timeout: float,
+        approval_handler: ServerApprovalHandler | None = None,
+        approval_context: Context | None = None,
     ) -> CodexTurnResult:
+        loop = asyncio.get_running_loop()
         return await asyncio.to_thread(
             self.run_stateless_turn_sync,
             thread_params=thread_params,
@@ -96,6 +118,9 @@ class CodexAppServerClient:
             tools=tools,
             tool_context=tool_context,
             turn_timeout=turn_timeout,
+            approval_handler=approval_handler,
+            approval_context=approval_context,
+            await_result=_await_result_in_loop(loop),
         )
 
     def run_stateless_turn_sync(
@@ -106,15 +131,31 @@ class CodexAppServerClient:
         tools: Mapping[str, Callable[..., Any]],
         tool_context: Context,
         turn_timeout: float,
+        approval_handler: ServerApprovalHandler | None = None,
+        approval_context: Context | None = None,
+        await_result: AwaitResult | None = None,
     ) -> CodexTurnResult:
         thread_response = self._start_thread(thread_params)
         thread = _required_object(thread_response, "thread")
         thread_id = _required_string(thread, "id")
         bindings = {
-            name: _ToolBinding(fn=fn, context=tool_context.copy()) for name, fn in tools.items()
+            name: _ToolBinding(
+                fn=fn,
+                context=tool_context.copy(),
+                await_result=await_result,
+            )
+            for name, fn in tools.items()
         }
         with self._state_lock:
             self._thread_tools[thread_id] = bindings
+            if approval_handler is not None:
+                self._thread_approvals[thread_id] = _ApprovalBinding(
+                    handler=approval_handler,
+                    context=(
+                        approval_context if approval_context is not None else tool_context
+                    ).copy(),
+                    await_result=await_result,
+                )
         turn_id: str | None = None
         try:
             turn_response = self.request("turn/start", {**turn_params, "threadId": thread_id})
@@ -145,6 +186,7 @@ class CodexAppServerClient:
         finally:
             with self._state_lock:
                 self._thread_tools.pop(thread_id, None)
+                self._thread_approvals.pop(thread_id, None)
                 if turn_id is not None:
                     self._turns.pop(turn_id, None)
             with suppress(CodexAppServerError, TimeoutError):
@@ -365,17 +407,23 @@ class CodexAppServerClient:
     def _handle_server_request(self, request_id: Any, method: str, params: Any) -> None:
         if not isinstance(request_id, (int, str)):
             return
-        if method != "item/tool/call":
-            self._send(
-                {
-                    "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": f"Unsupported request: {method}",
-                    },
-                }
-            )
+        if method == "item/tool/call":
+            self._handle_dynamic_tool_request(request_id, params)
             return
+        if method in _NATIVE_APPROVAL_METHODS:
+            self._handle_native_approval_request(request_id, method, params)
+            return
+        self._send(
+            {
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": f"Unsupported request: {method}",
+                },
+            }
+        )
+
+    def _handle_dynamic_tool_request(self, request_id: int | str, params: Any) -> None:
         if not isinstance(params, Mapping):
             self._tool_response(request_id, False, "Dynamic tool params must be an object.")
             return
@@ -394,15 +442,55 @@ class CodexAppServerClient:
             self._tool_response(request_id, False, f"Unknown Kedi tool: {tool_name}")
             return
         try:
-            context = binding.context.copy()
-            result = context.run(binding.fn, **dict(arguments))
-            if inspect.isawaitable(result):
-                result = context.run(asyncio.run, result)
+            result = _invoke_binding(binding, **dict(arguments))
             self._tool_response(request_id, True, _tool_result_text(result))
         except BaseException as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
             self._tool_response(request_id, False, f"{type(exc).__name__}: {exc}")
+
+    def _handle_native_approval_request(
+        self,
+        request_id: int | str,
+        method: str,
+        params: Any,
+    ) -> None:
+        if not isinstance(params, Mapping):
+            self._send(
+                {
+                    "id": request_id,
+                    "result": _default_native_approval_response(method),
+                }
+            )
+            return
+        thread_id = params.get("threadId")
+        with self._state_lock:
+            binding = self._thread_approvals.get(thread_id) if isinstance(thread_id, str) else None
+        if binding is None:
+            self._send(
+                {
+                    "id": request_id,
+                    "result": _default_native_approval_response(method),
+                }
+            )
+            return
+        try:
+            result = _invoke_binding(binding, method, dict(params))
+            response = _validated_native_approval_response(method, result)
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            self._send(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32000,
+                        "message": f"Kedi approval handler failed: {type(exc).__name__}: {exc}",
+                    },
+                }
+            )
+            return
+        self._send({"id": request_id, "result": response})
 
     def _tool_response(self, request_id: int | str, success: bool, text: str) -> None:
         self._send(
@@ -497,6 +585,90 @@ class CodexAppServerClient:
         if stderr:
             message = f"{message}\nApp Server stderr:\n{stderr}"
         return CodexAppServerDisconnected(message)
+
+
+def _invoke_binding(
+    binding: _ToolBinding | _ApprovalBinding,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    context = binding.context.copy()
+    callable_ = binding.fn if isinstance(binding, _ToolBinding) else binding.handler
+    result = context.run(callable_, *args, **kwargs)
+    if not inspect.isawaitable(result):
+        return result
+    awaitable = cast(Awaitable[Any], result)
+    if binding.await_result is not None:
+        return binding.await_result(context, awaitable)
+    return context.run(_await_result_in_new_loop, awaitable)
+
+
+def _await_result_in_new_loop(awaitable: Awaitable[Any]) -> Any:
+    async def await_value() -> Any:
+        return await awaitable
+
+    return asyncio.run(await_value())
+
+
+def _await_result_in_loop(loop: asyncio.AbstractEventLoop) -> AwaitResult:
+    """Return a blocking bridge that schedules an awaitable on ``loop`` safely."""
+
+    def await_result(context: Context, awaitable: Awaitable[Any]) -> Any:
+        result: Future[Any] = Future()
+
+        def schedule() -> None:
+            try:
+                task = context.run(asyncio.ensure_future, awaitable)
+            except BaseException as exc:
+                result.set_exception(exc)
+                return
+
+            def complete(completed: asyncio.Future[Any]) -> None:
+                try:
+                    result.set_result(completed.result())
+                except BaseException as exc:
+                    result.set_exception(exc)
+
+            task.add_done_callback(complete)
+
+        loop.call_soon_threadsafe(schedule)
+        return result.result()
+
+    return await_result
+
+
+def _default_native_approval_response(method: str) -> JsonObject:
+    if method == "item/permissions/requestApproval":
+        return {"permissions": {}, "scope": "turn"}
+    return {"decision": "decline"}
+
+
+def _validated_native_approval_response(method: str, value: Any) -> JsonObject:
+    if not isinstance(value, Mapping):
+        raise TypeError("Codex native approval handler must return an object response.")
+    if method == "item/permissions/requestApproval":
+        permissions = value.get("permissions")
+        scope = value.get("scope", "turn")
+        if not isinstance(permissions, Mapping):
+            raise TypeError(
+                "Codex permissions approval response requires an object permissions field."
+            )
+        if scope not in {"turn", "session"}:
+            raise ValueError("Codex permissions approval scope must be 'turn' or 'session'.")
+        response: JsonObject = {"permissions": dict(permissions), "scope": scope}
+        strict_auto_review = value.get("strictAutoReview")
+        if strict_auto_review is not None:
+            if not isinstance(strict_auto_review, bool):
+                raise TypeError("Codex strictAutoReview must be bool when provided.")
+            response["strictAutoReview"] = strict_auto_review
+        return response
+
+    decision = value.get("decision")
+    if decision not in {"accept", "acceptForSession", "decline", "cancel"}:
+        raise ValueError(
+            "Codex command/file approval response must use accept, acceptForSession, decline, or cancel."
+        )
+    return {"decision": decision}
 
 
 def _required_object(value: Mapping[str, Any], key: str) -> JsonObject:
