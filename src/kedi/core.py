@@ -33,6 +33,10 @@ from .errors import (
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
+if TYPE_CHECKING:
+    from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
+    from .agent_adapter.subagents.limits import SubagentUsageLimits
+
 _SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
 
@@ -150,6 +154,10 @@ class KediRuntime:
         adapter: AgentAdapter[Any] | None = None,
         executor: Executor | None = None,
         engine: Any | None = None,
+        subagent_max_depth: int = 5,
+        subagent_max_concurrency: int = 4,
+        subagent_timeout_seconds: float | None = 120.0,
+        subagent_usage_limits: "SubagentUsageLimits | None" = None,
     ) -> None:
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
@@ -170,6 +178,9 @@ class KediRuntime:
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
         )
+        self._subagent_stack: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
+            "kedi_subagent_stack", default=()
+        )
         # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
         # outermost invocation, regardless of entry point (run_main / query / direct invoke).
         self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
@@ -185,6 +196,32 @@ class KediRuntime:
         self._prelude_env: ValueEnv | None = None
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
+        from .agent_adapter.subagents.coordinator import (
+            SubagentCoordinator,
+            SubagentCoordinatorDependencies,
+        )
+
+        self._subagent_coordinator = SubagentCoordinator(
+            SubagentCoordinatorDependencies(
+                profile_registry=lambda: self._profile_registry,
+                evaluate_profile=lambda definition: self._evaluate_profile_definition(definition),
+                resolve_adapter=lambda profile: self._resolve_adapter(profile),
+                assert_profile_override_supported=lambda profile, adapter: (
+                    self._assert_profile_override_supported(profile, adapter)
+                ),
+                resolve_tools=lambda profile, adapter: self._resolve_agent_tool_specs(
+                    profile, adapter
+                ),
+                instructions_for_profile=lambda profile: self._agent_instructions(profile),
+                trace_frame=lambda frame: self.trace_frame(frame),
+                active_stack=self._subagent_stack,
+                default_cwd=Path.cwd,
+            ),
+            max_depth=subagent_max_depth,
+            max_concurrency=subagent_max_concurrency,
+            timeout_seconds=subagent_timeout_seconds,
+            usage_limits=subagent_usage_limits,
+        )
 
     # Expressions
     def i(self, key: str) -> InputExpr:
@@ -849,31 +886,116 @@ class KediRuntime:
 
     def _resolve_agent_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
-        specs = self._resolve_tool_specs(profile, adapter)
-        if not getattr(profile, "skills", False):
-            return specs
+        specs = list(self._resolve_tool_specs(profile, adapter))
 
-        from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_profile import AgentToolOverrideUnsupported
+        if getattr(profile, "skills", False):
+            from .agent_adapter.tool_override import SupportsToolRegistration
+            from .agent_profile import AgentToolOverrideUnsupported
 
-        if not isinstance(adapter, SupportsToolRegistration):
-            raise AgentToolOverrideUnsupported(
-                "Active adapter does not support skill tool registration"
-            )
-        from .agent_adapter.skills import skill_tool_specs
-        from .agent_adapter.tool_override import with_approval
-
-        skill_specs = skill_tool_specs(self._skill_root())
-        if not self._adapter_uses_native_approvals(adapter):
-            skill_specs = tuple(
-                with_approval(
-                    spec,
-                    policy=profile.approval,
-                    adapter_shortname=getattr(adapter, "shortname", None),
+            if not isinstance(adapter, SupportsToolRegistration):
+                raise AgentToolOverrideUnsupported(
+                    "Active adapter does not support skill tool registration"
                 )
-                for spec in skill_specs
+            from .agent_adapter.skills import skill_tool_specs
+            from .agent_adapter.tool_override import with_approval
+
+            skill_specs = skill_tool_specs(self._skill_root())
+            if not self._adapter_uses_native_approvals(adapter):
+                skill_specs = tuple(
+                    with_approval(
+                        spec,
+                        policy=profile.approval,
+                        adapter_shortname=getattr(adapter, "shortname", None),
+                    )
+                    for spec in skill_specs
+                )
+            specs.extend(skill_specs)
+
+        if getattr(profile, "subagents", ()):
+            from .agent_adapter.meta import AdapterCapabilities
+            from .agent_adapter.subagents import subagent_tool_specs
+            from .agent_profile import AgentSubagentUnsupported
+
+            capabilities = getattr(adapter, "capabilities", None)
+            if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
+                "subagents"
+            ):
+                raise AgentSubagentUnsupported(
+                    "Active adapter does not support Kedi subagent delegation"
+                )
+            specs.extend(
+                subagent_tool_specs(
+                    self,
+                    profile,
+                    supports_background=capabilities.supports("background_subagents"),
+                )
             )
-        return (*specs, *skill_specs)
+        return tuple(specs)
+
+    async def _delegate_task(
+        self,
+        *,
+        allowed_subagents: tuple[str, ...],
+        subagent: str,
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return await self._subagent_coordinator.delegate(
+            allowed_subagents=allowed_subagents,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    def _start_subagent(
+        self,
+        *,
+        allowed_subagents: tuple[str, ...],
+        subagent: str,
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return self._subagent_coordinator.start(
+            allowed_subagents=allowed_subagents,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    async def _wait_subagent(
+        self,
+        run_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        return await self._subagent_coordinator.wait(run_id, timeout=timeout)
+
+    def _cancel_subagent(self, run_id: str) -> bool:
+        return self._subagent_coordinator.cancel(run_id)
+
+    def _subagent_status(self, run_id: str) -> Any:
+        return self._subagent_coordinator.status(run_id)
+
+    def _new_subagent_concurrency(self) -> "DelegationConcurrency":
+        return self._subagent_coordinator.new_concurrency()
+
+    def _evaluate_profile_definition(self, definition: Any) -> Any:
+        from .agent_profile.compile import build_capture_env
+        from .agent_profile.model import eval_profile_definition
+
+        return eval_profile_definition(self, definition, build_capture_env(self))
 
     @staticmethod
     def _adapter_uses_native_approvals(adapter: Any) -> bool:

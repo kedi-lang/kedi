@@ -70,8 +70,10 @@ from ..ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
+    ProfileMaxAgentsEntry,
     ProfileModelEntry,
     ProfileSettingsEntry,
+    ProfileSubagentEntry,
     ProfileSystemEntry,
     Program,
     ProgramWithValidation,
@@ -1751,6 +1753,8 @@ class _Walker:
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
+        subagent_members: list[ProfileSubagentEntry] = []
+        max_agents_members: list[ProfileMaxAgentsEntry] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -1883,6 +1887,24 @@ class _Walker:
                             loc=self._span(child),
                         )
                     )
+                elif child.type == "subagent_directive":
+                    subagent_node = _field(child, "name")
+                    assert subagent_node is not None
+                    subagent_members.append(
+                        ProfileSubagentEntry(
+                            name=_identifier_name(self.source, subagent_node),
+                            loc=self._span(subagent_node),
+                        )
+                    )
+                elif child.type == "max_agents_directive":
+                    value_node = _field(child, "value")
+                    assert value_node is not None
+                    max_agents_members.append(
+                        ProfileMaxAgentsEntry(
+                            value=int(_src_text(self.source, value_node)),
+                            loc=self._span(child),
+                        )
+                    )
         if (
             not members
             and not agent_members
@@ -1892,11 +1914,13 @@ class _Walker:
             and not system_members
             and not mcp_members
             and not settings_members
+            and not subagent_members
+            and not max_agents_members
             and not tool_names
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> subagent:', '> max_agents:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -1909,6 +1933,8 @@ class _Walker:
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,
+            subagent_members=subagent_members,
+            max_agents_members=max_agents_members,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

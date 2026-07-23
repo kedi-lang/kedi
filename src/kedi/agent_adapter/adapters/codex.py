@@ -16,7 +16,10 @@ from ...agent_profile.settings import CODEX_AGENT_SETTING_KEYS, codex_agent_sett
 from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...resolved_types import ResolvedKediType
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
 from .._schema import output_field_definition
+from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -25,6 +28,7 @@ from ..approval import (
     resolve_tool_approval_async,
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..subagents import SubagentExecutionRequest
 from ..tool_override import ToolScope, ToolSpec, arguments_target_secret_file, with_approval
 from ._codex_app_server import (
     CodexAppServerClient,
@@ -71,6 +75,8 @@ class CodexAdapter:
         supports_settings=True,
         supports_native_approvals=True,
         supports_native_approval_handler=False,
+        supports_subagents=True,
+        supports_background_subagents=True,
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )
@@ -85,14 +91,18 @@ class CodexAdapter:
         request_timeout: float = 30,
         turn_timeout: float = 300,
         client: CodexAppServerClient | None = None,
+        subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         **kwargs: Any,
     ) -> None:
+        if subagent_failure_policy not in {"recover", "fail_closed"}:
+            raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = model
         self._settings = {
             **codex_agent_settings(model_settings or {}),
             **self._validated_settings(kwargs),
         }
         self._turn_timeout = turn_timeout
+        self._subagent_failure_policy = subagent_failure_policy
         self._client = client or CodexAppServerClient(
             command,
             env=env,
@@ -101,6 +111,10 @@ class CodexAdapter:
         self._tool_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_codex_profile_stack_{id(self)}",
+            default=(),
+        )
+        self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
+            f"kedi_codex_approval_ceiling_{id(self)}",
             default=(),
         )
 
@@ -134,29 +148,30 @@ class CodexAdapter:
         **kwargs: Any,
     ) -> OutputDataT:
         run = self._prepare_run(template, output_schema, output_type, kwargs)
-        result = await self._client.run_stateless_turn(
-            thread_params=run.thread_params,
-            turn_params=run.turn_params,
-            tools=run.tools,
-            tool_context=copy_context(),
-            turn_timeout=run.timeout,
-            approval_handler=run.native_approval_handler,
-            approval_context=copy_context(),
-        )
+        result = await self._run_async(run)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run = self._prepare_invoke(prompt, kwargs)
-        result = await self._client.run_stateless_turn(
-            thread_params=run.thread_params,
-            turn_params=run.turn_params,
-            tools=run.tools,
-            tool_context=copy_context(),
-            turn_timeout=run.timeout,
-            approval_handler=run.native_approval_handler,
-            approval_context=copy_context(),
-        )
+        result = await self._run_async(run)
         return result.text
+
+    async def produce_subagent(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, Any],
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        run = self._prepare_turn(
+            template,
+            kwargs,
+            output_schema=_codex_json_schema(output_schema),
+            output_type=None,
+        )
+        result = await self._run_async(run)
+        value = _json_object_result(result)
+        return value
 
     def produce_sync(
         self,
@@ -166,28 +181,12 @@ class CodexAdapter:
         **kwargs: Any,
     ) -> OutputDataT:
         run = self._prepare_run(template, output_schema, output_type, kwargs)
-        result = self._client.run_stateless_turn_sync(
-            thread_params=run.thread_params,
-            turn_params=run.turn_params,
-            tools=run.tools,
-            tool_context=copy_context(),
-            turn_timeout=run.timeout,
-            approval_handler=run.native_approval_handler,
-            approval_context=copy_context(),
-        )
+        result = self._run_sync(run)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         run = self._prepare_invoke(prompt, kwargs)
-        result = self._client.run_stateless_turn_sync(
-            thread_params=run.thread_params,
-            turn_params=run.turn_params,
-            tools=run.tools,
-            tool_context=copy_context(),
-            turn_timeout=run.timeout,
-            approval_handler=run.native_approval_handler,
-            approval_context=copy_context(),
-        )
+        result = self._run_sync(run)
         return result.text
 
     def close(self) -> None:
@@ -199,6 +198,9 @@ class CodexAdapter:
     def default_model(self) -> str | None:
         return self._model
 
+    def telemetry_model_name(self) -> str | None:
+        return self._model
+
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         token = self._profile_stack_var.set((*self._profile_stack_var.get(), profile))
@@ -206,6 +208,60 @@ class CodexAdapter:
             yield
         finally:
             self._profile_stack_var.reset(token)
+
+    @contextmanager
+    def approval_ceiling(
+        self,
+        policies: Sequence[ApprovalPolicy | None],
+    ) -> Iterator[None]:
+        token = self._approval_ceiling_var.set(tuple(policies))
+        try:
+            yield
+        finally:
+            self._approval_ceiling_var.reset(token)
+
+    @contextmanager
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        with (
+            self.tool_scope(request.tools),
+            self.profile_override(request.profile),
+            self.approval_ceiling(request.approval_ceiling),
+        ):
+            yield
+
+    @staticmethod
+    def subagent_run_kwargs(_limits: SubagentUsageLimits) -> dict[str, Any]:
+        return {}
+
+    async def _run_async(self, run: _CodexRun) -> CodexTurnResult:
+        with delegation_scope(self._subagent_failure_policy):
+            result = await self._client.run_stateless_turn(
+                thread_params=run.thread_params,
+                turn_params=run.turn_params,
+                tools=run.tools,
+                tool_context=copy_context(),
+                turn_timeout=run.timeout,
+                approval_handler=run.native_approval_handler,
+                approval_context=copy_context(),
+            )
+        if invocation_observer() is not None:
+            report_invocation(_codex_invocation_usage(result))
+        return result
+
+    def _run_sync(self, run: _CodexRun) -> CodexTurnResult:
+        with delegation_scope(self._subagent_failure_policy):
+            result = self._client.run_stateless_turn_sync(
+                thread_params=run.thread_params,
+                turn_params=run.turn_params,
+                tools=run.tools,
+                tool_context=copy_context(),
+                turn_timeout=run.timeout,
+                approval_handler=run.native_approval_handler,
+                approval_context=copy_context(),
+            )
+        if invocation_observer() is not None:
+            report_invocation(_codex_invocation_usage(result))
+        return result
 
     def _prepare_run(
         self,
@@ -258,12 +314,9 @@ class CodexAdapter:
         }
         model = profile.model or self._model
         system = instructions if instructions is not None else profile.system
+        policies = self._approval_policies(profile.approval)
         approved_tools = tuple(
-            with_approval(
-                tool,
-                policy=profile.approval,
-                adapter_shortname=self.shortname,
-            )
+            _tool_with_approval_policies(tool, policies, self.shortname)
             for tool in self.scoped_tools
         )
         tools = {tool.name: tool.fn for tool in approved_tools}
@@ -310,10 +363,19 @@ class CodexAdapter:
             thread_params=thread_params,
             turn_params=turn_params,
             tools=tools,
-            native_approval_handler=_codex_native_approval_handler(profile.approval),
+            native_approval_handler=_codex_native_approval_handler(policies),
             timeout=float(timeout),
             output_type=output_type,
         )
+
+    def _approval_policies(
+        self,
+        local_policy: ApprovalPolicy | None,
+    ) -> tuple[ApprovalPolicy | None, ...]:
+        policies = self._approval_ceiling_var.get()
+        if local_policy is not None or not policies:
+            return (*policies, local_policy)
+        return policies
 
     @staticmethod
     def _validated_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -392,13 +454,70 @@ def _parse_structured_result(result: CodexTurnResult, output_type: type[Any]) ->
     return value
 
 
-def _codex_native_approval_handler(policy: ApprovalPolicy | None) -> ServerApprovalHandler:
+def _json_object_result(result: CodexTurnResult) -> Mapping[str, Any]:
+    try:
+        value = json.loads(result.text)
+    except json.JSONDecodeError as exc:
+        raise CodexAppServerProtocolError(
+            f"Codex returned invalid structured output: {result.text}"
+        ) from exc
+    if not isinstance(value, Mapping):
+        raise CodexAppServerProtocolError("Codex subagent structured output must be an object.")
+    return value
+
+
+def _tool_with_approval_policies(
+    tool: ToolSpec,
+    policies: Sequence[ApprovalPolicy | None],
+    adapter_shortname: str,
+) -> ToolSpec:
+    guarded = tool
+    for policy in reversed(tuple(policies)):
+        guarded = with_approval(
+            guarded,
+            policy=policy,
+            adapter_shortname=adapter_shortname,
+        )
+    return guarded
+
+
+def _codex_native_approval_handler(
+    policies: Sequence[ApprovalPolicy | None],
+) -> ServerApprovalHandler:
     async def decide(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
-        request = _codex_native_approval_request(method, params)
-        decision = await resolve_tool_approval_async(policy, request)
+        decision = ApprovalDecision.allow()
+        for policy in policies:
+            request = _codex_native_approval_request(method, params)
+            decision = await resolve_tool_approval_async(policy, request)
+            if decision.decision != "allow":
+                break
         return _codex_native_approval_response(method, params, decision)
 
     return decide
+
+
+def _codex_invocation_usage(result: CodexTurnResult) -> InvocationUsage:
+    usage = result.turn.get("usage")
+    values = usage if isinstance(usage, Mapping) else {}
+    input_tokens = _usage_int(values, "input_tokens", "inputTokens")
+    output_tokens = _usage_int(values, "output_tokens", "outputTokens")
+    total_tokens = _usage_int(values, "total_tokens", "totalTokens")
+    if total_tokens == 0:
+        total_tokens = input_tokens + output_tokens
+    return InvocationUsage(
+        requests=1,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _usage_int(values: Mapping[str, Any], *names: str) -> int:
+    for name in names:
+        value = values.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
 
 
 def _codex_native_approval_request(

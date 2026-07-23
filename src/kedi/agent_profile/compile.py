@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ..errors import KediExecutionError
 from .profile import AgentProfile
 from .registry import (
     ProfileAdapterMember,
@@ -10,9 +11,11 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
+    ProfileMaxAgentsMember,
     ProfileModelMember,
     ProfileSettingsMember,
     ProfileSystemMember,
+    ProfileSubagentMember,
     ProfileToolMember,
 )
 
@@ -43,6 +46,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileSubagentMember
+        | ProfileMaxAgentsMember
     ] = []
     _assert_profile_adapter_selection_is_not_mixed(stmt)
     for entry in stmt.agent_members:
@@ -61,9 +66,13 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_mcp_entry_to_member(entry))
     for entry in stmt.settings_members:
         members.append(_settings_entry_to_member(entry))
+    for entry in stmt.subagent_members:
+        members.append(ProfileSubagentMember(name=entry.name, loc=entry.loc))
+    for entry in stmt.max_agents_members:
+        members.append(ProfileMaxAgentsMember(value=entry.value))
     if stmt.tool_names:
         members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
-    return ProfileDefinition(name=stmt.name, members=members)
+    return ProfileDefinition(name=stmt.name, description=stmt.docstring, members=members)
 
 
 def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
@@ -121,6 +130,41 @@ def _settings_entry_to_member(entry: ProfileSettingsEntry) -> ProfileSettingsMem
 
 def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
     return {name: profile_stmt_to_definition(stmt) for name, stmt in prog.profile_defs.items()}
+
+
+def validate_subagent_graph(registry: dict[str, ProfileDefinition]) -> None:
+    graph: dict[str, tuple[str, ...]] = {}
+    for profile_name, definition in registry.items():
+        children = tuple(member.name for member in definition.members if member.kind == "subagents")
+        graph[profile_name] = children
+        for child_name in children:
+            if child_name not in registry:
+                raise KediExecutionError(
+                    f"Unknown subagent profile {child_name!r} referenced by profile "
+                    f"{profile_name!r}"
+                )
+
+    visited: set[str] = set()
+    active: list[str] = []
+    active_set: set[str] = set()
+
+    def visit(profile_name: str) -> None:
+        if profile_name in visited:
+            return
+        if profile_name in active_set:
+            cycle_start = active.index(profile_name)
+            cycle = (*active[cycle_start:], profile_name)
+            raise KediExecutionError(f"Cyclic subagent profile reference: {' -> '.join(cycle)}")
+        active.append(profile_name)
+        active_set.add(profile_name)
+        for child_name in graph[profile_name]:
+            visit(child_name)
+        active.pop()
+        active_set.remove(profile_name)
+        visited.add(profile_name)
+
+    for profile_name in graph:
+        visit(profile_name)
 
 
 def _assert_profile_adapter_selection_is_not_mixed(stmt: ProfileDefStmt) -> None:

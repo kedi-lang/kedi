@@ -102,6 +102,7 @@ from ..lang.ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
+    ProfileMaxAgentsEntry,
     ProfileModelEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
@@ -253,6 +254,7 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
     try:
         prog = parse_program(source, source_path=source_path)
         out = _missing_import_diagnostics(prog)
+        out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
         for warning in prog.parser_warnings:
@@ -725,6 +727,70 @@ def _missing_import_diagnostics(
     return diagnostics
 
 
+def _subagent_profile_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> list[lsp.Diagnostic]:
+    profile_defs = _merged_profile_defs(prog, imported_surface_for_program(prog))
+    diagnostics: list[lsp.Diagnostic] = []
+    graph = {
+        name: tuple(entry.name for entry in profile.subagent_members)
+        for name, profile in prog.profile_defs.items()
+    }
+
+    for profile in prog.profile_defs.values():
+        for entry in profile.subagent_members:
+            if entry.name in profile_defs or entry.loc is None:
+                continue
+            diagnostics.append(
+                lsp.Diagnostic(
+                    range=_span_to_range(entry.loc),
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-SUBAGENT-UNKNOWN",
+                    source="kedi",
+                    message=(
+                        f"Unknown subagent profile '{entry.name}' referenced by "
+                        f"profile '{profile.name}'"
+                    ),
+                )
+            )
+
+    visited: set[str] = set()
+    active: list[str] = []
+    active_set: set[str] = set()
+
+    def visit(profile_name: str) -> None:
+        if profile_name in visited:
+            return
+        if profile_name in active_set:
+            cycle_start = active.index(profile_name)
+            cycle = (*active[cycle_start:], profile_name)
+            parent = prog.profile_defs[cycle[0]]
+            entry = next(item for item in parent.subagent_members if item.name == cycle[1])
+            assert entry.loc is not None
+            diagnostics.append(
+                lsp.Diagnostic(
+                    range=_span_to_range(entry.loc),
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-SUBAGENT-CYCLE",
+                    source="kedi",
+                    message=("Cyclic subagent profile reference: " + " -> ".join(cycle)),
+                )
+            )
+            return
+        active.append(profile_name)
+        active_set.add(profile_name)
+        for child_name in graph.get(profile_name, ()):
+            if child_name in graph:
+                visit(child_name)
+        active.pop()
+        active_set.remove(profile_name)
+        visited.add(profile_name)
+
+    for profile_name in graph:
+        visit(profile_name)
+    return diagnostics
+
+
 @dataclass(frozen=True)
 class _AdapterDiagnosticState:
     shortname: str | None = None
@@ -885,6 +951,16 @@ def _profile_capability_diagnostics(
                 "MCP server directives",
             )
         )
+    diagnostics.extend(
+        _unsupported_capability_diagnostics(
+            state,
+            "subagents",
+            [entry.loc for entry in profile.subagent_members],
+            "Subagent delegation",
+            severity=lsp.DiagnosticSeverity.Error,
+            code="K-ADAPTER-SUBAGENTS",
+        )
+    )
     diagnostics.extend(
         _native_approval_capability_diagnostics(
             prog,
@@ -1147,6 +1223,17 @@ def _use_capability_diagnostics(
                 "MCP server directives from this profile",
             )
         )
+    if profile.subagent_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "subagents",
+                [target_span],
+                "subagent delegation from this profile",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-SUBAGENTS",
+            )
+        )
     return diagnostics
 
 
@@ -1272,20 +1359,24 @@ def _unsupported_capability_diagnostics(
     feature: AdapterCapability,
     spans: Sequence[Span | None],
     description: str,
+    *,
+    severity: lsp.DiagnosticSeverity | None = None,
+    code: str = "K-ADAPTER-CAPABILITY",
 ) -> list[lsp.Diagnostic]:
     supported = _adapter_supports(state, feature)
     if supported is not False or state.shortname is None:
         return []
-    severity = (
-        lsp.DiagnosticSeverity.Error
-        if feature == "structured_output"
-        else lsp.DiagnosticSeverity.Warning
-    )
+    if severity is None:
+        severity = (
+            lsp.DiagnosticSeverity.Error
+            if feature == "structured_output"
+            else lsp.DiagnosticSeverity.Warning
+        )
     return [
         lsp.Diagnostic(
             range=_span_to_range(span),
             severity=severity,
-            code="K-ADAPTER-CAPABILITY",
+            code=code,
             source="kedi",
             message=(
                 f"Adapter '{state.shortname}' does not support {description}; "
@@ -1442,6 +1533,18 @@ def _resolve_symbol_at(
             )
 
     for profile in prog.profile_defs.values():
+        for entry in profile.subagent_members:
+            assert entry.loc is not None
+            if not _position_inside(pos, entry.loc):
+                continue
+            target = profile_defs.get(entry.name)
+            return SymbolRef(
+                kind="agent_profile",
+                name=entry.name,
+                declaration_span=target.loc if target is not None else None,
+                scope_proc=None,
+                cursor_span=entry.loc,
+            )
         for tool_name, name_span in _profile_tool_entry_spans(prog, profile):
             if not _position_inside(pos, name_span):
                 continue
@@ -2430,6 +2533,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.settings_members:
                 visit(member)
+            for member in node.subagent_members:
+                visit(member)
+            for member in node.max_agents_members:
+                visit(member)
             return
         if isinstance(node, SystemDirectiveStmt):
             for line in node.template_lines:
@@ -2615,6 +2722,11 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_mcp_entry_markdown(node)
     if isinstance(node, ProfileSettingsEntry):
         return _profile_settings_entry_markdown(node)
+    if isinstance(node, ProfileMaxAgentsEntry):
+        return (
+            f"**Subagent budget** `> max_agents: {node.value}`\n\n"
+            "Maximum descendant subagent invocations that this profile invocation may start."
+        )
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)
     if isinstance(node, ProfileDefStmt):

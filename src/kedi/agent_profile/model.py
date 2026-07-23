@@ -17,9 +17,11 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
+    ProfileMaxAgentsMember,
     ProfileModelMember,
     ProfileSettingsMember,
     ProfileSystemMember,
+    ProfileSubagentMember,
     ProfileToolMember,
 )
 from .settings import parse_plain_setting_value
@@ -48,6 +50,10 @@ class AgentProfileOverrideUnsupported(KediExecutionError):
 
 class AgentToolOverrideUnsupported(KediExecutionError):
     """Raised when the active adapter cannot register tools for an agent run."""
+
+
+class AgentSubagentUnsupported(KediExecutionError):
+    """Raised when the active adapter cannot delegate to Kedi subagents."""
 
 
 def eval_model_value(
@@ -329,6 +335,8 @@ def _member_to_patch(
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileSubagentMember
+        | ProfileMaxAgentsMember
     ),
     env: dict[str, Any],
 ) -> AgentProfile:
@@ -401,6 +409,10 @@ def _member_to_patch(
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     if member.kind == "settings":
         return AgentProfile(settings=eval_settings_fields(rt, member.fields, env))
+    if member.kind == "subagents":
+        return AgentProfile(subagents=(member.name,))
+    if member.kind == "max_agents":
+        return AgentProfile(max_agents=member.value)
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")
 
 
@@ -412,7 +424,7 @@ def eval_profile_definition(
     profile = AgentProfile.empty()
     for member in definition.members:
         profile = profile.merge(_member_to_patch(rt, member, env))
-    return profile
+    return profile.merge(AgentProfile(name=definition.name))
 
 
 def eval_use_profile(

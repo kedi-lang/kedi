@@ -14,6 +14,7 @@ from pydantic import BaseModel, TypeAdapter
 from pydantic_ai.tools import Tool
 
 from .approval import ToolRisk
+from .invocation import InvocationUsage, report_invocation
 from ..core import CallExpr, InputExpr, KediRuntime
 from ..lang.ast import ProcedureDef, Program, ProgramWithValidation
 from ..lang.compiler.type_system import KediType, coerce_model_value
@@ -262,6 +263,7 @@ def dspy_sync_tool_function(fn: Callable[..., Any]) -> Callable[..., Any]:
 
     @wraps(target)
     def _sync_tool(*args: Any, **kwargs: Any) -> Any:
+        report_invocation(InvocationUsage(tool_calls=1))
         result = target(*args, **kwargs)
         if inspect.isawaitable(result):
             return run_sync(cast(Awaitable[Any], result))

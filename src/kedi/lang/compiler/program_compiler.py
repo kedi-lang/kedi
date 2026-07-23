@@ -7,7 +7,11 @@ from typing import TYPE_CHECKING, Any
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.profile import SKILLS_USE_TARGET
-from ...agent_profile.compile import build_profile_registry, capture_procedure_profiles
+from ...agent_profile.compile import (
+    build_profile_registry,
+    capture_procedure_profiles,
+    validate_subagent_graph,
+)
 from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
@@ -49,6 +53,7 @@ from .type_system import register_type
 if TYPE_CHECKING:
     from ...agent_adapter.meta import AgentAdapter
     from ...executors.base import Executor
+    from ...agent_adapter.subagents.limits import SubagentUsageLimits
 
 
 def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
@@ -63,13 +68,24 @@ def compile_program(
     executor: Executor | None = None,
     runtime_globals: dict[str, Any] | None = None,
     engine: Any | None = None,
+    subagent_max_depth: int = 5,
+    subagent_max_concurrency: int = 4,
+    subagent_timeout_seconds: float | None = 120.0,
+    subagent_usage_limits: SubagentUsageLimits | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
     This is the main entry point for the compiler.
     """
     compiler = ProgramCompiler(
-        adapter, executor=executor, runtime_globals=runtime_globals, engine=engine
+        adapter,
+        executor=executor,
+        runtime_globals=runtime_globals,
+        engine=engine,
+        subagent_max_depth=subagent_max_depth,
+        subagent_max_concurrency=subagent_max_concurrency,
+        subagent_timeout_seconds=subagent_timeout_seconds,
+        subagent_usage_limits=subagent_usage_limits,
     )
     return compiler.compile(prog)
 
@@ -85,11 +101,27 @@ class ProgramCompiler:
         module_stack: tuple[Path, ...] = (),
         runtime_globals: dict[str, Any] | None = None,
         engine: Any | None = None,
+        subagent_max_depth: int = 5,
+        subagent_max_concurrency: int = 4,
+        subagent_timeout_seconds: float | None = 120.0,
+        subagent_usage_limits: SubagentUsageLimits | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
         self.engine = engine
-        self.rt = KediRuntime(adapter=adapter, executor=executor, engine=engine)
+        self.subagent_max_depth = subagent_max_depth
+        self.subagent_max_concurrency = subagent_max_concurrency
+        self.subagent_timeout_seconds = subagent_timeout_seconds
+        self.subagent_usage_limits = subagent_usage_limits
+        self.rt = KediRuntime(
+            adapter=adapter,
+            executor=executor,
+            engine=engine,
+            subagent_max_depth=subagent_max_depth,
+            subagent_max_concurrency=subagent_max_concurrency,
+            subagent_timeout_seconds=subagent_timeout_seconds,
+            subagent_usage_limits=subagent_usage_limits,
+        )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
         self.proc_compiler = ProcedureCompiler(self.rt)
@@ -120,6 +152,7 @@ class ProgramCompiler:
             self._setup_prelude(prog.prelude, prog.prelude_loc)
 
         self.rt._profile_registry.update(build_profile_registry(prog))
+        validate_subagent_graph(self.rt._profile_registry)
         capture_procedure_profiles(self.rt, prog)
 
         # Register top-level types
@@ -162,6 +195,10 @@ class ProgramCompiler:
                     module_stack=active_stack,
                     runtime_globals=dict(self.rt._initial_globals_env),
                     engine=self.engine,
+                    subagent_max_depth=self.subagent_max_depth,
+                    subagent_max_concurrency=self.subagent_max_concurrency,
+                    subagent_timeout_seconds=self.subagent_timeout_seconds,
+                    subagent_usage_limits=self.subagent_usage_limits,
                 ).compile(imported_prog)
                 imported_rt.run_main()
                 self._merge_exports(module_path, imported_prog, imported_rt)
@@ -203,9 +240,27 @@ class ProgramCompiler:
                 self.rt._type_env_stack[0][name] = value
             elif kind == "profile":
                 self.rt._profile_registry[name] = value
-                self._merge_profile_tool_dependencies(value, imported_rt)
+                self._merge_profile_dependencies(value, imported_rt, seen={name})
             else:
                 self.rt._import_env[name] = value
+
+    def _merge_profile_dependencies(
+        self,
+        profile: AgentProfile | ProfileDefinition,
+        imported_rt: KediRuntime,
+        *,
+        seen: set[str],
+    ) -> None:
+        self._merge_profile_tool_dependencies(profile, imported_rt)
+        for child_name in self._profile_subagent_names(profile):
+            if child_name in seen:
+                continue
+            child = imported_rt._profile_registry.get(child_name)
+            if child is None:
+                continue
+            seen.add(child_name)
+            self.rt._profile_registry.setdefault(child_name, child)
+            self._merge_profile_dependencies(child, imported_rt, seen=seen)
 
     def _merge_profile_tool_dependencies(
         self,
@@ -239,6 +294,14 @@ class ProgramCompiler:
             if member.kind == "tools":
                 names.extend(name for name in member.tool_names if name != SKILLS_USE_TARGET)
         return tuple(names)
+
+    def _profile_subagent_names(
+        self,
+        profile: AgentProfile | ProfileDefinition,
+    ) -> tuple[str, ...]:
+        if isinstance(profile, AgentProfile):
+            return profile.subagents
+        return tuple(member.name for member in profile.members if member.kind == "subagents")
 
     def _export_names(self, prog: Program, imported_rt: KediRuntime) -> list[str]:
         names: list[str] = []

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from kedi.lang.ast import McpField, SettingsField, TemplateLine
+    from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -71,8 +71,22 @@ class ProfileSettingsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileSubagentMember:
+    kind: Literal["subagents"] = "subagents"
+    name: str
+    loc: "Span | None" = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileMaxAgentsMember:
+    kind: Literal["max_agents"] = "max_agents"
+    value: int
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
+    description: str | None = None
     members: list[
         ProfileAgentMember
         | ProfileAdapterMember
@@ -83,4 +97,6 @@ class ProfileDefinition:
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileSubagentMember
+        | ProfileMaxAgentsMember
     ] = field(default_factory=list)

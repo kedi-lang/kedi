@@ -18,9 +18,15 @@ from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
+from ...errors import KediExecutionError
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
+from ..subagents.runs import safe_subagent_error_message
 from .._schema import output_field_definition
-from ..approval import ToolRisk, resolve_tool_approval_async
+from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
+from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..subagents import SubagentExecutionRequest
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -45,6 +51,8 @@ class LangChainAdapter:
         supports_settings=True,
         supports_native_approvals=True,
         supports_native_approval_handler=True,
+        supports_subagents=True,
+        supports_background_subagents=True,
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 
@@ -53,15 +61,23 @@ class LangChainAdapter:
         model: Any = None,
         *,
         model_settings: dict[str, Any] | None = None,
+        subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         **kwargs: Any,
     ) -> None:
+        if subagent_failure_policy not in {"recover", "fail_closed"}:
+            raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = normalize_for_langchain(model) if isinstance(model, str) else model
         self._model_settings = langchain_model_settings(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
+        self._subagent_failure_policy = subagent_failure_policy
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_langchain_profile_stack_{id(self)}",
+            default=(),
+        )
+        self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
+            f"kedi_langchain_approval_ceiling_{id(self)}",
             default=(),
         )
 
@@ -128,8 +144,33 @@ class LangChainAdapter:
             middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": [{"role": "user", "content": template}], **kwargs}
-        result = await agent.ainvoke(payload)
+        result = await self._invoke_agent(agent, payload)
         return cast(OutputDataT, _langchain_structured_response(result))
+
+    async def produce_subagent(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, Any],
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        from langchain.agents.structured_output import ToolStrategy
+
+        instructions = cast(str | None, kwargs.pop("instructions", None))
+        model = self._chat_model_for_run()
+        tools = await self._tools_for_run()
+        agent = self._create_agent(
+            model=model,
+            tools=tools,
+            response_format=ToolStrategy(output_schema),
+            system_prompt=instructions,
+            middleware=self._approval_middleware_for_run(tools),
+        )
+        payload = {"messages": [{"role": "user", "content": template}], **kwargs}
+        result = _langchain_structured_response(await self._invoke_agent(agent, payload))
+        if not isinstance(result, Mapping):
+            raise TypeError("LangChain subagent structured output must be an object")
+        return result
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         instructions = cast(str | None, kwargs.pop("instructions", None))
@@ -143,7 +184,7 @@ class LangChainAdapter:
             middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": [{"role": "user", "content": prompt}], **kwargs}
-        return _langchain_text_response(await agent.ainvoke(payload))
+        return _langchain_text_response(await self._invoke_agent(agent, payload))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -167,6 +208,9 @@ class LangChainAdapter:
         model = self._model
         return model if isinstance(model, str) else None
 
+    def telemetry_model_name(self) -> str | None:
+        return self.default_model()
+
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         stack_var = self._profile_stack_var
@@ -175,6 +219,41 @@ class LangChainAdapter:
             yield
         finally:
             stack_var.reset(token)
+
+    @contextmanager
+    def approval_ceiling(
+        self,
+        policies: Sequence[ApprovalPolicy | None],
+    ) -> Iterator[None]:
+        token = self._approval_ceiling_var.set(tuple(policies))
+        try:
+            yield
+        finally:
+            self._approval_ceiling_var.reset(token)
+
+    @contextmanager
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        with (
+            self.tool_scope(request.tools),
+            self.profile_override(request.profile),
+            self.approval_ceiling(request.approval_ceiling),
+        ):
+            yield
+
+    @staticmethod
+    def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
+        return {"recursion_limit": limits.request_limit * 2 + 1}
+
+    async def _invoke_agent(
+        self,
+        agent: Any,
+        payload: Mapping[str, Any],
+    ) -> Any:
+        with delegation_scope(self._subagent_failure_policy):
+            result = await agent.ainvoke(dict(payload))
+        if invocation_observer() is not None:
+            report_invocation(_langchain_invocation_usage(result))
+        return result
 
     def _model_for_run(self) -> str | Any:
         profile = self.active_profile
@@ -211,7 +290,7 @@ class LangChainAdapter:
         *,
         model: Any,
         tools: Sequence[Any],
-        response_format: type[Any] | None,
+        response_format: Any | None,
         system_prompt: str | None,
         middleware: Sequence[Any] = (),
     ) -> Any:
@@ -244,6 +323,7 @@ class LangChainAdapter:
             _langchain_approval_middleware(
                 profile=self.active_profile,
                 tools=self.scoped_tool_specs,
+                approval_ceiling=self._approval_ceiling_var.get(),
             )
         ]
 
@@ -275,6 +355,8 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         "description": description,
         "args_schema": tool.json_schema,
     }
+    if tool.metadata is not None and tool.metadata.get("kind") == "subagent":
+        kwargs["handle_tool_error"] = True
     if _is_async_callable(tool.fn):
         kwargs["coroutine"] = _langchain_async_tool_function(tool)
     else:
@@ -289,10 +371,14 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
     def _tool(*args: Any, **kwargs: Any) -> Any:
         from ..utils import run_sync
 
-        result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
-        if inspect.isawaitable(result):
-            return run_sync(cast(Coroutine[Any, Any, Any], result))
-        return result
+        try:
+            result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
+            if inspect.isawaitable(result):
+                return run_sync(cast(Coroutine[Any, Any, Any], result))
+            return result
+        except KediExecutionError as exc:
+            _raise_langchain_subagent_error(tool, exc)
+            raise
 
     return _tool
 
@@ -300,10 +386,14 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
 def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
     @wraps(tool.fn)
     async def _tool(*args: Any, **kwargs: Any) -> Any:
-        result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
-        if inspect.isawaitable(result):
-            return await result
-        return result
+        try:
+            result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        except KediExecutionError as exc:
+            _raise_langchain_subagent_error(tool, exc)
+            raise
 
     return _tool
 
@@ -312,6 +402,7 @@ def _langchain_approval_middleware(
     *,
     profile: AgentProfile,
     tools: Sequence[ToolSpec],
+    approval_ceiling: Sequence[ApprovalPolicy | None] = (),
 ) -> Any:
     """Bridge Kedi approval decisions into LangChain's native tool-call hook."""
 
@@ -339,12 +430,20 @@ def _langchain_approval_middleware(
 
             tool = known_tools.get(tool_name, _langchain_external_tool_spec(tool_name))
             try:
-                original_arguments = _validated_tool_arguments(tool, arguments)
-                approval = await resolve_tool_approval_async(
-                    profile.approval,
-                    approval_request_for_tool(tool, original_arguments, "langchain"),
-                )
-                final_arguments = arguments_after_approval(tool, original_arguments, approval)
+                final_arguments = _validated_tool_arguments(tool, arguments)
+                policies = tuple(approval_ceiling)
+                if profile.approval is not None or not policies:
+                    policies = (*policies, profile.approval)
+                for policy in policies:
+                    approval = await resolve_tool_approval_async(
+                        policy,
+                        approval_request_for_tool(tool, final_arguments, "langchain"),
+                    )
+                    final_arguments = arguments_after_approval(
+                        tool,
+                        final_arguments,
+                        approval,
+                    )
             except Exception as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))
 
@@ -358,6 +457,51 @@ def _langchain_approval_middleware(
             )
 
     return KediApprovalMiddleware()
+
+
+def _raise_langchain_subagent_error(tool: ToolSpec, exc: KediExecutionError) -> None:
+    if tool.metadata is None or tool.metadata.get("kind") != "subagent":
+        return
+    from langchain_core.tools import ToolException
+
+    raise ToolException(safe_subagent_error_message(exc) or "Subagent failed") from exc
+
+
+def _langchain_invocation_usage(result: Any) -> InvocationUsage:
+    if not isinstance(result, Mapping):
+        return InvocationUsage(requests=1)
+    messages = result.get("messages")
+    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+        return InvocationUsage(requests=1)
+
+    input_tokens = output_tokens = total_tokens = tool_calls = requests = 0
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None)
+        if isinstance(usage, Mapping):
+            input_tokens += _usage_int(usage, "input_tokens", "inputTokens")
+            output_tokens += _usage_int(usage, "output_tokens", "outputTokens")
+            total_tokens += _usage_int(usage, "total_tokens", "totalTokens")
+            requests += 1
+        calls = getattr(message, "tool_calls", None)
+        if isinstance(calls, Sequence) and not isinstance(calls, (str, bytes)):
+            tool_calls += len(calls)
+    if total_tokens == 0:
+        total_tokens = input_tokens + output_tokens
+    return InvocationUsage(
+        requests=max(requests, 1),
+        tool_calls=tool_calls,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _usage_int(values: Mapping[str, Any], *names: str) -> int:
+    for name in names:
+        value = values.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
 
 
 def _langchain_tool_error(tool_name: str, tool_call_id: object, message: str) -> Any:

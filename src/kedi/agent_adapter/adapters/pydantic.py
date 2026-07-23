@@ -19,11 +19,16 @@ from ...agent_profile.settings import (
 )
 from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
+from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
 from .._schema import output_field_definition
+from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..approval import ToolRisk, resolve_tool_approval_async
+from ..subagents import SubagentExecutionRequest
+from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -60,6 +65,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_settings=True,
         supports_native_approvals=True,
         supports_native_approval_handler=True,
+        supports_subagents=True,
+        supports_background_subagents=True,
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 
@@ -68,6 +75,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         model: str | Model | None = None,
         *,
         model_settings: dict[str, Any] | None = None,
+        subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         **kwargs: Any,
     ) -> None:
         """``model`` may be LiteLLM-style (``vendor/a/b``) or Pydantic-style (``vendor:a/b``)."""
@@ -77,6 +85,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             f"kedi_pydantic_profile_stack_{id(self)}",
             default=(),
         )
+        self._isolated_run_depth: ContextVar[int] = ContextVar(
+            f"kedi_pydantic_isolated_run_depth_{id(self)}",
+            default=0,
+        )
+        self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
+            f"kedi_pydantic_approval_ceiling_{id(self)}",
+            default=(),
+        )
+        if subagent_failure_policy not in {"recover", "fail_closed"}:
+            raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
+        self._subagent_failure_policy = subagent_failure_policy
         if isinstance(model, str):
             model = normalize_for_pydantic_ai(model)
         self._agent_model_arg = model
@@ -127,6 +146,60 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             "tuple[ToolSpec, ...]", self._tool_spec_scope_for_current_adapter().scoped_tools
         )
 
+    @contextmanager
+    def isolated_run(self) -> Iterator[None]:
+        """Run a nested agent with only the tools registered in the current scope."""
+        depth = self._isolated_run_depth_for_current_adapter()
+        token = depth.set(depth.get() + 1)
+        try:
+            yield
+        finally:
+            depth.reset(token)
+
+    @contextmanager
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        with (
+            self.tool_scope(request.tools),
+            self.profile_override(request.profile),
+            self.approval_ceiling(request.approval_ceiling),
+            self.isolated_run(),
+        ):
+            yield
+
+    @staticmethod
+    def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
+        return {"usage_limits": limits.to_pydantic()}
+
+    async def produce_subagent(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, Any],
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        from pydantic_ai.output import StructuredDict
+
+        result = await self.produce(
+            template=template,
+            output_type=StructuredDict(output_schema),
+            **kwargs,
+        )
+        if not isinstance(result, Mapping):
+            raise TypeError("Pydantic subagent structured output must be an object")
+        return cast(Mapping[str, Any], result)
+
+    @contextmanager
+    def approval_ceiling(
+        self,
+        policies: Sequence[ApprovalPolicy | None],
+    ) -> Iterator[None]:
+        stack_var = self._approval_ceiling_for_current_adapter()
+        token = stack_var.set(tuple(policies))
+        try:
+            yield
+        finally:
+            stack_var.reset(token)
+
     @property
     def active_profile(self) -> AgentProfile:
         stack_var = getattr(self, "_profile_stack_var", None)
@@ -169,7 +242,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if agent is not self:
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return (await agent.run(template, **cast(Any, run_kwargs))).output
+        return (await self._run_agent(agent, template, run_kwargs)).output
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run_kwargs = self._run_kwargs(kwargs)
@@ -177,7 +250,37 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if agent is not self:
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return str((await agent.run(prompt, **cast(Any, run_kwargs))).output)
+        return str((await self._run_agent(agent, prompt, run_kwargs)).output)
+
+    async def _run_agent(
+        self,
+        agent: Agent[Any, Any],
+        prompt: str,
+        run_kwargs: dict[str, object],
+    ) -> Any:
+        with delegation_scope(self._subagent_failure_policy):
+            observer = invocation_observer()
+            if observer is None:
+                return await agent.run(prompt, **cast(Any, run_kwargs))
+
+            from pydantic_ai.usage import RunUsage
+
+            usage = run_kwargs.get("usage")
+            if not isinstance(usage, RunUsage):
+                usage = RunUsage()
+                run_kwargs["usage"] = usage
+            try:
+                return await agent.run(prompt, **cast(Any, run_kwargs))
+            finally:
+                report_invocation(
+                    InvocationUsage(
+                        requests=usage.requests,
+                        tool_calls=usage.tool_calls,
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                )
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -197,7 +300,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["model_settings"] = model_settings
         from ..utils import inside_kedi_tool_call
 
-        toolsets = self._toolsets_for_run(include_scoped_tools=not inside_kedi_tool_call())
+        toolsets = self._toolsets_for_run(
+            include_scoped_tools=(
+                self._isolated_run_depth_for_current_adapter().get() > 0
+                or not inside_kedi_tool_call()
+            )
+        )
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
         if toolsets is not None or self._has_native_approval_tools():
@@ -209,7 +317,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     def _agent_for_produce(self) -> Agent[Any, Any]:
         from ..utils import inside_kedi_tool_call
 
-        if not inside_kedi_tool_call():
+        if (
+            not inside_kedi_tool_call()
+            and self._isolated_run_depth_for_current_adapter().get() == 0
+        ):
             return self
         # Keep nested Kedi tool calls isolated from the outer agent's scoped
         # Kedi tools. Native constructor and inherited toolsets are supplied
@@ -312,15 +423,32 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 continue
 
             tool = known_tools.get(call.tool_name, _external_tool_spec(call.tool_name))
-            request = approval_request_for_tool(tool, arguments, self.shortname)
-            decision = await resolve_tool_approval_async(self.active_profile.approval, request)
-            if decision.decision == "deny":
-                suffix = f": {decision.reason}" if decision.reason else ""
-                approvals[call.tool_call_id] = ToolDenied(f"Tool {tool.name!r} was denied{suffix}")
-                continue
+            policies = self._approval_ceiling_for_current_adapter().get()
+            local_policy = self.active_profile.approval
+            if local_policy is not None or not policies:
+                policies = (*policies, local_policy)
 
-            validated_arguments = arguments_after_approval(tool, arguments, decision)
-            approvals[call.tool_call_id] = ToolApproved(override_args=validated_arguments)
+            approved_arguments = arguments
+            for policy in policies:
+                request = approval_request_for_tool(
+                    tool,
+                    approved_arguments,
+                    self.shortname,
+                )
+                decision = await resolve_tool_approval_async(policy, request)
+                if decision.decision == "deny":
+                    suffix = f": {decision.reason}" if decision.reason else ""
+                    approvals[call.tool_call_id] = ToolDenied(
+                        f"Tool {tool.name!r} was denied{suffix}"
+                    )
+                    break
+                approved_arguments = arguments_after_approval(
+                    tool,
+                    approved_arguments,
+                    decision,
+                )
+            else:
+                approvals[call.tool_call_id] = ToolApproved(override_args=approved_arguments)
         return requests.build_results(approvals=approvals)
 
     def _tool_spec_scope_for_current_adapter(self) -> ToolScope:
@@ -330,6 +458,30 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             scope = ToolScope()
             self._tool_spec_scope = scope
             return scope
+
+    def _isolated_run_depth_for_current_adapter(self) -> ContextVar[int]:
+        try:
+            return self._isolated_run_depth
+        except AttributeError:
+            depth = ContextVar(
+                f"kedi_pydantic_isolated_run_depth_{id(self)}",
+                default=0,
+            )
+            self._isolated_run_depth = depth
+            return depth
+
+    def _approval_ceiling_for_current_adapter(
+        self,
+    ) -> ContextVar[tuple[ApprovalPolicy | None, ...]]:
+        try:
+            return self._approval_ceiling_var
+        except AttributeError:
+            ceiling: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
+                f"kedi_pydantic_approval_ceiling_{id(self)}",
+                default=(),
+            )
+            self._approval_ceiling_var = ceiling
+            return ceiling
 
     def _mcp_toolsets_for_profile(self, profile: AgentProfile) -> list[Any]:
         if not profile.mcp_servers:
@@ -386,6 +538,13 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         model = getattr(self, "_model", None)
         return model if isinstance(model, str) else None
 
+    def telemetry_model_name(self) -> str | None:
+        if isinstance(self._agent_model_arg, str):
+            return self._agent_model_arg
+        if isinstance(self._agent_model_arg, Model):
+            return self._agent_model_arg.model_name
+        return None
+
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         override_kwargs = self._profile_override_kwargs(profile)
@@ -428,10 +587,20 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
             if args:
                 raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
             arguments = _validated_tool_arguments(tool, kwargs)
-            result = tool.fn(**arguments)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            try:
+                result = tool.fn(**arguments)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+            except KediExecutionError as exc:
+                if tool.metadata is None or tool.metadata.get("kind") != "subagent":
+                    raise
+                from pydantic_ai import ModelRetry
+
+                from ..subagents.runs import safe_subagent_error_message
+
+                message = safe_subagent_error_message(exc) or "Subagent failed"
+                raise ModelRetry(message) from exc
 
         return validated_async_tool
 

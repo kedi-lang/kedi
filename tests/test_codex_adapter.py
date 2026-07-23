@@ -28,9 +28,12 @@ from kedi.agent_adapter.adapters._codex_app_server import (
     CodexTurnResult,
 )
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.tool_override import ToolSpec, arguments_target_secret_file
 from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 
 FAKE_APP_SERVER = Path(__file__).parent / "files" / "fake_codex_app_server.py"
 
@@ -185,6 +188,117 @@ def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
     assert "outputSchema" not in turns[0]["params"]
     assert turns[1]["params"]["input"] == [{"type": "text", "text": "raw async"}]
     assert "outputSchema" not in turns[1]["params"]
+
+
+def test_codex_subagent_execution_contract() -> None:
+    seen: dict[str, Any] = {}
+
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            seen.update(kwargs)
+            return CodexTurnResult(
+                text='{"task_summary":"done","final_result":{"value":17}}',
+                turn={"usage": {"inputTokens": 2, "output_tokens": 3}},
+            )
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    adapter = CodexAdapter(
+        model="base-model",
+        client=cast(CodexAppServerClient, FakeClient()),
+    )
+    tool = ToolSpec(fn=lambda: "ok", name="lookup", risk="read_only")
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(model="child-model", system="child system"),
+        tools=(tool,),
+        instructions="child system",
+        approval_ceiling=(ApprovalPolicy.allow(),),
+        usage_limits=SubagentUsageLimits(request_limit=4),
+    )
+    usages: list[InvocationUsage] = []
+
+    with adapter.subagent_scope(request):
+        assert adapter.active_profile is request.profile
+        assert adapter.scoped_tools == (tool,)
+        with observe_invocations(usages.append):
+            result = asyncio.run(
+                adapter.produce_subagent(
+                    template="delegate",
+                    output_schema={
+                        "type": "object",
+                        "properties": {"task_summary": {"type": "string"}},
+                    },
+                    instructions=request.instructions,
+                    **adapter.subagent_run_kwargs(request.usage_limits),
+                )
+            )
+
+    assert result["final_result"] == {"value": 17}
+    assert adapter.active_profile == AgentProfile.empty()
+    assert adapter.scoped_tools == ()
+    assert adapter.telemetry_model_name() == "base-model"
+    assert seen["thread_params"]["model"] == "child-model"
+    assert seen["thread_params"]["developerInstructions"] == "child system"
+    assert seen["turn_params"]["outputSchema"]["type"] == "object"
+    assert usages == [
+        InvocationUsage(
+            requests=1,
+            input_tokens=2,
+            output_tokens=3,
+            total_tokens=5,
+        )
+    ]
+    assert adapter.subagent_run_kwargs(request.usage_limits) == {}
+
+
+def test_codex_subagent_result_and_usage_validation() -> None:
+    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
+        CodexAdapter(subagent_failure_policy=cast(Any, "invalid"))
+
+    with pytest.raises(CodexAppServerProtocolError, match="invalid structured output"):
+        codex_adapter_module._json_object_result(CodexTurnResult(text="not-json", turn={}))
+    with pytest.raises(CodexAppServerProtocolError, match="must be an object"):
+        codex_adapter_module._json_object_result(CodexTurnResult(text="[]", turn={}))
+
+    usage = codex_adapter_module._codex_invocation_usage(
+        CodexTurnResult(
+            text="{}",
+            turn={
+                "usage": {
+                    "input_tokens": True,
+                    "inputTokens": 4,
+                    "outputTokens": 6,
+                    "totalTokens": 20,
+                }
+            },
+        )
+    )
+    assert usage == InvocationUsage(
+        requests=1,
+        input_tokens=4,
+        output_tokens=6,
+        total_tokens=20,
+    )
+    assert codex_adapter_module._codex_invocation_usage(
+        CodexTurnResult(text="{}", turn={"usage": "unknown"})
+    ) == InvocationUsage(requests=1)
+
+    class SyncClient:
+        def run_stateless_turn_sync(self, **_kwargs: Any) -> CodexTurnResult:
+            return CodexTurnResult(
+                text="raw",
+                turn={"usage": {"inputTokens": 1}},
+            )
+
+    adapter = CodexAdapter(client=cast(CodexAppServerClient, SyncClient()))
+    observed: list[InvocationUsage] = []
+    with observe_invocations(observed.append):
+        assert adapter.invoke_sync(prompt="raw") == "raw"
+    assert observed == [InvocationUsage(requests=1, input_tokens=1, total_tokens=1)]
 
 
 def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None:

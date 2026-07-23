@@ -21,7 +21,8 @@ def _record_dspy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Any]]:
             self.kwargs = kwargs
 
     @contextmanager
-    def fake_context(*, lm: Any) -> Iterator[None]:
+    def fake_context(*, lm: Any, track_usage: bool = False) -> Iterator[None]:
+        assert track_usage
         contexts.append(lm)
         try:
             yield

@@ -40,6 +40,8 @@ from kedi.agent_adapter.adapters import claude as claude_adapter_module
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
+from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.tool_override import (
     ToolScope,
     ToolSpec,
@@ -54,7 +56,9 @@ from kedi.agent_adapter.utils import (
 )
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 
 
 class DirectOutput(BaseModel):
@@ -116,6 +120,14 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert ClaudeAdapter.kind == "agent-harness"
     assert ClaudeAdapter.shortname == "claude"
     assert ClaudeAdapter.capabilities.supports("mcp")
+    assert ClaudeAdapter.capabilities.supports("subagents")
+    assert ClaudeAdapter.capabilities.supports("background_subagents")
+    assert CodexAdapter.capabilities.supports("subagents")
+    assert CodexAdapter.capabilities.supports("background_subagents")
+    assert LangChainAdapter.capabilities.supports("subagents")
+    assert LangChainAdapter.capabilities.supports("background_subagents")
+    assert DSPyAdapter.capabilities.supports("subagents")
+    assert not DSPyAdapter.capabilities.supports("background_subagents")
     assert LangChainAdapter.capabilities.supports("native_approvals")
     assert LangChainAdapter.capabilities.supports("native_approval_handler")
 
@@ -133,6 +145,7 @@ def test_adapter_capabilities_support_boolean_fields() -> None:
         supports_effort=True,
         supports_settings=True,
         supports_codemode=True,
+        supports_background_subagents=True,
     )
 
     assert capabilities.supports("structured_output")
@@ -143,6 +156,7 @@ def test_adapter_capabilities_support_boolean_fields() -> None:
     assert capabilities.supports("effort")
     assert capabilities.supports("settings")
     assert capabilities.supports("codemode")
+    assert capabilities.supports("background_subagents")
 
 
 def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
@@ -439,6 +453,155 @@ def test_langchain_adapter_invoke_returns_text(monkeypatch: pytest.MonkeyPatch) 
     }
 
 
+def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_langchain_modules(monkeypatch)
+
+    class FakeToolStrategy:
+        def __init__(self, schema: dict[str, Any]) -> None:
+            self.schema = schema
+
+    structured_output = ModuleType("langchain.agents.structured_output")
+    setattr(structured_output, "ToolStrategy", FakeToolStrategy)
+    monkeypatch.setitem(sys.modules, "langchain.agents.structured_output", structured_output)
+
+    seen: dict[str, Any] = {}
+
+    class FakeAgent:
+        async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+            seen["payload"] = payload
+            return {
+                "structured_response": {
+                    "task_summary": "done",
+                    "final_result": {"value": 9},
+                },
+                "messages": [
+                    SimpleNamespace(
+                        usage_metadata={"input_tokens": 2, "outputTokens": 3},
+                        tool_calls=[{"name": "lookup"}],
+                    )
+                ],
+            }
+
+    def create_agent(**kwargs: Any) -> FakeAgent:
+        seen["agent_kwargs"] = kwargs
+        return FakeAgent()
+
+    adapter = LangChainAdapter(model={"fake": "model"})
+    monkeypatch.setattr(adapter, "_create_agent", create_agent)
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(system="child system", approval=ApprovalPolicy.allow()),
+        tools=(
+            ToolSpec(
+                fn=lambda: "ok",
+                name="lookup",
+                metadata={"kind": "subagent"},
+            ),
+        ),
+        instructions="child system",
+        approval_ceiling=(ApprovalPolicy.allow(),),
+        usage_limits=SubagentUsageLimits(request_limit=4),
+    )
+    usages: list[InvocationUsage] = []
+
+    with adapter.subagent_scope(request):
+        with observe_invocations(usages.append):
+            result = asyncio.run(
+                adapter.produce_subagent(
+                    template="delegate",
+                    output_schema={"type": "object"},
+                    instructions=request.instructions,
+                    **adapter.subagent_run_kwargs(request.usage_limits),
+                )
+            )
+
+    assert result["final_result"] == {"value": 9}
+    assert seen["payload"]["recursion_limit"] == 9
+    assert isinstance(seen["agent_kwargs"]["response_format"], FakeToolStrategy)
+    assert seen["agent_kwargs"]["system_prompt"] == "child system"
+    assert adapter.telemetry_model_name() is None
+    assert usages == [
+        InvocationUsage(
+            requests=1,
+            tool_calls=1,
+            input_tokens=2,
+            output_tokens=3,
+            total_tokens=5,
+        )
+    ]
+
+    class BadAgent:
+        async def ainvoke(self, _payload: dict[str, Any]) -> dict[str, Any]:
+            return {"structured_response": "bad"}
+
+    monkeypatch.setattr(adapter, "_create_agent", lambda **_kwargs: BadAgent())
+    with pytest.raises(TypeError, match="must be an object"):
+        asyncio.run(adapter.produce_subagent(template="bad", output_schema={"type": "object"}))
+
+    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
+        LangChainAdapter(
+            model={"fake": "model"},
+            subagent_failure_policy=cast(Any, "invalid"),
+        )
+
+
+def test_langchain_subagent_tool_errors_and_usage_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_langchain_modules(monkeypatch)
+
+    class ToolException(Exception):
+        pass
+
+    setattr(sys.modules["langchain_core.tools"], "ToolException", ToolException)
+
+    def fail() -> str:
+        raise KediExecutionError("child failed")
+
+    subagent = ToolSpec(fn=fail, name="delegate_task", metadata={"kind": "subagent"})
+    with pytest.raises(ToolException, match="child failed"):
+        langchain_adapter_module._langchain_sync_tool_function(subagent)()
+
+    async def async_fail() -> str:
+        raise KediExecutionError("async child failed")
+
+    async_subagent = ToolSpec(
+        fn=async_fail,
+        name="delegate_async",
+        metadata={"kind": "subagent"},
+    )
+    with pytest.raises(ToolException, match="async child failed"):
+        asyncio.run(langchain_adapter_module._langchain_async_tool_function(async_subagent)())
+
+    ordinary = ToolSpec(fn=fail, name="ordinary")
+    with pytest.raises(KediExecutionError, match="child failed"):
+        langchain_adapter_module._langchain_sync_tool_function(ordinary)()
+    with pytest.raises(KediExecutionError, match="async child failed"):
+        asyncio.run(
+            langchain_adapter_module._langchain_async_tool_function(
+                ToolSpec(fn=async_fail, name="ordinary_async")
+            )()
+        )
+
+    assert langchain_adapter_module._langchain_invocation_usage("plain") == InvocationUsage(
+        requests=1
+    )
+    assert langchain_adapter_module._langchain_invocation_usage({"messages": "bad"}) == (
+        InvocationUsage(requests=1)
+    )
+    assert langchain_adapter_module._langchain_invocation_usage(
+        {
+            "messages": [
+                SimpleNamespace(usage_metadata=None, tool_calls="invalid"),
+                SimpleNamespace(
+                    usage_metadata={"totalTokens": 9},
+                    tool_calls=[],
+                ),
+            ]
+        }
+    ) == InvocationUsage(requests=1, total_tokens=9)
+    assert langchain_adapter_module._usage_int({"value": False}, "value") == 0
+
+
 def test_langchain_adapter_requires_output_spec() -> None:
     adapter = LangChainAdapter(model={"fake": "model"})
 
@@ -587,6 +750,22 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
         == "tool result"
     )
     assert len(calls) == 2
+
+    inherited_ceiling = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile.empty(),
+        tools=(tool,),
+        approval_ceiling=(ApprovalPolicy.allow(),),
+    )
+    assert (
+        asyncio.run(
+            inherited_ceiling.awrap_tool_call(
+                request_for(name="update_count", arguments={"count": 4}),
+                handler,
+            )
+        )
+        == "tool result"
+    )
+    assert len(calls) == 3
 
 
 def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
@@ -1327,6 +1506,117 @@ def test_claude_adapter_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
         asyncio.run(adapter.produce("template", output_schema={"answer": str}))
 
 
+def test_claude_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    events["structured_output"] = {
+        "task_summary": "done",
+        "final_result": {"value": 7},
+    }
+    adapter = ClaudeAdapter(model="claude")
+    tool = ToolSpec(fn=lambda query: query, name="lookup")
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(
+            model="child",
+            system="child system",
+            approval=ApprovalPolicy.allow(),
+        ),
+        tools=(tool,),
+        instructions="child system",
+        approval_ceiling=(ApprovalPolicy.allow(),),
+        usage_limits=SubagentUsageLimits(),
+    )
+    usages: list[InvocationUsage] = []
+
+    with adapter.subagent_scope(request):
+        assert adapter.active_profile is request.profile
+        assert adapter.scoped_tools == (tool,)
+        with observe_invocations(usages.append):
+            result = asyncio.run(
+                adapter.produce_subagent(
+                    template="delegate",
+                    output_schema={
+                        "type": "object",
+                        "properties": {"task_summary": {"type": "string"}},
+                    },
+                    **adapter.subagent_run_kwargs(request.usage_limits),
+                )
+            )
+
+    assert result["final_result"] == {"value": 7}
+    assert adapter.active_profile == AgentProfile.empty()
+    assert adapter.scoped_tools == ()
+    assert adapter.telemetry_model_name() == "claude"
+    assert events["options"][0]["model"] == "child"
+    assert events["options"][0]["max_turns"] == request.usage_limits.request_limit
+    assert events["options"][0]["output_format"]["schema"]["type"] == "object"
+    assert usages == [InvocationUsage()]
+
+    events["structured_output"] = "not-an-object"
+    with pytest.raises(TypeError, match="must be an object"):
+        asyncio.run(adapter.produce_subagent(template="bad", output_schema={"type": "object"}))
+
+    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
+        ClaudeAdapter(model="claude", subagent_failure_policy=cast(Any, "invalid"))
+
+
+def test_claude_subagent_tool_errors_and_usage_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+
+    def fail() -> str:
+        raise KediExecutionError("child details")
+
+    subagent_tool = ToolSpec(
+        fn=fail,
+        name="delegate_task",
+        metadata={"kind": "subagent"},
+    )
+    native = claude_adapter_module._claude_sdk_tool(sdk, subagent_tool)
+    result = asyncio.run(native({}))
+    assert result["is_error"] is True
+    assert "child details" in result["content"][0]["text"]
+
+    ordinary = claude_adapter_module._claude_sdk_tool(
+        sdk,
+        ToolSpec(fn=fail, name="ordinary"),
+    )
+    with pytest.raises(KediExecutionError, match="child details"):
+        asyncio.run(ordinary({}))
+
+    usage = claude_adapter_module._claude_invocation_usage(
+        SimpleNamespace(
+            usage={"inputTokens": 2, "output_tokens": 3, "totalTokens": 0},
+            num_turns=4,
+        )
+    )
+    assert usage == InvocationUsage(
+        requests=4,
+        input_tokens=2,
+        output_tokens=3,
+        total_tokens=5,
+    )
+    assert claude_adapter_module._claude_invocation_usage(
+        SimpleNamespace(usage={"totalTokens": 9}, num_turns=1)
+    ) == InvocationUsage(requests=1, total_tokens=9)
+    assert claude_adapter_module._usage_int({"value": True}, "value") == 0
+
+    inherited_hook = claude_adapter_module._claude_pre_tool_use_hook(
+        profile=AgentProfile.empty(),
+        tools=(),
+        approval_ceiling=(ApprovalPolicy.allow(),),
+    )
+    inherited = asyncio.run(
+        inherited_hook(
+            {"tool_name": "Read", "tool_input": {"file_path": "notes.txt"}},
+            None,
+            None,
+        )
+    )
+    assert inherited["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
 def test_claude_adapter_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "claude_agent_sdk", raising=False)
     monkeypatch.setattr(claude_adapter_module, "find_spec", lambda name: None)
@@ -1616,6 +1906,7 @@ def test_pydantic_adapter_filters_active_profile_model_settings(
 ) -> None:
     adapter = object.__new__(PydanticAdapter)
     adapter._tool_scope = ToolScope()
+    adapter._subagent_failure_policy = "fail_closed"
     _set_profile_stack(
         adapter,
         AgentProfile(
@@ -1794,6 +2085,20 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
         DSPyAdapter.type_builder({})
 
 
+def test_dspy_adapter_reuses_existing_global_lm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeSettings:
+        lm = object()
+
+        def configure(self, **_kwargs: Any) -> None:
+            raise AssertionError("existing DSPy baseline must not be reconfigured")
+
+    monkeypatch.setattr(dspy_adapter_module.dspy, "settings", FakeSettings())
+
+    DSPyAdapter(model="openai:gpt-4o-mini")
+
+
 def test_dspy_adapter_filters_lm_settings() -> None:
     adapter = object.__new__(DSPyAdapter)
     adapter._lm_model = "openai/gpt-4o-mini"
@@ -1875,6 +2180,123 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
+
+
+def test_dspy_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeSignature:
+        def __init__(self) -> None:
+            self.instructions: str | None = None
+
+        def with_instructions(self, instructions: str | None) -> "FakeSignature":
+            self.instructions = instructions
+            return self
+
+    prediction_result: Any = {
+        "task_summary": "done",
+        "final_result": {"value": 13},
+    }
+
+    class FakePredict:
+        def __init__(self, signature: FakeSignature) -> None:
+            self.signature = signature
+
+        def __call__(self, **kwargs: Any) -> dict[str, Any]:
+            assert self.signature.instructions == "child system"
+            assert kwargs["user_prompt"] == "delegate"
+            return {"result": prediction_result}
+
+    monkeypatch.setattr(
+        dspy_adapter_module,
+        "build_dynamic_model",
+        lambda *_args, **_kwargs: FakeSignature(),
+    )
+    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = None
+    adapter._tool_scope = ToolScope()
+    adapter._tool_spec_scope = ToolScope()
+    adapter._subagent_failure_policy = "fail_closed"
+    _set_profile_stack(adapter)
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(system="child system", approval=ApprovalPolicy.allow()),
+        tools=(
+            ToolSpec(
+                fn=lambda: "ok",
+                name="lookup",
+                metadata={"kind": "subagent"},
+            ),
+        ),
+        instructions="child system",
+        approval_ceiling=(ApprovalPolicy.allow(),),
+        usage_limits=SubagentUsageLimits(),
+    )
+
+    with adapter.subagent_scope(request):
+        assert tuple(tool.name for tool in adapter.scoped_tool_specs) == ("lookup",)
+    assert adapter.scoped_tools == ()
+    inherited_request = SubagentExecutionRequest(
+        profile=AgentProfile(system="child system"),
+        tools=request.tools,
+        instructions=request.instructions,
+        approval_ceiling=request.approval_ceiling,
+        usage_limits=request.usage_limits,
+    )
+    with adapter.subagent_scope(inherited_request):
+        assert tuple(tool.name for tool in adapter.scoped_tool_specs) == ("lookup",)
+    with adapter.tool_scope(("native",)):
+        assert adapter.scoped_tools == ("native",)
+
+    usages: list[InvocationUsage] = []
+    with observe_invocations(usages.append):
+        result = asyncio.run(
+            adapter.produce_subagent(
+                template="delegate",
+                output_schema={"type": "object"},
+                instructions="child system",
+            )
+        )
+    assert result["final_result"] == {"value": 13}
+    assert usages == [InvocationUsage(requests=1)]
+    assert adapter.telemetry_model_name() is None
+    assert adapter.subagent_run_kwargs(request.usage_limits) == {}
+
+    prediction_result = "bad"
+    with pytest.raises(TypeError, match="must be an object"):
+        asyncio.run(
+            adapter.produce_subagent(
+                template="delegate",
+                output_schema={"type": "object"},
+                instructions="child system",
+            )
+        )
+
+    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
+        DSPyAdapter(
+            model="openai/gpt-4o-mini",
+            subagent_failure_policy=cast(Any, "invalid"),
+        )
+
+
+def test_dspy_subagent_tool_failure_is_recoverable() -> None:
+    async def fail() -> str:
+        raise KediExecutionError("delegation failed")
+
+    wrapped = dspy_adapter_module._dspy_recoverable_subagent_tool(
+        ToolSpec(fn=fail, name="delegate_task", metadata={"kind": "subagent"})
+    )
+    assert asyncio.run(wrapped.fn()) == "delegation failed"
+
+    sync = dspy_adapter_module._dspy_recoverable_subagent_tool(
+        ToolSpec(fn=lambda: "ok", name="delegate_task", metadata={"kind": "subagent"})
+    )
+    assert asyncio.run(sync.fn()) == "ok"
+
+    guarded = dspy_adapter_module._dspy_tool_with_approval_policies(
+        ToolSpec(fn=lambda: "ok", name="delegate_task"),
+        (ApprovalPolicy.allow(),),
+    )
+    assert guarded.fn() == "ok"
 
 
 def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
@@ -1968,6 +2390,31 @@ def test_dspy_adapter_produce_sync_uses_mcp_stdio_tools(
         "session-closed",
         "stdio-closed",
     ]
+
+    async def structured_mcp(
+        _signature: object,
+        _tools: list[Any],
+        _template: str,
+        _kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "result": {
+                "task_summary": "done",
+                "final_result": {"value": 3},
+            }
+        }
+
+    adapter._lm_model = None
+    adapter._subagent_failure_policy = "fail_closed"
+    monkeypatch.setattr(adapter, "_produce_with_mcp", structured_mcp)
+    assert adapter._produce_subagent_sync(
+        "delegate",
+        {"type": "object"},
+        {"instructions": "child system"},
+    ) == {
+        "task_summary": "done",
+        "final_result": {"value": 3},
+    }
 
 
 def test_dspy_adapter_produce_sync_routes_to_mcp_when_profile_has_servers(
@@ -2080,6 +2527,44 @@ def test_dspy_sync_tool_function_awaits_inside_running_loop() -> None:
         return wrapped("kedi")
 
     assert asyncio.run(outer()) == "KEDI"
+
+
+def test_dspy_sync_tool_function_reports_tool_usage() -> None:
+    usages: list[InvocationUsage] = []
+    wrapped = dspy_sync_tool_function(lambda value: value.upper())
+
+    with observe_invocations(usages.append):
+        assert wrapped("kedi") == "KEDI"
+
+    assert usages == [InvocationUsage(tool_calls=1)]
+
+
+def test_dspy_invocation_usage_reads_tracked_tokens() -> None:
+    class Prediction:
+        @staticmethod
+        def get_lm_usage() -> dict[str, Any]:
+            return {
+                "invalid": "ignored",
+                "first": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 5,
+                    "total_tokens": 8,
+                },
+                "second": {"input_tokens": 2, "output_tokens": 4},
+            }
+
+    usages: list[InvocationUsage] = []
+    with observe_invocations(usages.append):
+        dspy_adapter_module._report_dspy_invocation(Prediction())
+
+    assert usages == [
+        InvocationUsage(
+            requests=1,
+            input_tokens=5,
+            output_tokens=9,
+            total_tokens=14,
+        )
+    ]
 
 
 def test_dspy_adapter_register_tool_wraps_async_callable_instance() -> None:

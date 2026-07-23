@@ -276,7 +276,8 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
             lm_calls.append(kwargs)
 
     class FakeContext:
-        def __init__(self, *, lm: Any) -> None:
+        def __init__(self, *, lm: Any, track_usage: bool = False) -> None:
+            assert track_usage
             context_calls.append(lm)
 
         def __enter__(self) -> None:
