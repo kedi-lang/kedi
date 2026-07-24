@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from contextlib import contextmanager
-from contextvars import copy_context
 from dataclasses import asdict
 import json
 from pathlib import Path
@@ -348,7 +347,7 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
     closed_loop = asyncio.new_event_loop()
     closed_loop.close()
     closed_task = cast(Any, PendingTask())
-    closed_owned = _OwnedSubagentTask(closed_task, closed_loop, copy_context())
+    closed_owned = _OwnedSubagentTask(closed_task, closed_loop)
     coordinator._tasks["closed"] = closed_owned
 
     with pytest.raises(KediExecutionError, match="cannot be cancelled"):
@@ -357,7 +356,7 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
         coordinator._bridge_task_wait("closed", closed_owned)
 
     done_task = cast(Any, PendingTask(done=True))
-    done_owned = _OwnedSubagentTask(done_task, asyncio.new_event_loop(), copy_context())
+    done_owned = _OwnedSubagentTask(done_task, asyncio.new_event_loop())
     coordinator._tasks["done"] = done_owned
     coordinator._timeout_run("done", done_task, 1)
     done_owned.loop.close()
@@ -372,7 +371,7 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
             scheduled.append((callback, args))
 
     foreign_task = cast(Any, PendingTask())
-    foreign_owned = _OwnedSubagentTask(foreign_task, cast(Any, ForeignLoop()), copy_context())
+    foreign_owned = _OwnedSubagentTask(foreign_task, cast(Any, ForeignLoop()))
     coordinator._tasks["foreign"] = foreign_owned
     coordinator._mark_timed_out("foreign", foreign_task, 1)
     assert scheduled
@@ -385,14 +384,12 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
     coordinator._tasks["closed-foreign"] = _OwnedSubagentTask(
         closed_foreign_task,
         cast(Any, ClosedForeignLoop()),
-        copy_context(),
     )
     coordinator._mark_timed_out("closed-foreign", closed_foreign_task, 1)
 
     coordinator._tasks["terminal"] = _OwnedSubagentTask(
         cast(Any, PendingTask()),
         asyncio.new_event_loop(),
-        copy_context(),
     )
     monkeypatch.setattr(
         coordinator_module, "_running_loop", lambda: coordinator._tasks["terminal"].loop
@@ -412,7 +409,7 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
 
     async def cancellation_error() -> None:
         normal_task = cast(Any, PendingTask())
-        normal_owned = _OwnedSubagentTask(normal_task, asyncio.get_running_loop(), copy_context())
+        normal_owned = _OwnedSubagentTask(normal_task, asyncio.get_running_loop())
         _schedule_owned_cancellation(normal_owned)
         await asyncio.sleep(0)
         assert normal_task.cancelled
@@ -421,13 +418,12 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
         detached_error_owned = _OwnedSubagentTask(
             detached_error_task,
             asyncio.get_running_loop(),
-            copy_context(),
         )
         _schedule_owned_cancellation(detached_error_owned)
         await asyncio.sleep(0)
 
         error_task = cast(Any, PendingTask(cancel_error=RuntimeError("cancel failed")))
-        owned = _OwnedSubagentTask(error_task, asyncio.get_running_loop(), copy_context())
+        owned = _OwnedSubagentTask(error_task, asyncio.get_running_loop())
         completed: Future[None] = Future()
         _schedule_owned_cancellation(owned, completed)
         await asyncio.sleep(0)

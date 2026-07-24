@@ -68,7 +68,6 @@ class _OwnedSubagentTask:
 
     task: asyncio.Task[DelegationResult]
     loop: asyncio.AbstractEventLoop
-    context: Context
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,7 +295,6 @@ class SubagentCoordinator:
             owned_task = _OwnedSubagentTask(
                 task=task_handle,
                 loop=owner_loop,
-                context=task_context,
             )
             self._tasks[run_id] = owned_task
             if self.timeout_seconds is not None and parent_run_id is None:
@@ -379,7 +377,10 @@ class SubagentCoordinator:
         awaited = self._bridge_task_wait(run_id, owned_task)
         if timeout is None:
             return await asyncio.shield(awaited)
-        return await asyncio.wait_for(asyncio.shield(awaited), timeout=timeout)
+        done, _ = await asyncio.wait((awaited,), timeout=timeout)
+        if not done:
+            raise TimeoutError
+        return awaited.result()
 
     def cancel(self, run_id: str) -> bool:
         owned_task = self._task_for(run_id, required=False)
@@ -990,7 +991,7 @@ def _schedule_owned_cancellation(
     owned_task: _OwnedSubagentTask,
     completed: Future[None] | None = None,
 ) -> None:
-    """Request cancellation in the child task's owner loop and context."""
+    """Request cancellation in the child task's owner loop."""
 
     def cancel() -> None:
         try:
@@ -1002,4 +1003,4 @@ def _schedule_owned_cancellation(
         if completed is not None and not completed.done():
             completed.set_result(None)
 
-    owned_task.loop.call_soon_threadsafe(cancel, context=owned_task.context)
+    owned_task.loop.call_soon_threadsafe(cancel)
