@@ -7,12 +7,12 @@ import os
 import shutil
 import subprocess
 from collections import deque
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import suppress
 from contextvars import Context
 from dataclasses import dataclass, field
-from threading import Event, Lock, RLock, Thread, current_thread
+from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thread
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
 JsonObject = dict[str, Any]
@@ -77,9 +77,17 @@ class CodexAppServerClient:
         *,
         env: Mapping[str, str] | None = None,
         request_timeout: float = 30,
+        dynamic_request_workers: int = 4,
+        max_dynamic_requests: int = 32,
     ) -> None:
         if not command:
             raise ValueError("Codex App Server command cannot be empty.")
+        if dynamic_request_workers < 1:
+            raise ValueError("Codex dynamic request workers must be at least 1.")
+        if max_dynamic_requests < dynamic_request_workers:
+            raise ValueError(
+                "Codex max dynamic requests cannot be smaller than dynamic request workers."
+            )
         self._command = tuple(command)
         self._env = dict(env) if env is not None else None
         self._request_timeout = request_timeout
@@ -98,6 +106,11 @@ class CodexAppServerClient:
         self._initialized = False
         self._last_disconnect: CodexAppServerDisconnected | None = None
         self._closed = False
+        self._dynamic_slots = BoundedSemaphore(max_dynamic_requests)
+        self._dynamic_executor = ThreadPoolExecutor(
+            max_workers=dynamic_request_workers,
+            thread_name_prefix="kedi-codex-dynamic",
+        )
 
     async def run_stateless_turn(
         self,
@@ -166,9 +179,9 @@ class CodexAppServerClient:
                 raise TimeoutError(
                     f"Codex turn {turn_id!r} did not complete within {turn_timeout:g}s."
                 )
-            if state.error is not None:
-                raise state.error
-            completed_turn = state.turn
+            error, completed_turn, messages = self._turn_snapshot(turn_id)
+            if error is not None:
+                raise error
             if completed_turn is None:
                 raise CodexAppServerProtocolError("Codex turn completed without turn data.")
             status = completed_turn.get("status")
@@ -178,11 +191,11 @@ class CodexAppServerClient:
                 raise CodexAppServerError(
                     str(message or f"Codex turn finished with status {status!r}.")
                 )
-            if not state.messages:
+            if not messages:
                 raise CodexAppServerProtocolError(
                     "Codex turn completed without a final agent message."
                 )
-            return CodexTurnResult(text=state.messages[-1], turn=completed_turn)
+            return CodexTurnResult(text=messages[-1], turn=completed_turn)
         finally:
             with self._state_lock:
                 self._thread_tools.pop(thread_id, None)
@@ -209,6 +222,7 @@ class CodexAppServerClient:
             self._closed = True
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
+            self._dynamic_executor.shutdown(wait=False, cancel_futures=True)
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
@@ -266,7 +280,8 @@ class CodexAppServerClient:
             ) from exc
         self._process = process
         self._last_disconnect = None
-        self._stderr_tail.clear()
+        with self._state_lock:
+            self._stderr_tail.clear()
         self._reader = Thread(
             target=self._read_stdout,
             args=(process,),
@@ -363,18 +378,14 @@ class CodexAppServerClient:
             return
         for line in stderr:
             if process is self._process:
-                self._stderr_tail.append(line.rstrip())
+                with self._state_lock:
+                    self._stderr_tail.append(line.rstrip())
 
     def _dispatch_message(self, message: JsonObject) -> None:
         request_id = message.get("id")
         method = message.get("method")
         if request_id is not None and isinstance(method, str):
-            Thread(
-                target=self._handle_server_request,
-                args=(request_id, method, message.get("params")),
-                name="kedi-codex-dynamic-tool",
-                daemon=True,
-            ).start()
+            self._submit_server_request(request_id, method, message.get("params"))
             return
         if isinstance(request_id, int):
             with self._state_lock:
@@ -403,6 +414,39 @@ class CodexAppServerClient:
         if isinstance(method, str):
             params = message.get("params")
             self._handle_notification(method, params if isinstance(params, dict) else {})
+
+    def _submit_server_request(self, request_id: Any, method: str, params: Any) -> None:
+        if not self._dynamic_slots.acquire(blocking=False):
+            self._send(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "Kedi dynamic request capacity is exhausted.",
+                    },
+                }
+            )
+            return
+        try:
+            future = self._dynamic_executor.submit(
+                self._handle_server_request,
+                request_id,
+                method,
+                params,
+            )
+        except RuntimeError:
+            self._dynamic_slots.release()
+            self._send(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32000,
+                        "message": "Kedi Codex dynamic request executor is closed.",
+                    },
+                }
+            )
+            return
+        future.add_done_callback(lambda _completed: self._dynamic_slots.release())
 
     def _handle_server_request(self, request_id: Any, method: str, params: Any) -> None:
         if not isinstance(request_id, (int, str)):
@@ -510,14 +554,12 @@ class CodexAppServerClient:
             if isinstance(item, Mapping) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str):
-                    self._turn_state(turn_id).messages.append(text)
+                    self._append_turn_message(turn_id, text)
             return
         if method == "turn/completed":
             turn = params.get("turn")
             if isinstance(turn, dict) and isinstance(turn.get("id"), str):
-                state = self._turn_state(turn["id"])
-                state.turn = turn
-                state.done.set()
+                self._complete_turn(turn)
 
     def _turn_state(self, turn_id: str) -> _TurnState:
         with self._state_lock:
@@ -526,6 +568,25 @@ class CodexAppServerClient:
                 state.error = self._last_disconnect
                 state.done.set()
             return state
+
+    def _append_turn_message(self, turn_id: str, text: str) -> None:
+        with self._state_lock:
+            self._turns.setdefault(turn_id, _TurnState()).messages.append(text)
+
+    def _complete_turn(self, turn: JsonObject) -> None:
+        turn_id = cast(str, turn["id"])
+        with self._state_lock:
+            state = self._turns.setdefault(turn_id, _TurnState())
+            state.turn = turn
+            state.done.set()
+
+    def _turn_snapshot(
+        self,
+        turn_id: str,
+    ) -> tuple[BaseException | None, JsonObject | None, tuple[str, ...]]:
+        with self._state_lock:
+            state = self._turns.setdefault(turn_id, _TurnState())
+            return state.error, state.turn, tuple(state.messages)
 
     def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
         with suppress(CodexAppServerError, TimeoutError):
@@ -545,13 +606,13 @@ class CodexAppServerClient:
         with self._state_lock:
             pending = tuple(self._pending.values())
             turns = tuple(self._turns.values())
+            for state in turns:
+                if not state.done.is_set():
+                    state.error = error
+                    state.done.set()
         for future in pending:
             if not future.done():
                 future.set_exception(error)
-        for state in turns:
-            if not state.done.is_set():
-                state.error = error
-                state.done.set()
 
     def _stop_process(self) -> None:
         process = self._process
@@ -581,7 +642,8 @@ class CodexAppServerClient:
                 thread.join(timeout=2)
 
     def _disconnect_error(self, message: str) -> CodexAppServerDisconnected:
-        stderr = "\n".join(self._stderr_tail)
+        with self._state_lock:
+            stderr = "\n".join(self._stderr_tail)
         if stderr:
             message = f"{message}\nApp Server stderr:\n{stderr}"
         return CodexAppServerDisconnected(message)

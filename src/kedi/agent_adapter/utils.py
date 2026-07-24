@@ -8,7 +8,17 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
-from typing import Any, Awaitable, Callable, Iterator, Mapping, TypeVar, cast, get_type_hints
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    TypeVar,
+    cast,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, TypeAdapter
 from pydantic_ai.tools import Tool
@@ -54,12 +64,29 @@ def run_sync(awaitable: Awaitable[_T]) -> _T:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(resolve())
+        return _run_awaitable(awaitable, resolve)
     # Copy the caller's context so a dspy.context(lm=...) override reaches the worker.
     ctx = contextvars.copy_context()
     with ThreadPoolExecutor(max_workers=1) as executor:
         # cast: Context.run's TypeVar doesn't unify with run_sync's via submit().
-        return cast("_T", executor.submit(lambda: ctx.run(asyncio.run, resolve())).result())
+        return cast(
+            "_T", executor.submit(lambda: ctx.run(_run_awaitable, awaitable, resolve)).result()
+        )
+
+
+def _run_awaitable(
+    awaitable: Awaitable[_T],
+    resolve: Callable[[], Coroutine[Any, Any, _T]],
+) -> _T:
+    try:
+        return asyncio.run(resolve())
+    except RuntimeError as exc:
+        if "different loop" not in str(exc) and "attached to a different loop" not in str(exc):
+            raise
+        raise RuntimeError(
+            "run_sync cannot execute an awaitable bound to another event loop; "
+            "await it from its owner loop instead"
+        ) from exc
 
 
 def inside_kedi_tool_call() -> bool:

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager, suppress
-from contextvars import ContextVar
+from concurrent.futures import Future
+from contextlib import AbstractContextManager
+from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any
+from typing import Any, cast
 
 from opentelemetry import trace
 
@@ -15,7 +17,9 @@ from ...errors import KediExecutionError, KediTraceFrame
 from ..invocation import InvocationUsage, observe_invocations
 from . import (
     DelegationResult,
+    SubagentConversationContext,
     SubagentExecutionRequest,
+    SubagentTurn,
     SupportsSubagentExecution,
     new_subagent_run_id,
     validate_structured_result,
@@ -24,6 +28,7 @@ from . import (
 from .attempts import bind_current_delegation_run
 from .budget import DelegationBudget, DelegationConcurrency
 from .limits import SubagentUsageLimits
+from .persistence import StoredConversation, SubagentStateStore
 from .runs import (
     SubagentCancelled,
     SubagentCompleted,
@@ -41,6 +46,7 @@ DEFAULT_MAX_SUBAGENT_CONCURRENCY = 4
 DEFAULT_SUBAGENT_TIMEOUT_SECONDS = 120.0
 MAX_SUBAGENT_TIMEOUT_SECONDS = 600.0
 DEFAULT_MAX_RETAINED_SUBAGENT_RUNS = 1024
+MAX_SUBAGENT_CONVERSATION_TURNS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +60,15 @@ class SubagentCoordinatorDependencies:
     trace_frame: Callable[[KediTraceFrame], AbstractContextManager[None]]
     active_stack: ContextVar[tuple[tuple[str, str], ...]]
     default_cwd: Callable[[], Path]
+
+
+@dataclass(frozen=True, slots=True)
+class _OwnedSubagentTask:
+    """A child task together with the event loop that owns it."""
+
+    task: asyncio.Task[DelegationResult]
+    loop: asyncio.AbstractEventLoop
+    context: Context
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +111,7 @@ class SubagentCoordinator:
         timeout_seconds: float | None = DEFAULT_SUBAGENT_TIMEOUT_SECONDS,
         usage_limits: SubagentUsageLimits | None = None,
         max_retained_runs: int = DEFAULT_MAX_RETAINED_SUBAGENT_RUNS,
+        state_path: str | Path | None = None,
     ) -> None:
         if max_depth < 1:
             raise ValueError("Subagent max depth must be at least 1")
@@ -114,6 +130,8 @@ class SubagentCoordinator:
         self.max_retained_runs = max_retained_runs
         self._coordination_lock = Lock()
         self._task_lock = Lock()
+        self._state_lock = Lock()
+        self._persistence_lock = Lock()
         self._active_runs = 0
         self._budget_stack: ContextVar[tuple[DelegationBudget, ...]] = ContextVar(
             f"kedi_subagent_budget_stack_{id(self)}",
@@ -129,9 +147,13 @@ class SubagentCoordinator:
         )
         self._tracer = trace.get_tracer("kedi.subagents")
         self.events = SubagentEventLog(max_events=max_retained_runs * 2)
-        self._tasks: dict[str, asyncio.Task[DelegationResult]] = {}
+        self._tasks: dict[str, _OwnedSubagentTask] = {}
         self._timeout_handles: dict[str, asyncio.TimerHandle] = {}
         self._cancel_requested: set[str] = set()
+        self._results: dict[str, DelegationResult] = {}
+        self._conversations: dict[str, StoredConversation] = {}
+        self._state_store = SubagentStateStore(state_path) if state_path is not None else None
+        self._restore_state()
 
     def new_concurrency(self) -> DelegationConcurrency:
         return DelegationConcurrency.for_limit(self.max_concurrency)
@@ -173,6 +195,9 @@ class SubagentCoordinator:
         parent_profile: Any,
         parent_budget: DelegationBudget,
         parent_concurrency: DelegationConcurrency,
+        previous_run_id: str | None = None,
+        conversation_id: str | None = None,
+        root_run_id_override: str | None = None,
     ) -> SubagentHandle:
         if subagent not in allowed_subagents:
             raise KediExecutionError(
@@ -210,48 +235,76 @@ class SubagentCoordinator:
         self._reserve_start(budgets, concurrency)
         run_id = new_subagent_run_id()
         parent_run_id = stack[-1][0] if stack else None
-        root_run_id = stack[0][0] if stack else run_id
-        self.runs.create(
-            run_id=run_id,
-            parent_run_id=parent_run_id,
-            root_run_id=root_run_id,
-            profile_name=subagent,
-            depth=child_depth,
-        )
-        bind_current_delegation_run(run_id)
-        started = self.runs.transition(run_id, "running")
-        self.events.append(SubagentStarted(started))
+        root_run_id = root_run_id_override or (stack[0][0] if stack else run_id)
+        conversation_id = conversation_id or run_id
+        owner_profile_name = parent_profile.name
         try:
-            task_handle = asyncio.create_task(
-                self._execute_run(
-                    run_id=run_id,
-                    root_run_id=root_run_id,
-                    parent_run_id=parent_run_id,
-                    child_depth=child_depth,
-                    definition=definition,
-                    subagent=subagent,
-                    task=task,
-                    final_schema=final_schema,
-                    parent_ceiling=parent_ceiling,
-                    budgets=budgets,
-                    concurrency=concurrency,
-                    stack=stack,
-                ),
-                name=f"kedi-subagent-{subagent}-{run_id}",
+            self._activate_conversation(
+                conversation_id=conversation_id,
+                profile_name=subagent,
+                run_id=run_id,
+                previous_run_id=previous_run_id,
             )
+            self.runs.create(
+                run_id=run_id,
+                parent_run_id=parent_run_id,
+                root_run_id=root_run_id,
+                previous_run_id=previous_run_id,
+                conversation_id=conversation_id,
+                owner_profile_name=owner_profile_name,
+                profile_name=subagent,
+                depth=child_depth,
+            )
+            bind_current_delegation_run(run_id)
+            started = self.runs.transition(run_id, "running")
+            self.events.append(SubagentStarted(started))
+        except BaseException:
+            self._deactivate_conversation(conversation_id, run_id)
+            self._release_slot(concurrency)
+            raise
+        try:
+            coroutine = self._execute_run(
+                run_id=run_id,
+                root_run_id=root_run_id,
+                parent_run_id=parent_run_id,
+                child_depth=child_depth,
+                definition=definition,
+                subagent=subagent,
+                task=task,
+                final_schema=final_schema,
+                parent_ceiling=parent_ceiling,
+                budgets=budgets,
+                concurrency=concurrency,
+                stack=stack,
+                conversation_id=conversation_id,
+            )
+            task_context = copy_context()
+            task_handle = _create_subagent_task(
+                coroutine,
+                name=f"kedi-subagent-{subagent}-{run_id}",
+                context=task_context,
+            )
+            owner_loop = task_handle.get_loop()
         except BaseException as exc:
             failed = self.runs.transition(run_id, "failed", error=exc)
             self.events.append(SubagentFailed(failed))
+            self._deactivate_conversation(conversation_id, run_id)
+            self._persist_state()
             self._release_slot(concurrency)
             raise
         with self._task_lock:
-            self._tasks[run_id] = task_handle
+            owned_task = _OwnedSubagentTask(
+                task=task_handle,
+                loop=owner_loop,
+                context=task_context,
+            )
+            self._tasks[run_id] = owned_task
             if self.timeout_seconds is not None and parent_run_id is None:
-                self._timeout_handles[run_id] = asyncio.get_running_loop().call_later(
+                self._timeout_handles[run_id] = owner_loop.call_later(
                     self.timeout_seconds,
                     self._timeout_run,
                     run_id,
-                    task_handle,
+                    owned_task,
                     self.timeout_seconds,
                 )
         task_handle.add_done_callback(
@@ -260,7 +313,59 @@ class SubagentCoordinator:
                 completed,
             )
         )
+        self._persist_state()
         return SubagentHandle(run_id=run_id, _coordinator=self)
+
+    async def continue_run(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: DelegationBudget,
+        parent_concurrency: DelegationConcurrency,
+    ) -> DelegationResult:
+        handle = self.start_continuation(
+            run_id=run_id,
+            allowed_subagents=allowed_subagents,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+        return await self.wait(handle.run_id)
+
+    def start_continuation(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: DelegationBudget,
+        parent_concurrency: DelegationConcurrency,
+    ) -> SubagentHandle:
+        previous = self._continuable_run(
+            run_id,
+            allowed_subagents=allowed_subagents,
+            owner_profile_name=parent_profile.name,
+        )
+        return self.start(
+            allowed_subagents=allowed_subagents,
+            subagent=previous.profile_name,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+            previous_run_id=previous.run_id,
+            conversation_id=previous.conversation_id,
+            root_run_id_override=previous.root_run_id,
+        )
 
     async def wait(
         self,
@@ -268,31 +373,42 @@ class SubagentCoordinator:
         *,
         timeout: float | None = None,
     ) -> DelegationResult:
-        task = self._task_for(run_id)
+        owned_task = self._task_for(run_id, required=False)
+        if owned_task is None:
+            return self._terminal_result(run_id)
+        awaited = self._bridge_task_wait(run_id, owned_task)
         if timeout is None:
-            return await self._wait_for_task(run_id, task)
-
-        try:
-            done, _ = await asyncio.wait({task}, timeout=timeout)
-        except asyncio.CancelledError:
-            self.cancel(run_id)
-            with suppress(asyncio.CancelledError):
-                await task
-            raise
-        if done:
-            return await self._wait_for_task(run_id, task)
-
-        self._mark_timed_out(run_id, task, timeout)
-        with suppress(asyncio.CancelledError):
-            await task
-        return await self._wait_for_task(run_id, task)
+            return await asyncio.shield(awaited)
+        return await asyncio.wait_for(asyncio.shield(awaited), timeout=timeout)
 
     def cancel(self, run_id: str) -> bool:
-        task = self._task_for(run_id)
-        if task.done() or run_id in self._cancel_requested:
+        owned_task = self._task_for(run_id, required=False)
+        if owned_task is None:
+            self.status(run_id)
             return False
-        self._cancel_requested.add(run_id)
-        task.cancel()
+        with self._task_lock:
+            current = self._tasks.get(run_id)
+            if (
+                current is not owned_task
+                or owned_task.task.done()
+                or run_id in self._cancel_requested
+            ):
+                return False
+            self._cancel_requested.add(run_id)
+        if owned_task.loop.is_closed():
+            raise KediExecutionError(
+                f"Subagent {run_id!r} cannot be cancelled because its owner event loop is closed"
+            )
+        if _running_loop() is owned_task.loop:
+            owned_task.task.cancel()
+        else:
+            # ``call_soon_threadsafe(task.cancel)`` captures the caller's
+            # ContextVar context. A foreign thread would then resume the child
+            # coroutine with tokens created in a different context, so schedule
+            # the callback with the child task's retained creation context.
+            completed: Future[None] = Future()
+            _schedule_owned_cancellation(owned_task, completed)
+            completed.result()
         return True
 
     def status(self, run_id: str) -> SubagentRunStatus:
@@ -301,12 +417,17 @@ class SubagentCoordinator:
         except KeyError:
             raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}") from None
 
-    def _task_for(self, run_id: str) -> asyncio.Task[DelegationResult]:
+    def _task_for(
+        self,
+        run_id: str,
+        *,
+        required: bool = True,
+    ) -> _OwnedSubagentTask | None:
         with self._task_lock:
-            try:
-                return self._tasks[run_id]
-            except KeyError:
-                raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}") from None
+            task = self._tasks.get(run_id)
+        if task is not None or not required:
+            return task
+        raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}")
 
     def _task_finished(
         self,
@@ -321,16 +442,22 @@ class SubagentCoordinator:
             timeout_handle = self._timeout_handles.pop(run_id, None)
             if timeout_handle is not None:
                 timeout_handle.cancel()
-            if self._tasks.get(run_id) is not task:
+            if self._tasks.get(run_id) is None or self._tasks[run_id].task is not task:
                 return
             for candidate_id, candidate in tuple(self._tasks.items()):
                 if len(self._tasks) <= self.max_retained_runs:
                     break
-                if candidate.done():
+                if candidate.task.done():
                     self._tasks.pop(candidate_id)
                     discarded.append(candidate_id)
         for candidate_id in discarded:
+            conversation_id = self.runs.get(candidate_id).conversation_id
             self.runs.discard(candidate_id)
+            with self._state_lock:
+                self._results.pop(candidate_id, None)
+                if not any(run.conversation_id == conversation_id for run in self.runs.snapshot()):
+                    self._conversations.pop(conversation_id, None)
+            self._persist_state()
 
     async def _wait_for_task(
         self,
@@ -338,7 +465,7 @@ class SubagentCoordinator:
         task: asyncio.Task[DelegationResult],
     ) -> DelegationResult:
         try:
-            return await task
+            return await asyncio.shield(task)
         except asyncio.CancelledError:
             run = self.runs.get(run_id)
             if run.status != "timed_out":
@@ -349,28 +476,62 @@ class SubagentCoordinator:
     def _timeout_run(
         self,
         run_id: str,
-        task: asyncio.Task[DelegationResult],
+        task: _OwnedSubagentTask | asyncio.Task[DelegationResult],
         timeout: float,
     ) -> None:
-        if task.done():
+        owned_task = self._task_for(run_id, required=False)
+        if owned_task is None or owned_task.task is not _unwrap_task(task):
             return
-        self._mark_timed_out(run_id, task, timeout)
+        if owned_task.task.done():
+            return
+        self._mark_timed_out(run_id, owned_task, timeout)
 
     def _mark_timed_out(
         self,
         run_id: str,
-        task: asyncio.Task[DelegationResult],
+        task: _OwnedSubagentTask | asyncio.Task[DelegationResult],
         timeout: float,
     ) -> None:
-        if task.done() or self.runs.get(run_id).status != "running":
+        owned_task = self._task_for(run_id, required=False)
+        if owned_task is None or owned_task.task is not _unwrap_task(task):
+            return
+        if _running_loop() is not owned_task.loop:
+            if owned_task.loop.is_closed():
+                return
+            owned_task.loop.call_soon_threadsafe(
+                self._mark_timed_out,
+                run_id,
+                owned_task,
+                timeout,
+            )
+            return
+        if owned_task.task.done() or self.runs.get(run_id).status != "running":
             return
         timeout_error = TimeoutError(
             f"Subagent {self.runs.get(run_id).profile_name!r} timed out after {timeout:g} seconds"
         )
         timed_out = self.runs.transition(run_id, "timed_out", error=timeout_error)
         self.events.append(SubagentFailed(timed_out))
-        self._cancel_requested.add(run_id)
-        task.cancel()
+        with self._task_lock:
+            self._cancel_requested.add(run_id)
+        _schedule_owned_cancellation(owned_task)
+
+    def _bridge_task_wait(
+        self,
+        run_id: str,
+        owned_task: _OwnedSubagentTask,
+    ) -> asyncio.Future[DelegationResult] | asyncio.Task[DelegationResult]:
+        if _running_loop() is owned_task.loop:
+            return asyncio.create_task(self._wait_for_task(run_id, owned_task.task))
+        if owned_task.loop.is_closed():
+            raise KediExecutionError(
+                f"Subagent {run_id!r} owner event loop is closed before completion"
+            )
+        bridge = asyncio.run_coroutine_threadsafe(
+            self._wait_for_task(run_id, owned_task.task),
+            owned_task.loop,
+        )
+        return asyncio.wrap_future(bridge)
 
     async def _execute_run(
         self,
@@ -387,6 +548,7 @@ class SubagentCoordinator:
         budgets: tuple[DelegationBudget, ...],
         concurrency: DelegationConcurrency,
         stack: tuple[tuple[str, str], ...],
+        conversation_id: str,
     ) -> DelegationResult:
         token = self._deps.active_stack.set((*stack, (run_id, subagent)))
         budget_token = self._budget_stack.set(budgets)
@@ -426,6 +588,7 @@ class SubagentCoordinator:
                 self._deps.assert_profile_override_supported(child_profile, child_adapter)
                 child_tools = self._deps.resolve_tools(child_profile, child_adapter)
                 instructions = self._deps.instructions_for_profile(child_profile)
+                conversation = self._conversation_context(conversation_id)
                 child_call = self._run_child(
                     run_id=run_id,
                     subagent=subagent,
@@ -436,6 +599,7 @@ class SubagentCoordinator:
                     tools=child_tools,
                     instructions=instructions,
                     approval_ceiling=parent_ceiling.approval_policies,
+                    conversation=conversation,
                 )
                 safety_token = self._safety_ceiling.set(child_ceiling)
                 with observe_invocations(
@@ -445,8 +609,16 @@ class SubagentCoordinator:
                 self._assert_usage_limits(run_id)
                 if self.runs.get(run_id).status != "running":
                     raise asyncio.CancelledError
+                self._record_success(
+                    conversation_id=conversation_id,
+                    run_id=run_id,
+                    task=task,
+                    result=result,
+                    adapter_state=conversation.result_state,
+                )
                 completed = self.runs.transition(run_id, "completed")
                 self.events.append(SubagentCompleted(completed))
+                self._persist_state()
                 span.set_attribute("kedi.subagent.status", "completed")
                 return result
             except asyncio.CancelledError as exc:
@@ -456,6 +628,8 @@ class SubagentCoordinator:
                     span.set_attribute("kedi.subagent.status", "cancelled")
                 else:
                     span.set_attribute("kedi.subagent.status", "timed_out")
+                self._deactivate_conversation(conversation_id, run_id)
+                self._persist_state()
                 raise
             except BaseException as exc:
                 current = self.runs.get(run_id)
@@ -465,6 +639,8 @@ class SubagentCoordinator:
                     span.set_attribute("kedi.subagent.status", "failed")
                 else:
                     span.set_attribute("kedi.subagent.status", current.status)
+                self._deactivate_conversation(conversation_id, run_id)
+                self._persist_state()
                 raise
             finally:
                 run = self.runs.get(run_id)
@@ -566,6 +742,7 @@ class SubagentCoordinator:
         tools: tuple[Any, ...],
         instructions: str | None,
         approval_ceiling: tuple[Any, ...],
+        conversation: SubagentConversationContext,
     ) -> DelegationResult:
         run_kwargs = dict(adapter.subagent_run_kwargs(self.usage_limits))
         if instructions is not None:
@@ -577,11 +754,17 @@ class SubagentCoordinator:
             instructions=instructions,
             approval_ceiling=approval_ceiling,
             usage_limits=self.usage_limits,
+            conversation=conversation,
         )
+        effective_task = task
+        if conversation.turns and not bool(
+            getattr(adapter, "supports_native_subagent_resume", False)
+        ):
+            effective_task = _task_with_verified_history(conversation.turns, task)
         with self._deps.trace_frame(KediTraceFrame(kind="subagent", label=f"delegate {subagent}")):
             with adapter.subagent_scope(request):
                 if final_schema is None:
-                    task_summary = await adapter.invoke(prompt=task, **run_kwargs)
+                    task_summary = await adapter.invoke(prompt=effective_task, **run_kwargs)
                     return DelegationResult(
                         run_id=run_id,
                         subagent=subagent,
@@ -590,7 +773,7 @@ class SubagentCoordinator:
 
                 schema = wrapped_final_schema(final_schema)
                 produced = await adapter.produce_subagent(
-                    template=task,
+                    template=effective_task,
                     output_schema=schema,
                     **run_kwargs,
                 )
@@ -601,3 +784,222 @@ class SubagentCoordinator:
                     task_summary=result["task_summary"],
                     final_result=result["final_result"],
                 )
+
+    def _activate_conversation(
+        self,
+        *,
+        conversation_id: str,
+        profile_name: str,
+        run_id: str,
+        previous_run_id: str | None,
+    ) -> None:
+        with self._state_lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is None:
+                if previous_run_id is not None:
+                    raise KediExecutionError(f"Unknown subagent conversation: {conversation_id!r}")
+                self._conversations[conversation_id] = StoredConversation(
+                    conversation_id=conversation_id,
+                    profile_name=profile_name,
+                    active_run_id=run_id,
+                    turns=[],
+                    adapter_state={},
+                )
+                return
+            if conversation.profile_name != profile_name:
+                raise KediExecutionError("A subagent conversation cannot change child profiles")
+            if conversation.active_run_id is not None:
+                raise KediExecutionError(
+                    f"Subagent conversation {conversation_id!r} already has an active run"
+                )
+            if not conversation.turns or conversation.turns[-1].run_id != previous_run_id:
+                raise KediExecutionError("Only the latest completed subagent run can be continued")
+            if len(conversation.turns) >= MAX_SUBAGENT_CONVERSATION_TURNS:
+                raise KediExecutionError(
+                    f"Subagent conversation turn limit {MAX_SUBAGENT_CONVERSATION_TURNS} reached"
+                )
+            conversation.active_run_id = run_id
+
+    def _deactivate_conversation(self, conversation_id: str, run_id: str) -> None:
+        with self._state_lock:
+            conversation = self._conversations.get(conversation_id)
+            if conversation is not None and conversation.active_run_id == run_id:
+                conversation.active_run_id = None
+
+    def _conversation_context(self, conversation_id: str) -> SubagentConversationContext:
+        with self._state_lock:
+            conversation = self._conversations[conversation_id]
+            return SubagentConversationContext(
+                conversation_id=conversation_id,
+                turns=tuple(conversation.turns),
+                resume_state=dict(conversation.adapter_state),
+            )
+
+    def _record_success(
+        self,
+        *,
+        conversation_id: str,
+        run_id: str,
+        task: str,
+        result: DelegationResult,
+        adapter_state: dict[str, Any],
+    ) -> None:
+        with self._state_lock:
+            conversation = self._conversations[conversation_id]
+            conversation.turns.append(
+                SubagentTurn(
+                    run_id=run_id,
+                    task=task,
+                    task_summary=result.task_summary,
+                    final_result=result.final_result,
+                )
+            )
+            conversation.active_run_id = None
+            conversation.adapter_state = dict(adapter_state)
+            self._results[run_id] = result
+
+    def _continuable_run(
+        self,
+        run_id: str,
+        *,
+        allowed_subagents: tuple[str, ...],
+        owner_profile_name: str,
+    ) -> Any:
+        try:
+            run = self.runs.get(run_id)
+        except KeyError:
+            raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}") from None
+        if run.status != "completed":
+            raise KediExecutionError("Only completed subagent runs can be continued")
+        if (
+            run.profile_name not in allowed_subagents
+            or run.owner_profile_name != owner_profile_name
+        ):
+            raise KediExecutionError("The current profile does not own this subagent conversation")
+        with self._state_lock:
+            conversation = self._conversations.get(run.conversation_id)
+            if conversation is None:
+                raise KediExecutionError(f"Unknown subagent conversation: {run.conversation_id!r}")
+            if conversation.active_run_id is not None:
+                raise KediExecutionError("The subagent conversation is already running")
+            if not conversation.turns or conversation.turns[-1].run_id != run_id:
+                raise KediExecutionError("Only the latest completed subagent run can be continued")
+        return run
+
+    def _terminal_result(self, run_id: str) -> DelegationResult:
+        try:
+            run = self.runs.get(run_id)
+        except KeyError:
+            raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}") from None
+        if run.status == "completed":
+            with self._state_lock:
+                result = self._results.get(run_id)
+            if result is None:
+                raise KediExecutionError(f"Completed subagent run {run_id!r} has no result")
+            return result
+        if run.status in {"failed", "cancelled", "timed_out"}:
+            message = run.error_message or f"Subagent {run.profile_name!r} {run.status}"
+            raise KediExecutionError(message)
+        raise KediExecutionError(f"Subagent run {run_id!r} is still {run.status}")
+
+    def _restore_state(self) -> None:
+        if self._state_store is None:
+            return
+        loaded = self._state_store.load()
+        for run in loaded.runs:
+            self.runs.restore(run)
+        self._results.update(loaded.results)
+        self._conversations.update(loaded.conversations)
+        for conversation in self._conversations.values():
+            conversation.active_run_id = None
+        if any(run.error_type == "InterruptedError" for run in loaded.runs):
+            self._persist_state()
+
+    def _persist_state(self) -> None:
+        if self._state_store is None:
+            return
+        with self._persistence_lock:
+            with self._state_lock:
+                results = dict(self._results)
+                conversations = {
+                    key: StoredConversation(
+                        conversation_id=value.conversation_id,
+                        profile_name=value.profile_name,
+                        active_run_id=value.active_run_id,
+                        turns=list(value.turns),
+                        adapter_state=dict(value.adapter_state),
+                    )
+                    for key, value in self._conversations.items()
+                }
+            self._state_store.save(
+                runs=self.runs.snapshot(),
+                results=results,
+                conversations=conversations,
+            )
+
+
+def _task_with_verified_history(turns: tuple[SubagentTurn, ...], task: str) -> str:
+    history = [
+        {
+            "task": turn.task,
+            "task_summary": turn.task_summary,
+            "final_result": turn.final_result,
+        }
+        for turn in turns
+    ]
+    return (
+        "Continue the same child task using this verified prior conversation state:\n"
+        f"{json.dumps(history, ensure_ascii=False)}\n\n"
+        f"New task:\n{task}"
+    )
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _unwrap_task(
+    owned_task: _OwnedSubagentTask | asyncio.Task[DelegationResult],
+) -> asyncio.Task[DelegationResult]:
+    if isinstance(owned_task, _OwnedSubagentTask):
+        return owned_task.task
+    return owned_task
+
+
+def _create_subagent_task(
+    coroutine: Any,
+    *,
+    name: str,
+    context: Context,
+) -> asyncio.Task[DelegationResult]:
+    """Create a task in an explicitly retained ContextVar context."""
+
+    # Creating inside the copied context works on every supported Python
+    # version, including 3.10 where ``asyncio.create_task(context=...)`` is
+    # unavailable. The task itself remains owned by the current event loop.
+    return cast(
+        asyncio.Task[DelegationResult],
+        context.run(asyncio.create_task, coroutine, name=name),
+    )
+
+
+def _schedule_owned_cancellation(
+    owned_task: _OwnedSubagentTask,
+    completed: Future[None] | None = None,
+) -> None:
+    """Request cancellation in the child task's owner loop and context."""
+
+    def cancel() -> None:
+        try:
+            owned_task.task.cancel()
+        except BaseException as exc:
+            if completed is not None and not completed.done():
+                completed.set_exception(exc)
+            return
+        if completed is not None and not completed.done():
+            completed.set_result(None)
+
+    owned_task.loop.call_soon_threadsafe(cancel, context=owned_task.context)

@@ -11,7 +11,12 @@ import pytest
 
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
 from kedi.agent_adapter.adapters import ACPAdapter
-from kedi.agent_adapter.adapters.acp import ACPClient, ACPDisconnected, ACPProtocolError
+from kedi.agent_adapter.adapters.acp import (
+    ACPClient,
+    ACPDisconnected,
+    ACPProtocolError,
+    _SessionState,
+)
 from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
 from kedi.agent_adapter.tool_override import ToolSpec
 from kedi.agent_profile import ACP_AGENT_SETTING_KEYS, AgentProfile
@@ -325,6 +330,64 @@ def test_acp_client_close_without_process_is_safe() -> None:
     client.close()
 
     assert client._closed
+
+
+def test_acp_client_close_fails_pending_requests() -> None:
+    client = ACPClient(("fake",))
+    pending: Future[dict[str, Any] | None] = Future()
+    with client._state_lock:
+        client._pending[1] = pending
+
+    client.close()
+
+    with pytest.raises(ACPDisconnected, match="closed"):
+        pending.result()
+
+
+def test_acp_client_write_failure_cleans_pending_request() -> None:
+    client = ACPClient(("fake",))
+    client._ensure_started = lambda **_kwargs: None  # type: ignore[method-assign]
+
+    def fail_write(_payload: object) -> None:
+        raise ACPDisconnected("broken pipe")
+
+    client._write = fail_write  # type: ignore[method-assign]
+
+    with pytest.raises(ACPDisconnected, match="broken pipe"):
+        client.request("session/prompt")
+
+    assert client._pending == {}
+
+
+def test_acp_client_rejects_duplicate_active_session_id() -> None:
+    client = ACPClient(("fake",))
+    first = _SessionState()
+    client._register_session("same", first)
+
+    with pytest.raises(ACPProtocolError, match="reused active session ID"):
+        client._register_session("same", _SessionState())
+
+    assert client._sessions == {"same": first}
+
+
+def test_acp_client_preserves_a_replaced_session_during_prompt_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ACPClient(("fake",))
+    replacement = _SessionState()
+
+    monkeypatch.setattr(client, "_new_session", lambda _cwd: "same")
+
+    def request(method: str, _params: object, *, timeout: float) -> dict[str, object]:
+        del timeout
+        if method == "session/prompt":
+            client._sessions["same"] = replacement
+        return {}
+
+    monkeypatch.setattr(client, "request", request)
+
+    assert client.run_prompt_sync(prompt="hello", cwd="/tmp", timeout=1) == ""
+    assert client._sessions["same"] is replacement
 
 
 def test_acp_client_can_start_without_initializing(monkeypatch: pytest.MonkeyPatch) -> None:

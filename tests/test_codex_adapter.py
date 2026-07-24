@@ -824,6 +824,74 @@ def test_codex_client_server_request_validation_edges(
     assert sent[-1]["result"]["success"] is False
 
 
+def test_codex_client_limits_dynamic_request_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from threading import Event as ThreadEvent
+
+    client = CodexAppServerClient(
+        (sys.executable,), dynamic_request_workers=1, max_dynamic_requests=1
+    )
+    sent: list[dict[str, Any]] = []
+    started = ThreadEvent()
+    release = ThreadEvent()
+
+    def block_request(_request_id: Any, _method: str, _params: Any) -> None:
+        started.set()
+        assert release.wait(timeout=2)
+
+    monkeypatch.setattr(client, "_send", sent.append)
+    monkeypatch.setattr(client, "_handle_server_request", block_request)
+    try:
+        client._submit_server_request(1, "item/tool/call", {})
+        assert started.wait(timeout=2)
+        client._submit_server_request(2, "item/tool/call", {})
+        assert sent == [
+            {
+                "id": 2,
+                "error": {
+                    "code": -32000,
+                    "message": "Kedi dynamic request capacity is exhausted.",
+                },
+            }
+        ]
+    finally:
+        release.set()
+        client.close()
+
+
+def test_codex_client_rejects_invalid_dynamic_worker_limits() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        CodexAppServerClient((sys.executable,), dynamic_request_workers=0)
+    with pytest.raises(ValueError, match="cannot be smaller"):
+        CodexAppServerClient(
+            (sys.executable,),
+            dynamic_request_workers=2,
+            max_dynamic_requests=1,
+        )
+
+
+def test_codex_client_reports_dynamic_executor_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = CodexAppServerClient((sys.executable,))
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(client, "_send", sent.append)
+    client._dynamic_executor.shutdown(wait=True)
+
+    client._submit_server_request(1, "item/tool/call", {})
+
+    assert sent == [
+        {
+            "id": 1,
+            "error": {
+                "code": -32000,
+                "message": "Kedi Codex dynamic request executor is closed.",
+            },
+        }
+    ]
+
+
 def test_codex_client_tool_request_system_exit_and_notifications(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

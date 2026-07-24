@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
+from concurrent.futures import Future
 from contextlib import contextmanager
+from contextvars import copy_context
+from dataclasses import asdict
+import json
 from pathlib import Path
-from typing import Any, Iterator
+from threading import Event, Lock, Thread
+from types import SimpleNamespace
+from typing import Any, Iterator, cast
 
 import pytest
 from pydantic_ai.messages import (
@@ -27,13 +33,23 @@ from kedi.agent_adapter.invocation import (
 )
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.subagents import (
+    DelegationResult,
     MAX_FINAL_SCHEMA_BYTES,
+    SubagentTurn,
     SubagentExecutionRequest,
     subagent_tool_specs,
     validate_final_schema,
     validate_structured_result,
     wrapped_final_schema,
 )
+from kedi.agent_adapter.subagents import coordinator as coordinator_module
+from kedi.agent_adapter.subagents.coordinator import (
+    MAX_SUBAGENT_CONVERSATION_TURNS,
+    _OwnedSubagentTask,
+    _schedule_owned_cancellation,
+    _unwrap_task,
+)
+from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
 from kedi.agent_adapter.tool_override import ToolSpec
 from kedi.agent_profile import (
     AgentProfile,
@@ -58,7 +74,7 @@ from kedi.agent_adapter.subagents.attempts import (
     delegation_scope,
     track_delegation_attempt,
 )
-from kedi.agent_adapter.subagents.runs import SubagentRunRegistry
+from kedi.agent_adapter.subagents.runs import SubagentRun, SubagentRunRegistry
 from kedi.agent_adapter.subagents.runs import (
     SubagentCancelled,
     SubagentCompleted,
@@ -200,6 +216,227 @@ def _manager_tools() -> tuple[RecordingPydanticAdapter, Any, dict[str, Any]]:
     return adapter, runtime, tools
 
 
+def test_subagent_foreign_loop_wait_does_not_cancel_owner_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, runtime, tools = _manager_tools()
+    started = Event()
+    release = Event()
+    owner_loop = asyncio.new_event_loop()
+    owner_ready = Event()
+
+    def run_owner_loop() -> None:
+        asyncio.set_event_loop(owner_loop)
+        owner_ready.set()
+        owner_loop.run_forever()
+        owner_loop.close()
+
+    owner_thread = Thread(target=run_owner_loop, daemon=True)
+
+    async def block(*, prompt: str, **kwargs: Any) -> str:
+        del prompt, kwargs
+        started.set()
+        await asyncio.to_thread(release.wait)
+        return "completed by owner loop"
+
+    monkeypatch.setattr(adapter, "invoke", block)
+    owner_thread.start()
+    assert owner_ready.wait(timeout=2)
+
+    async def start_background() -> str:
+        handle = await tools["delegate_task"].fn(
+            subagent="worker",
+            task="block until released",
+            background=True,
+        )
+        return handle["run_id"]
+
+    try:
+        run_id = asyncio.run_coroutine_threadsafe(start_background(), owner_loop).result(timeout=2)
+        assert started.wait(timeout=2)
+
+        async def caller_timeout() -> None:
+            with pytest.raises(TimeoutError):
+                await runtime._subagent_coordinator.wait(run_id, timeout=0.01)
+
+        asyncio.run(caller_timeout())
+        assert runtime._subagent_coordinator.status(run_id) == "running"
+
+        release.set()
+        result = asyncio.run(runtime._subagent_coordinator.wait(run_id))
+        assert result.task_summary == "completed by owner loop"
+        assert runtime._subagent_coordinator.status(run_id) == "completed"
+    finally:
+        release.set()
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2)
+
+
+def test_subagent_foreign_thread_cancel_preserves_contextvars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, runtime, tools = _manager_tools()
+    started = Event()
+    owner_loop = asyncio.new_event_loop()
+    owner_ready = Event()
+
+    def run_owner_loop() -> None:
+        asyncio.set_event_loop(owner_loop)
+        owner_ready.set()
+        owner_loop.run_forever()
+        owner_loop.close()
+
+    owner_thread = Thread(target=run_owner_loop, daemon=True)
+
+    async def block(*, prompt: str, **kwargs: Any) -> str:
+        del prompt, kwargs
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr(adapter, "invoke", block)
+    owner_thread.start()
+    assert owner_ready.wait(timeout=2)
+
+    async def start_background() -> str:
+        handle = await tools["delegate_task"].fn(
+            subagent="worker",
+            task="wait for cancellation",
+            background=True,
+        )
+        return handle["run_id"]
+
+    async def wait_for_cancellation(run_id: str) -> None:
+        with pytest.raises(asyncio.CancelledError):
+            await runtime._subagent_coordinator.wait(run_id)
+
+    try:
+        run_id = asyncio.run_coroutine_threadsafe(start_background(), owner_loop).result(timeout=2)
+        assert started.wait(timeout=2)
+        assert runtime._subagent_coordinator.cancel(run_id) is True
+        asyncio.run_coroutine_threadsafe(wait_for_cancellation(run_id), owner_loop).result(
+            timeout=2
+        )
+        assert runtime._subagent_coordinator.status(run_id) == "cancelled"
+    finally:
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        owner_thread.join(timeout=2)
+
+
+def test_subagent_cross_loop_guard_paths_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+
+    class PendingTask:
+        def __init__(
+            self, *, done: bool = False, cancel_error: BaseException | None = None
+        ) -> None:
+            self._done = done
+            self._cancel_error = cancel_error
+            self.cancelled = False
+
+        def done(self) -> bool:
+            return self._done
+
+        def cancel(self) -> None:
+            if self._cancel_error is not None:
+                raise self._cancel_error
+            self.cancelled = True
+
+    closed_loop = asyncio.new_event_loop()
+    closed_loop.close()
+    closed_task = cast(Any, PendingTask())
+    closed_owned = _OwnedSubagentTask(closed_task, closed_loop, copy_context())
+    coordinator._tasks["closed"] = closed_owned
+
+    with pytest.raises(KediExecutionError, match="cannot be cancelled"):
+        coordinator.cancel("closed")
+    with pytest.raises(KediExecutionError, match="owner event loop is closed"):
+        coordinator._bridge_task_wait("closed", closed_owned)
+
+    done_task = cast(Any, PendingTask(done=True))
+    done_owned = _OwnedSubagentTask(done_task, asyncio.new_event_loop(), copy_context())
+    coordinator._tasks["done"] = done_owned
+    coordinator._timeout_run("done", done_task, 1)
+    done_owned.loop.close()
+
+    scheduled: list[tuple[object, tuple[object, ...]]] = []
+
+    class ForeignLoop:
+        def is_closed(self) -> bool:
+            return False
+
+        def call_soon_threadsafe(self, callback: object, *args: object, **_kwargs: object) -> None:
+            scheduled.append((callback, args))
+
+    foreign_task = cast(Any, PendingTask())
+    foreign_owned = _OwnedSubagentTask(foreign_task, cast(Any, ForeignLoop()), copy_context())
+    coordinator._tasks["foreign"] = foreign_owned
+    coordinator._mark_timed_out("foreign", foreign_task, 1)
+    assert scheduled
+
+    class ClosedForeignLoop(ForeignLoop):
+        def is_closed(self) -> bool:
+            return True
+
+    closed_foreign_task = cast(Any, PendingTask())
+    coordinator._tasks["closed-foreign"] = _OwnedSubagentTask(
+        closed_foreign_task,
+        cast(Any, ClosedForeignLoop()),
+        copy_context(),
+    )
+    coordinator._mark_timed_out("closed-foreign", closed_foreign_task, 1)
+
+    coordinator._tasks["terminal"] = _OwnedSubagentTask(
+        cast(Any, PendingTask()),
+        asyncio.new_event_loop(),
+        copy_context(),
+    )
+    monkeypatch.setattr(
+        coordinator_module, "_running_loop", lambda: coordinator._tasks["terminal"].loop
+    )
+    coordinator.runs = cast(
+        Any, SimpleNamespace(get=lambda _run_id: SimpleNamespace(status="completed"))
+    )
+    coordinator._mark_timed_out("terminal", coordinator._tasks["terminal"].task, 1)
+    coordinator._tasks["terminal"].loop.close()
+
+    async def unwrap_raw_task() -> None:
+        task = asyncio.create_task(asyncio.sleep(0))
+        assert _unwrap_task(task) is task
+        await task
+
+    asyncio.run(unwrap_raw_task())
+
+    async def cancellation_error() -> None:
+        normal_task = cast(Any, PendingTask())
+        normal_owned = _OwnedSubagentTask(normal_task, asyncio.get_running_loop(), copy_context())
+        _schedule_owned_cancellation(normal_owned)
+        await asyncio.sleep(0)
+        assert normal_task.cancelled
+
+        detached_error_task = cast(Any, PendingTask(cancel_error=RuntimeError("detached failure")))
+        detached_error_owned = _OwnedSubagentTask(
+            detached_error_task,
+            asyncio.get_running_loop(),
+            copy_context(),
+        )
+        _schedule_owned_cancellation(detached_error_owned)
+        await asyncio.sleep(0)
+
+        error_task = cast(Any, PendingTask(cancel_error=RuntimeError("cancel failed")))
+        owned = _OwnedSubagentTask(error_task, asyncio.get_running_loop(), copy_context())
+        completed: Future[None] = Future()
+        _schedule_owned_cancellation(owned, completed)
+        await asyncio.sleep(0)
+        with pytest.raises(RuntimeError, match="cancel failed"):
+            completed.result()
+
+    asyncio.run(cancellation_error())
+
+
 def test_subagent_profile_parses_and_compiles() -> None:
     source = _profiles_source().replace(
         "    > subagent: worker\n",
@@ -323,6 +560,481 @@ def test_delegate_task_runs_structured_child_and_validates_result() -> None:
     assert result["final_result"] == {"value": 7}
     assert adapter.invocations == [("Build a value", "Work carefully.", ("lookup",), ())]
     assert runtime._subagent_stack.get() == ()
+
+
+def test_continue_subagent_uses_verified_history_and_new_run() -> None:
+    _, runtime, tools = _manager_tools()
+    adapter = RecordingNeutralChildAdapter()
+    runtime._resolve_adapter = lambda _profile: adapter  # type: ignore[method-assign]
+
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+        first = await tools["delegate_task"].fn(
+            subagent="worker",
+            task="Inspect the parser",
+        )
+        second = await tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="Now identify one edge case",
+        )
+        return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert second["run_id"] != first["run_id"]
+    first_run = runtime._subagent_coordinator.runs.get(first["run_id"])
+    second_run = runtime._subagent_coordinator.runs.get(second["run_id"])
+    assert second_run.previous_run_id == first_run.run_id
+    assert second_run.conversation_id == first_run.conversation_id
+    assert "verified prior conversation state" in adapter.child_calls[1][0]
+    assert "neutral:Inspect the parser" in adapter.child_calls[1][0]
+    with pytest.raises(KediExecutionError, match="latest completed"):
+        asyncio.run(
+            tools["continue_subagent"].fn(
+                run_id=first["run_id"],
+                task="Branch from stale state",
+            )
+        )
+
+
+def test_continue_subagent_supports_background_lifecycle() -> None:
+    _, runtime, tools = _manager_tools()
+
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+        first = await tools["delegate_task"].fn(
+            subagent="worker",
+            task="Inspect the parser",
+        )
+        handle = await tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="Continue in background",
+            background=True,
+        )
+        result = await tools["wait_subagent"].fn(run_id=handle["run_id"])
+        return handle, result
+
+    handle, result = asyncio.run(scenario())
+
+    assert handle["status"] == "running"
+    assert result["task_summary"] == "child:Continue in background"
+    assert runtime._subagent_coordinator.status(handle["run_id"]) == "completed"
+
+
+def test_continue_subagent_rejects_background_for_blocking_adapter() -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tools = {
+        tool.name: tool for tool in subagent_tool_specs(runtime, profile, supports_background=False)
+    }
+    first = asyncio.run(
+        tools["delegate_task"].fn(
+            subagent="worker",
+            task="Inspect the parser",
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not support background subagents"):
+        asyncio.run(
+            tools["continue_subagent"].fn(
+                run_id=first["run_id"],
+                task="Continue in background",
+                background=True,
+            )
+        )
+
+
+def test_pydantic_subagent_continuation_uses_native_message_history() -> None:
+    calls: list[list[object]] = []
+
+    async def respond(messages: list[object], _info: AgentInfo) -> ModelResponse:
+        calls.append(messages)
+        return ModelResponse(parts=[TextPart(f"turn-{len(calls)}")])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    runtime = compile_program(parse_program(_profiles_source()), adapter=adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tools = {tool.name: tool for tool in runtime._resolve_agent_tool_specs(profile, adapter)}
+
+    async def scenario() -> None:
+        first = await tools["delegate_task"].fn(subagent="worker", task="First task")
+        await tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="Follow-up task",
+        )
+
+    asyncio.run(scenario())
+
+    assert len(calls) == 2
+    assert len(calls[1]) > len(calls[0])
+    assert any(
+        isinstance(part, TextPart) and part.content == "turn-1"
+        for message in calls[1]
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    )
+
+
+def test_subagent_state_restores_terminal_results_and_continuation(tmp_path: Path) -> None:
+    state_path = tmp_path / "subagents.json"
+    first_adapter = RecordingPydanticAdapter()
+    first_runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=first_adapter,
+        subagent_state_path=state_path,
+    )
+    definition = first_runtime._profile_registry["manager"]
+    profile = eval_profile_definition(first_runtime, definition, build_capture_env(first_runtime))
+    first_tools = {
+        tool.name: tool for tool in first_runtime._resolve_agent_tool_specs(profile, first_adapter)
+    }
+    first = asyncio.run(
+        first_tools["delegate_task"].fn(subagent="worker", task="Persist this result")
+    )
+    assert state_path.exists()
+    assert state_path.stat().st_mode & 0o777 == 0o600
+
+    second_adapter = RecordingPydanticAdapter()
+    second_runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=second_adapter,
+        subagent_state_path=state_path,
+    )
+    restored = asyncio.run(second_runtime._wait_subagent(first["run_id"]))
+    assert restored.task_summary == "child:Persist this result"
+    definition = second_runtime._profile_registry["manager"]
+    profile = eval_profile_definition(
+        second_runtime,
+        definition,
+        build_capture_env(second_runtime),
+    )
+    second_tools = {
+        tool.name: tool
+        for tool in second_runtime._resolve_agent_tool_specs(profile, second_adapter)
+    }
+    continued = asyncio.run(
+        second_tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="Continue after restart",
+        )
+    )
+    assert continued["task_summary"] == "child:Continue after restart"
+
+
+def test_subagent_state_marks_nonterminal_runs_interrupted(tmp_path: Path) -> None:
+    state_path = tmp_path / "subagents.json"
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=adapter,
+        subagent_state_path=state_path,
+    )
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tools = {tool.name: tool for tool in runtime._resolve_agent_tool_specs(profile, adapter)}
+    result = asyncio.run(tools["delegate_task"].fn(subagent="worker", task="Initial"))
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["runs"][0]["status"] = "running"
+    payload["runs"][0]["finished_at"] = None
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = compile_program(
+        parse_program(_profiles_source()),
+        adapter=RecordingPydanticAdapter(),
+        subagent_state_path=state_path,
+    )
+    with pytest.raises(KediExecutionError, match="interrupted by a process restart"):
+        asyncio.run(restored._wait_subagent(result["run_id"]))
+    run = restored._subagent_coordinator.runs.get(result["run_id"])
+    assert run.status == "failed"
+    assert run.error_type == "InterruptedError"
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ("not-json", "Invalid subagent state file"),
+        ('{"version": 999}', "expected version 1"),
+        ('{"version": 1, "runs": {}}', "runs must be an array"),
+    ],
+)
+def test_subagent_state_rejects_invalid_data(
+    tmp_path: Path,
+    payload: str,
+    message: str,
+) -> None:
+    state_path = tmp_path / "subagents.json"
+    state_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        compile_program(
+            parse_program(_profiles_source()),
+            adapter=RecordingPydanticAdapter(),
+            subagent_state_path=state_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("results", [], "results must be an object"),
+        ("conversations", [], "conversations must be an object"),
+        ("runs", ["invalid"], "run records must be objects"),
+    ],
+)
+def test_subagent_state_rejects_invalid_collection_shapes(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    state_path = tmp_path / "subagents.json"
+    payload: dict[str, object] = {
+        "version": 1,
+        "runs": [],
+        "results": {},
+        "conversations": {},
+    }
+    payload[field] = value
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        SubagentStateStore(state_path).load()
+
+
+def test_subagent_state_rejects_unknown_run_status(tmp_path: Path) -> None:
+    state_path = tmp_path / "subagents.json"
+    run = SubagentRun(
+        run_id="run",
+        parent_run_id=None,
+        root_run_id="run",
+        previous_run_id=None,
+        conversation_id="run",
+        owner_profile_name="manager",
+        profile_name="worker",
+        depth=1,
+        status="completed",
+        created_at=1.0,
+    )
+    payload = {
+        "version": 1,
+        "runs": [{**asdict(run), "status": "unknown"}],
+        "results": {},
+        "conversations": {},
+    }
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="unknown subagent status"):
+        SubagentStateStore(state_path).load()
+
+
+def test_subagent_state_rejects_non_serializable_adapter_state(tmp_path: Path) -> None:
+    store = SubagentStateStore(tmp_path / "subagents.json")
+    conversation = StoredConversation(
+        conversation_id="conversation",
+        profile_name="worker",
+        active_run_id=None,
+        turns=[],
+        adapter_state={"invalid": object()},
+    )
+
+    with pytest.raises(ValueError, match="must be JSON serializable"):
+        store.save(runs=(), results={}, conversations={"conversation": conversation})
+
+
+def test_subagent_state_removes_temporary_file_after_replace_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = SubagentStateStore(tmp_path / "subagents.json")
+
+    def fail_replace(_source: object, _target: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("kedi.agent_adapter.subagents.persistence.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        store.save(runs=(), results={}, conversations={})
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_subagent_state_is_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(_profiles_source()), adapter=adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(profile, adapter)[0]
+
+    asyncio.run(tool.fn(subagent="worker", task="Do not persist"))
+
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+def test_subagent_run_registry_rejects_duplicate_restore() -> None:
+    registry = SubagentRunRegistry()
+    run = registry.create(
+        run_id="duplicate",
+        parent_run_id=None,
+        root_run_id="duplicate",
+        profile_name="worker",
+        depth=1,
+    )
+
+    with pytest.raises(ValueError, match="Duplicate subagent run ID"):
+        registry.restore(run)
+
+
+def test_concurrent_subagent_state_writes_cannot_restore_an_older_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(_profiles_source()), adapter=adapter)
+    coordinator = runtime._subagent_coordinator
+
+    class BlockingStateStore:
+        def __init__(self) -> None:
+            self.first_entered = Event()
+            self.second_entered = Event()
+            self.release_first = Event()
+            self._calls_lock = Lock()
+            self._calls = 0
+            self.saved_result_ids: list[frozenset[str]] = []
+
+        def save(
+            self,
+            *,
+            runs: tuple[Any, ...],
+            results: dict[str, DelegationResult],
+            conversations: dict[str, Any],
+        ) -> None:
+            del runs, conversations
+            with self._calls_lock:
+                self._calls += 1
+                call = self._calls
+            if call == 1:
+                self.first_entered.set()
+                assert self.release_first.wait(timeout=1)
+            else:
+                self.second_entered.set()
+            self.saved_result_ids.append(frozenset(results))
+
+    store = BlockingStateStore()
+    monkeypatch.setattr(coordinator, "_state_store", store)
+    coordinator._results["older"] = DelegationResult(
+        run_id="older",
+        subagent="worker",
+        task_summary="older",
+    )
+    first = Thread(target=coordinator._persist_state)
+    first.start()
+    assert store.first_entered.wait(timeout=1)
+
+    coordinator._results["newer"] = DelegationResult(
+        run_id="newer",
+        subagent="worker",
+        task_summary="newer",
+    )
+    second = Thread(target=coordinator._persist_state)
+    second.start()
+    assert not store.second_entered.wait(timeout=0.05)
+
+    store.release_first.set()
+    first.join(timeout=1)
+    second.join(timeout=1)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert store.saved_result_ids == [
+        frozenset({"older"}),
+        frozenset({"older", "newer"}),
+    ]
+
+
+def test_subagent_continuation_is_limited_to_owning_profile() -> None:
+    source = (
+        _profiles_source()
+        + """
+
+> profile: other_manager:
+    > adapter: pydantic
+    > subagent: worker
+"""
+    )
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(source), adapter=adapter)
+
+    def tools_for(profile_name: str) -> dict[str, Any]:
+        definition = runtime._profile_registry[profile_name]
+        profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+        return {tool.name: tool for tool in runtime._resolve_agent_tool_specs(profile, adapter)}
+
+    first = asyncio.run(
+        tools_for("manager")["delegate_task"].fn(subagent="worker", task="Owned task")
+    )
+    with pytest.raises(KediExecutionError, match="does not own"):
+        asyncio.run(
+            tools_for("other_manager")["continue_subagent"].fn(
+                run_id=first["run_id"],
+                task="Cross-owner continuation",
+            )
+        )
+
+
+def test_pydantic_native_message_history_survives_restart(tmp_path: Path) -> None:
+    calls: list[list[object]] = []
+
+    async def respond(messages: list[object], _info: AgentInfo) -> ModelResponse:
+        calls.append(messages)
+        return ModelResponse(parts=[TextPart(f"turn-{len(calls)}")])
+
+    state_path = tmp_path / "subagents.json"
+    first_adapter = PydanticAdapter(FunctionModel(respond))
+    first_runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=first_adapter,
+        subagent_state_path=state_path,
+    )
+    definition = first_runtime._profile_registry["manager"]
+    profile = eval_profile_definition(first_runtime, definition, build_capture_env(first_runtime))
+    first_tools = {
+        tool.name: tool for tool in first_runtime._resolve_agent_tool_specs(profile, first_adapter)
+    }
+    first = asyncio.run(
+        first_tools["delegate_task"].fn(subagent="worker", task="First persisted task")
+    )
+
+    second_adapter = PydanticAdapter(FunctionModel(respond))
+    second_runtime = compile_program(
+        parse_program(_profiles_source()),
+        adapter=second_adapter,
+        subagent_state_path=state_path,
+    )
+    definition = second_runtime._profile_registry["manager"]
+    profile = eval_profile_definition(
+        second_runtime,
+        definition,
+        build_capture_env(second_runtime),
+    )
+    second_tools = {
+        tool.name: tool
+        for tool in second_runtime._resolve_agent_tool_specs(profile, second_adapter)
+    }
+    asyncio.run(
+        second_tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="Continue persisted task",
+        )
+    )
+
+    assert len(calls) == 2
+    assert any(
+        isinstance(part, TextPart) and part.content == "turn-1"
+        for message in calls[1]
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    )
 
 
 def test_delegate_task_uses_adapter_neutral_child_execution_seam(
@@ -482,6 +1194,7 @@ def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
     assert runtime.run_main() == "parent received child result"
     lifecycle_tools = (
         "delegate_task",
+        "continue_subagent",
         "wait_subagent",
         "cancel_subagent",
         "subagent_status",
@@ -589,9 +1302,12 @@ def test_background_subagent_cancel_and_timeout_are_fail_closed(
                 background=True,
             )
             await started.wait()
-            with pytest.raises(KediExecutionError, match="timed out"):
+            with pytest.raises(TimeoutError):
                 await tools["wait_subagent"].fn(run_id=handle["run_id"], timeout=0.001)
-        assert timed_out.snapshot()[0].status == "timed_out"
+            assert tools["cancel_subagent"].fn(run_id=handle["run_id"])["cancel_requested"] is True
+            with pytest.raises(asyncio.CancelledError):
+                await tools["wait_subagent"].fn(run_id=handle["run_id"])
+        assert timed_out.snapshot()[0].status == "cancelled"
 
     asyncio.run(scenario())
 
@@ -832,6 +1548,11 @@ def test_concurrency_limit_fails_fast_and_releases_success_and_cancel_slots(
         cancelled.cancel()
         with pytest.raises(asyncio.CancelledError):
             await cancelled
+        active_run = next(
+            run for run in runtime._subagent_coordinator.runs.snapshot() if run.status == "running"
+        )
+        assert runtime._subagent_coordinator.cancel(active_run.run_id) is True
+        await asyncio.sleep(0)
 
         monkeypatch.setattr(adapter, "invoke", RecordingPydanticAdapter.invoke.__get__(adapter))
         assert (await tool.fn(subagent="worker", task="after-cancel"))[
@@ -1559,6 +2280,16 @@ def test_delegation_ledger_tracks_runtime_terminal_statuses(
     assert timed_out.snapshot()[0].status == "timed_out"
 
     cancel_adapter, _cancel_runtime, cancel_tool = _manager_tool()
+    cancel_definition = _cancel_runtime._profile_registry["manager"]
+    cancel_profile = eval_profile_definition(
+        _cancel_runtime,
+        cancel_definition,
+        build_capture_env(_cancel_runtime),
+    )
+    cancel_tools = {
+        tool.name: tool
+        for tool in _cancel_runtime._resolve_agent_tool_specs(cancel_profile, cancel_adapter)
+    }
 
     async def cancel_scenario() -> Any:
         started = asyncio.Event()
@@ -1576,6 +2307,14 @@ def test_delegation_ledger_tracks_runtime_terminal_statuses(
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await pending
+            active_run = next(
+                run
+                for run in _cancel_runtime._subagent_coordinator.runs.snapshot()
+                if run.status == "running"
+            )
+            assert _cancel_runtime._subagent_coordinator.cancel(active_run.run_id) is True
+            with pytest.raises(asyncio.CancelledError):
+                await cancel_tools["wait_subagent"].fn(run_id=active_run.run_id)
         return cancelled
 
     cancelled = asyncio.run(cancel_scenario())
@@ -1944,9 +2683,13 @@ def test_subagent_handle_wait_cancel_timeout_and_events(
             parent_concurrency=parent_concurrency,
         )
         await started.wait()
-        with pytest.raises(KediExecutionError, match="timed out after 0.01 seconds"):
+        with pytest.raises(TimeoutError):
             await timed_out.wait(timeout=0.01)
-        assert timed_out.status == "timed_out"
+        assert timed_out.status == "running"
+        assert timed_out.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await timed_out.wait()
+        assert timed_out.status == "cancelled"
 
     asyncio.run(scenario())
     events = coordinator.events.snapshot()
@@ -1956,7 +2699,7 @@ def test_subagent_handle_wait_cancel_timeout_and_events(
         SubagentStarted,
         SubagentCancelled,
         SubagentStarted,
-        SubagentFailed,
+        SubagentCancelled,
     ]
     assert [event.run.run_id for event in events[::2]] == [
         event.run.run_id for event in events[1::2]
@@ -1995,6 +2738,31 @@ def test_subagent_coordinator_bounds_terminal_run_retention() -> None:
         coordinator.status(first_run_id)
 
 
+def test_subagent_retention_keeps_conversation_for_latest_continuation() -> None:
+    _adapter, runtime, tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    coordinator.max_retained_runs = 1
+
+    async def scenario() -> tuple[str, str]:
+        first = await tools["delegate_task"].fn(
+            subagent="worker",
+            task="first turn",
+        )
+        second = await tools["continue_subagent"].fn(
+            run_id=first["run_id"],
+            task="second turn",
+        )
+        await asyncio.sleep(0)
+        return first["run_id"], second["run_id"]
+
+    first_run_id, second_run_id = asyncio.run(scenario())
+
+    with pytest.raises(KediExecutionError, match="Unknown subagent run ID"):
+        coordinator.status(first_run_id)
+    second = coordinator.runs.get(second_run_id)
+    assert second.conversation_id in coordinator._conversations
+
+
 def test_subagent_lifecycle_rejects_invalid_configuration_and_background_mode() -> None:
     _adapter, runtime, _tools = _manager_tools()
     coordinator = runtime._subagent_coordinator
@@ -2018,6 +2786,195 @@ def test_subagent_lifecycle_rejects_invalid_configuration_and_background_mode() 
         type(coordinator)(coordinator._deps, max_retained_runs=0)
     with pytest.raises(ValueError, match="event retention must be at least 1"):
         SubagentEventLog(max_events=0)
+
+
+def test_subagent_start_releases_slot_when_lifecycle_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    budget = DelegationBudget.for_profile(profile_name="manager", max_agents=1)
+    concurrency = coordinator.new_concurrency()
+
+    def fail_activation(**_kwargs: Any) -> None:
+        raise RuntimeError("activation failed")
+
+    monkeypatch.setattr(coordinator, "_activate_conversation", fail_activation)
+
+    with pytest.raises(RuntimeError, match="activation failed"):
+        coordinator.start(
+            allowed_subagents=("worker",),
+            subagent="worker",
+            task="fail during setup",
+            final_schema=None,
+            parent_profile=profile,
+            parent_budget=budget,
+            parent_concurrency=concurrency,
+        )
+    assert coordinator.active_runs == 0
+    assert concurrency.active == 0
+
+
+def test_subagent_conversation_and_terminal_state_guards() -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+
+    with pytest.raises(KediExecutionError, match="Unknown subagent conversation"):
+        coordinator._activate_conversation(
+            conversation_id="missing",
+            profile_name="worker",
+            run_id="next",
+            previous_run_id="previous",
+        )
+
+    coordinator._conversations["profile-change"] = StoredConversation(
+        conversation_id="profile-change",
+        profile_name="worker",
+        active_run_id=None,
+        turns=[],
+        adapter_state={},
+    )
+    with pytest.raises(KediExecutionError, match="cannot change child profiles"):
+        coordinator._activate_conversation(
+            conversation_id="profile-change",
+            profile_name="other",
+            run_id="next",
+            previous_run_id=None,
+        )
+
+    coordinator._conversations["active"] = StoredConversation(
+        conversation_id="active",
+        profile_name="worker",
+        active_run_id="running",
+        turns=[],
+        adapter_state={},
+    )
+    with pytest.raises(KediExecutionError, match="already has an active run"):
+        coordinator._activate_conversation(
+            conversation_id="active",
+            profile_name="worker",
+            run_id="next",
+            previous_run_id=None,
+        )
+
+    coordinator._conversations["stale"] = StoredConversation(
+        conversation_id="stale",
+        profile_name="worker",
+        active_run_id=None,
+        turns=[],
+        adapter_state={},
+    )
+    with pytest.raises(KediExecutionError, match="latest completed"):
+        coordinator._activate_conversation(
+            conversation_id="stale",
+            profile_name="worker",
+            run_id="next",
+            previous_run_id="previous",
+        )
+
+    turns = [
+        SubagentTurn(
+            run_id=f"run-{index}",
+            task="task",
+            task_summary="summary",
+            final_result=None,
+        )
+        for index in range(MAX_SUBAGENT_CONVERSATION_TURNS)
+    ]
+    coordinator._conversations["full"] = StoredConversation(
+        conversation_id="full",
+        profile_name="worker",
+        active_run_id=None,
+        turns=turns,
+        adapter_state={},
+    )
+    with pytest.raises(KediExecutionError, match="turn limit"):
+        coordinator._activate_conversation(
+            conversation_id="full",
+            profile_name="worker",
+            run_id="next",
+            previous_run_id=turns[-1].run_id,
+        )
+
+    coordinator._deactivate_conversation("missing", "run")
+    coordinator._deactivate_conversation("active", "different")
+    assert coordinator._conversations["active"].active_run_id == "running"
+    coordinator._deactivate_conversation("active", "running")
+    assert coordinator._conversations["active"].active_run_id is None
+
+
+def test_subagent_coordinator_rejects_invalid_restored_lifecycle_state() -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+    registry = coordinator.runs
+
+    with pytest.raises(KediExecutionError, match="Unknown subagent run ID"):
+        coordinator._task_for("missing")
+    with pytest.raises(KediExecutionError, match="Unknown subagent run ID"):
+        coordinator._continuable_run(
+            "missing",
+            allowed_subagents=("worker",),
+            owner_profile_name="manager",
+        )
+
+    pending = registry.create(
+        run_id="pending",
+        parent_run_id=None,
+        root_run_id="pending",
+        profile_name="worker",
+        depth=1,
+        owner_profile_name="manager",
+    )
+    assert coordinator.cancel(pending.run_id) is False
+    with pytest.raises(KediExecutionError, match="Only completed"):
+        coordinator._continuable_run(
+            pending.run_id,
+            allowed_subagents=("worker",),
+            owner_profile_name="manager",
+        )
+    with pytest.raises(KediExecutionError, match="still pending"):
+        coordinator._terminal_result(pending.run_id)
+
+    completed = registry.create(
+        run_id="completed",
+        parent_run_id=None,
+        root_run_id="completed",
+        profile_name="worker",
+        depth=1,
+        owner_profile_name="manager",
+    )
+    registry.transition(completed.run_id, "running")
+    registry.transition(completed.run_id, "completed")
+    with pytest.raises(KediExecutionError, match="Unknown subagent conversation"):
+        coordinator._continuable_run(
+            completed.run_id,
+            allowed_subagents=("worker",),
+            owner_profile_name="manager",
+        )
+    coordinator._conversations[completed.conversation_id] = StoredConversation(
+        conversation_id=completed.conversation_id,
+        profile_name="worker",
+        active_run_id="active",
+        turns=[
+            SubagentTurn(
+                run_id=completed.run_id,
+                task="task",
+                task_summary="summary",
+                final_result=None,
+            )
+        ],
+        adapter_state={},
+    )
+    with pytest.raises(KediExecutionError, match="already running"):
+        coordinator._continuable_run(
+            completed.run_id,
+            allowed_subagents=("worker",),
+            owner_profile_name="manager",
+        )
+    with pytest.raises(KediExecutionError, match="has no result"):
+        coordinator._terminal_result(completed.run_id)
 
 
 def test_subagent_wait_cancellation_and_completed_timeout_path(
@@ -2066,6 +3023,10 @@ def test_subagent_wait_cancellation_and_completed_timeout_path(
         waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
             await waiter
+        assert cancelled.status == "running"
+        assert cancelled.cancel() is True
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled.wait()
         assert cancelled.status == "cancelled"
 
     asyncio.run(scenario())

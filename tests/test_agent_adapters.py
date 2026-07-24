@@ -41,7 +41,10 @@ from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
-from kedi.agent_adapter.subagents import SubagentExecutionRequest
+from kedi.agent_adapter.subagents import (
+    SubagentConversationContext,
+    SubagentExecutionRequest,
+)
 from kedi.agent_adapter.tool_override import (
     ToolScope,
     ToolSpec,
@@ -85,6 +88,11 @@ def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
         adapter,
         "_profile_stack_var",
         ContextVar(f"test_profile_stack_{id(adapter)}", default=tuple(profiles)),
+    )
+    setattr(
+        adapter,
+        "_subagent_conversation_var",
+        ContextVar(f"test_subagent_conversation_{id(adapter)}", default=None),
     )
 
 
@@ -1180,6 +1188,12 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self.structured_output = structured_output
             self.is_error = is_error
             self.result = result
+            self.session_id = "claude-session"
+
+    @dataclass
+    class FakeSystemMessage:
+        subtype: str
+        data: dict[str, Any]
 
     async def fake_query(*, prompt: str, options: Any) -> Any:
         events["prompts"].append({"prompt": prompt, "options": options})
@@ -1210,6 +1224,7 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     setattr(sdk, "ClaudeAgentOptions", FakeClaudeAgentOptions)
     setattr(sdk, "HookMatcher", FakeHookMatcher)
     setattr(sdk, "ResultMessage", FakeResultMessage)
+    setattr(sdk, "SystemMessage", FakeSystemMessage)
     setattr(sdk, "query", fake_query)
     setattr(sdk, "tool", fake_tool)
     setattr(sdk, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
@@ -1326,6 +1341,87 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
         "type": "preset",
         "preset": "claude_code",
     }
+
+
+def test_claude_subagent_continuation_resumes_captured_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(model="claude")
+    conversation = SubagentConversationContext(conversation_id="conversation")
+
+    with adapter.subagent_scope(
+        SubagentExecutionRequest(
+            profile=AgentProfile(name="worker"),
+            tools=(),
+            instructions=None,
+            approval_ceiling=(),
+            usage_limits=SubagentUsageLimits(),
+            conversation=conversation,
+        )
+    ):
+        assert asyncio.run(adapter.invoke(prompt="first")) == "plain claude text"
+    assert conversation.result_state == {"claude_session_id": "claude-session"}
+
+    follow_up = SubagentConversationContext(
+        conversation_id="conversation",
+        resume_state=dict(conversation.result_state),
+    )
+    with adapter.subagent_scope(
+        SubagentExecutionRequest(
+            profile=AgentProfile(name="worker"),
+            tools=(),
+            instructions=None,
+            approval_ceiling=(),
+            usage_limits=SubagentUsageLimits(),
+            conversation=follow_up,
+        )
+    ):
+        assert asyncio.run(adapter.invoke(prompt="second")) == "plain claude text"
+
+    assert "resume" not in events["options"][0]
+    assert events["options"][1]["resume"] == "claude-session"
+
+
+def test_claude_adapter_fails_fast_on_non_retryable_api_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+    events["prefix_message"] = sdk.SystemMessage(
+        subtype="api_retry",
+        data={"error_status": 401, "error": "authentication_failed"},
+    )
+
+    with pytest.raises(RuntimeError, match="check ANTHROPIC_API_KEY"):
+        asyncio.run(ClaudeAdapter(model="claude").invoke(prompt="hello"))
+
+
+def test_claude_adapter_allows_transient_api_retry_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+    events["prefix_message"] = sdk.SystemMessage(
+        subtype="api_retry",
+        data={"error_status": 429, "error": "rate_limit"},
+    )
+
+    assert asyncio.run(ClaudeAdapter(model="claude").invoke(prompt="hello")) == "plain claude text"
+
+
+def test_claude_adapter_fails_fast_on_non_authentication_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+    events["prefix_message"] = sdk.SystemMessage(
+        subtype="api_retry",
+        data={"error_status": 400, "error": "invalid_request"},
+    )
+
+    with pytest.raises(RuntimeError, match="non-retryable HTTP 400: invalid_request"):
+        asyncio.run(ClaudeAdapter(model="claude").invoke(prompt="hello"))
 
 
 def test_claude_adapter_allows_tools_setting_to_override_builtin_preset(

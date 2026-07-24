@@ -72,6 +72,7 @@ def compile_program(
     subagent_max_concurrency: int = 4,
     subagent_timeout_seconds: float | None = 120.0,
     subagent_usage_limits: SubagentUsageLimits | None = None,
+    subagent_state_path: str | Path | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -86,6 +87,7 @@ def compile_program(
         subagent_max_concurrency=subagent_max_concurrency,
         subagent_timeout_seconds=subagent_timeout_seconds,
         subagent_usage_limits=subagent_usage_limits,
+        subagent_state_path=subagent_state_path,
     )
     return compiler.compile(prog)
 
@@ -105,6 +107,7 @@ class ProgramCompiler:
         subagent_max_concurrency: int = 4,
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: SubagentUsageLimits | None = None,
+        subagent_state_path: str | Path | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -113,6 +116,7 @@ class ProgramCompiler:
         self.subagent_max_concurrency = subagent_max_concurrency
         self.subagent_timeout_seconds = subagent_timeout_seconds
         self.subagent_usage_limits = subagent_usage_limits
+        self.subagent_state_path = subagent_state_path
         self.rt = KediRuntime(
             adapter=adapter,
             executor=executor,
@@ -121,6 +125,7 @@ class ProgramCompiler:
             subagent_max_concurrency=subagent_max_concurrency,
             subagent_timeout_seconds=subagent_timeout_seconds,
             subagent_usage_limits=subagent_usage_limits,
+            subagent_state_path=subagent_state_path,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)

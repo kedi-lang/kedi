@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any, TypeVar
 
 import pytest
@@ -231,6 +233,102 @@ def test_query_response_cache_reuses_same_call(adapter: ApiAdapter) -> None:
     assert summarize("Kedi") == "short summary"
     assert summarize("Kedi") == "short summary"
     assert len(adapter.templates) == 1
+
+
+def test_query_response_cache_coalesces_concurrent_first_call(adapter: ApiAdapter) -> None:
+    started = Event()
+    release = Event()
+    call_lock = Lock()
+    calls = 0
+    produce_sync = adapter.produce_sync
+
+    def blocked_produce_sync(**kwargs: Any) -> AttrDict[str, Any]:
+        nonlocal calls
+        with call_lock:
+            calls += 1
+        started.set()
+        assert release.wait(timeout=2)
+        return produce_sync(**kwargs)
+
+    adapter.produce_sync = blocked_produce_sync  # type: ignore[method-assign]
+
+    @query(adapter=adapter, cache=True)
+    def summarize(topic: str) -> str:
+        """kedi
+        >> Summarize <topic>. Return [summary].
+        = <summary>
+        """
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(summarize, "Kedi")
+        assert started.wait(timeout=2)
+        second = executor.submit(summarize, "Kedi")
+        release.set()
+        assert first.result(timeout=2) == "short summary"
+        assert second.result(timeout=2) == "short summary"
+
+    assert calls == 1
+    assert len(adapter.templates) == 1
+
+
+def test_response_cache_releases_waiters_after_a_producer_error(adapter: ApiAdapter) -> None:
+    def fail(**_kwargs: Any) -> AttrDict[str, Any]:
+        raise RuntimeError("adapter failed")
+
+    adapter.produce_sync = fail  # type: ignore[method-assign]
+
+    @query(adapter=adapter, cache=True)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    with pytest.raises(RuntimeError, match="adapter failed"):
+        answer()
+
+    assert cache_info().response_entries == 0
+
+
+def test_response_cache_private_flights_handle_recursion_and_clear_races() -> None:
+    clear_cache()
+    cache_key = "private-flight"
+    _, flight, owns_flight = api_module._claim_response_cache_key(cache_key)
+    assert owns_flight
+    assert flight is not None
+
+    with pytest.raises(RuntimeError, match="Recursive Kedi response cache request"):
+        api_module._claim_response_cache_key(cache_key)
+
+    clear_cache()
+    api_module._finish_response_flight(cache_key, flight, result={"answer": "stale"})
+    assert cache_key not in api_module._RESPONSE_CACHE
+    assert flight.future.result() == {"answer": "stale"}
+
+    _, orphaned_flight, owns_orphaned_flight = api_module._claim_response_cache_key(
+        "orphaned-flight"
+    )
+    assert owns_orphaned_flight
+    assert orphaned_flight is not None
+    with api_module._RESPONSE_CACHE_LOCK:
+        api_module._RESPONSE_IN_FLIGHT.pop("orphaned-flight")
+    api_module._finish_response_flight(
+        "orphaned-flight",
+        orphaned_flight,
+        result={"answer": "orphaned"},
+    )
+    assert orphaned_flight.future.result() == {"answer": "orphaned"}
+
+    _, failed_flight, owns_failed_flight = api_module._claim_response_cache_key("failed-flight")
+    assert owns_failed_flight
+    assert failed_flight is not None
+    api_module._finish_response_flight(
+        "failed-flight",
+        failed_flight,
+        error=ValueError("cache producer failed"),
+    )
+    with pytest.raises(ValueError, match="cache producer failed"):
+        failed_flight.future.result()
 
 
 def test_query_response_cache_splits_by_args_and_env(adapter: ApiAdapter) -> None:

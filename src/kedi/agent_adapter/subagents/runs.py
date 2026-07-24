@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 import re
 from threading import Lock
-from time import monotonic
+from time import time
 from typing import Literal, TypeAlias
 
 SubagentRunStatus = Literal[
@@ -36,6 +36,9 @@ class SubagentRun:
     run_id: str
     parent_run_id: str | None
     root_run_id: str
+    previous_run_id: str | None
+    conversation_id: str
+    owner_profile_name: str
     profile_name: str
     depth: int
     status: SubagentRunStatus
@@ -108,15 +111,21 @@ class SubagentRunRegistry:
         root_run_id: str,
         profile_name: str,
         depth: int,
+        previous_run_id: str | None = None,
+        conversation_id: str | None = None,
+        owner_profile_name: str = "",
     ) -> SubagentRun:
         run = SubagentRun(
             run_id=run_id,
             parent_run_id=parent_run_id,
             root_run_id=root_run_id,
+            previous_run_id=previous_run_id,
+            conversation_id=conversation_id or run_id,
+            owner_profile_name=owner_profile_name,
             profile_name=profile_name,
             depth=depth,
             status="pending",
-            created_at=monotonic(),
+            created_at=time(),
         )
         with self._lock:
             if run_id in self._runs:
@@ -133,7 +142,7 @@ class SubagentRunRegistry:
     ) -> SubagentRun:
         if error is not None and status not in {"failed", "cancelled", "timed_out"}:
             raise ValueError("Only failed, cancelled, or timed-out runs may record an error")
-        now = monotonic()
+        now = time()
         with self._lock:
             current = self._runs[run_id]
             if status not in _TRANSITIONS[current.status]:
@@ -199,6 +208,12 @@ class SubagentRunRegistry:
     def snapshot(self) -> tuple[SubagentRun, ...]:
         with self._lock:
             return tuple(self._runs.values())
+
+    def restore(self, run: SubagentRun) -> None:
+        with self._lock:
+            if run.run_id in self._runs:
+                raise ValueError(f"Duplicate subagent run ID: {run.run_id}")
+            self._runs[run.run_id] = run
 
     def discard(self, run_id: str) -> None:
         with self._lock:

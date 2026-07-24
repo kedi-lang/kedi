@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
@@ -41,12 +41,34 @@ class DelegationResult:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class SubagentTurn:
+    run_id: str
+    task: str
+    task_summary: str
+    final_result: Any | None = None
+
+
+@dataclass(slots=True, kw_only=True)
+class SubagentConversationContext:
+    conversation_id: str
+    turns: tuple[SubagentTurn, ...] = ()
+    resume_state: dict[str, Any] = field(default_factory=dict)
+    result_state: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SubagentExecutionRequest:
     profile: AgentProfile
     tools: tuple[ToolSpec, ...]
     instructions: str | None
     approval_ceiling: tuple[ApprovalPolicy | None, ...]
     usage_limits: SubagentUsageLimits
+    conversation: SubagentConversationContext = field(
+        default_factory=lambda: SubagentConversationContext(
+            conversation_id=uuid4().hex,
+            turns=(),
+        )
+    )
 
 
 @runtime_checkable
@@ -134,15 +156,50 @@ def subagent_tool_specs(
                 )
             except BaseException as exc:
                 if attempt is not None:
-                    status = "rejected"
-                    if attempt.run_id is not None:
-                        run = rt._subagent_coordinator.runs.get(attempt.run_id)
-                        status = attempt_status_from_run(run.status)
-                    attempt.fail(status=status, error=exc)
+                    if attempt.run_id is None:
+                        attempt.fail(status="rejected", error=exc)
+                    else:
+                        run_status = rt._subagent_coordinator.runs.get(attempt.run_id).status
+                        if run_status != "running":
+                            attempt.fail(
+                                status=attempt_status_from_run(run_status),
+                                error=exc,
+                            )
                 raise
             if attempt is not None:
                 attempt.complete()
             return result.as_tool_result()
+
+    async def continue_subagent(
+        *,
+        run_id: str,
+        task: str,
+        final_schema: dict[str, Any] | None = None,
+        background: bool = False,
+    ) -> dict[str, Any]:
+        if background:
+            if not supports_background:
+                raise ValueError("The active adapter does not support background subagents")
+            handle = rt._start_subagent_continuation(
+                run_id=run_id,
+                allowed_subagents=allowed,
+                task=task,
+                final_schema=final_schema,
+                parent_profile=profile,
+                parent_budget=budget,
+                parent_concurrency=concurrency,
+            )
+            return handle.as_tool_result()
+        result = await rt._continue_subagent(
+            run_id=run_id,
+            allowed_subagents=allowed,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=profile,
+            parent_budget=budget,
+            parent_concurrency=concurrency,
+        )
+        return result.as_tool_result()
 
     properties: dict[str, Any] = {
         "subagent": {
@@ -176,6 +233,21 @@ def subagent_tool_specs(
                 "before using the result or returning a final answer."
             ),
         }
+
+    continuation_properties: dict[str, Any] = {
+        "run_id": {
+            "type": "string",
+            "description": "Completed run whose child conversation should continue.",
+        },
+        "task": {
+            "type": "string",
+            "minLength": 1,
+            "description": "New follow-up task for the same child conversation.",
+        },
+        "final_schema": properties["final_schema"],
+    }
+    if supports_background:
+        continuation_properties["background"] = properties["background"]
 
     tools = [
         ToolSpec(
@@ -214,7 +286,34 @@ def subagent_tool_specs(
             # Child tools enforce the child profile's own approval policy. Spawning
             # an isolated child is not itself a filesystem or environment mutation.
             risk="read_only",
-        )
+        ),
+        ToolSpec(
+            fn=continue_subagent,
+            name="continue_subagent",
+            description=(
+                "Continue the latest completed turn of a child conversation. The same child "
+                "profile receives its bounded verified history; the continuation consumes a "
+                "new delegation budget slot and returns a new run_id."
+            ),
+            json_schema={
+                "type": "object",
+                "properties": continuation_properties,
+                "required": ["run_id", "task"],
+                "additionalProperties": False,
+            },
+            return_schema=(
+                {
+                    "oneOf": [
+                        _delegation_result_schema(),
+                        _subagent_handle_schema(),
+                    ]
+                }
+                if supports_background
+                else _delegation_result_schema()
+            ),
+            metadata={"source": "kedi", "kind": "subagent"},
+            risk="read_only",
+        ),
     ]
     if not supports_background:
         return tuple(tools)
@@ -229,8 +328,11 @@ def subagent_tool_specs(
             result = await rt._wait_subagent(run_id, timeout=timeout)
         except BaseException as exc:
             if attempt is not None:
-                status = attempt_status_from_run(rt._subagent_status(run_id))
-                attempt.fail(status=status, error=exc)
+                status = rt._subagent_status(run_id)
+                # A waiter timeout or cancellation is local to this caller. The
+                # child remains observable until it reaches a terminal status.
+                if status != "running":
+                    attempt.fail(status=attempt_status_from_run(status), error=exc)
             raise
         if attempt is not None:
             attempt.complete()

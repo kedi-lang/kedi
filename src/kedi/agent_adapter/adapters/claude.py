@@ -24,7 +24,7 @@ from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..subagents import SubagentExecutionRequest
+from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -52,6 +52,7 @@ class ClaudeAdapter:
 
     kind: AgentAdapterKind = "agent-harness"
     shortname = "claude"
+    supports_native_subagent_resume = True
     capabilities = AdapterCapabilities(
         supports_structured_output=True,
         supports_tool_registration=True,
@@ -89,6 +90,12 @@ class ClaudeAdapter:
         self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
             f"kedi_claude_approval_ceiling_{id(self)}",
             default=(),
+        )
+        self._subagent_conversation_var: ContextVar[SubagentConversationContext | None] = (
+            ContextVar(
+                f"kedi_claude_subagent_conversation_{id(self)}",
+                default=None,
+            )
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -187,6 +194,9 @@ class ClaudeAdapter:
         result = None
         with delegation_scope(self._subagent_failure_policy):
             async for message in sdk.query(prompt=prompt, options=options):
+                system_error = _claude_non_retryable_system_error(sdk, message)
+                if system_error is not None:
+                    raise RuntimeError(system_error)
                 if _is_result_message(sdk, message):
                     result = message
 
@@ -196,6 +206,9 @@ class ClaudeAdapter:
             raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
         if invocation_observer() is not None:
             report_invocation(_claude_invocation_usage(result))
+        conversation = self._subagent_conversation_var.get()
+        if conversation is not None:
+            conversation.result_state["claude_session_id"] = result.session_id
         return result
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
@@ -244,12 +257,16 @@ class ClaudeAdapter:
 
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
-        with (
-            self.tool_scope(request.tools),
-            self.profile_override(request.profile),
-            self.approval_ceiling(request.approval_ceiling),
-        ):
-            yield
+        token = self._subagent_conversation_var.set(request.conversation)
+        try:
+            with (
+                self.tool_scope(request.tools),
+                self.profile_override(request.profile),
+                self.approval_ceiling(request.approval_ceiling),
+            ):
+                yield
+        finally:
+            self._subagent_conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -281,6 +298,11 @@ class ClaudeAdapter:
             **self._settings_for_run(),
             **dict(run_kwargs),
         }
+        conversation = self._subagent_conversation_var.get()
+        if conversation is not None:
+            session_id = conversation.resume_state.get("claude_session_id")
+            if isinstance(session_id, str):
+                options_kwargs.setdefault("resume", session_id)
         options_kwargs.setdefault("tools", dict(CLAUDE_CODE_TOOLS_PRESET))
         options_kwargs.setdefault("permission_mode", CLAUDE_CODE_PERMISSION_MODE)
         if output_schema is not None:
@@ -400,6 +422,27 @@ def _is_result_message(sdk: Any, message: Any) -> bool:
     if result_cls is not None and isinstance(message, result_cls):
         return True
     return hasattr(message, "structured_output") or hasattr(message, "is_error")
+
+
+def _claude_non_retryable_system_error(sdk: Any, message: Any) -> str | None:
+    system_message = getattr(sdk, "SystemMessage", None)
+    if (
+        system_message is None
+        or not isinstance(message, system_message)
+        or message.subtype != "api_retry"
+    ):
+        return None
+    status = message.data.get("error_status")
+    if status not in {400, 401, 403, 404, 422}:
+        return None
+    error = message.data.get("error")
+    detail = f": {error}" if isinstance(error, str) and error else ""
+    if status in {401, 403}:
+        return (
+            f"Claude authentication failed (HTTP {status}){detail}; "
+            "check ANTHROPIC_API_KEY and Claude endpoint settings"
+        )
+    return f"Claude request failed with non-retryable HTTP {status}{detail}"
 
 
 def _claude_sdk_mcp_server(sdk: Any, tools: Sequence[ToolSpec]) -> Any:

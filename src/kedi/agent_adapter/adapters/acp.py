@@ -79,8 +79,7 @@ class ACPClient:
     def run_prompt_sync(self, *, prompt: str, cwd: str, timeout: float) -> str:
         session_id = self._new_session(cwd)
         state = _SessionState()
-        with self._state_lock:
-            self._sessions[session_id] = state
+        self._register_session(session_id, state)
         try:
             self.request(
                 "session/prompt",
@@ -90,10 +89,12 @@ class ACPClient:
                 },
                 timeout=timeout,
             )
-            return "".join(state.messages)
+            with self._state_lock:
+                return "".join(state.messages)
         finally:
             with self._state_lock:
-                self._sessions.pop(session_id, None)
+                if self._sessions.get(session_id) is state:
+                    self._sessions.pop(session_id)
             with suppress(Exception):
                 self.request("session/close", {"sessionId": session_id}, timeout=1)
 
@@ -110,8 +111,10 @@ class ACPClient:
             request_id = self._next_request_id
             self._next_request_id += 1
             self._pending[request_id] = future
-        self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}})
         try:
+            self._write(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
+            )
             return future.result(timeout=timeout or self._request_timeout)
         finally:
             with self._state_lock:
@@ -119,6 +122,7 @@ class ACPClient:
 
     def close(self) -> None:
         self._closed = True
+        self._fail_all(ACPDisconnected("ACP client is closed."))
         process = self._process
         if process is not None and process.poll() is None:
             process.terminate()
@@ -179,6 +183,12 @@ class ACPClient:
             raise ACPProtocolError("ACP session/new response must contain sessionId.")
         return response["sessionId"]
 
+    def _register_session(self, session_id: str, state: _SessionState) -> None:
+        with self._state_lock:
+            if session_id in self._sessions:
+                raise ACPProtocolError(f"ACP reused active session ID: {session_id!r}")
+            self._sessions[session_id] = state
+
     def _write(self, payload: JsonObject) -> None:
         process = self._process
         if process is None or process.stdin is None or process.poll() is not None:
@@ -212,7 +222,8 @@ class ACPClient:
         if process is None or process.stderr is None:
             return
         for line in process.stderr:
-            self._stderr_tail.append(line.rstrip())
+            with self._state_lock:
+                self._stderr_tail.append(line.rstrip())
 
     def _handle_message(self, message: JsonObject) -> None:
         if "id" in message:
@@ -247,8 +258,8 @@ class ACPClient:
             return
         with self._state_lock:
             state = self._sessions.get(session_id)
-        if state is not None:
-            state.messages.append(text)
+            if state is not None:
+                state.messages.append(text)
 
     def _fail_all(self, exc: BaseException) -> None:
         with self._state_lock:
@@ -258,7 +269,8 @@ class ACPClient:
                 future.set_exception(exc)
 
     def _disconnect_message(self) -> str:
-        details = "\n".join(self._stderr_tail)
+        with self._state_lock:
+            details = "\n".join(self._stderr_tail)
         if details:
             return f"ACP agent process disconnected.\n{details}"
         return "ACP agent process disconnected."

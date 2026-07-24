@@ -27,7 +27,7 @@ from ..subagents.limits import SubagentUsageLimits
 from .._schema import output_field_definition
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..subagents import SubagentExecutionRequest
+from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
 from ..tool_override import (
     ToolScope,
@@ -55,6 +55,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     kind: AgentAdapterKind = "agent-framework"
     shortname = "pydantic"
+    supports_native_subagent_resume = True
     capabilities = AdapterCapabilities(
         supports_structured_output=True,
         supports_tool_registration=True,
@@ -92,6 +93,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
             f"kedi_pydantic_approval_ceiling_{id(self)}",
             default=(),
+        )
+        self._subagent_conversation_var: ContextVar[SubagentConversationContext | None] = (
+            ContextVar(
+                f"kedi_pydantic_subagent_conversation_{id(self)}",
+                default=None,
+            )
         )
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
@@ -158,13 +165,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
-        with (
-            self.tool_scope(request.tools),
-            self.profile_override(request.profile),
-            self.approval_ceiling(request.approval_ceiling),
-            self.isolated_run(),
-        ):
-            yield
+        token = self._subagent_conversation_var.set(request.conversation)
+        try:
+            with (
+                self.tool_scope(request.tools),
+                self.profile_override(request.profile),
+                self.approval_ceiling(request.approval_ceiling),
+                self.isolated_run(),
+            ):
+                yield
+        finally:
+            self._subagent_conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -258,10 +269,22 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         prompt: str,
         run_kwargs: dict[str, object],
     ) -> Any:
+        conversation = self._subagent_conversation_var.get()
+        if conversation is not None and "pydantic_messages" in conversation.resume_state:
+            from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+            run_kwargs.setdefault(
+                "message_history",
+                ModelMessagesTypeAdapter.validate_python(
+                    conversation.resume_state["pydantic_messages"]
+                ),
+            )
         with delegation_scope(self._subagent_failure_policy):
             observer = invocation_observer()
             if observer is None:
-                return await agent.run(prompt, **cast(Any, run_kwargs))
+                result = await agent.run(prompt, **cast(Any, run_kwargs))
+                self._capture_subagent_messages(conversation, result)
+                return result
 
             from pydantic_ai.usage import RunUsage
 
@@ -270,7 +293,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 usage = RunUsage()
                 run_kwargs["usage"] = usage
             try:
-                return await agent.run(prompt, **cast(Any, run_kwargs))
+                result = await agent.run(prompt, **cast(Any, run_kwargs))
+                self._capture_subagent_messages(conversation, result)
+                return result
             finally:
                 report_invocation(
                     InvocationUsage(
@@ -281,6 +306,20 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                         total_tokens=usage.total_tokens,
                     )
                 )
+
+    @staticmethod
+    def _capture_subagent_messages(
+        conversation: SubagentConversationContext | None,
+        result: Any,
+    ) -> None:
+        if conversation is None:
+            return
+        from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+        conversation.result_state["pydantic_messages"] = ModelMessagesTypeAdapter.dump_python(
+            result.all_messages(),
+            mode="json",
+        )
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync

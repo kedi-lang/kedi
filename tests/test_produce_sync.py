@@ -37,6 +37,19 @@ def test_run_sync_inside_running_loop_propagates_errors() -> None:
         asyncio.run(driver())
 
 
+def test_run_sync_rejects_an_awaitable_bound_to_the_caller_loop() -> None:
+    async def driver() -> None:
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        async def await_caller_future() -> str:
+            return await future
+
+        with pytest.raises(RuntimeError, match="bound to another event loop"):
+            run_sync(await_caller_future())
+
+    asyncio.run(driver())
+
+
 def test_pydantic_adapter_produce_sync_inside_running_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -158,6 +158,7 @@ class KediRuntime:
         subagent_max_concurrency: int = 4,
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
+        subagent_state_path: str | Path | None = None,
     ) -> None:
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
@@ -188,6 +189,7 @@ class KediRuntime:
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
         self._python_origins: Dict[str, KediPythonOrigin] = {}
+        self._python_origin_keys: Dict[tuple[Any, ...], str] = {}
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
@@ -221,6 +223,7 @@ class KediRuntime:
             max_concurrency=subagent_max_concurrency,
             timeout_seconds=subagent_timeout_seconds,
             usage_limits=subagent_usage_limits,
+            state_path=subagent_state_path,
         )
 
     # Expressions
@@ -499,13 +502,7 @@ class KediRuntime:
     ) -> str:
         import linecache
 
-        with self._origin_counter_lock:
-            self._python_origin_counter += 1
-            counter = self._python_origin_counter
         origin_span = span
-        # Unique virtual filename per snippet so snippets sharing a .kedi file don't
-        # collide; the real source path lives on origin_span for rendering.
-        filename = f"<kedi-python:{kind}:{counter}>"
         if span is not None and span.source_path is not None:
             origin_span = span
         elif (
@@ -522,20 +519,52 @@ class KediRuntime:
                     source_path=resolved.source_path,
                     source_id=resolved.source_id,
                 )
-        self._python_origins[filename] = KediPythonOrigin(
-            filename=filename,
-            kind=kind,
-            code=code,
-            span=origin_span,
-            compile_line_offset=compile_line_offset,
-            wrapper_line_offset=wrapper_line_offset,
-            kedi_line_offset=kedi_line_offset,
-            procedure_name=procedure_name,
+        span_key = (
+            None
+            if origin_span is None
+            else (
+                origin_span.start_byte,
+                origin_span.end_byte,
+                origin_span.start_line,
+                origin_span.start_col,
+                origin_span.end_line,
+                origin_span.end_col,
+                origin_span.source_path,
+                origin_span.source_id,
+            )
         )
-        cache_text = "\n" * compile_line_offset + (traceback_code or code)
-        lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
-        linecache.cache[filename] = (len(code), None, lines, filename)
-        return filename
+        origin_key = (
+            kind,
+            code,
+            span_key,
+            compile_line_offset,
+            wrapper_line_offset,
+            kedi_line_offset,
+            procedure_name,
+            traceback_code,
+        )
+        with self._origin_counter_lock:
+            cached = self._python_origin_keys.get(origin_key)
+            if cached is not None:
+                return cached
+
+            self._python_origin_counter += 1
+            filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+            self._python_origins[filename] = KediPythonOrigin(
+                filename=filename,
+                kind=kind,
+                code=code,
+                span=origin_span,
+                compile_line_offset=compile_line_offset,
+                wrapper_line_offset=wrapper_line_offset,
+                kedi_line_offset=kedi_line_offset,
+                procedure_name=procedure_name,
+            )
+            self._python_origin_keys[origin_key] = filename
+            cache_text = "\n" * compile_line_offset + (traceback_code or code)
+            lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
+            linecache.cache[filename] = (len(code), None, lines, filename)
+            return filename
 
     def _hydrate_frame(self, frame: KediTraceFrame) -> KediTraceFrame:
         if frame.source_snippet is not None or frame.span is None or frame.span.source_path is None:
@@ -967,6 +996,48 @@ class KediRuntime:
         return self._subagent_coordinator.start(
             allowed_subagents=allowed_subagents,
             subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    async def _continue_subagent(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return await self._subagent_coordinator.continue_run(
+            run_id=run_id,
+            allowed_subagents=allowed_subagents,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    def _start_subagent_continuation(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return self._subagent_coordinator.start_continuation(
+            run_id=run_id,
+            allowed_subagents=allowed_subagents,
             task=task,
             final_schema=final_schema,
             parent_profile=parent_profile,
