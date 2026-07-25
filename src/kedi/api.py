@@ -11,17 +11,32 @@ import os
 import re
 import textwrap
 from collections.abc import Mapping, Sequence
+from concurrent.futures import Future
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock, get_ident
 from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, overload
 
 import dotenv
 from typing_extensions import Sentinel
 
+from .agent_adapter.approval import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalMode,
+    ApprovalPolicy,
+    ApprovalRequest,
+    ToolRisk,
+)
 from .agent_adapter import AgentAdapter, AgentAdapterKind
 from .agent_adapter.adapters.lazy import LazyAdapter
-from .agent_adapter.registry import adapter_factory, build_adapter, known_adapter_shortnames
+from .agent_adapter.registry import (
+    adapter_capabilities,
+    adapter_factory,
+    build_adapter,
+    known_adapter_shortnames,
+)
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .effort import EffortValue
 from .errors import KediExecutionError
@@ -37,11 +52,23 @@ AdapterLike: TypeAlias = AgentAdapter[Any] | LazyAdapter
 _UNSET = Sentinel("_UNSET")
 _TOOL_NAME_ATTR = "__kedi_tool_name__"
 _TOOL_DESCRIPTION_ATTR = "__kedi_tool_description__"
+_TOOL_RISK_ATTR = "__kedi_tool_risk__"
 _TYPE_INJECT_ATTR = "__kedi_type_inject__"
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 _TYPE_REGISTRY: dict[str, dict[str, builtins.type[Any]]] = {}
 _PARSE_CACHE: dict[tuple[str, str | None, str], Any] = {}
 _RESPONSE_CACHE: dict[str, Any] = {}
+_RESPONSE_CACHE_LOCK = Lock()
+_RESPONSE_CACHE_GENERATION = 0
+_RESPONSE_IN_FLIGHT: dict[str, _ResponseFlight] = {}
+_CACHE_MISS = object()
+
+
+@dataclass(frozen=True)
+class _ResponseFlight:
+    future: Future[Any]
+    owner_thread_id: int
+    generation: int
 
 
 @dataclass(frozen=True)
@@ -161,15 +188,17 @@ def _parse_cached(
 
 
 def cache_info() -> CacheInfo:
-    return CacheInfo(
-        parse_entries=len(_PARSE_CACHE),
-        response_entries=len(_RESPONSE_CACHE),
-    )
+    with _RESPONSE_CACHE_LOCK:
+        response_entries = len(_RESPONSE_CACHE)
+    return CacheInfo(parse_entries=len(_PARSE_CACHE), response_entries=response_entries)
 
 
 def clear_cache() -> None:
+    global _RESPONSE_CACHE_GENERATION
     _PARSE_CACHE.clear()
-    _RESPONSE_CACHE.clear()
+    with _RESPONSE_CACHE_LOCK:
+        _RESPONSE_CACHE.clear()
+        _RESPONSE_CACHE_GENERATION += 1
 
 
 def _stable_repr(value: Any) -> str:
@@ -202,6 +231,22 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),
         tuple(profile.tools),
         tuple(_stable_repr(server) for server in profile.mcp_servers),
+        _approval_identity(profile.approval),
+        profile.skills,
+    )
+
+
+def _approval_identity(approval_policy: ApprovalPolicy | None) -> tuple[Any, ...] | None:
+    if approval_policy is None:
+        return None
+    handler = approval_policy.handler
+    if handler is None:
+        return approval_policy.mode, None
+    return (
+        approval_policy.mode,
+        getattr(handler, "__module__", None),
+        getattr(handler, "__qualname__", None),
+        id(handler),
     )
 
 
@@ -250,6 +295,8 @@ def _agent_profile_overrides(
     settings: Mapping[str, Any] | None,
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
+    approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    skills: bool | None,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
     return tool_map, AgentProfile(
@@ -261,7 +308,27 @@ def _agent_profile_overrides(
         settings=dict(settings or {}),
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
+        approval=_coerce_approval(approval_policy),
+        skills=skills,
     )
+
+
+def _coerce_approval(
+    value: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+) -> ApprovalPolicy | None:
+    if value is None:
+        return None
+    if isinstance(value, ApprovalPolicy):
+        return value
+    if isinstance(value, str):
+        if value == "allow":
+            return ApprovalPolicy.allow()
+        if value == "deny":
+            return ApprovalPolicy.deny()
+        raise TypeError("approval must be 'allow', 'deny', ApprovalPolicy, or an approval handler")
+    if callable(value):
+        return ApprovalPolicy.dynamic(value)
+    raise TypeError("approval must be 'allow', 'deny', ApprovalPolicy, or an approval handler")
 
 
 def _known_adapter_names(kind: AgentAdapterKind) -> tuple[str, ...]:
@@ -398,11 +465,6 @@ def _decorate_kedi_program(
             profile=profile,
             tool_names=sorted(tool_namespace),
         )
-        if cache and cache_key in _RESPONSE_CACHE:
-            # Hand back a copy: the cache holds mutable results (dict/list/pydantic model) by value,
-            # so a caller mutating a returned object must not corrupt the shared cached entry.
-            return cast(R, _isolate_cached(_RESPONSE_CACHE[cache_key]))
-
         bound_globals = _bound_runtime_globals(inner, args, kwargs)
         tool_collisions = tool_namespace & set(bound_globals)
         if tool_collisions:
@@ -420,29 +482,40 @@ def _decorate_kedi_program(
             **config.env,
             **env,
         }
-        engine = None
-        if config.parallel:
-            from .core import shared_thread_engine
-
-            engine = shared_thread_engine(max_workers=config.max_workers)
-        runtime = compile_program(
-            active_program,
-            adapter=active_adapter,
-            runtime_globals=runtime_globals,
-            engine=engine,
-        )
-        with block_agent_profile_scope(profile):
-            if use_main:
-                result = cast(R, runtime.run_main())
-            else:
-                result = cast(
-                    R,
-                    runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
-                )
+        cache_flight: _ResponseFlight | None = None
         if cache:
-            # Store a copy so the caller's later mutation of `result` can't reach back into the
-            # cache (and so every future hit is isolated via the copy on the hit path above).
-            _RESPONSE_CACHE[cache_key] = _isolate_cached(result)
+            cached, cache_flight, owns_flight = _claim_response_cache_key(cache_key)
+            if cached is not _CACHE_MISS:
+                return cast(R, _isolate_cached(cached))
+            if not owns_flight:
+                assert cache_flight is not None
+                return cast(R, _isolate_cached(cache_flight.future.result()))
+        try:
+            engine = None
+            if config.parallel:
+                from .core import shared_thread_engine
+
+                engine = shared_thread_engine(max_workers=config.max_workers)
+            runtime = compile_program(
+                active_program,
+                adapter=active_adapter,
+                runtime_globals=runtime_globals,
+                engine=engine,
+            )
+            with block_agent_profile_scope(profile):
+                if use_main:
+                    result = cast(R, runtime.run_main())
+                else:
+                    result = cast(
+                        R,
+                        runtime._invoke_procedure(runtime._procedures["__kedi_query_entry__"], []),
+                    )
+        except BaseException as exc:
+            if cache_flight is not None:
+                _finish_response_flight(cache_key, cache_flight, error=exc)
+            raise
+        if cache_flight is not None:
+            _finish_response_flight(cache_key, cache_flight, result=result)
         return result
 
     if _is_async_callable(inner):
@@ -463,6 +536,52 @@ def _decorate_kedi_program(
     return sync_wrapper
 
 
+def _claim_response_cache_key(
+    cache_key: str,
+) -> tuple[Any, _ResponseFlight | None, bool]:
+    """Return a cache hit or atomically claim the one producer slot for ``cache_key``."""
+
+    with _RESPONSE_CACHE_LOCK:
+        cached = _RESPONSE_CACHE.get(cache_key, _CACHE_MISS)
+        if cached is not _CACHE_MISS:
+            return cached, None, False
+        generation = _RESPONSE_CACHE_GENERATION
+        flight = _RESPONSE_IN_FLIGHT.get(cache_key)
+        if flight is not None and flight.generation == generation:
+            if flight.owner_thread_id == get_ident():
+                raise RuntimeError(f"Recursive Kedi response cache request for key {cache_key!r}")
+            return _CACHE_MISS, flight, False
+        flight = _ResponseFlight(
+            future=Future(),
+            owner_thread_id=get_ident(),
+            generation=generation,
+        )
+        _RESPONSE_IN_FLIGHT[cache_key] = flight
+        return _CACHE_MISS, flight, True
+
+
+def _finish_response_flight(
+    cache_key: str,
+    flight: _ResponseFlight,
+    *,
+    result: Any = _CACHE_MISS,
+    error: BaseException | None = None,
+) -> None:
+    if error is None:
+        stored_result = _isolate_cached(result)
+    else:
+        stored_result = _CACHE_MISS
+    with _RESPONSE_CACHE_LOCK:
+        if error is None and flight.generation == _RESPONSE_CACHE_GENERATION:
+            _RESPONSE_CACHE[cache_key] = stored_result
+        if _RESPONSE_IN_FLIGHT.get(cache_key) is flight:
+            _RESPONSE_IN_FLIGHT.pop(cache_key)
+    if error is None:
+        flight.future.set_result(stored_result)
+    else:
+        flight.future.set_exception(error)
+
+
 def _lazy_adapter(
     shortname: str,
     model: str | None,
@@ -473,7 +592,12 @@ def _lazy_adapter(
     def factory() -> AgentAdapter[Any]:
         return build_adapter(shortname, model, **dict(adapter_kwargs))
 
-    return LazyAdapter(factory, kind=metadata.kind, shortname=metadata.shortname)
+    return LazyAdapter(
+        factory,
+        kind=metadata.kind,
+        shortname=metadata.shortname,
+        capabilities=adapter_capabilities(shortname),
+    )
 
 
 def _build_config(
@@ -489,6 +613,8 @@ def _build_config(
     tools: Sequence[Callable[..., Any]],
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    skills: bool | None,
     adapter_kwargs: Mapping[str, Any],
     parallel: bool | None = None,
     max_workers: int | None = None,
@@ -557,6 +683,8 @@ def _build_config(
         settings=dict(settings or {}),
         tools=tuple(_tool_mapping(tools)),
         mcp_servers=tuple(mcp_servers),
+        approval=_coerce_approval(approval),
+        skills=skills,
     )
     profile = base_profile.merge(profile_patch)
     return _APIConfig(
@@ -590,6 +718,8 @@ def configure(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -612,6 +742,8 @@ def configure(
             tools=tools,
             env=env,
             mcp_servers=mcp_servers,
+            approval=approval,
+            skills=skills,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -621,6 +753,24 @@ def configure(
 
 def reset_config() -> None:
     _config_var.set(_DEFAULT_CONFIG)
+
+
+def approval(handler: ApprovalHandler) -> ApprovalHandler:
+    """Register ``handler`` as the current Python API's default approval policy.
+
+    Explicit ``approval=`` values on :func:`query`, :func:`bind`, or
+    :func:`context` take precedence for their own scope.
+    """
+
+    policy = ApprovalPolicy.dynamic(handler)
+    config = _config_var.get()
+    _config_var.set(
+        dataclasses.replace(
+            config,
+            profile=config.profile.merge(AgentProfile(approval=policy)),
+        )
+    )
+    return handler
 
 
 class _KediContext:
@@ -656,6 +806,8 @@ def context(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -673,6 +825,8 @@ def context(
             tools=tools,
             env=env,
             mcp_servers=mcp_servers,
+            approval=approval,
+            skills=skills,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -701,6 +855,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    risk: ToolRisk = "mutating",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
 
@@ -710,9 +865,12 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    risk: ToolRisk = "mutating",
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     if retries < 0:
         raise ValueError("tool retries must be >= 0")
+    if risk not in ("read_only", "mutating", "sensitive"):
+        raise ValueError("tool risk must be 'read_only', 'mutating', or 'sensitive'")
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
         tool_name = name or _callable_name(inner)
@@ -750,6 +908,7 @@ def tool(
             wrapped = sync_wrapper
 
         setattr(wrapped, _TOOL_NAME_ATTR, tool_name)
+        setattr(wrapped, _TOOL_RISK_ATTR, risk)
         if tool_description is not None:
             setattr(wrapped, _TOOL_DESCRIPTION_ATTR, tool_description)
             wrapped.__doc__ = tool_description
@@ -803,6 +962,8 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -819,6 +980,8 @@ def query(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     selection = _resolve_selection(adapter=adapter, agent=agent)
@@ -834,6 +997,8 @@ def query(
         settings=settings,
         tools=tools,
         mcp_servers=mcp_servers,
+        approval_policy=approval,
+        skills=skills,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -872,6 +1037,8 @@ def bind(
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
     cache: bool = False,
     reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -888,6 +1055,8 @@ def bind(
         settings=settings,
         tools=tools,
         mcp_servers=mcp_servers,
+        approval_policy=approval,
+        skills=skills,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -919,10 +1088,16 @@ def bind(
 
 __all__ = [
     "AdapterLike",
+    "ApprovalDecision",
+    "ApprovalHandler",
+    "ApprovalMode",
+    "ApprovalPolicy",
+    "ApprovalRequest",
     "AgentName",
     "CacheInfo",
     "FrameworkAdapterName",
     "bind",
+    "approval",
     "cache_info",
     "clear_cache",
     "configure",

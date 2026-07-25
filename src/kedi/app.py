@@ -8,8 +8,11 @@ from typing import Any, Tuple
 
 from .agent_adapter.adapters import ACPAdapter, DSPyAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
+from .agent_adapter.approval import ApprovalPolicy
+from .agent_adapter.cli_approval import CliApprovalHandler
 from .agent_adapter.meta import AgentAdapter
-from .agent_adapter.registry import build_adapter
+from .agent_profile import AgentProfile
+from .agent_adapter.registry import adapter_capabilities, adapter_factory, build_adapter
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.compiler import environment as compiler_environment
@@ -51,6 +54,11 @@ def _runtime_globals(runtime_args: CliArgs | None) -> dict[str, Any]:
 def _set_runtime_args(rt: Any, runtime_args: CliArgs | None) -> None:
     if runtime_args is not None:
         rt.set_initial_globals(_runtime_globals(runtime_args))
+
+
+def _cli_default_profile() -> AgentProfile:
+    """Provide interactive approval only for direct CLI program execution."""
+    return AgentProfile(approval=ApprovalPolicy.dynamic(CliApprovalHandler()))
 
 
 def run_tests_cli(
@@ -433,9 +441,18 @@ def run_program_cli(
 
     # Run once with a lazily-built adapter: offline programs never construct one (no
     # API key needed), and top-level side effects fire exactly once.
-    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
+    metadata = adapter_factory(adapter)
+    lazy_adapter = LazyAdapter(
+        lambda: _build_runtime_adapter(adapter, model),
+        kind=metadata.kind,
+        shortname=metadata.shortname,
+        capabilities=adapter_capabilities(adapter),
+    )
     rt = compile_program(
-        program, adapter=lazy_adapter, runtime_globals=_runtime_globals(runtime_args)
+        program,
+        adapter=lazy_adapter,
+        runtime_globals=_runtime_globals(runtime_args),
+        default_agent_profile=_cli_default_profile(),
     )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()
@@ -451,11 +468,18 @@ def run_source_cli(
     source_path: str = "<command>",
 ) -> Tuple[int, str]:
     program = parse_program(source_text, source_path=source_path)
-    lazy_adapter = LazyAdapter(lambda: _build_runtime_adapter(adapter, model))
+    metadata = adapter_factory(adapter)
+    lazy_adapter = LazyAdapter(
+        lambda: _build_runtime_adapter(adapter, model),
+        kind=metadata.kind,
+        shortname=metadata.shortname,
+        capabilities=adapter_capabilities(adapter),
+    )
     rt = compile_program(
         program,
         adapter=lazy_adapter,
         runtime_globals=_runtime_globals(runtime_args),
+        default_agent_profile=_cli_default_profile(),
     )
     _set_runtime_args(rt, runtime_args)
     out = rt.run_main()

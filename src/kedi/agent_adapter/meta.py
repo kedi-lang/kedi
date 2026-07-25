@@ -16,6 +16,10 @@ AdapterCapability = Literal[
     "effort",
     "settings",
     "codemode",
+    "native_approvals",
+    "native_approval_handler",
+    "subagents",
+    "background_subagents",
 ]
 
 
@@ -29,6 +33,10 @@ class AdapterCapabilities:
     supports_effort: bool | None = None
     supports_settings: bool | None = None
     supports_codemode: bool | None = None
+    supports_native_approvals: bool | None = None
+    supports_native_approval_handler: bool | None = None
+    supports_subagents: bool | None = None
+    supports_background_subagents: bool | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
 
@@ -42,6 +50,10 @@ class AdapterCapabilities:
             "effort": self.supports_effort,
             "settings": self.supports_settings,
             "codemode": self.supports_codemode,
+            "native_approvals": self.supports_native_approvals,
+            "native_approval_handler": self.supports_native_approval_handler,
+            "subagents": self.supports_subagents,
+            "background_subagents": self.supports_background_subagents,
         }
         return bool(values[feature])
 

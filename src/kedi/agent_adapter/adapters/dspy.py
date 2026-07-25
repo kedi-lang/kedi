@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import json
+from collections.abc import Mapping
 from contextlib import (
     AbstractContextManager,
     AsyncExitStack,
@@ -8,6 +11,8 @@ from contextlib import (
     nullcontext,
 )
 from contextvars import ContextVar
+from dataclasses import replace
+from functools import wraps
 from typing import Any, Callable, Iterator, Sequence, cast
 
 import dspy
@@ -17,9 +22,16 @@ from ...agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
 from ...dynamic_models import build_dynamic_model
 from ...model_normalization import normalize_for_litellm
 from ...resolved_types import ResolvedKediType
+from ...errors import KediExecutionError
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
+from ..subagents.runs import safe_subagent_error_message
+from ..approval import ApprovalPolicy
+from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..llm_wrapper import ThinkingStrippingLM
 from ..meta import AdapterCapabilities, AgentAdapterKind
-from ..tool_override import ToolScope, ToolSpec
+from ..subagents import SubagentExecutionRequest
+from ..tool_override import ToolScope, ToolSpec, with_approval
 
 
 class DSPyAdapter:
@@ -33,6 +45,8 @@ class DSPyAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_subagents=True,
+        supports_background_subagents=False,
         settings=DSPY_LM_SETTING_KEYS,
     )
 
@@ -49,8 +63,11 @@ class DSPyAdapter:
         temperature: float = 1.0,
         provider: dspy.Provider | None = None,
         model_settings: dict[str, Any] | None = None,
+        subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         **kwargs,
     ):
+        if subagent_failure_policy not in {"recover", "fail_closed"}:
+            raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         model = normalize_for_litellm(model)
         self._lm_model = model
         self._lm_provider = provider
@@ -58,7 +75,9 @@ class DSPyAdapter:
         self._lm_temperature = temperature
         self._lm_settings = dspy_lm_settings(model_settings or {})
         self._lm_extra_kwargs = dict(kwargs)
+        self._subagent_failure_policy = subagent_failure_policy
         self._tool_scope = ToolScope()
+        self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_dspy_profile_stack_{id(self)}",
             default=(),
@@ -66,7 +85,8 @@ class DSPyAdapter:
         # Keep a one-time baseline configure so plain (no-profile) produce has a
         # global LM; per-call correctness comes from the ``dspy.context`` wrap in
         # ``produce_sync`` / ``profile_override`` (innermost context wins).
-        dspy.settings.configure(lm=self._default_lm())
+        if getattr(dspy.settings, "lm", None) is None:
+            dspy.settings.configure(lm=self._default_lm())
 
     def _default_lm(self) -> ThinkingStrippingLM:
         provider, kwargs = self._lm_kwargs()
@@ -90,11 +110,26 @@ class DSPyAdapter:
         return provider, kwargs
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
-        return self._tool_scope.tool_scope(tools)
+        @contextmanager
+        def scoped() -> Iterator[None]:
+            with (
+                self._tool_scope.tool_scope(),
+                self._tool_spec_scope_for_current_adapter().tool_scope(),
+            ):
+                for tool in tools:
+                    if isinstance(tool, ToolSpec):
+                        self.register_tool(tool)
+                    else:
+                        self._tool_scope.register_tool(tool)
+                yield
+
+        return scoped()
 
     def register_tool(self, tool: ToolSpec) -> None:
         from ..utils import dspy_sync_tool_function, dspy_tool_arg_desc, dspy_tool_args
 
+        if tool.metadata is not None and tool.metadata.get("kind") == "subagent":
+            tool = _dspy_recoverable_subagent_tool(tool)
         kwargs: dict[str, Any] = {
             "func": dspy_sync_tool_function(tool.fn),
             "name": tool.name,
@@ -106,11 +141,26 @@ class DSPyAdapter:
             if arg_desc:
                 kwargs["arg_desc"] = arg_desc
         self._tool_scope.register_tool(dspy.Tool(**kwargs))
+        self._tool_spec_scope_for_current_adapter().register_tool(tool)
 
     @property
     def scoped_tools(self) -> tuple[Any, ...]:
         scope = getattr(self, "_tool_scope", None)
         return () if scope is None else scope.scoped_tools
+
+    @property
+    def scoped_tool_specs(self) -> tuple[ToolSpec, ...]:
+        return cast(
+            tuple[ToolSpec, ...],
+            self._tool_spec_scope_for_current_adapter().scoped_tools,
+        )
+
+    def _tool_spec_scope_for_current_adapter(self) -> ToolScope:
+        scope = getattr(self, "_tool_spec_scope", None)
+        if scope is None:
+            scope = ToolScope()
+            self._tool_spec_scope = scope
+        return scope
 
     @property
     def active_profile(self) -> AgentProfile:
@@ -163,6 +213,20 @@ class DSPyAdapter:
             **kwargs,
         )
 
+    async def produce_subagent(
+        self,
+        *,
+        template: str,
+        output_schema: dict[str, Any],
+        **kwargs: Any,
+    ) -> Mapping[str, Any]:
+        return await asyncio.to_thread(
+            self._produce_subagent_sync,
+            template,
+            output_schema,
+            kwargs,
+        )
+
     def produce_sync(
         self,
         template: str,
@@ -181,11 +245,15 @@ class DSPyAdapter:
         instructions = kwargs.pop("instructions", None)
         sig = sig.with_instructions(instructions)
         tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
-        with self._produce_lm_context():
-            if self.active_profile.mcp_servers:
-                return run_sync(self._produce_with_mcp(sig, tools, template, kwargs))
-            prediction = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
-            return prediction(**kwargs, user_prompt=template)
+        with delegation_scope(getattr(self, "_subagent_failure_policy", "fail_closed")):
+            with self._produce_lm_context():
+                if self.active_profile.mcp_servers:
+                    prediction = run_sync(self._produce_with_mcp(sig, tools, template, kwargs))
+                else:
+                    adapter = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+                    prediction = adapter(**kwargs, user_prompt=template)
+        _report_dspy_invocation(prediction)
+        return prediction
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         return await asyncio.to_thread(self.invoke_sync, prompt=prompt, **kwargs)
@@ -198,13 +266,58 @@ class DSPyAdapter:
         instructions = kwargs.pop("instructions", None)
         sig = sig.with_instructions(instructions)
         tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
-        with self._produce_lm_context():
-            if self.active_profile.mcp_servers:
-                prediction = run_sync(self._produce_with_mcp(sig, tools, prompt, kwargs))
-            else:
-                adapter = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
-                prediction = adapter(**kwargs, user_prompt=prompt)
+        with delegation_scope(getattr(self, "_subagent_failure_policy", "fail_closed")):
+            with self._produce_lm_context():
+                if self.active_profile.mcp_servers:
+                    prediction = run_sync(self._produce_with_mcp(sig, tools, prompt, kwargs))
+                else:
+                    adapter = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
+                    prediction = adapter(**kwargs, user_prompt=prompt)
+        _report_dspy_invocation(prediction)
         return str(_prediction_value(prediction, "response"))
+
+    def _produce_subagent_sync(
+        self,
+        template: str,
+        output_schema: dict[str, Any],
+        kwargs: dict[str, Any],
+    ) -> Mapping[str, Any]:
+        from ..utils import run_sync
+
+        run_kwargs = dict(kwargs)
+        run_kwargs.pop("user_prompt", None)
+        instructions = run_kwargs.pop("instructions", None)
+        schema_text = json.dumps(output_schema, ensure_ascii=False, separators=(",", ":"))
+        signature = build_dynamic_model(
+            "_SubagentOutputSignature",
+            dspy.Signature,
+            {
+                "user_prompt": (str, dspy.InputField()),
+                "result": (
+                    dict[str, Any],
+                    dspy.OutputField(
+                        desc=f"Return one JSON object matching this JSON Schema: {schema_text}"
+                    ),
+                ),
+            },
+        ).with_instructions(instructions)
+        tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
+        with delegation_scope(getattr(self, "_subagent_failure_policy", "fail_closed")):
+            with self._produce_lm_context():
+                if self.active_profile.mcp_servers:
+                    prediction = run_sync(
+                        self._produce_with_mcp(signature, tools, template, run_kwargs)
+                    )
+                else:
+                    adapter = (
+                        dspy.ReAct(signature, tools=tools) if tools else dspy.Predict(signature)
+                    )
+                    prediction = adapter(**run_kwargs, user_prompt=template)
+        _report_dspy_invocation(prediction)
+        result = _prediction_value(prediction, "result")
+        if not isinstance(result, Mapping):
+            raise TypeError("DSPy subagent structured output must be an object")
+        return result
 
     def _produce_lm_context(self) -> AbstractContextManager[Any]:
         """Make the active LM authoritative for one produce call.
@@ -219,7 +332,7 @@ class DSPyAdapter:
             return nullcontext()
         if self._lm_model is None:
             return nullcontext()
-        return dspy.context(lm=self._default_lm())
+        return dspy.context(lm=self._default_lm(), track_usage=True)
 
     async def _produce_with_mcp(
         self,
@@ -256,6 +369,22 @@ class DSPyAdapter:
     def default_model(self) -> str | None:
         return self._lm_model
 
+    def telemetry_model_name(self) -> str | None:
+        return self._lm_model
+
+    @contextmanager
+    def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        policies = request.approval_ceiling
+        if request.profile.approval is not None or not policies:
+            policies = (*policies, request.profile.approval)
+        tools = tuple(_dspy_tool_with_approval_policies(tool, policies) for tool in request.tools)
+        with self.profile_override(request.profile), self.tool_scope(tools):
+            yield
+
+    @staticmethod
+    def subagent_run_kwargs(_limits: SubagentUsageLimits) -> dict[str, Any]:
+        return {}
+
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
         needs_model_override = profile.needs_model_override(self.default_model())
@@ -276,7 +405,7 @@ class DSPyAdapter:
                 provider=provider,
                 **lm_kwargs,
             )
-            with dspy.context(lm=lm):
+            with dspy.context(lm=lm, track_usage=True):
                 yield
         finally:
             stack_var.reset(token)
@@ -286,3 +415,68 @@ def _prediction_value(prediction: Any, field: str) -> Any:
     if isinstance(prediction, dict):
         return prediction[field]
     return getattr(prediction, field)
+
+
+def _dspy_tool_with_approval_policies(
+    tool: ToolSpec,
+    policies: Sequence[ApprovalPolicy | None],
+) -> ToolSpec:
+    guarded = tool
+    for policy in reversed(tuple(policies)):
+        guarded = with_approval(
+            guarded,
+            policy=policy,
+            adapter_shortname=DSPyAdapter.shortname,
+        )
+    return guarded
+
+
+def _dspy_recoverable_subagent_tool(tool: ToolSpec) -> ToolSpec:
+    @wraps(tool.fn)
+    async def recoverable(*args: Any, **kwargs: Any) -> Any:
+        try:
+            result = tool.fn(*args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        except KediExecutionError as exc:
+            return safe_subagent_error_message(exc) or "Subagent failed"
+
+    return replace(tool, fn=recoverable)
+
+
+def _report_dspy_invocation(prediction: Any) -> None:
+    if invocation_observer() is None:
+        return
+    input_tokens = output_tokens = total_tokens = 0
+    usage = prediction.get_lm_usage() if hasattr(prediction, "get_lm_usage") else None
+    if isinstance(usage, Mapping):
+        for model_usage in usage.values():
+            if not isinstance(model_usage, Mapping):
+                continue
+            model_input = _usage_value(model_usage, "prompt_tokens", "input_tokens")
+            model_output = _usage_value(
+                model_usage,
+                "completion_tokens",
+                "output_tokens",
+            )
+            model_total = _usage_value(model_usage, "total_tokens")
+            input_tokens += model_input
+            output_tokens += model_output
+            total_tokens += model_total or model_input + model_output
+    report_invocation(
+        InvocationUsage(
+            requests=1,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+    )
+
+
+def _usage_value(usage: Mapping[str, Any], *names: str) -> int:
+    for name in names:
+        value = usage.get(name)
+        if isinstance(value, int):
+            return value
+    return 0

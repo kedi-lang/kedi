@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -186,6 +188,35 @@ def test_gepa_metric_wrapper_wrap_metric_success_error_and_cache() -> None:
     )
     no_override = wrapper.wrap_metric(metric, ["x"], span=span, module_ref=module_ref)
     assert no_override(gold, dspy.Prediction(other="ignored")).score == 0.8
+
+
+def test_gepa_metric_wrapper_coalesces_parallel_prediction_callbacks() -> None:
+    class BarrierReporter:
+        def emit(self, message: str, *, flush: bool = False, end: str = "\n") -> None:
+            del flush, end
+            if message.endswith("starting..."):
+                rendezvous.wait(timeout=2)
+
+        def progress_char(self, char: str = ".") -> None:
+            del char
+
+    rendezvous = Barrier(2)
+    wrapper = GEPAMetricWrapper(reporter=cast(Any, BarrierReporter()))
+    calls: list[tuple[Any, Any]] = []
+
+    def metric(input_value: Any, expected: Any) -> tuple[float, str]:
+        calls.append((input_value, expected))
+        return 1.0, "ok"
+
+    wrapped = wrapper.wrap_metric(metric, ["value"])
+    gold = dspy.Example(value="input", _expected="expected").with_inputs("value")
+    prediction = dspy.Prediction(answer="same")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: wrapped(gold, prediction), range(2)))
+
+    assert [result.score for result in results] == [1.0, 1.0]
+    assert calls == [("input", "expected")]
 
 
 def test_gepa_optimizer_edges(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from re import Pattern
-from threading import current_thread
+from threading import Thread, current_thread
 from typing import Any, cast
 
 import pytest
@@ -27,9 +27,13 @@ from kedi.agent_adapter.adapters._codex_app_server import (
     CodexAppServerProtocolError,
     CodexTurnResult,
 )
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_adapter.subagents import SubagentExecutionRequest
+from kedi.agent_adapter.tool_override import ToolSpec, arguments_target_secret_file
 from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 
 FAKE_APP_SERVER = Path(__file__).parent / "files" / "fake_codex_app_server.py"
 
@@ -186,6 +190,117 @@ def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
     assert "outputSchema" not in turns[1]["params"]
 
 
+def test_codex_subagent_execution_contract() -> None:
+    seen: dict[str, Any] = {}
+
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            seen.update(kwargs)
+            return CodexTurnResult(
+                text='{"task_summary":"done","final_result":{"value":17}}',
+                turn={"usage": {"inputTokens": 2, "output_tokens": 3}},
+            )
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    adapter = CodexAdapter(
+        model="base-model",
+        client=cast(CodexAppServerClient, FakeClient()),
+    )
+    tool = ToolSpec(fn=lambda: "ok", name="lookup", risk="read_only")
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(model="child-model", system="child system"),
+        tools=(tool,),
+        instructions="child system",
+        approval_ceiling=(ApprovalPolicy.allow(),),
+        usage_limits=SubagentUsageLimits(request_limit=4),
+    )
+    usages: list[InvocationUsage] = []
+
+    with adapter.subagent_scope(request):
+        assert adapter.active_profile is request.profile
+        assert adapter.scoped_tools == (tool,)
+        with observe_invocations(usages.append):
+            result = asyncio.run(
+                adapter.produce_subagent(
+                    template="delegate",
+                    output_schema={
+                        "type": "object",
+                        "properties": {"task_summary": {"type": "string"}},
+                    },
+                    instructions=request.instructions,
+                    **adapter.subagent_run_kwargs(request.usage_limits),
+                )
+            )
+
+    assert result["final_result"] == {"value": 17}
+    assert adapter.active_profile == AgentProfile.empty()
+    assert adapter.scoped_tools == ()
+    assert adapter.telemetry_model_name() == "base-model"
+    assert seen["thread_params"]["model"] == "child-model"
+    assert seen["thread_params"]["developerInstructions"] == "child system"
+    assert seen["turn_params"]["outputSchema"]["type"] == "object"
+    assert usages == [
+        InvocationUsage(
+            requests=1,
+            input_tokens=2,
+            output_tokens=3,
+            total_tokens=5,
+        )
+    ]
+    assert adapter.subagent_run_kwargs(request.usage_limits) == {}
+
+
+def test_codex_subagent_result_and_usage_validation() -> None:
+    with pytest.raises(ValueError, match="Unknown subagent failure policy"):
+        CodexAdapter(subagent_failure_policy=cast(Any, "invalid"))
+
+    with pytest.raises(CodexAppServerProtocolError, match="invalid structured output"):
+        codex_adapter_module._json_object_result(CodexTurnResult(text="not-json", turn={}))
+    with pytest.raises(CodexAppServerProtocolError, match="must be an object"):
+        codex_adapter_module._json_object_result(CodexTurnResult(text="[]", turn={}))
+
+    usage = codex_adapter_module._codex_invocation_usage(
+        CodexTurnResult(
+            text="{}",
+            turn={
+                "usage": {
+                    "input_tokens": True,
+                    "inputTokens": 4,
+                    "outputTokens": 6,
+                    "totalTokens": 20,
+                }
+            },
+        )
+    )
+    assert usage == InvocationUsage(
+        requests=1,
+        input_tokens=4,
+        output_tokens=6,
+        total_tokens=20,
+    )
+    assert codex_adapter_module._codex_invocation_usage(
+        CodexTurnResult(text="{}", turn={"usage": "unknown"})
+    ) == InvocationUsage(requests=1)
+
+    class SyncClient:
+        def run_stateless_turn_sync(self, **_kwargs: Any) -> CodexTurnResult:
+            return CodexTurnResult(
+                text="raw",
+                turn={"usage": {"inputTokens": 1}},
+            )
+
+    adapter = CodexAdapter(client=cast(CodexAppServerClient, SyncClient()))
+    observed: list[InvocationUsage] = []
+    with observe_invocations(observed.append):
+        assert adapter.invoke_sync(prompt="raw") == "raw"
+    assert observed == [InvocationUsage(requests=1, input_tokens=1, total_tokens=1)]
+
+
 def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None:
     adapter, log_path = _adapter(tmp_path)
     context_value: ContextVar[str] = ContextVar("codex_test_context", default="missing")
@@ -198,7 +313,14 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
         return f"async:{query}:{context_value.get()}"
 
     context_value.set("visible")
-    adapter.register_tool(ToolSpec(fn=lookup, name="lookup", description="Look up records."))
+    adapter.register_tool(
+        ToolSpec(
+            fn=lookup,
+            name="lookup",
+            description="Look up records.",
+            risk="read_only",
+        )
+    )
     with adapter.tool_scope(
         (
             ToolSpec(
@@ -210,6 +332,7 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
                     "properties": {"query": {"type": "string"}},
                     "required": ["query"],
                 },
+                risk="read_only",
             ),
         )
     ):
@@ -218,7 +341,7 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
         )
         assert adapter.scoped_tools[0].name == "async_lookup"
     sync_result = None
-    with adapter.tool_scope((ToolSpec(fn=lookup, name="lookup"),)):
+    with adapter.tool_scope((ToolSpec(fn=lookup, name="lookup", risk="read_only"),)):
         sync_result = adapter.produce_sync(
             'tool:lookup:{"query":"items","limit":3}', output_type=ToolAnswer
         )
@@ -235,11 +358,81 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
     specs = [message["params"]["dynamicTools"][0] for message in _method(messages, "thread/start")]
     starts = _method(messages, "thread/start")
     assert all(start["params"]["sandbox"] == "workspace-write" for start in starts)
-    assert all(start["params"]["approvalPolicy"] == "never" for start in starts)
+    # The App Server must ask Kedi before it can run native actions as well. Kedi then
+    # auto-allows the explicitly read-only registered tools above.
+    assert all(start["params"]["approvalPolicy"] == "untrusted" for start in starts)
     assert specs[0]["inputSchema"]["required"] == ["query"]
     assert specs[1]["inputSchema"]["properties"]["limit"]["default"] == 2
     tool_responses = [message for message in messages if message.get("id", 0) >= 10_000]
     assert all(message["result"]["success"] for message in tool_responses)
+
+
+def test_codex_adapter_bridges_native_app_server_approvals(tmp_path: Path) -> None:
+    adapter, log_path = _adapter(tmp_path)
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        command = adapter.produce_sync("approval:command-write", output_type=ToolAnswer)
+        permission = adapter.produce_sync("approval:permissions", output_type=ToolAnswer)
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.deny())):
+        denied = adapter.produce_sync("approval:command-write", output_type=ToolAnswer)
+        read_only = adapter.produce_sync("approval:command-read", output_type=ToolAnswer)
+
+    def edit_command(_request: Any) -> ApprovalDecision:
+        return ApprovalDecision.edit({"command": "echo replacement"})
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(edit_command))):
+        edited = adapter.produce_sync("approval:file", output_type=ToolAnswer)
+    adapter.close()
+
+    assert json.loads(command.answer) == {"decision": "accept"}
+    assert json.loads(permission.answer) == {
+        "permissions": {"network": {"enabled": True}, "fileSystem": None},
+        "scope": "turn",
+    }
+    assert json.loads(denied.answer) == {"decision": "decline"}
+    assert json.loads(read_only.answer) == {"decision": "accept"}
+    assert json.loads(edited.answer) == {"decision": "decline"}
+    starts = _method(_messages(log_path), "thread/start")
+    assert all(start["params"]["approvalPolicy"] == "untrusted" for start in starts)
+    assert CodexAdapter.capabilities.supports("native_approvals")
+    assert not CodexAdapter.capabilities.supports("native_approval_handler")
+
+
+def test_codex_adapter_keeps_async_tool_and_approval_on_caller_loop(tmp_path: Path) -> None:
+    adapter, _ = _adapter(tmp_path)
+
+    async def run() -> tuple[ToolAnswer, ToolAnswer]:
+        loop = asyncio.get_running_loop()
+        tool_gate: asyncio.Future[None] = loop.create_future()
+        approval_gate: asyncio.Future[None] = loop.create_future()
+
+        async def lookup(query: str) -> str:
+            assert asyncio.get_running_loop() is loop
+            await tool_gate
+            return f"lookup:{query}"
+
+        async def approve(_request: Any) -> ApprovalDecision:
+            assert asyncio.get_running_loop() is loop
+            await approval_gate
+            return ApprovalDecision.allow()
+
+        loop.call_later(0.01, tool_gate.set_result, None)
+        loop.call_later(0.01, approval_gate.set_result, None)
+        with adapter.tool_scope((ToolSpec(fn=lookup, name="lookup", risk="read_only"),)):
+            tool_result = await adapter.produce(
+                'tool:lookup:{"query":"docs"}', output_type=ToolAnswer
+            )
+        with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.dynamic(approve))):
+            approval_result = await adapter.produce(
+                "approval:command-write", output_type=ToolAnswer
+            )
+        return tool_result, approval_result
+
+    tool_result, approval_result = asyncio.run(run())
+    adapter.close()
+
+    assert tool_result == ToolAnswer(answer="lookup:docs", success=True)
+    assert json.loads(approval_result.answer) == {"decision": "accept"}
 
 
 def test_codex_adapter_returns_tool_failures_to_app_server(tmp_path: Path) -> None:
@@ -248,8 +441,9 @@ def test_codex_adapter_returns_tool_failures_to_app_server(tmp_path: Path) -> No
     def broken(query: str) -> str:
         raise ValueError(f"bad {query}")
 
-    with adapter.tool_scope((ToolSpec(fn=broken, name="broken"),)):
-        result = adapter.produce_sync('tool:broken:{"query":"input"}', output_type=ToolAnswer)
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        with adapter.tool_scope((ToolSpec(fn=broken, name="broken"),)):
+            result = adapter.produce_sync('tool:broken:{"query":"input"}', output_type=ToolAnswer)
     adapter.close()
     assert result == ToolAnswer(answer="ValueError: bad input", success=False)
 
@@ -630,6 +824,74 @@ def test_codex_client_server_request_validation_edges(
     assert sent[-1]["result"]["success"] is False
 
 
+def test_codex_client_limits_dynamic_request_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from threading import Event as ThreadEvent
+
+    client = CodexAppServerClient(
+        (sys.executable,), dynamic_request_workers=1, max_dynamic_requests=1
+    )
+    sent: list[dict[str, Any]] = []
+    started = ThreadEvent()
+    release = ThreadEvent()
+
+    def block_request(_request_id: Any, _method: str, _params: Any) -> None:
+        started.set()
+        assert release.wait(timeout=2)
+
+    monkeypatch.setattr(client, "_send", sent.append)
+    monkeypatch.setattr(client, "_handle_server_request", block_request)
+    try:
+        client._submit_server_request(1, "item/tool/call", {})
+        assert started.wait(timeout=2)
+        client._submit_server_request(2, "item/tool/call", {})
+        assert sent == [
+            {
+                "id": 2,
+                "error": {
+                    "code": -32000,
+                    "message": "Kedi dynamic request capacity is exhausted.",
+                },
+            }
+        ]
+    finally:
+        release.set()
+        client.close()
+
+
+def test_codex_client_rejects_invalid_dynamic_worker_limits() -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        CodexAppServerClient((sys.executable,), dynamic_request_workers=0)
+    with pytest.raises(ValueError, match="cannot be smaller"):
+        CodexAppServerClient(
+            (sys.executable,),
+            dynamic_request_workers=2,
+            max_dynamic_requests=1,
+        )
+
+
+def test_codex_client_reports_dynamic_executor_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = CodexAppServerClient((sys.executable,))
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(client, "_send", sent.append)
+    client._dynamic_executor.shutdown(wait=True)
+
+    client._submit_server_request(1, "item/tool/call", {})
+
+    assert sent == [
+        {
+            "id": 1,
+            "error": {
+                "code": -32000,
+                "message": "Kedi Codex dynamic request executor is closed.",
+            },
+        }
+    ]
+
+
 def test_codex_client_tool_request_system_exit_and_notifications(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -749,3 +1011,175 @@ def test_codex_client_stateless_turn_missing_data_and_start_failure(
             tool_context=contextvars.copy_context(),
             turn_timeout=1,
         )
+
+
+def test_codex_client_native_approval_fallback_and_validation_edges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = CodexAppServerClient((sys.executable,))
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(client, "_send", sent.append)
+
+    command_method = "item/commandExecution/requestApproval"
+    permissions_method = "item/permissions/requestApproval"
+    client._handle_server_request(1, command_method, "invalid")
+    assert sent[-1] == {"id": 1, "result": {"decision": "decline"}}
+
+    client._handle_server_request(2, permissions_method, {"threadId": "missing"})
+    assert sent[-1] == {"id": 2, "result": {"permissions": {}, "scope": "turn"}}
+
+    def broken_approval(_method: str, _params: dict[str, Any]) -> dict[str, Any]:
+        raise ValueError("approval failed")
+
+    client._thread_approvals["bound"] = codex_server_module._ApprovalBinding(
+        handler=broken_approval,
+        context=contextvars.copy_context(),
+    )
+    client._handle_server_request(3, command_method, {"threadId": "bound"})
+    assert sent[-1]["error"]["code"] == -32000
+    assert "approval failed" in sent[-1]["error"]["message"]
+
+    def interrupted_approval(_method: str, _params: dict[str, Any]) -> dict[str, Any]:
+        raise KeyboardInterrupt
+
+    client._thread_approvals["interrupted"] = codex_server_module._ApprovalBinding(
+        handler=interrupted_approval,
+        context=contextvars.copy_context(),
+    )
+    with pytest.raises(KeyboardInterrupt):
+        client._handle_server_request(4, command_method, {"threadId": "interrupted"})
+
+    assert codex_server_module._default_native_approval_response(command_method) == {
+        "decision": "decline"
+    }
+    assert codex_server_module._default_native_approval_response(permissions_method) == {
+        "permissions": {},
+        "scope": "turn",
+    }
+    assert codex_server_module._validated_native_approval_response(
+        permissions_method,
+        {
+            "permissions": {"network": {"enabled": True}},
+            "scope": "session",
+            "strictAutoReview": True,
+        },
+    ) == {
+        "permissions": {"network": {"enabled": True}},
+        "scope": "session",
+        "strictAutoReview": True,
+    }
+
+    with pytest.raises(TypeError, match="object response"):
+        codex_server_module._validated_native_approval_response(command_method, "invalid")
+    with pytest.raises(TypeError, match="permissions field"):
+        codex_server_module._validated_native_approval_response(
+            permissions_method, {"permissions": "invalid"}
+        )
+    with pytest.raises(ValueError, match="scope"):
+        codex_server_module._validated_native_approval_response(
+            permissions_method, {"permissions": {}, "scope": "invalid"}
+        )
+    with pytest.raises(TypeError, match="strictAutoReview"):
+        codex_server_module._validated_native_approval_response(
+            permissions_method, {"permissions": {}, "strictAutoReview": "yes"}
+        )
+    with pytest.raises(ValueError, match="acceptForSession"):
+        codex_server_module._validated_native_approval_response(
+            command_method, {"decision": "invalid"}
+        )
+
+
+def test_codex_async_bridge_propagates_schedule_and_task_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NeverScheduled:
+        def __await__(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield None
+            return None
+
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        bridge = codex_server_module._await_result_in_loop(loop)
+
+        async def run_from_thread(awaitable: Any) -> BaseException:
+            completed = asyncio.Event()
+            errors: list[BaseException] = []
+
+            def invoke() -> None:
+                try:
+                    bridge(contextvars.copy_context(), awaitable)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    loop.call_soon_threadsafe(completed.set)
+
+            worker = Thread(target=invoke)
+            worker.start()
+            await completed.wait()
+            worker.join()
+            assert len(errors) == 1
+            return errors[0]
+
+        async def fails() -> None:
+            raise ValueError("task failed")
+
+        task_error = await run_from_thread(fails())
+        assert isinstance(task_error, ValueError)
+        assert str(task_error) == "task failed"
+
+        original_ensure_future = codex_server_module.asyncio.ensure_future
+
+        def reject_sentinel(awaitable: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(awaitable, NeverScheduled):
+                raise RuntimeError("schedule failed")
+            return original_ensure_future(awaitable, *args, **kwargs)
+
+        monkeypatch.setattr(codex_server_module.asyncio, "ensure_future", reject_sentinel)
+        scheduling_error = await run_from_thread(NeverScheduled())
+        assert isinstance(scheduling_error, RuntimeError)
+        assert str(scheduling_error) == "schedule failed"
+
+    asyncio.run(scenario())
+
+
+def test_codex_native_approval_classifies_edge_cases_and_declines_unrepresentable_edits() -> None:
+    command_method = "item/commandExecution/requestApproval"
+    file_method = "item/fileChange/requestApproval"
+    permissions_method = "item/permissions/requestApproval"
+
+    with pytest.raises(ValueError, match="Unsupported Codex native approval method"):
+        codex_adapter_module._codex_native_approval_details("unknown", {})
+
+    assert codex_adapter_module._codex_command_risk({"path": ".env"}) == "sensitive"
+    assert (
+        codex_adapter_module._codex_command_risk({"additionalPermissions": {"network": True}})
+        == "sensitive"
+    )
+    assert not codex_adapter_module._is_read_only_command_action("invalid")
+    assert (
+        codex_adapter_module._codex_command_risk({"commandActions": [{"type": "read"}]})
+        == "read_only"
+    )
+    assert (
+        codex_adapter_module._codex_command_risk({"commandActions": [{"type": "unknown"}]})
+        == "mutating"
+    )
+    assert arguments_target_secret_file([{"path": ".env.local"}, 1])
+    assert not arguments_target_secret_file(1)
+
+    denied = ApprovalDecision.deny()
+    edited = ApprovalDecision.edit({"path": "other.txt"})
+    assert codex_adapter_module._codex_native_approval_response(command_method, {}, denied) == {
+        "decision": "decline"
+    }
+    assert codex_adapter_module._codex_native_approval_response(file_method, {}, edited) == {
+        "decision": "decline"
+    }
+    assert codex_adapter_module._codex_native_approval_response(permissions_method, {}, denied) == {
+        "permissions": {},
+        "scope": "turn",
+    }
+    assert codex_adapter_module._codex_native_approval_response(
+        permissions_method, {"permissions": "invalid"}, ApprovalDecision.allow()
+    ) == {"permissions": {}, "scope": "turn"}

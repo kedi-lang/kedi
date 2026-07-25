@@ -118,3 +118,13 @@ def test_python_origins_use_unique_keys_per_snippet() -> None:
     assert set(rt._python_origins) == {first, second}
     assert rt._python_origins[first].code == "1 / 0"
     assert rt._python_origins[second].code == "2 + 2"
+
+
+def test_python_origins_reuse_an_identical_snippet() -> None:
+    rt = KediRuntime()
+
+    first = rt.register_python_origin(kind="type_expression", code="str", span=None)
+    second = rt.register_python_origin(kind="type_expression", code="str", span=None)
+
+    assert second == first
+    assert tuple(rt._python_origins) == (first,)

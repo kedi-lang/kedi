@@ -6,6 +6,9 @@ _ROOT = Path.cwd().resolve()
 _MAX_READ_BYTES = 1_000_000
 _MAX_DIRECTORY_ENTRIES = 1_000
 
+def _is_secret_file(path: Path) -> bool:
+    return path.name == ".env" or path.name.startswith(".env.")
+
 def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
@@ -21,18 +24,23 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
     return resolved
 ```
 
-@read_text_file(file_path: str) -> str:
+@read_text_file(file_path: str, secret_files: bool = `False`) -> str:
     ###
     Read a UTF-8 text file.
 
     Args:
         file_path (str): Path to the file.
+        secret_files (bool): Request a secret file such as .env. This requires approval.
 
     Returns:
         str: File contents.
     ###
     = ```
     path = _safe_path(file_path)
+    if _is_secret_file(path) and not secret_files:
+        raise PermissionError(
+            f"refusing to read secret file: {file_path}; set secret_files=True to request approval"
+        )
     if path.stat().st_size > _MAX_READ_BYTES:
         raise ValueError(f"file is too large to read: {file_path}")
     return path.read_text(encoding="utf-8")

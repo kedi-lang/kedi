@@ -4,17 +4,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..effort import EffortValue
 from .mcp import McpServerSpec
 
 AgentCommand = str | tuple[str, ...]
+SKILLS_USE_TARGET = "skills"
 
 
 @dataclass(frozen=True, kw_only=True)
 class AgentProfile:
     """Runtime agent configuration merged incrementally by profile directives."""
 
+    name: str | None = None
     model: str | None = None
     adapter_kind: AgentAdapterKind | None = None
     adapter_shortname: str | None = None
@@ -24,6 +27,10 @@ class AgentProfile:
     settings: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[str, ...] = ()
     mcp_servers: tuple[McpServerSpec, ...] = ()
+    approval: ApprovalPolicy | None = None
+    skills: bool | None = None
+    subagents: tuple[str, ...] = ()
+    max_agents: int | None = None
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -31,6 +38,8 @@ class AgentProfile:
 
     def merge(self, other: AgentProfile) -> AgentProfile:
         updates: dict[str, object] = {}
+        if other.name is not None:
+            updates["name"] = other.name
         if other.adapter_shortname is not None:
             updates["adapter_shortname"] = other.adapter_shortname
             updates["adapter_kind"] = other.adapter_kind
@@ -48,6 +57,14 @@ class AgentProfile:
             updates["tools"] = _merge_tool_names(self.tools, other.tools)
         if other.mcp_servers:
             updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
+        if other.approval is not None:
+            updates["approval"] = other.approval
+        if other.skills is not None:
+            updates["skills"] = other.skills
+        if other.subagents:
+            updates["subagents"] = _merge_names(self.subagents, other.subagents)
+        if other.max_agents is not None:
+            updates["max_agents"] = other.max_agents
         if not updates:
             return self
         return replace(self, **updates)
@@ -78,6 +95,10 @@ class AgentProfile:
 
 
 def _merge_tool_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
+    return _merge_names(left, right)
+
+
+def _merge_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ...]:
     merged = list(left)
     for name in right:
         if name in merged:

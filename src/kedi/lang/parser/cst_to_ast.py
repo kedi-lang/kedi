@@ -42,6 +42,7 @@ from ...source_loading import CompositeSourceMap
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    ApprovalDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -65,11 +66,14 @@ from ..ast import (
     ProcedureDef,
     ProfileAdapterEntry,
     ProfileAgentEntry,
+    ProfileApprovalEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMcpEntry,
+    ProfileMaxAgentsEntry,
     ProfileModelEntry,
     ProfileSettingsEntry,
+    ProfileSubagentEntry,
     ProfileSystemEntry,
     Program,
     ProgramWithValidation,
@@ -343,6 +347,10 @@ class _Walker:
                 stmt = self._walk_effort_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "approval_directive":
+                stmt = self._walk_approval_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
                 stmt = self._walk_system_directive(child)
                 prog.toplevel_body.append(stmt)
@@ -404,9 +412,9 @@ class _Walker:
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "template_block_stmt":
-                stmt = self._walk_template_block_stmt(child)
-                prog.toplevel_body.append(stmt)
-                prog.ordered_toplevel.append(stmt)
+                for stmt in self._walk_template_block_statements(child):
+                    prog.toplevel_body.append(stmt)
+                    prog.ordered_toplevel.append(stmt)
             elif t == "template_line":
                 stmt = self._walk_template_line(child, deprecated=True)
                 prog.toplevel_body.append(stmt)
@@ -474,6 +482,16 @@ class _Walker:
             node,
             f"effort directive must be one of: {expected}",
             code="K-EFFORT-VALUE",
+        )
+
+    def _validate_approval_plain_value(self, node: Node, value: str) -> None:
+        if value in {"allow", "deny"}:
+            return
+        self._error(
+            node,
+            "approval directive must be 'allow', 'deny', or an inline Python handler; "
+            "'edit' is only valid as ApprovalDecision.edit(...) from a handler",
+            code="K-APPROVAL-VALUE",
         )
 
     def _validate_mcp_transport_plain_value(self, node: Node, value: str) -> None:
@@ -756,6 +774,9 @@ class _Walker:
 
     def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
         for child in _named_children(block_node):
+            if child.type == "template_block_stmt":
+                proc.body.extend(self._walk_template_block_statements(child))
+                continue
             stmt = self._walk_stmt(child, proc)
             if stmt is None:
                 continue
@@ -798,6 +819,8 @@ class _Walker:
             return self._walk_adapter_directive(node)
         if t == "effort_directive":
             return self._walk_effort_directive(node)
+        if t == "approval_directive":
+            return self._walk_approval_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -824,7 +847,9 @@ class _Walker:
         if t == "backtick_line_stmt":
             return self._walk_backtick_line_stmt(node)
         if t == "template_block_stmt":
-            return self._walk_template_block_stmt(node)
+            block = self._walk_template_block_stmt(node)
+            self._validate_template_block_scope(block.lines)
+            return block
         if t == "template_line":
             return self._walk_template_line(node, deprecated=True)
         if t in ("block_comment", "line_comment"):
@@ -864,10 +889,14 @@ class _Walker:
         type_expr = self._walk_type_expr(type_node) if type_node is not None else None
 
         rhs_node = _field(node, "rhs")
-        # RHS is either an inline_python_expr or a template_expr.
-        if rhs_node is not None and rhs_node.type == "inline_python_expr":
-            code = self._walk_inline_python_expr(rhs_node)
-            seg = PythonExprNativeSegment(code=code, loc=self._span(rhs_node))
+        # A sole backtick RHS preserves its native Python value. The
+        # tree-sitter grammar also admits inline expressions as template
+        # segments, so accept either CST shape here without changing the
+        # long-standing native assignment semantics.
+        native_expr = self._sole_inline_python_expr(rhs_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
+            seg = PythonExprNativeSegment(code=code, loc=self._span(native_expr))
             return AssignStmt(
                 name=name,
                 expr=[seg],
@@ -957,8 +986,9 @@ class _Walker:
         # ``ReturnStmt`` whose value happens to include a backtick
         # segment alongside other content (which IS a ReturnStmt with
         # a single PythonExprNativeSegment, rendered to string).
-        if value_node is not None and value_node.type == "inline_python_expr":
-            code = self._walk_inline_python_expr(value_node)
+        native_expr = self._sole_inline_python_expr(value_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
             return ReturnBlockStmt(code=code, loc=self._span(node))
         segs = self._walk_template_expr(value_node) if value_node is not None else []
         return ReturnStmt(segments=segs, loc=self._span(node))
@@ -1032,8 +1062,58 @@ class _Walker:
             lines.append(self._template_line_from_expr(head))
         for cont in node.children_by_field_name("continuation"):
             lines.append(self._template_line_from_expr(cont))
-        self._validate_template_block_scope(lines)
         return TemplateBlock(lines=lines, loc=self._span(node))
+
+    def _walk_template_block_statements(self, node: Node) -> List[Stmt]:
+        """Split legacy backtick statements out of a ``>>`` continuation.
+
+        A bare inline Python expression is a valid prompt segment after ``>>``.
+        Historically, however, a continuation containing a Python *statement*
+        (for example ``value = value.strip()``) remained a standalone
+        backtick statement. Tree-sitter deliberately parses both forms as a
+        template continuation so plain expressions can stay in the block; this
+        AST pass restores the statement boundary without restricting Python
+        expression syntax in the grammar.
+        """
+
+        block = self._walk_template_block_stmt(node)
+        statements: List[Stmt] = []
+        pending_lines: List[TemplateLine] = []
+
+        for index, line in enumerate(block.lines):
+            code = self._standalone_backtick_continuation_code(line) if index else None
+            if code is None:
+                pending_lines.append(line)
+                continue
+            if pending_lines:
+                statements.append(self._validated_template_block(pending_lines, block.loc))
+                pending_lines = []
+            statements.append(BacktickLineStmt(code=code, loc=line.loc))
+
+        if pending_lines:
+            statements.append(self._validated_template_block(pending_lines, block.loc))
+        return statements
+
+    def _validated_template_block(
+        self, lines: List[TemplateLine], loc: Span | None
+    ) -> TemplateBlock:
+        self._validate_template_block_scope(lines)
+        return TemplateBlock(lines=lines, loc=loc)
+
+    @staticmethod
+    def _standalone_backtick_continuation_code(line: TemplateLine) -> str | None:
+        """Return code when a continuation is a Python statement, not an expression."""
+
+        if len(line.segments) != 1 or not isinstance(line.segments[0], PythonExprSegment):
+            return None
+        code = line.segments[0].code
+        try:
+            parsed = py_ast.parse(code, mode="exec")
+        except SyntaxError:
+            return None
+        if len(parsed.body) != 1 or isinstance(parsed.body[0], py_ast.Expr):
+            return None
+        return code
 
     def _validate_template_block_scope(self, lines: List[TemplateLine]) -> None:
         produced_names: set[str] = set()
@@ -1223,6 +1303,18 @@ class _Walker:
         self._strip_leading_template_indent(segs)
         return segs
 
+    @staticmethod
+    def _sole_inline_python_expr(node: Node | None) -> Node | None:
+        """Return the sole inline expression in a native assignment/return RHS."""
+        if node is None:
+            return None
+        if node.type == "inline_python_expr":
+            return node
+        children = _named_children(node)
+        if len(children) == 1 and children[0].type == "inline_python_expr":
+            return children[0]
+        return None
+
     def _strip_leading_template_indent(self, segs: List[Segment]) -> None:
         # The scanner's text-token rule absorbs any leading horizontal
         # whitespace of a body line (because tree-sitter cannot
@@ -1295,6 +1387,11 @@ class _Walker:
                     return PythonExprSegment(code=code, loc=self._span(node))
             self._error(node, "python_expr_segment missing inline_python_expr child")
             return PythonExprSegment(code="", loc=self._span(node))
+        if t == "inline_python_expr":
+            return PythonExprSegment(
+                code=self._walk_inline_python_expr(node),
+                loc=self._span(node),
+            )
         self._error(node, f"unexpected segment {t!r}")
         # Fallback so callers don't need None checks.
         return TextSegment(text="", loc=self._span(node))
@@ -1504,6 +1601,14 @@ class _Walker:
         self._validate_effort_plain_value(value_node, plain)
         return EffortDirectiveStmt(plain_value=plain, loc=self._span(node))
 
+    def _walk_approval_directive(self, node: Node) -> ApprovalDirectiveStmt:
+        plain, code = self._walk_simple_directive_value(node)
+        if plain is not None:
+            value_node = _field(node, "value")
+            assert value_node is not None
+            self._validate_approval_plain_value(value_node, plain)
+        return ApprovalDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -1644,9 +1749,12 @@ class _Walker:
         agent_members: list[ProfileAgentEntry] = []
         adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
+        approval_members: list[ProfileApprovalEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
+        subagent_members: list[ProfileSubagentEntry] = []
+        max_agents_members: list[ProfileMaxAgentsEntry] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -1721,6 +1829,15 @@ class _Walker:
                                 loc=self._span(child),
                             )
                         )
+                elif child.type == "approval_directive":
+                    approval_stmt = self._walk_approval_directive(child)
+                    approval_members.append(
+                        ProfileApprovalEntry(
+                            plain_value=approval_stmt.plain_value,
+                            backtick_code=approval_stmt.backtick_code,
+                            loc=self._span(child),
+                        )
+                    )
                 elif child.type == "system_directive":
                     system_stmt = self._walk_system_directive(child)
                     if system_stmt.template_lines:
@@ -1770,19 +1887,40 @@ class _Walker:
                             loc=self._span(child),
                         )
                     )
+                elif child.type == "subagent_directive":
+                    subagent_node = _field(child, "name")
+                    assert subagent_node is not None
+                    subagent_members.append(
+                        ProfileSubagentEntry(
+                            name=_identifier_name(self.source, subagent_node),
+                            loc=self._span(subagent_node),
+                        )
+                    )
+                elif child.type == "max_agents_directive":
+                    value_node = _field(child, "value")
+                    assert value_node is not None
+                    max_agents_members.append(
+                        ProfileMaxAgentsEntry(
+                            value=int(_src_text(self.source, value_node)),
+                            loc=self._span(child),
+                        )
+                    )
         if (
             not members
             and not agent_members
             and not adapter_members
             and not effort_members
+            and not approval_members
             and not system_members
             and not mcp_members
             and not settings_members
+            and not subagent_members
+            and not max_agents_members
             and not tool_names
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> system:', '> mcp:', '> settings:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> subagent:', '> max_agents:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -1791,9 +1929,12 @@ class _Walker:
             adapter_members=adapter_members,
             model_members=members,
             effort_members=effort_members,
+            approval_members=approval_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,
+            subagent_members=subagent_members,
+            max_agents_members=max_agents_members,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+from pathlib import Path
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -31,6 +32,10 @@ from .errors import (
 )
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
+
+if TYPE_CHECKING:
+    from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
+    from .agent_adapter.subagents.limits import SubagentUsageLimits
 
 _SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
@@ -149,7 +154,15 @@ class KediRuntime:
         adapter: AgentAdapter[Any] | None = None,
         executor: Executor | None = None,
         engine: Any | None = None,
+        default_agent_profile: Any | None = None,
+        subagent_max_depth: int = 5,
+        subagent_max_concurrency: int = 4,
+        subagent_timeout_seconds: float | None = 120.0,
+        subagent_usage_limits: "SubagentUsageLimits | None" = None,
+        subagent_state_path: str | Path | None = None,
     ) -> None:
+        from .agent_profile import AgentProfile
+
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
@@ -169,6 +182,9 @@ class KediRuntime:
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
         )
+        self._subagent_stack: ContextVar[tuple[tuple[str, str], ...]] = ContextVar(
+            "kedi_subagent_stack", default=()
+        )
         # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
         # outermost invocation, regardless of entry point (run_main / query / direct invoke).
         self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
@@ -176,14 +192,47 @@ class KediRuntime:
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
         self._python_origins: Dict[str, KediPythonOrigin] = {}
+        self._python_origin_keys: Dict[tuple[Any, ...], str] = {}
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
         self._type_env_stack: list[dict[str, Any]] = []
         self._profile_registry: dict[str, Any] = {}
+        self.default_agent_profile = (
+            default_agent_profile
+            if isinstance(default_agent_profile, AgentProfile)
+            else AgentProfile.empty()
+        )
         self._prelude_env: ValueEnv | None = None
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
+        from .agent_adapter.subagents.coordinator import (
+            SubagentCoordinator,
+            SubagentCoordinatorDependencies,
+        )
+
+        self._subagent_coordinator = SubagentCoordinator(
+            SubagentCoordinatorDependencies(
+                profile_registry=lambda: self._profile_registry,
+                evaluate_profile=lambda definition: self._evaluate_profile_definition(definition),
+                resolve_adapter=lambda profile: self._resolve_adapter(profile),
+                assert_profile_override_supported=lambda profile, adapter: (
+                    self._assert_profile_override_supported(profile, adapter)
+                ),
+                resolve_tools=lambda profile, adapter: self._resolve_agent_tool_specs(
+                    profile, adapter
+                ),
+                instructions_for_profile=lambda profile: self._agent_instructions(profile),
+                trace_frame=lambda frame: self.trace_frame(frame),
+                active_stack=self._subagent_stack,
+                default_cwd=Path.cwd,
+            ),
+            max_depth=subagent_max_depth,
+            max_concurrency=subagent_max_concurrency,
+            timeout_seconds=subagent_timeout_seconds,
+            usage_limits=subagent_usage_limits,
+            state_path=subagent_state_path,
+        )
 
     # Expressions
     def i(self, key: str) -> InputExpr:
@@ -461,13 +510,7 @@ class KediRuntime:
     ) -> str:
         import linecache
 
-        with self._origin_counter_lock:
-            self._python_origin_counter += 1
-            counter = self._python_origin_counter
         origin_span = span
-        # Unique virtual filename per snippet so snippets sharing a .kedi file don't
-        # collide; the real source path lives on origin_span for rendering.
-        filename = f"<kedi-python:{kind}:{counter}>"
         if span is not None and span.source_path is not None:
             origin_span = span
         elif (
@@ -484,20 +527,52 @@ class KediRuntime:
                     source_path=resolved.source_path,
                     source_id=resolved.source_id,
                 )
-        self._python_origins[filename] = KediPythonOrigin(
-            filename=filename,
-            kind=kind,
-            code=code,
-            span=origin_span,
-            compile_line_offset=compile_line_offset,
-            wrapper_line_offset=wrapper_line_offset,
-            kedi_line_offset=kedi_line_offset,
-            procedure_name=procedure_name,
+        span_key = (
+            None
+            if origin_span is None
+            else (
+                origin_span.start_byte,
+                origin_span.end_byte,
+                origin_span.start_line,
+                origin_span.start_col,
+                origin_span.end_line,
+                origin_span.end_col,
+                origin_span.source_path,
+                origin_span.source_id,
+            )
         )
-        cache_text = "\n" * compile_line_offset + (traceback_code or code)
-        lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
-        linecache.cache[filename] = (len(code), None, lines, filename)
-        return filename
+        origin_key = (
+            kind,
+            code,
+            span_key,
+            compile_line_offset,
+            wrapper_line_offset,
+            kedi_line_offset,
+            procedure_name,
+            traceback_code,
+        )
+        with self._origin_counter_lock:
+            cached = self._python_origin_keys.get(origin_key)
+            if cached is not None:
+                return cached
+
+            self._python_origin_counter += 1
+            filename = f"<kedi-python:{kind}:{self._python_origin_counter}>"
+            self._python_origins[filename] = KediPythonOrigin(
+                filename=filename,
+                kind=kind,
+                code=code,
+                span=origin_span,
+                compile_line_offset=compile_line_offset,
+                wrapper_line_offset=wrapper_line_offset,
+                kedi_line_offset=kedi_line_offset,
+                procedure_name=procedure_name,
+            )
+            self._python_origin_keys[origin_key] = filename
+            cache_text = "\n" * compile_line_offset + (traceback_code or code)
+            lines = [line + "\n" for line in cache_text.splitlines()] or ["\n"]
+            linecache.cache[filename] = (len(code), None, lines, filename)
+            return filename
 
     def _hydrate_frame(self, frame: KediTraceFrame) -> KediTraceFrame:
         if frame.source_snippet is not None or frame.span is None or frame.span.source_path is None:
@@ -532,7 +607,7 @@ class KediRuntime:
 
         block_profile = current_block_agent_profile()
         adapter = self._resolve_adapter(block_profile)
-        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         self._assert_profile_override_supported(block_profile, adapter)
 
         def _call_invoke() -> str:
@@ -544,9 +619,7 @@ class KediRuntime:
 
             profile = current_block_agent_profile()
             override_ctx = nullcontext()
-            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
-                adapter.default_model()
-            ):
+            if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
 
             tool_adapter: Any = None
@@ -560,8 +633,9 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                if profile.system is not None:
-                    run_kwargs["instructions"] = profile.system
+                instructions = self._agent_instructions(profile)
+                if instructions is not None:
+                    run_kwargs["instructions"] = instructions
                 with override_ctx:
                     return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
 
@@ -647,7 +721,7 @@ class KediRuntime:
 
         block_profile = current_block_agent_profile()
         adapter = self._resolve_adapter(block_profile)
-        captured_tool_specs = self._resolve_tool_specs(block_profile, adapter)
+        captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         # Validate the profile override on the main thread too, so it raises synchronously at the
         # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
         # at drain (wrapped, differently typed) when _produce runs on a parallel worker.
@@ -671,9 +745,7 @@ class KediRuntime:
             # (_assert_profile_override_supported); here we only enter the override scope.
             profile = current_block_agent_profile()
             override_ctx = nullcontext()
-            if isinstance(adapter, SupportsProfileOverride) and profile.needs_adapter_override(
-                adapter.default_model()
-            ):
+            if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
 
             # Register the pre-resolved (scope-correct) tool specs inside the adapter's per-call
@@ -689,8 +761,9 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                if profile.system is not None:
-                    run_kwargs["instructions"] = profile.system
+                instructions = self._agent_instructions(profile)
+                if instructions is not None:
+                    run_kwargs["instructions"] = instructions
 
                 with override_ctx:
                     result = adapter.produce_sync(
@@ -810,6 +883,7 @@ class KediRuntime:
             return ()
 
         from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_adapter.tool_override import with_approval
         from .agent_adapter.utils import (
             kedi_procedure_tool_spec,
             python_callable_tool_spec,
@@ -836,7 +910,199 @@ class KediRuntime:
             if tool_fn is None:
                 raise KediExecutionError(f"Unknown tool procedure: {tool_name!r}")
             specs.append(python_callable_tool_spec(tool_name, tool_fn))
+        if self._adapter_uses_native_approvals(adapter):
+            return tuple(specs)
+        return tuple(
+            with_approval(
+                spec,
+                policy=profile.approval,
+                adapter_shortname=getattr(adapter, "shortname", None),
+            )
+            for spec in specs
+        )
+
+    def _resolve_agent_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
+        """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
+        specs = list(self._resolve_tool_specs(profile, adapter))
+
+        if getattr(profile, "skills", False):
+            from .agent_adapter.tool_override import SupportsToolRegistration
+            from .agent_profile import AgentToolOverrideUnsupported
+
+            if not isinstance(adapter, SupportsToolRegistration):
+                raise AgentToolOverrideUnsupported(
+                    "Active adapter does not support skill tool registration"
+                )
+            from .agent_adapter.skills import skill_tool_specs
+            from .agent_adapter.tool_override import with_approval
+
+            skill_specs = skill_tool_specs(self._skill_root())
+            if not self._adapter_uses_native_approvals(adapter):
+                skill_specs = tuple(
+                    with_approval(
+                        spec,
+                        policy=profile.approval,
+                        adapter_shortname=getattr(adapter, "shortname", None),
+                    )
+                    for spec in skill_specs
+                )
+            specs.extend(skill_specs)
+
+        if getattr(profile, "subagents", ()):
+            from .agent_adapter.meta import AdapterCapabilities
+            from .agent_adapter.subagents import subagent_tool_specs
+            from .agent_profile import AgentSubagentUnsupported
+
+            capabilities = getattr(adapter, "capabilities", None)
+            if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
+                "subagents"
+            ):
+                raise AgentSubagentUnsupported(
+                    "Active adapter does not support Kedi subagent delegation"
+                )
+            specs.extend(
+                subagent_tool_specs(
+                    self,
+                    profile,
+                    supports_background=capabilities.supports("background_subagents"),
+                )
+            )
         return tuple(specs)
+
+    async def _delegate_task(
+        self,
+        *,
+        allowed_subagents: tuple[str, ...],
+        subagent: str,
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return await self._subagent_coordinator.delegate(
+            allowed_subagents=allowed_subagents,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    def _start_subagent(
+        self,
+        *,
+        allowed_subagents: tuple[str, ...],
+        subagent: str,
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return self._subagent_coordinator.start(
+            allowed_subagents=allowed_subagents,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    async def _continue_subagent(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return await self._subagent_coordinator.continue_run(
+            run_id=run_id,
+            allowed_subagents=allowed_subagents,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    def _start_subagent_continuation(
+        self,
+        *,
+        run_id: str,
+        allowed_subagents: tuple[str, ...],
+        task: str,
+        final_schema: dict[str, Any] | None,
+        parent_profile: Any,
+        parent_budget: "DelegationBudget",
+        parent_concurrency: "DelegationConcurrency",
+    ) -> Any:
+        return self._subagent_coordinator.start_continuation(
+            run_id=run_id,
+            allowed_subagents=allowed_subagents,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_budget=parent_budget,
+            parent_concurrency=parent_concurrency,
+        )
+
+    async def _wait_subagent(
+        self,
+        run_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        return await self._subagent_coordinator.wait(run_id, timeout=timeout)
+
+    def _cancel_subagent(self, run_id: str) -> bool:
+        return self._subagent_coordinator.cancel(run_id)
+
+    def _subagent_status(self, run_id: str) -> Any:
+        return self._subagent_coordinator.status(run_id)
+
+    def _new_subagent_concurrency(self) -> "DelegationConcurrency":
+        return self._subagent_coordinator.new_concurrency()
+
+    def _evaluate_profile_definition(self, definition: Any) -> Any:
+        from .agent_profile.compile import build_capture_env
+        from .agent_profile.model import eval_profile_definition
+
+        return eval_profile_definition(self, definition, build_capture_env(self))
+
+    @staticmethod
+    def _adapter_uses_native_approvals(adapter: Any) -> bool:
+        from .agent_adapter.meta import AdapterCapabilities
+
+        capabilities = getattr(adapter, "capabilities", None)
+        return isinstance(capabilities, AdapterCapabilities) and capabilities.supports(
+            "native_approvals"
+        )
+
+    def _skill_root(self) -> Path:
+        """Resolve skills beside the executed Kedi source, else from the process CWD."""
+        program_loc = getattr(self._program, "loc", None)
+        source_path = getattr(program_loc, "source_path", None)
+        if isinstance(source_path, str) and not source_path.startswith("<"):
+            return Path(source_path).resolve().parent / ".agents" / "skills"
+        return Path.cwd() / ".agents" / "skills"
+
+    @staticmethod
+    def _agent_instructions(profile: Any) -> str | None:
+        """Append the skill contract without replacing user-provided system instructions."""
+        instructions = getattr(profile, "system", None)
+        if not getattr(profile, "skills", False):
+            return instructions
+        from .agent_adapter.skills import skill_instructions
+
+        skill_prompt = skill_instructions()
+        return skill_prompt if instructions is None else f"{instructions}\n\n{skill_prompt}"
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

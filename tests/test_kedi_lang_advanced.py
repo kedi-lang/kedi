@@ -472,18 +472,18 @@ def test_backtick_assignment_type_coercion_to_str(monkeypatch: Any) -> None:
         _run(monkeypatch, src)
 
 
-def test_backtick_assignment_with_extra_text_is_string(monkeypatch: Any) -> None:
-    """A raw backtick mid-template is a parse error.
-
-    The grammar treats `` ` `` as a segment delimiter consistently.
-    Users who want a literal backtick must escape it (``\\```) or wrap
-    an inline-Python segment in angle brackets (``<`expr`>``).
-    """
-    import pytest
-
+def test_bare_inline_python_segment_can_mix_with_template_text(monkeypatch: Any) -> None:
     src = "@p(s):\n  [x] = `1+1` and more <s>\n  = <x>\n\n= <p(ok)>\n"
-    with pytest.raises(Exception):
-        _run(monkeypatch, src)
+    assert _run(monkeypatch, src) == "2 and more ok"
+
+
+def test_bare_inline_python_segment_accepts_template_special_characters(monkeypatch: Any) -> None:
+    src = (
+        '>> Review `"def add(number1: str, number2: int) -> int: return number1 + number2"` '
+        "and provide [report]\n"
+        "= <report>\n"
+    )
+    assert _run(monkeypatch, src) == "report-value"
 
 
 def test_backtick_vs_angle_inline_python_assignment(monkeypatch: Any) -> None:

@@ -5,19 +5,23 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
+from ..agent_adapter.approval import ApprovalPolicy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import AgentCommand, AgentProfile
+from .profile import AgentCommand, AgentProfile, SKILLS_USE_TARGET
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
+    ProfileApprovalMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMcpMember,
+    ProfileMaxAgentsMember,
     ProfileModelMember,
     ProfileSettingsMember,
     ProfileSystemMember,
+    ProfileSubagentMember,
     ProfileToolMember,
 )
 from .settings import parse_plain_setting_value
@@ -27,6 +31,7 @@ if TYPE_CHECKING:
     from kedi.lang.ast import (
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
+        ApprovalDirectiveStmt,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         McpField,
@@ -45,6 +50,10 @@ class AgentProfileOverrideUnsupported(KediExecutionError):
 
 class AgentToolOverrideUnsupported(KediExecutionError):
     """Raised when the active adapter cannot register tools for an agent run."""
+
+
+class AgentSubagentUnsupported(KediExecutionError):
+    """Raised when the active adapter cannot delegate to Kedi subagents."""
 
 
 def eval_model_value(
@@ -230,6 +239,28 @@ def eval_effort_directive(
     return AgentProfile(effort=effort)
 
 
+def eval_approval_directive(
+    rt: KediRuntime,
+    stmt: ApprovalDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    if stmt.backtick_code is not None:
+        handler = rt.executor.evaluate_inline(rt, stmt.backtick_code, env)
+        if not callable(handler):
+            raise TypeError(
+                "approval directive inline Python must evaluate to a callable approval handler, "
+                f"got {type(handler).__name__}"
+            )
+        return AgentProfile(approval=ApprovalPolicy.dynamic(handler))
+    if stmt.plain_value is None:
+        raise ValueError("approval directive has no value")
+    if stmt.plain_value == "allow":
+        return AgentProfile(approval=ApprovalPolicy.allow())
+    if stmt.plain_value == "deny":
+        return AgentProfile(approval=ApprovalPolicy.deny())
+    raise ValueError("approval directive must be 'allow', 'deny', or an inline Python handler")
+
+
 def eval_system_directive(
     rt: KediRuntime,
     stmt: SystemDirectiveStmt,
@@ -299,10 +330,13 @@ def _member_to_patch(
         | ProfileAgentMember
         | ProfileAdapterMember
         | ProfileEffortMember
+        | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileSubagentMember
+        | ProfileMaxAgentsMember
     ),
     env: dict[str, Any],
 ) -> AgentProfile:
@@ -343,6 +377,20 @@ def _member_to_patch(
             env=env,
         )
         return AgentProfile(effort=effort)
+    if member.kind == "approval":
+        if member.backtick_code is not None:
+            handler = rt.executor.evaluate_inline(rt, member.backtick_code, env)
+            if not callable(handler):
+                raise TypeError(
+                    "profile approval inline Python must evaluate to a callable approval handler, "
+                    f"got {type(handler).__name__}"
+                )
+            return AgentProfile(approval=ApprovalPolicy.dynamic(handler))
+        if member.plain_value == "allow":
+            return AgentProfile(approval=ApprovalPolicy.allow())
+        if member.plain_value == "deny":
+            return AgentProfile(approval=ApprovalPolicy.deny())
+        raise ValueError("profile approval must be 'allow' or 'deny'")
     if member.kind == "system":
         system = eval_system_value(
             rt,
@@ -353,11 +401,18 @@ def _member_to_patch(
         )
         return AgentProfile(system=system)
     if member.kind == "tools":
-        return AgentProfile(tools=member.tool_names)
+        tool_names = tuple(name for name in member.tool_names if name != SKILLS_USE_TARGET)
+        return AgentProfile(
+            tools=tool_names, skills=True if SKILLS_USE_TARGET in member.tool_names else None
+        )
     if member.kind == "mcp":
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     if member.kind == "settings":
         return AgentProfile(settings=eval_settings_fields(rt, member.fields, env))
+    if member.kind == "subagents":
+        return AgentProfile(subagents=(member.name,))
+    if member.kind == "max_agents":
+        return AgentProfile(max_agents=member.value)
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")
 
 
@@ -369,7 +424,7 @@ def eval_profile_definition(
     profile = AgentProfile.empty()
     for member in definition.members:
         profile = profile.merge(_member_to_patch(rt, member, env))
-    return profile
+    return profile.merge(AgentProfile(name=definition.name))
 
 
 def eval_use_profile(

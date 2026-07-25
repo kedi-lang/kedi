@@ -527,6 +527,21 @@ def test_hover_on_single_line_use_explains_tools_and_profiles() -> None:
     assert "profile target" in body
 
 
+def test_hover_on_use_skills_explains_explicit_skill_discovery() -> None:
+    body = hover_text_at("> use: skills\n", "main.kedi", "skills")
+
+    assert "project-local skills" in body
+    assert "list_skills" in body
+    assert "read_skill" in body
+
+
+def test_hover_on_procedure_local_use_skills_explains_explicit_skill_discovery() -> None:
+    source = "@ask():\n    > use: skills\n    >> Return [answer].\n"
+    body = hover_text_at(source, "main.kedi", "skills")
+
+    assert "project-local skills" in body
+
+
 def test_hover_on_procedure_used_as_single_line_tool() -> None:
     src = """
 @foo():

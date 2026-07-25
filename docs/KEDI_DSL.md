@@ -184,7 +184,14 @@ Substitutions read values and insert them into templates using `<...>`:
 
 # Inline Python expression (note the backticks)
 >> Sum is <`2 + 3`>
+
+# Bare inline Python segments are also valid in templates
+>> Review this code `"def add(a: int, b: int) -> int: return a + b"`.
 ```
+
+Inside a template, both `<`...`>` and bare `` `...` `` evaluate Python and insert
+its string value. Bare backticks are useful when the expression contains characters
+such as `>` or `[]` that would otherwise need escaping in literal template text.
 
 ### Outputs (L-values)
 
@@ -750,9 +757,10 @@ Dataset items can follow two conventions:
 ## Agent Profiles and Tools
 
 Kedi routes LLM calls through agent adapters. Use `> adapter:`, `> agent:`,
-`> model:`, `> effort:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
+`> model:`, `> effort:`, `> approval:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
 to choose adapter implementations, choose models, set reasoning effort, set
-agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
+agent instructions, load MCP tools, expose Kedi procedures as agent tools, and
+opt into project-local skills.
 
 ### Model and profile directives
 
@@ -760,6 +768,7 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
 > adapter: pydantic
 > model: groq:qwen/qwen3-32b
 > effort: low
+> approval: allow
 > system: Answer concisely and avoid extra narration.
 
 > profile: fast:
@@ -816,6 +825,35 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; plain values or
   `` `expression` `` are allowed. Pydantic AI maps `max` to `xhigh`.
   DSPy receives the value directly as `reasoning_effort`.
+- `> approval: allow` / `> approval: deny` — configure tool-call approval for
+  subsequent agent calls in the current scope. `allow` permits registered
+  mutating or sensitive tools; `deny` refuses them. In the Python API, omitting
+  a policy
+  allows read-only tools automatically and refuses mutating or sensitive tools.
+  The `kedi` CLI instead asks interactively for every mutating or sensitive
+  call, offering **Allow once**, **Deny**, and **Allow always for this run**.
+  The last option is scoped to the current CLI process and the same tool/risk
+  level; it is never persisted. A dynamic Python handler can inspect and
+  allow, deny, or edit a call:
+
+  ````kedi
+  ```
+  from kedi import ApprovalDecision
+
+  def approve_tool(request):
+      if request.tool_name == "write_report":
+          return ApprovalDecision.edit({**request.arguments, "path": "reports/safe.txt"})
+      return ApprovalDecision.deny(reason="tool is not allowed here")
+  ```
+
+  > approval: `approve_tool`
+  ````
+
+  The handler receives an immutable request with `tool_name`, `arguments`,
+  `risk`, adapter metadata, and tool metadata. It must return
+  `ApprovalDecision.allow()`, `ApprovalDecision.deny()`, or
+  `ApprovalDecision.edit({...})`. `edit` is available only from a handler;
+  `> approval: edit` is invalid.
 - `> system: text` — set active agent instructions for subsequent procedure
   captures and prompt calls.
 - `> settings:` — set active model configuration for subsequent procedure
@@ -860,8 +898,9 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   calls are not. Use `<``>` when the instruction text needs to mention a
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> agent:`,
-  `> adapter:`, `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`,
-  and/or `> use:` members.
+  `> adapter:`, `> model:`, `> effort:`, `> approval:`, `> system:`,
+  `> settings:`, `> mcp:`, `> subagent:`, and/or `> use:` members.
+  A profile that delegates may also set `> max_agents: N`.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
   A block comment after any other profile statement remains a normal comment.
@@ -878,6 +917,97 @@ agent instructions, load MCP tools, and expose Kedi procedures as agent tools.
   runs. `> use:` tool registration and `> mcp:` servers remain capability
   warnings: when an adapter later advertises support for that feature, the same
   Kedi code stops warning without syntax changes.
+
+### Subagents
+
+The subagent surface is available with the Pydantic AI, Claude Agent SDK,
+Codex App Server, LangChain, and DSPy adapters. A profile may expose other
+profiles as direct children:
+
+```kedi
+> profile: researcher:
+    ###
+    Investigates one focused question and reports its findings.
+    ###
+    > adapter: pydantic
+    > model: openrouter:google/gemini-3-flash-preview
+    > system: Inspect the evidence before answering.
+    > use: web_search
+
+> profile: coordinator:
+    > adapter: pydantic
+    > subagent: researcher
+    > max_agents: 5
+
+> use: coordinator
+[answer] << Delegate the research task, inspect its result, and answer briefly.
+= <answer>
+```
+
+`> subagent: researcher` registers a `delegate_task` tool for `coordinator`.
+The parent may delegate only to profiles named directly in its own body.
+Forward references are supported, while unknown profiles and cyclic profile
+graphs are rejected.
+
+`> max_agents: N` limits how many descendant subagent invocations one
+invocation of that profile may start. Repeated calls to the same child count
+separately, failed or cancelled calls still consume budget, and rejected calls
+do not. Nested descendants consume both their immediate parent's budget and
+every active ancestor budget. Kedi also applies a hard runtime ceiling of 100
+descendant starts per profile invocation.
+
+Each `delegate_task` call starts a fresh child conversation. The child uses its
+own model, system instructions, tools, MCP servers, skills, and approval
+policy; parent tools and local variables do not leak into it. The parent must
+include all required context in the delegated `task`.
+
+The generated tool accepts:
+
+- `subagent`: one of the direct child profile names,
+- `task`: a self-contained instruction,
+- `final_schema`: an optional JSON Schema for a validated structured result.
+- `background`: when supported by the active adapter, start the child without
+  blocking and return a run handle.
+
+Without `final_schema`, the child runs through the raw text `invoke` seam.
+With a schema, Kedi asks for a short `task_summary` plus the schema-conforming
+result and validates the response again before returning it. The tool result
+always includes `run_id`, `subagent`, `task_summary`, and `final_result`.
+
+Every subagent-capable adapter also exposes `continue_subagent`. It accepts a
+completed `run_id`, a new `task`, and an optional `final_schema`, then creates
+a new run in the same bounded child conversation. Only the latest completed
+run may be continued, the calling profile must own that conversation, and one
+conversation may contain at most eight completed turns. Native adapter resume
+state is used when available; otherwise Kedi supplies the child with bounded,
+verified prior results.
+
+Pydantic AI, Claude, Codex, and LangChain profiles also expose
+`wait_subagent`, `cancel_subagent`, and `subagent_status`. A background child
+must be observed with `wait_subagent` before the parent returns; fail-closed
+profiles reject unobserved work. Runtime timeouts start when the child starts,
+not when it is first waited. Completed results may be waited more than once,
+and cancellation is idempotent.
+
+Live background tasks are process-local and runtime-owned. Old terminal
+handles may expire after bounded retention.
+DSPy keeps blocking `delegate_task` only because its synchronous tool bridge
+does not guarantee that later lifecycle calls use the same event loop.
+
+Python callers may opt into restart persistence with
+`compile_program(..., subagent_state_path=...)` or
+`KediRuntime(..., subagent_state_path=...)`. Kedi stores terminal run records,
+validated results, bounded conversation turns, and serializable native resume
+state in a versioned owner-only JSON file. Completed results and continuations
+then survive a process restart. A run that was still pending or running when
+the process stopped is restored as failed with `InterruptedError`; Kedi does
+not claim to resume an in-flight provider request.
+
+Adapters without child-execution support reject subagent delegation through
+capability validation instead of silently ignoring it. Child execution uses
+the same Kedi contract across supported adapters: isolated profile state,
+scoped tools and approvals, generic usage limits, raw `invoke` output, and
+schema-validated structured output.
 
 ### `> mcp:` semantics
 
@@ -927,6 +1057,7 @@ Single-line form:
 1. If a procedure named `foo` exists, register it as an **agent tool** for the
    current indentation block.
 2. Otherwise merge the agent profile named `foo`.
+3. `> use: skills` enables the project-local skill tools described below.
 
 Backticks on the single-line form are accepted for symmetry with `> model:`.
 
@@ -940,6 +1071,37 @@ Multiline form always lists tools (never profiles):
 
 Each entry names a Kedi procedure to expose as an agent tool. Backtick entries
 are accepted for symmetry with `> model:`.
+
+### One-file skills
+
+Skills are opt-in, project-local instructions stored as one plain file per
+skill:
+
+```text
+.agents/skills/<skill-name>/SKILL.md
+```
+
+Enable them in an agent scope or profile with the single-line form:
+
+```kedi
+> use: skills
+```
+
+This registers two read-only agent tools:
+
+- `list_skills(all: bool = false, limit: int = 20)` returns available skill
+  identifiers in deterministic order.
+- `read_skill(skill_name: str)` returns the exact UTF-8 `SKILL.md` content for
+  one listed identifier.
+
+Skill instructions are never inserted into the model context automatically.
+The agent must first list relevant skills, then explicitly read the one it
+needs. Skill names are limited to one directory name; path traversal, absolute
+paths, symlink escapes, and oversized files are rejected. `all` is reserved for
+future source selection and currently reads the same project-local directory.
+
+`> use: skills` works inside a profile too. The multiline `> use:` form remains
+a procedure-tool list, so it does not enable skills.
 
 ### Scoping rules
 
@@ -968,6 +1130,23 @@ Agent tools require an adapter that supports tool registration (for example
 Pydantic AI). Adapters without tool support surface capability warnings in the
 LSP; harness adapters that cannot accept external tools may ignore registrations
 until their underlying protocol gains tool support.
+
+### Tool approval and sensitive files
+
+Kedi classifies tool calls as `read_only`, `mutating`, or `sensitive`. Custom
+Python tools default to `mutating`; choose a different classification with the
+Python API when appropriate:
+
+```python
+@kedi.tool(risk="read_only")
+def list_public_files() -> list[str]:
+    ...
+```
+
+The bundled filesystem module treats normal reads as read-only, but refuses
+`.env` and `.env.*` files by default. Requesting one requires
+`secret_files=True`, which upgrades that call to sensitive and therefore needs
+an explicit `allow` policy or a dynamic approval decision.
 
 ## Python API
 
@@ -1013,6 +1192,15 @@ Rules:
 - `model=`, `adapter=`, and `agent=` override the configured backend only for
   that callable. Use `adapter=` for frameworks (`pydantic`, `dspy`,
   `langchain`) and `agent=` for harnesses (`claude`, `codex`, `acp`).
+- `approval=` accepts `"allow"`, `"deny"`, an `ApprovalPolicy`, or a callable.
+  `query` and `bind` apply it only to that callable's registered tools.
+- `skills=True` on `kedi.configure`, `kedi.context`, `@kedi.query`, or
+  `@kedi.bind` enables the same explicit `list_skills` / `read_skill` tools as
+  `> use: skills`.
+- `@kedi.approval` registers a callable as the current Python API's default
+  dynamic policy, equivalent to configuring that handler for subsequent calls.
+  An explicit `approval=` on `query`, `bind`, or `kedi.context(...)` takes
+  precedence in that scope.
 
 Dynamic output types can be passed as normal Python values:
 
@@ -1075,6 +1263,8 @@ kedi.configure(
     effort="low",
     settings={"temperature": 0.2},
     tools=[search_docs],
+    approval="allow",
+    skills=True,
     env={"audience": "maintainers"},
 )
 ```
@@ -1098,6 +1288,27 @@ If no backend is passed explicitly, `configure()` reads `KEDI_AGENT` or
 `KEDI_ADAPTER_MODEL` supplies the model for either selection. `kedi.context(...)`
 temporarily merges the same options and restores the previous configuration
 when the block exits. It supports both sync and async context managers.
+
+For a dynamic policy, decorate a Python handler and return one explicit
+decision. The decorator registers it as the default policy. Kedi passes an
+immutable request; only `edit` may replace arguments:
+
+```python
+import kedi
+
+
+@kedi.approval
+def protect_writes(request: kedi.ApprovalRequest) -> kedi.ApprovalDecision:
+    if request.tool_name == "write_report":
+        return kedi.ApprovalDecision.edit(
+            {**request.arguments, "path": "reports/latest.md"}
+        )
+    return kedi.ApprovalDecision.deny(reason="tool is outside this task")
+
+
+with kedi.context(approval=protect_writes):
+    run_task()
+```
 
 `McpServerSpec` is available from the root package for Python configuration:
 

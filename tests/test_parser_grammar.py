@@ -38,6 +38,7 @@ from kedi.lang import (
 )
 from kedi.lang.ast import (
     AssignStmt,
+    BacktickLineStmt,
     InputSegment,
     OutputSegment,
     PythonExprSegment,
@@ -45,6 +46,7 @@ from kedi.lang.ast import (
     ReturnStmt,
     SystemDirectiveStmt,
     TemplateBlock,
+    TemplateLine,
     TextSegment,
     UseDirectiveStmt,
 )
@@ -237,6 +239,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
     assert stmt_walker._walk_template_line(_FakeNode("template_line")).segments == []
     empty_template_block = stmt_walker._walk_template_block_stmt(_FakeNode("template_block_stmt"))
     assert empty_template_block.lines == []
+    assert isinstance(stmt_walker._walk_stmt(_FakeNode("template_block_stmt"), None), TemplateBlock)
     template_with_noise = stmt_walker._walk_template_line(
         _FakeNode(
             "template_line",
@@ -278,6 +281,19 @@ def test_cst_walker_defensive_edges(monkeypatch):
     )
     assert cst_module.TypeApply == TypeApply
     assert stmt_walker._walk_type_term(type_apply).args == []
+
+    assert stmt_walker._sole_inline_python_expr(None) is None
+    nested_native = _FakeNode(
+        "template_expr",
+        children=[_FakeNode("inline_python_expr")],
+    )
+    assert stmt_walker._sole_inline_python_expr(nested_native) is nested_native.children[0]
+    assert (
+        cst_module._Walker._standalone_backtick_continuation_code(
+            TemplateLine(segments=[PythonExprSegment(code="if")])
+        )
+        is None
+    )
 
     type_def = stmt_walker._walk_type_def(
         _FakeNode(
@@ -919,6 +935,45 @@ def test_type_apply_accepts_string_literal_metadata():
     assert out.type_annotation == 'Annotated[str, "City name"]'
 
 
+def test_template_block_keeps_bare_expressions_but_splits_python_statements():
+    prog = parse_program(
+        "@demo(value: str):\n"
+        "  >> Prefix\n"
+        "  `value`\n"
+        "  `value = value.strip()`\n"
+        "  `value = value.lower()`\n"
+        "  = done\n"
+    )
+
+    body = prog.procedures[0].body
+    assert len(body) == 4
+    assert isinstance(body[0], TemplateBlock)
+    assert len(body[0].lines) == 2
+    assert isinstance(body[0].lines[1].segments[0], PythonExprSegment)
+    assert isinstance(body[1], BacktickLineStmt)
+    assert body[1].code == "value = value.strip()"
+    assert isinstance(body[2], BacktickLineStmt)
+    assert body[2].code == "value = value.lower()"
+    assert isinstance(body[3], ReturnStmt)
+
+
+def test_template_scope_validation_runs_after_python_statement_boundaries():
+    program = parse_program(
+        "@demo() -> str:\n  >> Generate [value]\n  `seen = value`\n  Later use <value>\n  = done\n"
+    )
+
+    body = program.procedures[0].body
+    assert [type(statement) for statement in body] == [
+        TemplateBlock,
+        BacktickLineStmt,
+        TemplateBlock,
+        ReturnStmt,
+    ]
+
+    with pytest.raises(KediParseError, match="cannot read LLM output 'value'"):
+        parse_program("@demo() -> str:\n  >> Generate [value]\n  Later use <value>\n  = done\n")
+
+
 def test_type_apply_accepts_inline_python_args():
     prog = parse_program("@p():\n  >> Values: [values: list[`str`]].\n")
     block = prog.procedures[0].body[0]
@@ -1164,6 +1219,31 @@ def test_sole_backtick_return_produces_return_block_stmt():
     assert len(body) == 1
     assert isinstance(body[0], ReturnBlockStmt)
     assert body[0].code == "42"
+
+
+def test_fenced_return_after_validation_block_parses_as_return_block() -> None:
+    """A blank line after a fenced validation case must not corrupt the
+    scanner state before a later fenced return block.
+    """
+    source = """@test: f:
+  > case: basic:
+    ```
+    assert True
+    ```
+
+@f():
+  = ```
+  result = "ok"
+  return result
+  ```
+"""
+
+    program = parse_program(source)
+    body = program.procedures[0].body
+
+    assert len(body) == 1
+    assert isinstance(body[0], ReturnBlockStmt)
+    assert body[0].code == 'result = "ok"\nreturn result'
 
 
 def test_mixed_return_is_returnstmt_not_block():

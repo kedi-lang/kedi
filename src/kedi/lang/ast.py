@@ -281,6 +281,12 @@ class EffortDirectiveStmt(Stmt):
 
 
 @dataclass
+class ApprovalDirectiveStmt(Stmt):
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -337,9 +343,12 @@ class ProfileDefStmt(Stmt):
     adapter_members: List["ProfileAdapterEntry"] = field(default_factory=list)
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
+    approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
+    subagent_members: List["ProfileSubagentEntry"] = field(default_factory=list)
+    max_agents_members: List["ProfileMaxAgentsEntry"] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
@@ -376,6 +385,13 @@ class ProfileEffortEntry:
 
 
 @dataclass
+class ProfileApprovalEntry:
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class ProfileSystemEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -392,6 +408,18 @@ class ProfileMcpEntry:
 @dataclass
 class ProfileSettingsEntry:
     fields: List[SettingsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileSubagentEntry:
+    name: str
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileMaxAgentsEntry:
+    value: int
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

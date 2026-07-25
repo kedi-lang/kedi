@@ -8,6 +8,7 @@ from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
+    eval_approval_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -20,6 +21,7 @@ from ...errors import KediTraceFrame
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    ApprovalDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
@@ -261,7 +263,7 @@ class StatementExecutor:
             type_scope.update(parent_stack[-2])
 
         captured = proc.captured_agent_profile
-        active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        active = captured if isinstance(captured, AgentProfile) else self.rt.default_agent_profile
         adapter_selection_kind: str | None = None
         profile_registry = self.rt._profile_registry
 
@@ -282,6 +284,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, EffortDirectiveStmt):
                     active = active.merge(eval_effort_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, ApprovalDirectiveStmt):
+                    active = active.merge(eval_approval_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))

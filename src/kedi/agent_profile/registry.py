@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from kedi.lang.ast import McpField, SettingsField, TemplateLine
+    from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,6 +38,13 @@ class ProfileEffortMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileApprovalMember:
+    kind: Literal["approval"] = "approval"
+    plain_value: str | None = None
+    backtick_code: str | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -64,15 +71,32 @@ class ProfileSettingsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileSubagentMember:
+    kind: Literal["subagents"] = "subagents"
+    name: str
+    loc: "Span | None" = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileMaxAgentsMember:
+    kind: Literal["max_agents"] = "max_agents"
+    value: int
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
+    description: str | None = None
     members: list[
         ProfileAgentMember
         | ProfileAdapterMember
         | ProfileModelMember
         | ProfileEffortMember
+        | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileSubagentMember
+        | ProfileMaxAgentsMember
     ] = field(default_factory=list)

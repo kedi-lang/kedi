@@ -463,11 +463,26 @@ def _find_deepest_procedure_at_line(
     procedures: Iterable[ProcedureDef], source_line: int
 ) -> Optional[ProcedureDef]:
     for proc in procedures:
-        if proc.loc is None or not (proc.loc.start_line <= source_line <= proc.loc.end_line):
+        if proc.loc is None or not _span_contains_source_line(proc.loc, source_line):
             continue
         nested = _find_deepest_procedure_at_line(_nested_procedures(proc), source_line)
         return nested or proc
     return None
+
+
+def _span_contains_source_line(span: Span, source_line: int) -> bool:
+    """Whether a 1-based source line intersects an end-exclusive source span.
+
+    Tree-sitter spans ending after a newline have ``end_col == 1`` on the
+    following physical line. That line is outside the node. Treating the end
+    line as inclusive made a top-level inline return immediately after a
+    procedure disappear from its focused virtual Python document.
+    """
+    if source_line < span.start_line or source_line > span.end_line:
+        return False
+    if source_line != span.end_line:
+        return True
+    return span.end_col > 1
 
 
 def _top_level_procedure_for(
