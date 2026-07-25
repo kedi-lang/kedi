@@ -1837,6 +1837,7 @@ def test_claude_adapter_is_available_from_runtime_builders() -> None:
     assert isinstance(runtime_adapter, ClaudeAdapter)
 
     lazy = api_module._lazy_adapter("claude", "claude-sonnet-4", {"max_turns": 2})
+    assert lazy.capabilities.supports("subagents")
     assert lazy.default_model() == "claude-sonnet-4"
 
 

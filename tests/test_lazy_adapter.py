@@ -13,7 +13,16 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 
 import kedi.app as app
+import pytest
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
+from kedi.agent_adapter.subagents import (
+    SubagentConversationContext,
+    SubagentExecutionRequest,
+    SupportsSubagentExecution,
+)
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
+from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_profile import AgentProfile
 from kedi.app import run_program_cli
 from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
@@ -83,6 +92,9 @@ def test_offline_program_never_builds_adapter(tmp_path, monkeypatch) -> None:
 
 
 class _RecordingAdapter:
+    shortname = "recording"
+    supports_native_subagent_resume = True
+
     def __init__(self) -> None:
         self.calls: list[object] = []
         self.scoped_tools = ("tool-a",)
@@ -118,6 +130,22 @@ class _RecordingAdapter:
     def register_tool(self, tool: object) -> None:
         self.calls.append(("register_tool", tool))
 
+    def telemetry_model_name(self) -> str:
+        self.calls.append("telemetry_model_name")
+        return "telemetry-m"
+
+    def subagent_scope(self, request: object) -> object:
+        self.calls.append(("subagent_scope", request))
+        return nullcontext()
+
+    def subagent_run_kwargs(self, limits: object) -> dict[str, object]:
+        self.calls.append(("subagent_run_kwargs", limits))
+        return {"limits": limits}
+
+    async def produce_subagent(self, **kwargs: object) -> dict[str, object]:
+        self.calls.append(("produce_subagent", kwargs))
+        return {"task_summary": "done", "final_result": {"value": 1}}
+
 
 def test_lazy_adapter_builds_once_and_delegates() -> None:
     rec = _RecordingAdapter()
@@ -135,11 +163,13 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert asyncio.run(lazy.produce()) == "p"
     assert lazy.invoke_sync() == "is"
     assert asyncio.run(lazy.invoke()) == "i"
-    with lazy.profile_override(object()):
+    profile = AgentProfile()
+    tool = ToolSpec(fn=lambda: None, name="tool")
+    with lazy.profile_override(profile):
         pass
     with lazy.tool_scope(["x"]):
         pass
-    lazy.register_tool("tool")
+    lazy.register_tool(tool)
     assert lazy.scoped_tools == ("tool-a",)
 
     assert builds == [1]  # built exactly once, then reused
@@ -149,7 +179,53 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert "invoke" in rec.calls
     assert "profile_override" in rec.calls
     assert "tool_scope" in rec.calls
-    assert ("register_tool", "tool") in rec.calls
+    assert ("register_tool", tool) in rec.calls
+
+
+def test_lazy_adapter_delegates_complete_subagent_protocol() -> None:
+    rec = _RecordingAdapter()
+    lazy = LazyAdapter(
+        lambda: rec,
+        shortname="pydantic",
+    )
+    limits = SubagentUsageLimits(request_limit=2)
+    request = SubagentExecutionRequest(
+        profile=AgentProfile(name="worker"),
+        tools=(),
+        instructions="Work carefully.",
+        approval_ceiling=(),
+        usage_limits=limits,
+        conversation=SubagentConversationContext(conversation_id="conversation"),
+    )
+
+    assert isinstance(lazy, SupportsSubagentExecution)
+    assert lazy.shortname == "pydantic"
+    assert lazy.telemetry_model_name() == "telemetry-m"
+    with lazy.subagent_scope(request):
+        pass
+    assert lazy.subagent_run_kwargs(limits) == {"limits": limits}
+    assert asyncio.run(
+        lazy.produce_subagent(
+            template="Build a value",
+            output_schema={"type": "object"},
+        )
+    ) == {
+        "task_summary": "done",
+        "final_result": {"value": 1},
+    }
+    assert lazy.supports_native_subagent_resume
+    assert ("subagent_scope", request) in rec.calls
+    assert ("subagent_run_kwargs", limits) in rec.calls
+
+
+def test_lazy_adapter_rejects_subagent_execution_when_real_adapter_lacks_it() -> None:
+    lazy = LazyAdapter(lambda: object(), shortname="unsupported")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Adapter 'unsupported' does not implement Kedi child execution",
+    ):
+        lazy.telemetry_model_name()
 
 
 def test_lazy_adapter_factory_is_called_once_for_concurrent_first_use() -> None:

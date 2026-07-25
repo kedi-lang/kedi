@@ -827,9 +827,14 @@ opt into project-local skills.
   DSPy receives the value directly as `reasoning_effort`.
 - `> approval: allow` / `> approval: deny` — configure tool-call approval for
   subsequent agent calls in the current scope. `allow` permits registered
-  mutating tools; `deny` refuses them. Without an explicit policy, Kedi allows
-  read-only tools automatically and refuses mutating or sensitive tools.
-  A dynamic Python handler can inspect and allow, deny, or edit a call:
+  mutating or sensitive tools; `deny` refuses them. In the Python API, omitting
+  a policy
+  allows read-only tools automatically and refuses mutating or sensitive tools.
+  The `kedi` CLI instead asks interactively for every mutating or sensitive
+  call, offering **Allow once**, **Deny**, and **Allow always for this run**.
+  The last option is scoped to the current CLI process and the same tool/risk
+  level; it is never persisted. A dynamic Python handler can inspect and
+  allow, deny, or edit a call:
 
   ````kedi
   ```

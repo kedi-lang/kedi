@@ -154,12 +154,15 @@ class KediRuntime:
         adapter: AgentAdapter[Any] | None = None,
         executor: Executor | None = None,
         engine: Any | None = None,
+        default_agent_profile: Any | None = None,
         subagent_max_depth: int = 5,
         subagent_max_concurrency: int = 4,
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
         subagent_state_path: str | Path | None = None,
     ) -> None:
+        from .agent_profile import AgentProfile
+
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
@@ -195,6 +198,11 @@ class KediRuntime:
         self._source_text: str | None = None
         self._type_env_stack: list[dict[str, Any]] = []
         self._profile_registry: dict[str, Any] = {}
+        self.default_agent_profile = (
+            default_agent_profile
+            if isinstance(default_agent_profile, AgentProfile)
+            else AgentProfile.empty()
+        )
         self._prelude_env: ValueEnv | None = None
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []

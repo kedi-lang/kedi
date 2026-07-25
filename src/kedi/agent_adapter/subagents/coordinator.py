@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +47,27 @@ DEFAULT_SUBAGENT_TIMEOUT_SECONDS = 120.0
 MAX_SUBAGENT_TIMEOUT_SECONDS = 600.0
 DEFAULT_MAX_RETAINED_SUBAGENT_RUNS = 1024
 MAX_SUBAGENT_CONVERSATION_TURNS = 8
+_DELEGATION_TOOL_NAMES = frozenset({"delegate_task", "continue_subagent"})
+
+
+def _subagent_run_span(
+    tracer: trace.Tracer,
+    attributes: Mapping[str, Any],
+) -> AbstractContextManager[trace.Span]:
+    current = trace.get_current_span()
+    current_attributes = getattr(current, "attributes", None)
+    tool_name = (
+        current_attributes.get("gen_ai.tool.name")
+        if isinstance(current_attributes, Mapping)
+        else None
+    )
+    if current.is_recording() and tool_name in _DELEGATION_TOOL_NAMES:
+        current.update_name("subagent run")
+        current.set_attribute("logfire.msg", "subagent run")
+        for key, value in attributes.items():
+            current.set_attribute(key, value)
+        return nullcontext(current)
+    return tracer.start_as_current_span("subagent run", attributes=attributes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -555,9 +576,9 @@ class SubagentCoordinator:
         budget_token = self._budget_stack.set(budgets)
         concurrency_token = self._concurrency.set(concurrency)
         safety_token = None
-        with self._tracer.start_as_current_span(
-            "run subagent",
-            attributes={
+        with _subagent_run_span(
+            self._tracer,
+            {
                 "kedi.subagent.run_id": run_id,
                 "kedi.subagent.root_run_id": root_run_id,
                 "kedi.subagent.profile": subagent,

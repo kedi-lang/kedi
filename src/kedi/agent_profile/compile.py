@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ..errors import KediExecutionError
-from .profile import AgentProfile
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -222,7 +221,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
 
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
-    active = AgentProfile.empty()
+    active = rt.default_agent_profile
     adapter_selection_kind: str | None = None
     defined_procedures: set[str] = set(rt._procedures.keys())
 

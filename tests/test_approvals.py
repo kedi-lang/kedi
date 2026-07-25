@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -10,7 +11,10 @@ from pydantic_ai.models.test import TestModel
 
 import kedi
 import kedi.api as kedi_api
+import kedi.app as app_module
 from kedi.agent_adapter import approval as approval_module
+from kedi.agent_adapter.adapters.lazy import LazyAdapter
+from kedi.agent_adapter.cli_approval import CliApprovalHandler
 from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.approval import (
@@ -63,6 +67,260 @@ def test_mutating_tools_default_to_denied() -> None:
 
     with pytest.raises(ToolApprovalDenied, match="no approval policy configured"):
         tool.fn(path="notes.txt", content="blocked")
+
+
+def test_cli_approval_handler_allows_once_and_denies_cancelled_prompt() -> None:
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={"path": "notes.txt"},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+    allowed = CliApprovalHandler(prompt=lambda _request: "allow", is_interactive=lambda: True)
+    cancelled = CliApprovalHandler(prompt=lambda _request: None, is_interactive=lambda: True)
+
+    assert allowed(request).decision == "allow"
+    assert cancelled(request).decision == "deny"
+
+
+def test_cli_approval_handler_allow_always_is_session_local_and_risk_scoped() -> None:
+    calls: list[str] = []
+    handler = CliApprovalHandler(
+        prompt=lambda _request: calls.append("asked") or "always",
+        is_interactive=lambda: True,
+    )
+    mutating = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+    sensitive = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="sensitive",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    assert handler(mutating).decision == "allow"
+    assert handler(mutating).decision == "allow"
+    assert handler(sensitive).decision == "allow"
+    assert calls == ["asked", "asked"]
+
+
+def test_cli_approval_handler_accepts_async_prompt_callbacks() -> None:
+    async def prompt(_request: ApprovalRequest) -> str:
+        await asyncio.sleep(0)
+        return "allow"
+
+    handler = CliApprovalHandler(prompt=prompt, is_interactive=lambda: True)
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    assert (
+        asyncio.run(resolve_tool_approval_async(ApprovalPolicy.dynamic(handler), request)).decision
+        == "allow"
+    )
+    with pytest.raises(RuntimeError, match="async CLI approval prompts require an async adapter"):
+        handler(request)
+
+    loop = asyncio.new_event_loop()
+    try:
+        future = loop.create_future()
+        sync_handler = CliApprovalHandler(
+            prompt=lambda _request: future,
+            is_interactive=lambda: True,
+        )
+        with pytest.raises(
+            RuntimeError, match="async CLI approval prompts require an async adapter"
+        ):
+            sync_handler(request)
+    finally:
+        loop.close()
+
+
+def test_cli_approval_handler_refuses_noninteractive_requests() -> None:
+    handler = CliApprovalHandler(is_interactive=lambda: False)
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    decision = handler(request)
+
+    assert decision.decision == "deny"
+    assert decision.reason == "interactive CLI approval requires a TTY"
+
+
+def test_cli_approval_handler_async_path_handles_always_and_noninteractive() -> None:
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+    handler = CliApprovalHandler(prompt=lambda _request: "always", is_interactive=lambda: True)
+
+    assert asyncio.run(handler.resolve_async(request)).decision == "allow"
+    assert asyncio.run(handler.resolve_async(request)).reason == "allowed for this CLI run"
+
+    noninteractive = CliApprovalHandler(is_interactive=lambda: False)
+    assert asyncio.run(noninteractive.resolve_async(request)).decision == "deny"
+
+
+def test_cli_approval_handler_uses_questionary_choices(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class FakePrompt:
+        def ask(self) -> str:
+            return "deny"
+
+        async def ask_async(self) -> str:
+            return "deny"
+
+    class FakeQuestionary:
+        @staticmethod
+        def Choice(title: str, *, value: str) -> tuple[str, str]:
+            return title, value
+
+        @staticmethod
+        def select(message: str, *, choices: list[tuple[str, str]]) -> FakePrompt:
+            seen["message"] = message
+            seen["choices"] = choices
+            return FakePrompt()
+
+    monkeypatch.setitem(sys.modules, "questionary", FakeQuestionary)
+    handler = CliApprovalHandler(is_interactive=lambda: True)
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    assert handler(request).decision == "deny"
+    assert asyncio.run(handler.resolve_async(request)).decision == "deny"
+    assert seen["message"] == "Allow mutating tool 'write_file'?"
+    assert seen["choices"] == [
+        ("Deny", "deny"),
+        ("Allow once", "allow"),
+        ("Allow always for this run", "always"),
+    ]
+
+
+def test_run_source_cli_supplies_interactive_default_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    class Runtime:
+        def set_initial_globals(self, _globals: object) -> None:
+            return None
+
+        def run_main(self) -> None:
+            return None
+
+    def fake_compile(_program: object, **kwargs: object) -> Runtime:
+        seen.update(kwargs)
+        return Runtime()
+
+    monkeypatch.setattr(app_module, "compile_program", fake_compile)
+
+    assert app_module.run_source_cli("= done", adapter="pydantic", model=None) == (0, "")
+    profile = seen["default_agent_profile"]
+    assert isinstance(profile, AgentProfile)
+    assert isinstance(profile.approval, ApprovalPolicy)
+    assert isinstance(profile.approval.handler, CliApprovalHandler)
+    adapter = seen["adapter"]
+    assert isinstance(adapter, LazyAdapter)
+    assert adapter.capabilities.supports("subagents")
+
+
+def test_run_source_cli_denies_risky_tools_without_an_explicit_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = """@write_file(path: str) -> str:
+  = <path>
+
+> use: write_file
+>> Write [answer]
+= <answer>
+"""
+    monkeypatch.setattr(
+        app_module,
+        "_build_runtime_adapter",
+        lambda _adapter, _model: _ToolCallingAdapter(),
+    )
+
+    with pytest.raises(ToolApprovalDenied, match="interactive CLI approval requires a TTY"):
+        app_module.run_source_cli(source, adapter="dspy", model=None)
+
+
+def test_run_source_cli_explicit_allow_overrides_the_cli_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = """@write_file(path: str) -> str:
+  = <path>
+
+> use: write_file
+> approval: allow
+>> Write [answer]
+= <answer>
+"""
+    monkeypatch.setattr(
+        app_module,
+        "_build_runtime_adapter",
+        lambda _adapter, _model: _ToolCallingAdapter(),
+    )
+
+    assert app_module.run_source_cli(source, adapter="dspy", model=None) == (0, "safe.txt")
+
+
+def test_compiler_default_profile_reaches_top_level_and_procedure_tool_approval() -> None:
+    calls: list[str] = []
+
+    def approve(request: ApprovalRequest) -> ApprovalDecision:
+        calls.append(request.tool_name)
+        return ApprovalDecision.allow()
+
+    source = """@write_file(path: str) -> str:
+  = <path>
+
+@run() -> str:
+  > use: write_file
+  >> Write [answer]
+  = <answer>
+
+= <run()>
+"""
+    runtime = compile_program(
+        parse_program(source),
+        adapter=_ToolCallingAdapter(),
+        default_agent_profile=AgentProfile(approval=ApprovalPolicy.dynamic(approve)),
+    )
+
+    assert runtime.run_main() == "safe.txt"
+    assert calls == ["write_file"]
 
 
 def test_static_allow_and_deny_policies() -> None:
@@ -514,7 +772,11 @@ class _ToolCallingAdapter:
     def __init__(self) -> None:
         self._tools: list[ToolSpec] = []
 
-    def tool_scope(self):  # type: ignore[no-untyped-def]
+    @contextmanager
+    def profile_override(self, _profile: AgentProfile) -> Iterator[None]:
+        yield
+
+    def tool_scope(self, _tools=()):  # type: ignore[no-untyped-def]
         adapter = self
 
         class Scope:

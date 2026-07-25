@@ -600,7 +600,7 @@ def test_unknown_agent_adapter_directive_fails_at_runtime(src: str, message: str
         rt.run_main()
 
 
-def test_adapter_registry_helpers() -> None:
+def test_adapter_registry_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "pydantic" in known_adapter_shortnames()
     assert adapter_factory("pydantic").kind == "agent-framework"
     assert adapter_capabilities("pydantic").supports("structured_output")
@@ -611,6 +611,25 @@ def test_adapter_registry_helpers() -> None:
     assert build_adapter("pydantic").shortname == "pydantic"
     assert build_adapter("claude", "claude-model").shortname == "claude"
     assert build_adapter("codex", "codex-model").shortname == "codex"
+
+    class FakeDSPyAdapter:
+        def __init__(self, *, model: str, **kwargs: Any) -> None:
+            self.model = model
+            self.kwargs = kwargs
+
+    class FakeLangChainAdapter:
+        def __init__(self, *, model: str | None, **kwargs: Any) -> None:
+            self.model = model
+            self.kwargs = kwargs
+
+    import kedi.agent_adapter.adapters.dspy as dspy_module
+    import kedi.agent_adapter.adapters.langchain as langchain_module
+
+    monkeypatch.setattr(dspy_module, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(langchain_module, "LangChainAdapter", FakeLangChainAdapter)
+    assert build_adapter("dspy", "dspy-model", cache=False).model == "dspy-model"
+    assert build_adapter("langchain", "langchain-model", temperature=0.2).model == "langchain-model"
+
     with pytest.raises(ValueError, match="DSPy adapter requires"):
         build_adapter("dspy")
     with pytest.raises(Exception, match="Unknown agent adapter"):

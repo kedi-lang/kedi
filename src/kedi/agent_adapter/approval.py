@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from ..errors import KediExecutionError
 
@@ -18,6 +18,13 @@ ApprovalHandler: TypeAlias = Callable[
     ["ApprovalRequest"],
     "ApprovalDecision | Awaitable[ApprovalDecision]",
 ]
+
+
+@runtime_checkable
+class SupportsAsyncApprovalResolution(Protocol):
+    """Optional async path for handlers that also support synchronous prompting."""
+
+    async def resolve_async(self, request: ApprovalRequest) -> ApprovalDecision: ...
 
 
 class ToolApprovalDenied(KediExecutionError):
@@ -179,7 +186,11 @@ async def resolve_tool_approval_async(
     if policy.mode == "deny":
         return ApprovalDecision.deny(reason="static deny policy")
     assert policy.handler is not None
-    result = policy.handler(request)
+    handler = policy.handler
+    if isinstance(handler, SupportsAsyncApprovalResolution):
+        result = handler.resolve_async(request)
+    else:
+        result = handler(request)
     if inspect.isawaitable(result):
         result = await result
     return _validated_decision(result)

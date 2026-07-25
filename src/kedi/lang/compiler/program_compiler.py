@@ -68,6 +68,7 @@ def compile_program(
     executor: Executor | None = None,
     runtime_globals: dict[str, Any] | None = None,
     engine: Any | None = None,
+    default_agent_profile: AgentProfile | None = None,
     subagent_max_depth: int = 5,
     subagent_max_concurrency: int = 4,
     subagent_timeout_seconds: float | None = 120.0,
@@ -83,6 +84,7 @@ def compile_program(
         executor=executor,
         runtime_globals=runtime_globals,
         engine=engine,
+        default_agent_profile=default_agent_profile,
         subagent_max_depth=subagent_max_depth,
         subagent_max_concurrency=subagent_max_concurrency,
         subagent_timeout_seconds=subagent_timeout_seconds,
@@ -103,6 +105,7 @@ class ProgramCompiler:
         module_stack: tuple[Path, ...] = (),
         runtime_globals: dict[str, Any] | None = None,
         engine: Any | None = None,
+        default_agent_profile: AgentProfile | None = None,
         subagent_max_depth: int = 5,
         subagent_max_concurrency: int = 4,
         subagent_timeout_seconds: float | None = 120.0,
@@ -112,6 +115,7 @@ class ProgramCompiler:
         self.adapter = adapter
         self.module_stack = module_stack
         self.engine = engine
+        self.default_agent_profile = default_agent_profile
         self.subagent_max_depth = subagent_max_depth
         self.subagent_max_concurrency = subagent_max_concurrency
         self.subagent_timeout_seconds = subagent_timeout_seconds
@@ -121,6 +125,7 @@ class ProgramCompiler:
             adapter=adapter,
             executor=executor,
             engine=engine,
+            default_agent_profile=default_agent_profile,
             subagent_max_depth=subagent_max_depth,
             subagent_max_concurrency=subagent_max_concurrency,
             subagent_timeout_seconds=subagent_timeout_seconds,
@@ -200,6 +205,7 @@ class ProgramCompiler:
                     module_stack=active_stack,
                     runtime_globals=dict(self.rt._initial_globals_env),
                     engine=self.engine,
+                    default_agent_profile=self.default_agent_profile,
                     subagent_max_depth=self.subagent_max_depth,
                     subagent_max_concurrency=self.subagent_max_concurrency,
                     subagent_timeout_seconds=self.subagent_timeout_seconds,
@@ -419,7 +425,7 @@ class ProgramCompiler:
             # Initialize top-level environment
             kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             self.rt._globals_env = kwargs
-            active = AgentProfile.empty()
+            active = self.rt.default_agent_profile
             adapter_selection_kind = active.adapter_kind
 
             # Execute top-level statements

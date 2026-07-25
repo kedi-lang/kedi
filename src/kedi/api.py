@@ -31,7 +31,12 @@ from .agent_adapter.approval import (
 )
 from .agent_adapter import AgentAdapter, AgentAdapterKind
 from .agent_adapter.adapters.lazy import LazyAdapter
-from .agent_adapter.registry import adapter_factory, build_adapter, known_adapter_shortnames
+from .agent_adapter.registry import (
+    adapter_capabilities,
+    adapter_factory,
+    build_adapter,
+    known_adapter_shortnames,
+)
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .effort import EffortValue
 from .errors import KediExecutionError
@@ -587,7 +592,12 @@ def _lazy_adapter(
     def factory() -> AgentAdapter[Any]:
         return build_adapter(shortname, model, **dict(adapter_kwargs))
 
-    return LazyAdapter(factory, kind=metadata.kind, shortname=metadata.shortname)
+    return LazyAdapter(
+        factory,
+        kind=metadata.kind,
+        shortname=metadata.shortname,
+        capabilities=adapter_capabilities(shortname),
+    )
 
 
 def _build_config(

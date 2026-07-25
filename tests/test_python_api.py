@@ -26,6 +26,7 @@ from kedi import (
 )
 from kedi import type as kedi_type
 from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
@@ -759,6 +760,11 @@ def test_reset_config_restores_default_config(monkeypatch: pytest.MonkeyPatch) -
     configure(adapter=ApiAdapter())
     reset_config()
     monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
@@ -1095,6 +1101,11 @@ def test_configure_builds_default_adapter_lazily(
         return adapter
 
     monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
@@ -1125,6 +1136,11 @@ def test_configure_uses_adapter_env_when_not_explicit(
     monkeypatch.setenv("KEDI_ADAPTER", "dspy")
     monkeypatch.setenv("KEDI_ADAPTER_MODEL", "openrouter:env-model")
     monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
     configure(temperature=0.1)
 
@@ -1151,6 +1167,11 @@ def test_configure_explicit_model_overrides_env(
 
     monkeypatch.setenv("KEDI_ADAPTER_MODEL", "openrouter:env-model")
     monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
     configure(model=None)
 
@@ -1174,6 +1195,11 @@ def test_configure_builds_dspy_adapter_lazily(monkeypatch: pytest.MonkeyPatch) -
         return adapter
 
     monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     configure(model="openrouter:test-model", adapter="dspy", temperature=0.3)
 
     @query
@@ -1199,6 +1225,11 @@ def test_configure_builds_langchain_adapter_lazily(
         return adapter
 
     monkeypatch.setattr(langchain_adapter_module, "LangChainAdapter", fake_adapter)
+    monkeypatch.setattr(
+        api_module,
+        "adapter_capabilities",
+        lambda _shortname: AdapterCapabilities(),
+    )
     configure(model="openrouter:test-model", adapter="langchain", temperature=0.3)
 
     @query

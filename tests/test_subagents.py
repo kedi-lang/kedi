@@ -12,6 +12,9 @@ from types import SimpleNamespace
 from typing import Any, Iterator, cast
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -46,6 +49,7 @@ from kedi.agent_adapter.subagents.coordinator import (
     MAX_SUBAGENT_CONVERSATION_TURNS,
     _OwnedSubagentTask,
     _schedule_owned_cancellation,
+    _subagent_run_span,
     _unwrap_task,
 )
 from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
@@ -90,6 +94,52 @@ from kedi.agent_adapter.subagents.limits import (
     SubagentUsageLimits,
 )
 from tests.mock_adapter import MockAdapter
+
+
+def test_subagent_run_reuses_delegation_tool_span() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("kedi-test")
+
+    with tracer.start_as_current_span(
+        "execute_tool delegate_task",
+        attributes={
+            "gen_ai.tool.name": "delegate_task",
+            "logfire.msg": "running tool: delegate_task",
+        },
+    ) as tool_span:
+        with _subagent_run_span(
+            tracer,
+            {"kedi.subagent.run_id": "run-1"},
+        ) as subagent_span:
+            assert subagent_span is tool_span
+
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["subagent run"]
+    attributes = spans[0].attributes
+    assert attributes is not None
+    assert attributes["logfire.msg"] == "subagent run"
+    assert attributes["kedi.subagent.run_id"] == "run-1"
+
+
+def test_subagent_run_keeps_unrelated_parent_span() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("kedi-test")
+
+    with tracer.start_as_current_span("self run"):
+        with _subagent_run_span(
+            tracer,
+            {"kedi.subagent.run_id": "run-1"},
+        ):
+            pass
+
+    assert [span.name for span in exporter.get_finished_spans()] == [
+        "subagent run",
+        "self run",
+    ]
 
 
 class RecordingPydanticAdapter(PydanticAdapter):

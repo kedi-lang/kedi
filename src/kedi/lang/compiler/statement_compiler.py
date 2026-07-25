@@ -263,7 +263,7 @@ class StatementExecutor:
             type_scope.update(parent_stack[-2])
 
         captured = proc.captured_agent_profile
-        active = captured if isinstance(captured, AgentProfile) else AgentProfile.empty()
+        active = captured if isinstance(captured, AgentProfile) else self.rt.default_agent_profile
         adapter_selection_kind: str | None = None
         profile_registry = self.rt._profile_registry
 
