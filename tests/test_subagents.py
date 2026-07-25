@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from contextlib import contextmanager
 from dataclasses import asdict
-import json
 from pathlib import Path
 from threading import Event, Lock, Thread
 from types import SimpleNamespace
@@ -27,24 +27,36 @@ from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.pydantic import _validated_tool_function
-from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.invocation import (
     InvocationUsage,
     observe_invocations,
     report_invocation,
 )
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.subagents import (
-    DelegationResult,
     MAX_FINAL_SCHEMA_BYTES,
-    SubagentTurn,
+    DelegationResult,
     SubagentExecutionRequest,
+    SubagentTurn,
     subagent_tool_specs,
     validate_final_schema,
     validate_structured_result,
     wrapped_final_schema,
 )
 from kedi.agent_adapter.subagents import coordinator as coordinator_module
+from kedi.agent_adapter.subagents.attempts import (
+    DelegationFailurePolicy,
+    UnresolvedDelegationError,
+    delegation_scope,
+    track_delegation_attempt,
+)
+from kedi.agent_adapter.subagents.budget import (
+    MAX_SUBAGENT_CONCURRENCY,
+    MAX_SUBAGENT_INVOCATIONS,
+    DelegationBudget,
+    DelegationConcurrency,
+)
 from kedi.agent_adapter.subagents.coordinator import (
     MAX_SUBAGENT_CONVERSATION_TURNS,
     _OwnedSubagentTask,
@@ -52,47 +64,36 @@ from kedi.agent_adapter.subagents.coordinator import (
     _subagent_run_span,
     _unwrap_task,
 )
-from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
-from kedi.agent_adapter.tool_override import ToolSpec
-from kedi.agent_profile import (
-    AgentProfile,
-    AgentSubagentUnsupported,
-)
-from kedi.core import KediRuntime
-from kedi.agent_profile.compile import build_capture_env
-from kedi.agent_profile.model import eval_profile_definition
-from kedi.errors import KediExecutionError
-from kedi.lang import compile_program, parse_program
-from kedi.lang.compiler.program_compiler import ProgramCompiler
-from kedi.lsp import features
-from kedi.agent_adapter.subagents.budget import (
-    MAX_SUBAGENT_CONCURRENCY,
-    MAX_SUBAGENT_INVOCATIONS,
-    DelegationBudget,
-    DelegationConcurrency,
-)
-from kedi.agent_adapter.subagents.attempts import (
-    DelegationFailurePolicy,
-    UnresolvedDelegationError,
-    delegation_scope,
-    track_delegation_attempt,
-)
-from kedi.agent_adapter.subagents.runs import SubagentRun, SubagentRunRegistry
-from kedi.agent_adapter.subagents.runs import (
-    SubagentCancelled,
-    SubagentCompleted,
-    SubagentEventLog,
-    SubagentFailed,
-    SubagentStarted,
-    safe_subagent_error_message,
-)
-from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
 from kedi.agent_adapter.subagents.limits import (
     MAX_SUBAGENT_REQUESTS,
     MAX_SUBAGENT_TOKENS,
     MAX_SUBAGENT_TOOL_CALLS,
     SubagentUsageLimits,
 )
+from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
+from kedi.agent_adapter.subagents.runs import (
+    SubagentCancelled,
+    SubagentCompleted,
+    SubagentEventLog,
+    SubagentFailed,
+    SubagentRun,
+    SubagentRunRegistry,
+    SubagentStarted,
+    safe_subagent_error_message,
+)
+from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
+from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_profile import (
+    AgentProfile,
+    AgentSubagentUnsupported,
+)
+from kedi.agent_profile.compile import build_capture_env
+from kedi.agent_profile.model import eval_profile_definition
+from kedi.core import KediRuntime
+from kedi.errors import KediExecutionError
+from kedi.lang import compile_program, parse_program
+from kedi.lang.compiler.program_compiler import ProgramCompiler
+from kedi.lsp import features
 from tests.mock_adapter import MockAdapter
 
 

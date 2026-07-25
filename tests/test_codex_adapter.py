@@ -30,10 +30,10 @@ from kedi.agent_adapter.adapters._codex_app_server import (
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import SubagentExecutionRequest
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import ToolSpec, arguments_target_secret_file
 from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
-from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 
 FAKE_APP_SERVER = Path(__file__).parent / "files" / "fake_codex_app_server.py"
 

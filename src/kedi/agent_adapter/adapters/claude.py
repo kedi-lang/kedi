@@ -17,20 +17,20 @@ from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
-from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
-from ..subagents.limits import SubagentUsageLimits
-from ..subagents.runs import safe_subagent_error_message
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
+from ..subagents.runs import safe_subagent_error_message
 from ..tool_override import (
     ToolScope,
     ToolSpec,
     approval_request_for_tool,
-    arguments_target_secret_file,
     arguments_after_approval,
+    arguments_target_secret_file,
 )
 
 OutputDataT = Any

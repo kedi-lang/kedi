@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
-from ...agent_profile.profile import SKILLS_USE_TARGET
 from ...agent_profile.compile import (
     build_profile_registry,
     capture_procedure_profiles,
@@ -22,6 +21,7 @@ from ...agent_profile.model import (
     eval_settings_directive,
     eval_system_directive,
 )
+from ...agent_profile.profile import SKILLS_USE_TARGET
 from ...agent_profile.registry import ProfileDefinition
 from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
@@ -52,8 +52,8 @@ from .type_system import register_type
 
 if TYPE_CHECKING:
     from ...agent_adapter.meta import AgentAdapter
-    from ...executors.base import Executor
     from ...agent_adapter.subagents.limits import SubagentUsageLimits
+    from ...executors.base import Executor
 
 
 def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:

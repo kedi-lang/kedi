@@ -11,8 +11,8 @@ from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.approval import ApprovalPolicy
 from .agent_adapter.cli_approval import CliApprovalHandler
 from .agent_adapter.meta import AgentAdapter
-from .agent_profile import AgentProfile
 from .agent_adapter.registry import adapter_capabilities, adapter_factory, build_adapter
+from .agent_profile import AgentProfile
 from .codegen.runner import run_codegen
 from .lang import compile_program, parse_program
 from .lang.compiler import environment as compiler_environment

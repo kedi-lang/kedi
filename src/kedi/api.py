@@ -21,6 +21,8 @@ from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, 
 import dotenv
 from typing_extensions import Sentinel
 
+from .agent_adapter import AgentAdapter, AgentAdapterKind
+from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.approval import (
     ApprovalDecision,
     ApprovalHandler,
@@ -29,8 +31,6 @@ from .agent_adapter.approval import (
     ApprovalRequest,
     ToolRisk,
 )
-from .agent_adapter import AgentAdapter, AgentAdapterKind
-from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,

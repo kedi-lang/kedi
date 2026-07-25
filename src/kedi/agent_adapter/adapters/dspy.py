@@ -20,17 +20,17 @@ import dspy
 from ...agent_profile import AgentProfile
 from ...agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
 from ...dynamic_models import build_dynamic_model
+from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_litellm
 from ...resolved_types import ResolvedKediType
-from ...errors import KediExecutionError
-from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
-from ..subagents.limits import SubagentUsageLimits
-from ..subagents.runs import safe_subagent_error_message
 from ..approval import ApprovalPolicy
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..llm_wrapper import ThinkingStrippingLM
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentExecutionRequest
+from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
+from ..subagents.limits import SubagentUsageLimits
+from ..subagents.runs import safe_subagent_error_message
 from ..tool_override import ToolScope, ToolSpec, with_approval
 
 

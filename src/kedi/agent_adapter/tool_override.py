@@ -19,9 +19,9 @@ from typing import (
 )
 
 from .approval import (
+    ApprovalDecision,
     ApprovalPolicy,
     ApprovalRequest,
-    ApprovalDecision,
     ToolApprovalDenied,
     ToolRisk,
     resolve_tool_approval,

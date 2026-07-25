@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import atexit
 import os
-from pathlib import Path
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from pathlib import Path
 from threading import Lock
 from types import TracebackType
 from typing import (
@@ -882,8 +882,7 @@ class KediRuntime:
         if not tool_names:
             return ()
 
-        from .agent_adapter.tool_override import SupportsToolRegistration
-        from .agent_adapter.tool_override import with_approval
+        from .agent_adapter.tool_override import SupportsToolRegistration, with_approval
         from .agent_adapter.utils import (
             kedi_procedure_tool_spec,
             python_callable_tool_spec,

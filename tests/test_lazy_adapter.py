@@ -12,8 +12,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 
-import kedi.app as app
 import pytest
+
+import kedi.app as app
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,

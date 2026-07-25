@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from dataclasses import dataclass, replace
-import re
 from threading import Lock
 from time import time
 from typing import Literal, TypeAlias
