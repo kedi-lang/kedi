@@ -280,6 +280,73 @@ def test_procedure_parameter_header_resolves_to_its_declaration() -> None:
     ]
 
 
+def test_selective_import_name_resolves_hover_and_definition(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    module_path = package / "helpers.kedi"
+    module_path.write_text(
+        "@selected(name: str) -> str:\n  = <name>\n> export:\n  selected\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = "> import: package/helpers:\n  selected\n"
+    position = lsp.Position(line=1, character=3)
+
+    hover = features.compute_hover(source, str(source_path), position)
+    definition = features.compute_definition(
+        source,
+        source_path.as_uri(),
+        str(source_path),
+        position,
+    )
+
+    assert hover is not None
+    assert "`@selected(name: str)` → `str`" in hover.contents.value
+    assert definition is not None
+    assert definition.uri == module_path.as_uri()
+    assert definition.range.start.line == 0
+
+
+def test_selective_import_names_resolve_all_export_kinds(tmp_path: Path) -> None:
+    module_path = tmp_path / "helpers.kedi"
+    module_path.write_text(
+        "~Record(name: str)\n"
+        "[count: int] = `1`\n"
+        "> profile: analyst:\n"
+        "    > model: test\n"
+        "> export:\n"
+        "  Record\n"
+        "  count\n"
+        "  analyst\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = "> import: helpers:\n  Record\n  count\n  analyst\n  missing\n"
+
+    type_hover = features.compute_hover(source, str(source_path), lsp.Position(line=1, character=3))
+    value_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=2, character=3)
+    )
+    profile_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=3, character=3)
+    )
+    missing_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=4, character=3)
+    )
+
+    assert type_hover is not None and "`~Record(name: str)`" in type_hover.contents.value
+    assert (
+        value_hover is not None and "**Imported value** `count: int`" in value_hover.contents.value
+    )
+    assert (
+        profile_hover is not None
+        and "**Agent profile** `> profile: analyst:`" in profile_hover.contents.value
+    )
+    assert (
+        missing_hover is not None and "**Imported value** `missing`" in missing_hover.contents.value
+    )
+
+
 def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
     source = "@outer(value: str) -> str:\n  @inner() -> str:\n    = <value>\n  = <inner()>\n"
     uri = "file:///tmp/x.kedi"

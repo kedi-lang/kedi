@@ -673,8 +673,20 @@ class _Walker:
     def _walk_module_import(self, node: Node) -> ModuleImport:
         module_node = _field(node, "module")
         assert module_node is not None
+        names: list[str] = []
+        name_locs: dict[str, Span] = {}
+        body = _field(node, "body")
+        if body is not None:
+            for child in _named_children(body):
+                name_node = _field(child, "name")
+                assert name_node is not None
+                name = _identifier_name(self.source, name_node)
+                names.append(name)
+                name_locs[name] = self._span(name_node)
         return ModuleImport(
-            module=_identifier_name(self.source, module_node),
+            module=_src_text(self.source, module_node),
+            names=names,
+            name_locs=name_locs,
             loc=self._span(node),
         )
 

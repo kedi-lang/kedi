@@ -162,6 +162,7 @@ from .module_surface import (
     ImportedSurface,
     ImportedValueInfo,
     imported_surface_for_program,
+    load_imported_surface,
     program_path,
     resolved_import_path,
     top_level_value_infos,
@@ -707,6 +708,21 @@ def _missing_import_diagnostics(
     for module_import in prog.imports:
         module_path = resolved_import_path(prog, module_import.module)
         if module_path is not None:
+            imported = load_imported_surface(module_path, set(), module_import.module)
+            exported_names = imported.exported_names()
+            for name in dict.fromkeys(module_import.names):
+                if name in exported_names:
+                    continue
+                span = module_import.name_locs[name]
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(span),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-IMPORT-NAME",
+                        source="kedi",
+                        message=f"module '{module_import.module}' does not export '{name}'",
+                    )
+                )
             continue
         span = _import_name_span(prog, module_import) or module_import.loc
         if span is None:
@@ -1508,6 +1524,42 @@ def _resolve_symbol_at(
     for module_import in prog.imports:
         name_span = _import_name_span(prog, module_import)
         if name_span is None or not _position_inside(pos, name_span):
+            for selected_name in module_import.names:
+                selected_span = module_import.name_locs[selected_name]
+                if not _position_inside(pos, selected_span):
+                    continue
+                module_path = resolved_import_path(prog, module_import.module)
+                selected_surface = (
+                    load_imported_surface(module_path, set(), module_import.module)
+                    if module_path is not None
+                    else ImportedSurface()
+                )
+                if selected_name in selected_surface.procedures:
+                    target = selected_surface.procedures[selected_name]
+                    kind = "procedure"
+                    declaration_span = target.loc
+                elif selected_name in selected_surface.types:
+                    target = selected_surface.types[selected_name]
+                    kind = "type"
+                    declaration_span = target.loc
+                elif selected_name in selected_surface.values:
+                    target = selected_surface.values[selected_name]
+                    kind = "imported_value"
+                    declaration_span = target.declaration_span
+                elif selected_name in selected_surface.profiles:
+                    target = selected_surface.profiles[selected_name]
+                    kind = "agent_profile"
+                    declaration_span = target.loc
+                else:
+                    kind = "imported_value"
+                    declaration_span = None
+                return SymbolRef(
+                    kind=kind,
+                    name=selected_name,
+                    declaration_span=declaration_span,
+                    scope_proc=None,
+                    cursor_span=selected_span,
+                )
             continue
         module_info = imported_surface.modules.get(module_import.module)
         return SymbolRef(

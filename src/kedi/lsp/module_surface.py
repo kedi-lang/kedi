@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast as py_ast
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 from ..lang.ast import (
     AssignBlockStmt,
@@ -24,6 +24,8 @@ from .ast_helpers import (
     extract_module_docstring,
     is_public_export_name,
 )
+
+_SurfaceValue = TypeVar("_SurfaceValue")
 
 __all__ = [
     "ImportedModuleInfo",
@@ -67,10 +69,40 @@ class ImportedSurface:
 
     def merge(self, other: "ImportedSurface") -> None:
         self.modules.update(other.modules)
-        self.procedures.update(other.procedures)
-        self.types.update(other.types)
-        self.values.update(other.values)
-        self.profiles.update(other.profiles)
+        self._merge_collection(self.procedures, other.procedures)
+        self._merge_collection(self.types, other.types)
+        self._merge_collection(self.values, other.values)
+        self._merge_collection(self.profiles, other.profiles)
+
+    def select(self, names: list[str]) -> "ImportedSurface":
+        if not names:
+            return self
+        selected = set(names)
+        return ImportedSurface(
+            modules=dict(self.modules),
+            procedures={name: value for name, value in self.procedures.items() if name in selected},
+            types={name: value for name, value in self.types.items() if name in selected},
+            values={name: value for name, value in self.values.items() if name in selected},
+            profiles={name: value for name, value in self.profiles.items() if name in selected},
+        )
+
+    def exported_names(self) -> set[str]:
+        return set(self.procedures) | set(self.types) | set(self.values) | set(self.profiles)
+
+    def _remove_binding(self, name: str) -> None:
+        self.procedures.pop(name, None)
+        self.types.pop(name, None)
+        self.values.pop(name, None)
+        self.profiles.pop(name, None)
+
+    def _merge_collection(
+        self,
+        target: dict[str, _SurfaceValue],
+        incoming: dict[str, _SurfaceValue],
+    ) -> None:
+        for name, value in incoming.items():
+            self._remove_binding(name)
+            target[name] = value
 
 
 def program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
@@ -126,7 +158,8 @@ def _merge_imports(
         module_path = _lookup_import_path(module_import.module, source_path)
         if module_path is None:
             continue
-        surface.merge(load_imported_surface(module_path, seen, module_import.module))
+        imported = load_imported_surface(module_path, seen, module_import.module)
+        surface.merge(imported.select(module_import.names))
 
 
 def imported_surface_for_program(

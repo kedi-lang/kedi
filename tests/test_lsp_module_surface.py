@@ -110,6 +110,25 @@ def test_module_surface_resolves_imported_program(tmp_path) -> None:
     assert "child" in surface.procedures
 
 
+def test_module_surface_filters_selective_imports_and_preserves_last_write(tmp_path) -> None:
+    (tmp_path / "first.kedi").write_text(
+        "@shared() -> str:\n  = first\n"
+        "@only_first() -> str:\n  = first\n"
+        "> export:\n  shared\n  only_first\n"
+    )
+    (tmp_path / "second.kedi").write_text("[shared: str] = second\n> export:\n  shared\n")
+    prog = parse_program(
+        "> import: first:\n  shared\n> import: second\n= <shared>\n",
+        source_path=str(tmp_path / "main.kedi"),
+    )
+
+    surface = module_surface.imported_surface_for_program(prog)
+
+    assert "only_first" not in surface.procedures
+    assert "shared" not in surface.procedures
+    assert surface.values["shared"].module_name == "second"
+
+
 def test_module_surface_uses_cache_local_definition_offsets(tmp_path: Path) -> None:
     module = tmp_path / "generated.kedi"
     module.write_text("@root() -> str:\n  = ok\n", encoding="utf-8")

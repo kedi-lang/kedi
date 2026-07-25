@@ -218,7 +218,7 @@ kedi report.kedi --country Turkey --dry-run
 - Substitutions: `<value>`, `<call(arg)>`, and inline Python with backticks
 - Python blocks: triple-backtick blocks that return native Python values
 - Agent routing: `> model:`, `> profile:`, and `> use:` (see above)
-- Modules: `> import: module_name`, `> export: name`, and `> export: *`
+- Modules: whole or selective `> import: package/module`, `> export: name`, and `> export: *`
 - Validation: `@test:` and `@eval:` blocks live next to the code they verify
 - Optimization: `> optimize: name:` marks template spans for `--optimize`
 

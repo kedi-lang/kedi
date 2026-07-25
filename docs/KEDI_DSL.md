@@ -107,6 +107,22 @@ In `profiles.kedi`:
 
 Imports resolve relative to the importing file. If no sibling module exists, Kedi falls back to bundled internal modules such as `> import: this`. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
 
+Use `/` to import a module from a nested directory:
+
+```kedi
+> import: services/profiles
+```
+
+To import only part of a module's exported surface, list the required names in an indented body:
+
+```kedi
+> import: services/profiles:
+  Profile
+  get_profile
+```
+
+Selective imports do not create a namespace object; the selected names enter the current environment directly. Imports are applied in source order, so when multiple imports provide the same name, the last imported binding wins. Imports inside nested modules remain relative to the file containing that import.
+
 To export every public name in a module, use `> export: *`:
 
 ```kedi

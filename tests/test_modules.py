@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from kedi import module_registry
+from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.module_registry import (
     describe_module_search_paths,
@@ -24,7 +25,21 @@ def test_parser_reads_import_and_export_directives() -> None:
     prog = parse_program("> import: profiles\n\n> export:\n  xd\n  get_proc\n")
 
     assert [item.module for item in prog.imports] == ["profiles"]
+    assert prog.imports[0].names == []
     assert prog.exports[0].names == ["xd", "get_proc"]
+
+
+def test_parser_reads_submodule_and_selective_import() -> None:
+    prog = parse_program("> import: package/services:\n  fetch\n  Response\n")
+
+    assert prog.imports[0].module == "package/services"
+    assert prog.imports[0].names == ["fetch", "Response"]
+    assert set(prog.imports[0].name_locs) == {"fetch", "Response"}
+
+
+def test_module_registry_rejects_invalid_module_paths() -> None:
+    with pytest.raises(ValueError, match="Invalid Kedi module path"):
+        module_registry.module_search_paths("../private", source_path=Path("/tmp/main.kedi"))
 
 
 def test_parser_rejects_text_after_import_module() -> None:
@@ -66,6 +81,73 @@ def test_import_exposes_only_exported_procedure_value_and_type(tmp_path: Path) -
     rt = _compile_file(main)
 
     assert rt.run_main() == "Ada:41:42"
+
+
+def test_selective_import_exposes_only_selected_exports(tmp_path: Path) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "[first: str] = one\n[second: str] = two\n\n> export:\n  first\n  second\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: values:\n  second\n\n= <second>\n", encoding="utf-8")
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == "two"
+    assert "first" not in rt._import_env
+    assert rt._import_env["second"] == "two"
+
+
+def test_selective_import_rejects_name_outside_export_surface(tmp_path: Path) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "[public: str] = yes\n[private: str] = no\n> export:\n  public\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: values:\n  private\n\n= ok\n", encoding="utf-8")
+
+    with pytest.raises(KediExecutionError, match="does not export 'private'"):
+        _compile_file(main)
+
+
+def test_submodule_imports_resolve_relative_to_importing_module(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "helper.kedi").write_text(
+        "[suffix: str] = relative\n> export:\n  suffix\n",
+        encoding="utf-8",
+    )
+    (package / "service.kedi").write_text(
+        "> import: helper\n\n@result() -> str:\n  = <suffix>\n\n> export:\n  result\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: package/service:\n  result\n\n= <result()>\n", encoding="utf-8")
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == "relative"
+
+
+def test_later_import_wins_when_binding_kind_changes(tmp_path: Path) -> None:
+    (tmp_path / "procedures.kedi").write_text(
+        "@shared() -> str:\n  = procedure\n> export:\n  shared\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "values.kedi").write_text(
+        "[shared: str] = value\n> export:\n  shared\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: procedures\n> import: values\n\n= <shared>\n",
+        encoding="utf-8",
+    )
+
+    rt = _compile_file(main)
+
+    assert rt.run_main() == "value"
+    assert "shared" not in rt._procedures
 
 
 def test_imported_values_are_visible_inside_local_procedures(tmp_path: Path) -> None:
@@ -539,3 +621,12 @@ def test_module_registry_missing_sibling_reports_file_path(tmp_path: Path) -> No
         resolve_module_path("profiles", source_path=source)
 
     assert str(tmp_path / "profiles.kedi") in str(info.value)
+
+
+def test_module_registry_builds_relative_submodule_path(tmp_path: Path) -> None:
+    source = tmp_path / "main.kedi"
+
+    assert (
+        module_search_paths("package/service", source_path=source)[0]
+        == (tmp_path / "package" / "service.kedi").resolve()
+    )

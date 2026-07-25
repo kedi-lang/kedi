@@ -212,7 +212,7 @@ class ProgramCompiler:
                     subagent_usage_limits=self.subagent_usage_limits,
                 ).compile(imported_prog)
                 imported_rt.run_main()
-                self._merge_exports(module_path, imported_prog, imported_rt)
+                self._merge_exports(module_import, module_path, imported_prog, imported_rt)
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
         try:
@@ -220,7 +220,7 @@ class ProgramCompiler:
                 module_import.module,
                 source_path=self._program_path(prog),
             )
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, ValueError) as exc:
             raise ModuleNotFoundError(str(exc)) from exc
 
     def _load_imported_program(self, module_path: Path) -> Program:
@@ -239,12 +239,16 @@ class ProgramCompiler:
 
     def _merge_exports(
         self,
+        module_import: ModuleImport,
         module_path: Path,
         imported_prog: Program,
         imported_rt: KediRuntime,
     ) -> None:
-        for name in self._export_names(imported_prog, imported_rt):
+        export_names = self._export_names(imported_prog, imported_rt)
+        names = self._selected_import_names(module_import, export_names)
+        for name in names:
             kind, value = self._resolve_export(name, imported_rt, module_path)
+            self._remove_imported_binding(name)
             if kind == "procedure":
                 self.rt._procedures[name] = self._wrap_imported_procedure(name, value, imported_rt)
             elif kind == "type":
@@ -254,6 +258,28 @@ class ProgramCompiler:
                 self._merge_profile_dependencies(value, imported_rt, seen={name})
             else:
                 self.rt._import_env[name] = value
+
+    def _selected_import_names(
+        self,
+        module_import: ModuleImport,
+        export_names: list[str],
+    ) -> list[str]:
+        if not module_import.names:
+            return export_names
+
+        exported = set(export_names)
+        missing = list(dict.fromkeys(name for name in module_import.names if name not in exported))
+        if missing:
+            rendered = ", ".join(repr(name) for name in missing)
+            raise ImportError(f"Kedi module {module_import.module!r} does not export {rendered}")
+        return list(dict.fromkeys(module_import.names))
+
+    def _remove_imported_binding(self, name: str) -> None:
+        """Make a later import authoritative even when the binding kind changes."""
+        self.rt._procedures.pop(name, None)
+        self.rt._type_env_stack[0].pop(name, None)
+        self.rt._profile_registry.pop(name, None)
+        self.rt._import_env.pop(name, None)
 
     def _merge_profile_dependencies(
         self,

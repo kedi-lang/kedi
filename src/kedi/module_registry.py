@@ -3,19 +3,28 @@
 from __future__ import annotations
 
 import importlib.resources
+import re
 from functools import lru_cache
 from pathlib import Path
 
 _INTERNAL_MODULES_PACKAGE = "kedi.modules"
+_MODULE_SEGMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _module_file_parts(module_name: str) -> tuple[str, ...]:
+    segments = tuple(module_name.split("/"))
+    if not segments or any(not _MODULE_SEGMENT_RE.fullmatch(segment) for segment in segments):
+        raise ValueError(f"Invalid Kedi module path: {module_name!r}")
+    return (*segments[:-1], f"{segments[-1]}.kedi")
 
 
 @lru_cache(maxsize=None)
 def internal_module_path(module_name: str) -> Path | None:
     """Return the bundled module path for ``module_name`` if it exists."""
     try:
-        resource = importlib.resources.files(_INTERNAL_MODULES_PACKAGE).joinpath(
-            f"{module_name}.kedi"
-        )
+        resource = importlib.resources.files(_INTERNAL_MODULES_PACKAGE)
+        for part in _module_file_parts(module_name):
+            resource = resource.joinpath(part)
     except Exception:
         return None
 
@@ -30,9 +39,10 @@ def internal_module_path(module_name: str) -> Path | None:
 
 def module_search_paths(module_name: str, *, source_path: Path | None) -> tuple[Path, ...]:
     """Return candidate module paths in resolution order."""
+    relative_path = Path(*_module_file_parts(module_name))
     candidates: list[Path] = []
     if source_path is not None:
-        candidates.append((source_path.parent / f"{module_name}.kedi").resolve())
+        candidates.append((source_path.parent / relative_path).resolve())
 
     internal_path = internal_module_path(module_name)
     if internal_path is not None and internal_path not in candidates:

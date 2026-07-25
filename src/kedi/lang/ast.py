@@ -488,6 +488,8 @@ class TypeDefStmt(Stmt):
 @dataclass
 class ModuleImport:
     module: str
+    names: List[str] = field(default_factory=list)
+    name_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

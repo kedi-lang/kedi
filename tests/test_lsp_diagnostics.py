@@ -703,6 +703,35 @@ def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     assert features.compute_diagnostics(src, str(main)) == []
 
 
+def test_diagnostics_accept_selective_submodule_import(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "profiles.kedi").write_text(
+        "@get_profile() -> str:\n  = ok\n> export:\n  get_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = "> import: package/profiles:\n  get_profile\n\n= <get_profile()>\n"
+    main.write_text(src, encoding="utf-8")
+
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_report_unexported_selective_import_name(tmp_path):
+    module = tmp_path / "profiles.kedi"
+    module.write_text("[visible: str] = yes\n> export:\n  visible\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles:\n  missing\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    diagnostics = features.compute_diagnostics(src, str(main))
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-IMPORT-NAME"
+    assert diagnostics[0].range.start.line == 1
+    assert diagnostics[0].message == "module 'profiles' does not export 'missing'"
+
+
 def test_diagnostics_limit_recovered_parse_errors_to_the_faulting_line() -> None:
     src = (
         "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"

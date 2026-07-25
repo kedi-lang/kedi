@@ -1,0 +1,17 @@
+> import: rates:
+  discount_rate
+  tax_rate
+
+@inventory_value(products: list) -> float:
+  = `round(sum(product.unit_price * product.quantity for product in products), 2)`
+
+@checkout_total(products: list) -> float:
+  = ```
+  subtotal = sum(product.unit_price * product.quantity for product in products)
+  discounted = subtotal * (1 - discount_rate)
+  return round(discounted * (1 + tax_rate), 2)
+  ```
+
+> export:
+  inventory_value
+  checkout_total
