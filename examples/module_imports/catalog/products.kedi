@@ -1,0 +1,17 @@
+~Product(name: str, unit_price: float, quantity: int)
+
+@sample_products() -> list[Product]:
+  = ```
+  return [
+      Product(name="Mechanical keyboard", unit_price=120.0, quantity=2),
+      Product(name="USB-C dock", unit_price=85.0, quantity=3),
+      Product(name="Webcam", unit_price=60.0, quantity=1),
+  ]
+  ```
+
+@internal_sku_count() -> int:
+  = `3`
+
+> export:
+  Product
+  sample_products

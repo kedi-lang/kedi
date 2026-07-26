@@ -278,7 +278,7 @@ def test_imported_profile_can_use_prelude_python_callable_tool(tmp_path) -> None
         adapter=adapter,
     )
 
-    assert callable(rt._import_env["read_file_content"])
+    assert "read_file_content" not in rt._import_env
     assert rt.run_main() == "content-value"
     assert adapter.tool_calls == [("read_file_content",)]
 
@@ -310,32 +310,32 @@ def test_imported_profile_can_use_private_kedi_procedure_tool(tmp_path) -> None:
         adapter=adapter,
     )
 
-    assert "read_file_content" in rt._procedures
+    assert "read_file_content" not in rt._procedures
     assert rt.run_main() == "content-value"
     assert adapter.tool_calls == [("read_file_content",)]
 
 
-def test_imported_profile_tool_dependency_helper_edges() -> None:
-    from kedi.agent_profile.profile import AgentProfile
+def test_imported_profile_tool_binding_does_not_publish_or_rebind_dependency() -> None:
+    from kedi.agent_profile.registry import ProfileDefinition, ProfileToolMember
     from kedi.lang.compiler.program_compiler import ProgramCompiler
 
     compiler = ProgramCompiler(adapter=None)
     imported_rt = KediRuntime()
-    existing = object()
-    compiler.rt._import_env["existing"] = existing
-
-    assert compiler._profile_tool_names(AgentProfile(tools=("existing", "missing"))) == (
-        "existing",
-        "missing",
+    imported_rt._prelude_env = {
+        "private_lookup": lambda: "private",
+    }
+    compiler.rt._import_env["private_lookup"] = lambda: "caller"
+    definition = ProfileDefinition(
+        name="agent",
+        members=[ProfileToolMember(tool_names=("private_lookup", "missing"))],
     )
 
-    compiler._merge_profile_tool_dependencies(
-        AgentProfile(tools=("existing", "missing")),
-        imported_rt,
-    )
+    bound = compiler._bind_imported_profile(definition, imported_rt)
 
-    assert compiler.rt._import_env["existing"] is existing
-    assert "missing" not in compiler.rt._import_env
+    assert isinstance(bound, ProfileDefinition)
+    assert set(bound.tool_bindings) == {"private_lookup"}
+    assert bound.tool_bindings["private_lookup"].fn() == "private"
+    assert compiler.rt._import_env["private_lookup"]() == "caller"
 
 
 def test_unknown_use_target_raises() -> None:

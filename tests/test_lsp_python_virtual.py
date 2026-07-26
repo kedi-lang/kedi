@@ -411,6 +411,30 @@ def test_python_virtual_document_exposes_imported_kedi_and_python_symbols(tmp_pa
     assert any(symbol["kind"] == "imported_value" for symbol in virtual["symbols"])
 
 
+def test_python_virtual_document_exposes_only_selective_imports(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "helpers.kedi").write_text(
+        "@selected(name: str) -> str:\n"
+        "  = <name>\n"
+        "@excluded() -> str:\n"
+        "  = excluded\n"
+        "> export:\n"
+        "  selected\n"
+        "  excluded\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = '> import: package/helpers:\n  selected\n\n```\nresult = selected("Ada")\n```\n'
+
+    virtual = compute_python_virtual_document(source, str(source_path))
+
+    ast.parse(virtual["text"])
+    assert "def selected(name: str) -> str:" in virtual["text"]
+    assert "def excluded(" not in virtual["text"]
+    assert 'result = selected("Ada")' in virtual["text"]
+
+
 def test_python_virtual_document_preserves_imported_python_type_metadata(tmp_path):
     module_path = tmp_path / "helpers.kedi"
     module_path.write_text(

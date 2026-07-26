@@ -3,11 +3,12 @@ from __future__ import annotations
 import ast as py_ast
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 from ..lang.ast import (
     AssignBlockStmt,
     AssignStmt,
+    ModuleImport,
     ProcedureDef,
     ProfileDefStmt,
     Program,
@@ -18,6 +19,7 @@ from ..lang.ast import (
 )
 from ..lang.parser import parse_program
 from ..module_registry import find_module_path, resolve_module_path
+from ..package_registry import CorruptInstalledPackageError
 from ..source_loading import load_kedi_source_bundle
 from .ast_helpers import (
     assignment_name_span,
@@ -25,12 +27,15 @@ from .ast_helpers import (
     is_public_export_name,
 )
 
+_SurfaceValue = TypeVar("_SurfaceValue")
+
 __all__ = [
     "ImportedModuleInfo",
     "ImportedSurface",
     "ImportedValueInfo",
     "assignment_name_span",
     "extract_module_docstring",
+    "import_resolution_error",
     "imported_surface_for_program",
     "is_public_export_name",
     "load_imported_surface",
@@ -67,10 +72,72 @@ class ImportedSurface:
 
     def merge(self, other: "ImportedSurface") -> None:
         self.modules.update(other.modules)
-        self.procedures.update(other.procedures)
-        self.types.update(other.types)
-        self.values.update(other.values)
-        self.profiles.update(other.profiles)
+        self._merge_collection(self.procedures, other.procedures)
+        self._merge_collection(self.types, other.types)
+        self._merge_collection(self.values, other.values)
+        self._merge_collection(self.profiles, other.profiles)
+
+    def select(self, names: list[str]) -> "ImportedSurface":
+        if not names:
+            return self
+        selected = set(names)
+        return ImportedSurface(
+            modules=dict(self.modules),
+            procedures={name: value for name, value in self.procedures.items() if name in selected},
+            types={name: value for name, value in self.types.items() if name in selected},
+            values={name: value for name, value in self.values.items() if name in selected},
+            profiles={name: value for name, value in self.profiles.items() if name in selected},
+        )
+
+    def exported_names(self) -> set[str]:
+        return set(self.procedures) | set(self.types) | set(self.values) | set(self.profiles)
+
+    def _remove_binding(self, name: str) -> None:
+        self.procedures.pop(name, None)
+        self.types.pop(name, None)
+        self.values.pop(name, None)
+        self.profiles.pop(name, None)
+
+    def _merge_collection(
+        self,
+        target: dict[str, _SurfaceValue],
+        incoming: dict[str, _SurfaceValue],
+    ) -> None:
+        for name, value in incoming.items():
+            self._remove_binding(name)
+            target[name] = value
+
+
+@dataclass
+class _SurfaceBindings:
+    """Track final top-level bindings and whether an import last wrote each one."""
+
+    surface: ImportedSurface = field(default_factory=ImportedSurface)
+    imported_names: set[str] = field(default_factory=set)
+
+    def publish_import(self, imported: ImportedSurface) -> None:
+        self.surface.merge(imported)
+        self.imported_names.update(imported.exported_names())
+
+    def publish_procedure(self, procedure: ProcedureDef) -> None:
+        self._publish(procedure.name, self.surface.procedures, procedure)
+
+    def publish_type(self, typedef: TypeDef) -> None:
+        self._publish(typedef.name, self.surface.types, typedef)
+
+    def publish_profile(self, profile: ProfileDefStmt) -> None:
+        self._publish(profile.name, self.surface.profiles, profile)
+
+    def publish_value(self, value: ImportedValueInfo) -> None:
+        self._publish(value.name, self.surface.values, value)
+
+    def imported_surface(self) -> ImportedSurface:
+        return _retain_bindings(self.surface, self.imported_names)
+
+    def _publish(self, name: str, target: dict[str, _SurfaceValue], value: _SurfaceValue) -> None:
+        self.surface._remove_binding(name)
+        target[name] = value
+        self.imported_names.discard(name)
 
 
 def program_path(prog: Program | ProgramWithValidation) -> Optional[Path]:
@@ -90,6 +157,20 @@ def resolved_import_path(
         return resolve_module_path(module_import_name, source_path=program_path(prog))
     except (FileNotFoundError, RuntimeError):
         return None
+
+
+def import_resolution_error(
+    prog: Program | ProgramWithValidation,
+    module_import_name: str,
+) -> str | None:
+    """Return an installed-package integrity error without breaking LSP requests."""
+    try:
+        resolve_module_path(module_import_name, source_path=program_path(prog))
+    except CorruptInstalledPackageError as exc:
+        return str(exc)
+    except (FileNotFoundError, RuntimeError):
+        return None
+    return None
 
 
 def _lookup_import_path(module_name: str, source_path: Path | None) -> Path | None:
@@ -115,28 +196,95 @@ def top_level_value_infos(
     }
 
 
-def _merge_imports(
-    surface: ImportedSurface,
-    imports: list,
+def _retain_bindings(surface: ImportedSurface, names: set[str]) -> ImportedSurface:
+    """Return selected bindings while retaining module navigation metadata."""
+    return ImportedSurface(
+        modules=dict(surface.modules),
+        procedures={name: value for name, value in surface.procedures.items() if name in names},
+        types={name: value for name, value in surface.types.items() if name in names},
+        values={name: value for name, value in surface.values.items() if name in names},
+        profiles={name: value for name, value in surface.profiles.items() if name in names},
+    )
+
+
+def _ordered_toplevel_items(prog: Program | ProgramWithValidation) -> list[object]:
+    if prog.ordered_toplevel:
+        return list(prog.ordered_toplevel)
+    return [
+        *prog.imports,
+        *prog.type_defs,
+        *prog.profile_defs.values(),
+        *prog.procedures,
+        *prog.toplevel_body,
+    ]
+
+
+def _top_level_value_info(
+    stmt: AssignStmt | AssignBlockStmt,
+    *,
+    module_name: str | None,
+) -> ImportedValueInfo | None:
+    span = assignment_name_span(stmt)
+    if span is None:
+        return None
+    return ImportedValueInfo(
+        name=stmt.name,
+        declaration_span=span,
+        type_expr=stmt.type_expr,
+        module_name=module_name,
+    )
+
+
+def _binding_surface_for_program(
+    prog: Program | ProgramWithValidation,
     *,
     source_path: Path | None,
     seen: set[Path],
-) -> None:
-    for module_import in imports:
-        module_path = _lookup_import_path(module_import.module, source_path)
-        if module_path is None:
-            continue
-        surface.merge(load_imported_surface(module_path, seen, module_import.module))
+    module_name: str | None,
+) -> _SurfaceBindings:
+    """Apply top-level writes in the same order as the runtime compiler.
+
+    Local declarations and imports share one namespace in Kedi.  The LSP must
+    therefore not simply merge all imports and then all locals: the final
+    writer of a name is the declaration visible to consumers and re-exports.
+    """
+    bindings = _SurfaceBindings()
+    for value in _python_value_infos(
+        prog.prelude, prog.prelude_loc, module_name=module_name
+    ).values():
+        bindings.publish_value(value)
+
+    for item in _ordered_toplevel_items(prog):
+        if isinstance(item, ModuleImport):
+            module_path = _lookup_import_path(item.module, source_path)
+            if module_path is None:
+                continue
+            imported = load_imported_surface(module_path, seen, item.module)
+            bindings.publish_import(imported.select(item.names))
+        elif isinstance(item, ProcedureDef):
+            bindings.publish_procedure(item)
+        elif isinstance(item, TypeDef):
+            bindings.publish_type(item)
+        elif isinstance(item, ProfileDefStmt):
+            bindings.publish_profile(item)
+        elif isinstance(item, (AssignStmt, AssignBlockStmt)):
+            value = _top_level_value_info(item, module_name=module_name)
+            if value is not None:
+                bindings.publish_value(value)
+    return bindings
 
 
 def imported_surface_for_program(
     prog: Program | ProgramWithValidation,
 ) -> ImportedSurface:
-    surface = ImportedSurface()
     root_path = program_path(prog)
     seen = {root_path} if root_path is not None else set()
-    _merge_imports(surface, list(prog.imports), source_path=root_path, seen=seen)
-    return surface
+    return _binding_surface_for_program(
+        prog,
+        source_path=root_path,
+        seen=seen,
+        module_name=None,
+    ).imported_surface()
 
 
 def load_imported_surface(
@@ -176,69 +324,31 @@ def load_imported_surface(
             docstring=extract_module_docstring(loaded.text),
         )
 
-    nested_surface = ImportedSurface()
-    _merge_imports(
-        nested_surface,
-        list(prog.imports),
+    bindings = _binding_surface_for_program(
+        prog,
         source_path=path,
         seen=next_seen,
-    )
-
-    local_procedures = {proc.name: proc for proc in prog.procedures}
-    local_types = {td.name: td for td in prog.type_defs}
-    prelude_values = _python_value_infos(
-        prog.prelude,
-        prog.prelude_loc,
         module_name=module_name,
-    )
-    local_values = {
-        stmt.name: ImportedValueInfo(
-            name=stmt.name,
-            declaration_span=span,
-            type_expr=stmt.type_expr,
-            module_name=module_name,
-        )
-        for stmt in prog.toplevel_body
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [assignment_name_span(stmt)]
-        if span is not None
-    }
-    local_values = {**prelude_values, **local_values}
-
-    combined_procedures = dict(nested_surface.procedures)
-    combined_procedures.update(local_procedures)
-    combined_types = dict(nested_surface.types)
-    combined_types.update(local_types)
-    combined_values = dict(nested_surface.values)
-    combined_values.update(local_values)
-    combined_profiles = dict(nested_surface.profiles)
-    combined_profiles.update(prog.profile_defs)
+    ).surface
 
     export_names: list[str] = []
     for export in prog.exports:
         if export.export_all:
             export_names.extend(
-                name
-                for name in (
-                    list(combined_procedures)
-                    + list(combined_types)
-                    + list(combined_values)
-                    + list(combined_profiles)
-                )
-                if is_public_export_name(name)
+                name for name in bindings.exported_names() if is_public_export_name(name)
             )
         export_names.extend(export.names)
 
     resolved = ImportedSurface(modules=dict(module_surface.modules))
     for name in dict.fromkeys(export_names):
-        if name in combined_procedures:
-            resolved.procedures[name] = combined_procedures[name]
-        elif name in combined_types:
-            resolved.types[name] = combined_types[name]
-        elif name in combined_values:
-            resolved.values[name] = combined_values[name]
-        elif name in combined_profiles:
-            resolved.profiles[name] = combined_profiles[name]
+        if name in bindings.procedures:
+            resolved.procedures[name] = bindings.procedures[name]
+        elif name in bindings.types:
+            resolved.types[name] = bindings.types[name]
+        elif name in bindings.values:
+            resolved.values[name] = bindings.values[name]
+        elif name in bindings.profiles:
+            resolved.profiles[name] = bindings.profiles[name]
     return resolved
 
 

@@ -1,0 +1,6 @@
+[discount_rate: float] = `0.10`
+[tax_rate: float] = `0.20`
+
+> export:
+  discount_rate
+  tax_rate

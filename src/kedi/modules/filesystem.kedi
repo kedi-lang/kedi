@@ -239,3 +239,10 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
 > export:
     filesystem
     readonlyfs
+    read_text_file
+    write_text_file
+    apply_patch
+    path_exists
+    list_directory
+    create_directory
+    get_file_info

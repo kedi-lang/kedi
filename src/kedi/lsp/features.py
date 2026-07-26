@@ -94,6 +94,7 @@ from ..lang.ast import (
     ModelDirectiveStmt,
     OptimizeSpan,
     OutputSegment,
+    PackageMetadata,
     ProcDefStmt,
     ProcedureDef,
     ProfileAdapterEntry,
@@ -161,7 +162,9 @@ from .coordinates import (
 from .module_surface import (
     ImportedSurface,
     ImportedValueInfo,
+    import_resolution_error,
     imported_surface_for_program,
+    load_imported_surface,
     program_path,
     resolved_import_path,
     top_level_value_infos,
@@ -705,8 +708,40 @@ def _missing_import_diagnostics(
 ) -> List[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     for module_import in prog.imports:
+        resolution_error = import_resolution_error(prog, module_import.module)
+        if resolution_error is not None:
+            span = _import_name_span(prog, module_import) or module_import.loc
+            if span is not None:
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(span),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-IMPORT-CORRUPT",
+                        source="kedi",
+                        message=(
+                            f"installed package for import {module_import.module!r} is invalid: "
+                            f"{resolution_error}"
+                        ),
+                    )
+                )
+            continue
         module_path = resolved_import_path(prog, module_import.module)
         if module_path is not None:
+            imported = load_imported_surface(module_path, set(), module_import.module)
+            exported_names = imported.exported_names()
+            for name in dict.fromkeys(module_import.names):
+                if name in exported_names:
+                    continue
+                span = module_import.name_locs[name]
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(span),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-IMPORT-NAME",
+                        source="kedi",
+                        message=f"module '{module_import.module}' does not export '{name}'",
+                    )
+                )
             continue
         span = _import_name_span(prog, module_import) or module_import.loc
         if span is None:
@@ -1508,6 +1543,42 @@ def _resolve_symbol_at(
     for module_import in prog.imports:
         name_span = _import_name_span(prog, module_import)
         if name_span is None or not _position_inside(pos, name_span):
+            for selected_name in module_import.names:
+                selected_span = module_import.name_locs[selected_name]
+                if not _position_inside(pos, selected_span):
+                    continue
+                module_path = resolved_import_path(prog, module_import.module)
+                selected_surface = (
+                    load_imported_surface(module_path, set(), module_import.module)
+                    if module_path is not None
+                    else ImportedSurface()
+                )
+                if selected_name in selected_surface.procedures:
+                    target = selected_surface.procedures[selected_name]
+                    kind = "procedure"
+                    declaration_span = target.loc
+                elif selected_name in selected_surface.types:
+                    target = selected_surface.types[selected_name]
+                    kind = "type"
+                    declaration_span = target.loc
+                elif selected_name in selected_surface.values:
+                    target = selected_surface.values[selected_name]
+                    kind = "imported_value"
+                    declaration_span = target.declaration_span
+                elif selected_name in selected_surface.profiles:
+                    target = selected_surface.profiles[selected_name]
+                    kind = "agent_profile"
+                    declaration_span = target.loc
+                else:
+                    kind = "imported_value"
+                    declaration_span = None
+                return SymbolRef(
+                    kind=kind,
+                    name=selected_name,
+                    declaration_span=declaration_span,
+                    scope_proc=None,
+                    cursor_span=selected_span,
+                )
             continue
         module_info = imported_surface.modules.get(module_import.module)
         return SymbolRef(
@@ -2627,6 +2698,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             visit(stmt)
     for td in prog.type_defs if hasattr(prog, "type_defs") else []:
         visit(td)
+    package = getattr(prog, "package", None)
+    if package is not None:
+        visit(package)
     toplevel_return = prog.toplevel_return if hasattr(prog, "toplevel_return") else None
     if toplevel_return is not None:
         visit(toplevel_return)
@@ -2648,6 +2722,17 @@ def _describe_ast_node(node) -> Optional[str]:
         ann = node.type_annotation or "str"
         default = f" = `{node.default_expr}`" if node.default_expr is not None else ""
         return f"**Type field** `{node.name}: {ann}{default}` — member of a Kedi type."
+    if isinstance(node, PackageMetadata):
+        lines = [f"**Kedi package** `{node.name}`"]
+        if node.version is not None:
+            lines.append(f"Version: `{node.version}`")
+        if node.source is not None:
+            lines.append(f"Source: `{node.source}`; `main.kedi` is the package root module.")
+        if node.python_requirement is not None:
+            lines.append(f"Python: `{node.python_requirement}`")
+        if node.python_dependencies:
+            lines.append("Python dependencies: `" + "`, `".join(node.python_dependencies) + "`")
+        return "\n\n".join(lines)
     if isinstance(node, TemplateBlock):
         line_count = len(node.lines)
         return (

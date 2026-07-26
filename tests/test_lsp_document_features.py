@@ -6,8 +6,9 @@ from pathlib import Path
 
 from lsprotocol import types as lsp
 
+from kedi.lang.ast import ProfileSubagentEntry
 from kedi.lsp import features
-from tests.lsp_helpers import inlay_hints_for_lines, signature_help_at
+from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, signature_help_at
 
 # ---------------------------------------------------------------------
 # Document symbols
@@ -20,6 +21,96 @@ def test_document_symbols_lists_procedures_and_types():
     names = [s.name for s in syms]
     assert "Person" in names
     assert "get" in names
+
+
+def test_package_manifest_hover_describes_installed_package_metadata() -> None:
+    source = (
+        "> package: kedi_http:\n"
+        "  version: 1.0\n"
+        "  source: src/kedi_http\n"
+        "  python: python@3.11-3.14\n"
+        "  python_dependencies:\n"
+        "    httpx>=0.27\n"
+    )
+
+    hover = features.compute_hover(source, "/tmp/package.kedi", lsp.Position(line=0, character=4))
+
+    assert hover is not None
+    assert "Kedi package" in hover.contents.value
+    assert "main.kedi" in hover.contents.value
+    assert "Python dependencies" in hover.contents.value
+
+
+def test_package_manifest_hover_handles_minimal_metadata() -> None:
+    source = "> package: kedi_http:\n  author: Mert\n"
+
+    hover = features.compute_hover(source, "/tmp/package.kedi", lsp.Position(line=0, character=4))
+
+    assert hover is not None
+    assert hover.contents.value == "**Kedi package** `kedi_http`"
+
+
+def test_generic_hover_visits_legacy_top_level_body() -> None:
+    program = features.parse_program("[value: str] = done\n", source_path="/tmp/x.kedi")
+    program.ordered_toplevel.clear()
+
+    target = features._smallest_enclosing(program, lsp.Position(line=0, character=2))
+
+    assert target is not None
+
+
+def test_generic_hover_returns_none_for_an_undocumented_statement() -> None:
+    span = features.Span(
+        start_byte=0,
+        end_byte=3,
+        start_line=1,
+        start_col=1,
+        end_line=1,
+        end_col=4,
+    )
+    program = features.Program(
+        ordered_toplevel=[
+            features.ProfileDefStmt(
+                name="parent",
+                subagent_members=[ProfileSubagentEntry(name="child", loc=span)],
+                loc=span,
+            )
+        ]
+    )
+
+    assert features._generic_hover(program, lsp.Position(line=0, character=1)) is None
+
+
+def test_package_manifest_semantic_tokens_cover_metadata() -> None:
+    source = (
+        "> package: kedi_http:\n"
+        "  version: 1.0\n"
+        "  source: src/kedi_http\n"
+        "  python_dependencies:\n"
+        "    httpx>=0.27\n"
+    )
+
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(source, "/tmp/package.kedi").data
+    )
+    token_types = features.SEMANTIC_TOKEN_TYPES
+
+    assert any(
+        line == 0 and token_type == token_types.index("keyword")
+        for line, _, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 0 and token_type == token_types.index("namespace")
+        for line, _, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and token_type == token_types.index("property")
+        for line, _, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 4 and token_type == token_types.index("string")
+        for line, _, _, token_type, _ in tokens
+    )
 
 
 def test_document_symbols_lists_validation_blocks():
@@ -278,6 +369,73 @@ def test_procedure_parameter_header_resolves_to_its_declaration() -> None:
         (0, 7),
         (1, 11),
     ]
+
+
+def test_selective_import_name_resolves_hover_and_definition(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    module_path = package / "helpers.kedi"
+    module_path.write_text(
+        "@selected(name: str) -> str:\n  = <name>\n> export:\n  selected\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = "> import: package/helpers:\n  selected\n"
+    position = lsp.Position(line=1, character=3)
+
+    hover = features.compute_hover(source, str(source_path), position)
+    definition = features.compute_definition(
+        source,
+        source_path.as_uri(),
+        str(source_path),
+        position,
+    )
+
+    assert hover is not None
+    assert "`@selected(name: str)` → `str`" in hover.contents.value
+    assert definition is not None
+    assert definition.uri == module_path.as_uri()
+    assert definition.range.start.line == 0
+
+
+def test_selective_import_names_resolve_all_export_kinds(tmp_path: Path) -> None:
+    module_path = tmp_path / "helpers.kedi"
+    module_path.write_text(
+        "~Record(name: str)\n"
+        "[count: int] = `1`\n"
+        "> profile: analyst:\n"
+        "    > model: test\n"
+        "> export:\n"
+        "  Record\n"
+        "  count\n"
+        "  analyst\n",
+        encoding="utf-8",
+    )
+    source_path = tmp_path / "main.kedi"
+    source = "> import: helpers:\n  Record\n  count\n  analyst\n  missing\n"
+
+    type_hover = features.compute_hover(source, str(source_path), lsp.Position(line=1, character=3))
+    value_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=2, character=3)
+    )
+    profile_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=3, character=3)
+    )
+    missing_hover = features.compute_hover(
+        source, str(source_path), lsp.Position(line=4, character=3)
+    )
+
+    assert type_hover is not None and "`~Record(name: str)`" in type_hover.contents.value
+    assert (
+        value_hover is not None and "**Imported value** `count: int`" in value_hover.contents.value
+    )
+    assert (
+        profile_hover is not None
+        and "**Agent profile** `> profile: analyst:`" in profile_hover.contents.value
+    )
+    assert (
+        missing_hover is not None and "**Imported value** `missing`" in missing_hover.contents.value
+    )
 
 
 def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:

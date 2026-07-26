@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ast as py_ast
 import re
+from pathlib import Path
 from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
@@ -60,6 +61,7 @@ from ..ast import (
     ModelDirectiveStmt,
     ModuleExport,
     ModuleImport,
+    PackageMetadata,
     OptimizeSpan,
     OutputSegment,
     ProcDefStmt,
@@ -379,11 +381,36 @@ class _Walker:
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "type_def":
-                prog.type_defs.append(self._walk_type_def(child))
+                typedef = self._walk_type_def(child)
+                prog.type_defs.append(typedef)
+                prog.ordered_toplevel.append(typedef)
             elif t == "module_import":
-                prog.imports.append(self._walk_module_import(child))
+                module_import = self._walk_module_import(child)
+                prog.imports.append(module_import)
+                # Imports are compiled eagerly so their public surface is
+                # available to declarations, then republished in this stream
+                # to preserve source-order binding writes at runtime.
+                prog.ordered_toplevel.append(module_import)
             elif t == "module_export":
                 prog.exports.append(self._walk_module_export(child))
+            elif t == "package_directive":
+                if prog.package is not None:
+                    self._error(
+                        child,
+                        "a package manifest can define only one package",
+                        code="K-PACKAGE-DUP",
+                    )
+                else:
+                    if (
+                        self.source_path is not None
+                        and Path(self.source_path).name != "package.kedi"
+                    ):
+                        self._error(
+                            child,
+                            "package metadata is only allowed in package.kedi",
+                            code="K-PACKAGE-PATH",
+                        )
+                    prog.package = self._walk_package_directive(child)
             elif t == "validation_block":
                 assert isinstance(prog, ProgramWithValidation)
                 suite = self._walk_validation_block(child)
@@ -670,11 +697,112 @@ class _Walker:
     # Module directives
     # =================================================================
 
+    def _walk_package_directive(self, node: Node) -> PackageMetadata:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        package = PackageMetadata(
+            name=_identifier_name(self.source, name_node), loc=self._span(node)
+        )
+        body = _field(node, "body")
+        assert body is not None
+
+        scalar_fields = {
+            "author": "author",
+            "contact": "contact",
+            "version": "version",
+            "source": "source",
+            "python": "python_requirement",
+            "license": "license",
+        }
+        for child in _named_children(body):
+            if child.type == "package_python_dependencies":
+                if package.python_dependencies:
+                    self._error(
+                        child,
+                        "package manifest can define only one python_dependencies block",
+                        code="K-PACKAGE-DUP",
+                    )
+                    continue
+                dependencies = _field(child, "body")
+                assert dependencies is not None
+                package.python_dependencies = [
+                    _src_text(self.source, value).strip()
+                    for dependency in _named_children(dependencies)
+                    if dependency.type == "package_dependency"
+                    for value in [_field(dependency, "value")]
+                    if value is not None and _src_text(self.source, value).strip()
+                ]
+                package.field_locs["python_dependencies"] = self._span(child)
+                continue
+            assert child.type == "package_field"
+            field_node = _field(child, "name")
+            value_node = _field(child, "value")
+            assert field_node is not None and value_node is not None
+            field_name = _identifier_name(self.source, field_node)
+            attribute = scalar_fields.get(field_name)
+            if attribute is None:
+                self._error(
+                    field_node,
+                    f"unknown package metadata field {field_name!r}",
+                    code="K-PACKAGE-FIELD",
+                )
+                continue
+            if field_name in package.field_locs:
+                self._error(
+                    field_node,
+                    f"duplicate package metadata field {field_name!r}",
+                    code="K-PACKAGE-DUP",
+                )
+                continue
+            value = _src_text(self.source, value_node).strip()
+            setattr(package, attribute, value)
+            package.field_locs[field_name] = self._span(field_node)
+
+        if package.python_requirement is not None:
+            match = re.fullmatch(
+                r"python@(\d+)\.(\d+)(?:-(\d+)\.(\d+))?", package.python_requirement
+            )
+            if match is None:
+                self._error(
+                    node,
+                    "python must be python@MAJOR.MINOR or python@MAJOR.MINOR-MAJOR.MINOR",
+                    code="K-PACKAGE-PYTHON",
+                )
+            elif match.group(3) is not None:
+                lower = (int(match.group(1)), int(match.group(2)))
+                upper = (int(match.group(3)), int(match.group(4)))
+                if upper < lower:
+                    self._error(
+                        node,
+                        "python version range must end at or after its start",
+                        code="K-PACKAGE-PYTHON",
+                    )
+        return package
+
     def _walk_module_import(self, node: Node) -> ModuleImport:
         module_node = _field(node, "module")
         assert module_node is not None
+        names: list[str] = []
+        name_locs: dict[str, Span] = {}
+        body = _field(node, "body")
+        if body is not None:
+            for child in _named_children(body):
+                name_node = _field(child, "name")
+                assert name_node is not None
+                name = _identifier_name(self.source, name_node)
+                if name in name_locs:
+                    self._error(
+                        name_node,
+                        f"duplicate selective import name {name!r}",
+                        code="K-IMPORT-DUPLICATE",
+                    )
+                    continue
+                names.append(name)
+                name_locs[name] = self._span(name_node)
         return ModuleImport(
-            module=_identifier_name(self.source, module_node),
+            module=_src_text(self.source, module_node),
+            names=names,
+            name_locs=name_locs,
             loc=self._span(node),
         )
 

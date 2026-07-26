@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -703,6 +704,35 @@ def test_diagnostics_accept_module_import_export_syntax(tmp_path):
     assert features.compute_diagnostics(src, str(main)) == []
 
 
+def test_diagnostics_accept_selective_submodule_import(tmp_path):
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "profiles.kedi").write_text(
+        "@get_profile() -> str:\n  = ok\n> export:\n  get_profile\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    src = "> import: package/profiles:\n  get_profile\n\n= <get_profile()>\n"
+    main.write_text(src, encoding="utf-8")
+
+    assert features.compute_diagnostics(src, str(main)) == []
+
+
+def test_diagnostics_report_unexported_selective_import_name(tmp_path):
+    module = tmp_path / "profiles.kedi"
+    module.write_text("[visible: str] = yes\n> export:\n  visible\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    src = "> import: profiles:\n  missing\n\n= ok\n"
+    main.write_text(src, encoding="utf-8")
+
+    diagnostics = features.compute_diagnostics(src, str(main))
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-IMPORT-NAME"
+    assert diagnostics[0].range.start.line == 1
+    assert diagnostics[0].message == "module 'profiles' does not export 'missing'"
+
+
 def test_diagnostics_limit_recovered_parse_errors_to_the_faulting_line() -> None:
     src = (
         "> import: profiles (module fixture)\n> profile: local:\n    > model: openai:gpt-4o-mini\n"
@@ -734,6 +764,25 @@ def test_diagnostics_report_missing_imported_module(tmp_path):
     assert diag.range.start.line == 0
 
 
+def test_diagnostics_report_corrupt_installed_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "kedi-home" / "registry" / "profiles"
+    package.mkdir(parents=True)
+    (package / "package.kedi").write_text("# invalid manifest\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: profiles\n"
+    main.write_text(source, encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    diagnostics = features.compute_diagnostics(source, str(main))
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.code == "K-IMPORT-CORRUPT"
+    assert "invalid package manifest" in diagnostic.message
+
+
 def test_diagnostics_accept_internal_registry_import(tmp_path):
     main = tmp_path / "main.kedi"
     src = "> import: this\n\n= ok\n"
@@ -762,3 +811,13 @@ def test_diagnostics_report_invalid_template_escape() -> None:
     assert len(diagnostics) == 1
     assert diagnostics[0].code == "K-TEXT-ESCAPE"
     assert "Literal '=' must be escaped" in diagnostics[0].message
+
+
+def test_missing_import_diagnostics_ignore_corrupt_import_without_a_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    program = Program()
+    program.imports = [SimpleNamespace(module="broken", loc=None, name_locs={}, names=[])]
+    monkeypatch.setattr(features, "import_resolution_error", lambda *_args: "invalid package")
+
+    assert features._missing_import_diagnostics(program) == []

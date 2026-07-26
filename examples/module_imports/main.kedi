@@ -1,0 +1,15 @@
+> import: catalog/products:
+  Product
+  sample_products
+
+> import: services/pricing:
+  inventory_value
+  checkout_total
+
+> import: reports/formatting
+
+[products: list[Product]] = `sample_products()`
+[subtotal: float] = `inventory_value(products)`
+[total: float] = `checkout_total(products)`
+
+= `render_inventory_report(products, subtotal, total)`

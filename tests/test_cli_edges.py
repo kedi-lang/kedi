@@ -52,6 +52,136 @@ def test_cli_command_runs_inline_source() -> None:
     assert result.output == "done\n"
 
 
+def test_cli_install_installs_local_package(tmp_path: Path, monkeypatch: Any) -> None:
+    source = tmp_path / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= done\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    result = CliRunner().invoke(cli_module.main, ["install", str(manifest)])
+
+    assert result.exit_code == 0
+    assert "Installed kedi_http" in result.output
+    assert (tmp_path / "kedi-home" / "registry" / "kedi_http" / "package.kedi").is_file()
+
+
+def test_cli_install_uses_package_manifest_in_the_current_directory(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    source = tmp_path / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (tmp_path / "package.kedi").write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= done\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    result = CliRunner().invoke(cli_module.main, ["install"])
+
+    assert result.exit_code == 0
+    assert "Installed kedi_http" in result.output
+
+
+def test_cli_add_installs_from_the_mock_registry(tmp_path: Path, monkeypatch: Any) -> None:
+    package = tmp_path / "mock-registry" / "kedi_http"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= done\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+    monkeypatch.setenv("KEDI_REGISTRY_MOCK_ROOT", str(package.parent))
+
+    result = CliRunner().invoke(cli_module.main, ["add", "kedi_http"])
+
+    assert result.exit_code == 0
+    assert "Installed kedi_http" in result.output
+
+
+def test_cli_add_requires_a_package_name() -> None:
+    result = CliRunner().invoke(cli_module.main, ["add"])
+
+    assert result.exit_code == 2
+    assert "Missing argument for 'kedi add'." in result.output
+
+
+def test_cli_package_commands_reject_extra_arguments() -> None:
+    add_result = CliRunner().invoke(cli_module.main, ["add", "kedi_http", "unexpected"])
+    install_result = CliRunner().invoke(cli_module.main, ["install", "one.kedi", "two.kedi"])
+
+    assert add_result.exit_code == 2
+    assert "accepts exactly one package source" in add_result.output
+    assert install_result.exit_code == 2
+    assert "accepts at most one manifest path" in install_result.output
+
+
+def test_cli_package_commands_reject_options_and_render_add_errors(
+    monkeypatch: Any,
+) -> None:
+    option_result = CliRunner().invoke(cli_module.main, ["add", "--unexpected"])
+    monkeypatch.setattr(
+        cli_module, "add_package", lambda _source: (_ for _ in ()).throw(ValueError("bad package"))
+    )
+    error_result = CliRunner().invoke(cli_module.main, ["add", "demo"])
+
+    assert option_result.exit_code == 2
+    assert "Unexpected option" in option_result.output
+    assert error_result.exit_code == 1
+    assert "Error: bad package" in error_result.output
+
+
+def test_cli_package_commands_have_specific_help() -> None:
+    install_result = CliRunner().invoke(cli_module.main, ["install", "--help"])
+    add_result = CliRunner().invoke(cli_module.main, ["add", "--help"])
+
+    assert install_result.exit_code == 0
+    assert "Usage: kedi install [PACKAGE.KEDI]" in install_result.output
+    assert add_result.exit_code == 0
+    assert "Usage: kedi add <PACKAGE-NAME" in add_result.output
+
+
+def test_cli_general_help_uses_click_help() -> None:
+    result = CliRunner().invoke(cli_module.main, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Run a .kedi program" in result.output
+
+
+def test_cli_package_errors_are_rendered_as_click_errors(tmp_path: Path) -> None:
+    result = CliRunner().invoke(cli_module.main, ["install", str(tmp_path / "missing.kedi")])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "Kedi stack trace" not in result.output
+
+
+def test_cli_add_git_source_reports_the_cloned_revision(monkeypatch: Any) -> None:
+    class Installed:
+        name = "kedi_http"
+        root = Path("/tmp/registry/kedi_http")
+        source_revision = "abc123"
+
+    monkeypatch.setattr(cli_module, "add_package", lambda _source: Installed())
+
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["add", "git+https://github.com/kedi-lang/kedi-http.git"],
+    )
+
+    assert result.exit_code == 0
+    assert "Installed kedi_http" in result.output
+    assert "abc123" in result.output
+
+
 def test_cli_acp_command_sets_process_env(monkeypatch: Any) -> None:
     seen: dict[str, str | None] = {}
 

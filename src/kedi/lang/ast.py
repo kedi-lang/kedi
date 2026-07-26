@@ -488,6 +488,8 @@ class TypeDefStmt(Stmt):
 @dataclass
 class ModuleImport:
     module: str
+    names: List[str] = field(default_factory=list)
+    name_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
@@ -499,7 +501,22 @@ class ModuleExport:
 
 
 @dataclass
+class PackageMetadata:
+    name: str
+    author: Optional[str] = None
+    contact: Optional[str] = None
+    version: Optional[str] = None
+    source: Optional[str] = None
+    python_requirement: Optional[str] = None
+    license: Optional[str] = None
+    python_dependencies: List[str] = field(default_factory=list)
+    field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class Program:
+    package: Optional[PackageMetadata] = None
     imports: List[ModuleImport] = field(default_factory=list)
     exports: List[ModuleExport] = field(default_factory=list)
     procedures: List[ProcedureDef] = field(default_factory=list)
@@ -509,7 +526,9 @@ class Program:
     prelude_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     type_defs: List[TypeDef] = field(default_factory=list)
     profile_defs: dict[str, "ProfileDefStmt"] = field(default_factory=dict)
-    ordered_toplevel: List[Union["ProcedureDef", Stmt]] = field(default_factory=list)
+    ordered_toplevel: List[Union["ProcedureDef", "TypeDef", Stmt, "ModuleImport"]] = field(
+        default_factory=list
+    )
     source_text: Optional[str] = field(default=None, repr=False, compare=False)
     source_map: Any = field(default=None, repr=False, compare=False)
     parser_warnings: List[KediDiagnostic] = field(default_factory=list, repr=False, compare=False)

@@ -65,6 +65,25 @@ def test_semantic_tokens_cover_module_directives():
     assert any(line == 4 and token_type == variable_type for line, _, _, token_type, _ in decoded)
 
 
+def test_semantic_tokens_cover_submodule_and_selective_imports():
+    src = "> import: package/helpers:\n  selected\n"
+    decoded = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
+    namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 0
+        and col == 10
+        and length == len("package/helpers")
+        and token_type == namespace_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 1 and col == 2 and length == len("selected") and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+
+
 def test_semantic_tokens_cover_assignment_targets_and_args():
     src = "[x: str] = `args.country`\n= <args>\n"
     tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")

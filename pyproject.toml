@@ -15,6 +15,7 @@ dependencies = [
     "questionary>=2.1.1",
     "pytest>=8.2",
     "pydantic>=2",
+    "packaging>=24",
     "docstring-parser>=0.18",
     "python-dotenv",
     "pydantic-settings",

@@ -193,6 +193,7 @@ class SubagentCoordinator:
         parent_profile: Any,
         parent_budget: DelegationBudget,
         parent_concurrency: DelegationConcurrency,
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> DelegationResult:
         handle = self.start(
             allowed_subagents=allowed_subagents,
@@ -202,6 +203,7 @@ class SubagentCoordinator:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
         return await self.wait(handle.run_id)
 
@@ -215,6 +217,7 @@ class SubagentCoordinator:
         parent_profile: Any,
         parent_budget: DelegationBudget,
         parent_concurrency: DelegationConcurrency,
+        subagent_definitions: Mapping[str, Any] | None = None,
         previous_run_id: str | None = None,
         conversation_id: str | None = None,
         root_run_id_override: str | None = None,
@@ -223,7 +226,11 @@ class SubagentCoordinator:
             raise KediExecutionError(
                 f"Subagent profile {subagent!r} is not allowed in the current profile"
             )
-        definition = self._deps.profile_registry().get(subagent)
+        definition = (
+            subagent_definitions.get(subagent) if subagent_definitions is not None else None
+        )
+        if definition is None:
+            definition = self._deps.profile_registry().get(subagent)
         if definition is None:
             raise KediExecutionError(f"Unknown subagent profile: {subagent!r}")
         if not task.strip():
@@ -345,6 +352,7 @@ class SubagentCoordinator:
         parent_profile: Any,
         parent_budget: DelegationBudget,
         parent_concurrency: DelegationConcurrency,
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> DelegationResult:
         handle = self.start_continuation(
             run_id=run_id,
@@ -354,6 +362,7 @@ class SubagentCoordinator:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
         return await self.wait(handle.run_id)
 
@@ -367,6 +376,7 @@ class SubagentCoordinator:
         parent_profile: Any,
         parent_budget: DelegationBudget,
         parent_concurrency: DelegationConcurrency,
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> SubagentHandle:
         previous = self._continuable_run(
             run_id,
@@ -381,6 +391,7 @@ class SubagentCoordinator:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
             previous_run_id=previous.run_id,
             conversation_id=previous.conversation_id,
             root_run_id_override=previous.root_run_id,

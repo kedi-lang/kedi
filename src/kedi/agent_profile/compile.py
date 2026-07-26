@@ -132,38 +132,47 @@ def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
 
 
 def validate_subagent_graph(registry: dict[str, ProfileDefinition]) -> None:
-    graph: dict[str, tuple[str, ...]] = {}
-    for profile_name, definition in registry.items():
-        children = tuple(member.name for member in definition.members if member.kind == "subagents")
-        graph[profile_name] = children
-        for child_name in children:
-            if child_name not in registry:
-                raise KediExecutionError(
-                    f"Unknown subagent profile {child_name!r} referenced by profile "
-                    f"{profile_name!r}"
-                )
+    visited: set[int] = set()
+    active: list[ProfileDefinition] = []
+    active_ids: set[int] = set()
 
-    visited: set[str] = set()
-    active: list[str] = []
-    active_set: set[str] = set()
+    def child_definition(
+        definition: ProfileDefinition,
+        child_name: str,
+    ) -> ProfileDefinition:
+        bound = definition.subagent_bindings.get(child_name)
+        if bound is not None:
+            return bound
+        child = registry.get(child_name)
+        if child is None:
+            raise KediExecutionError(
+                f"Unknown subagent profile {child_name!r} referenced by profile {definition.name!r}"
+            )
+        return child
 
-    def visit(profile_name: str) -> None:
-        if profile_name in visited:
+    def visit(definition: ProfileDefinition) -> None:
+        identity = id(definition)
+        if identity in visited:
             return
-        if profile_name in active_set:
-            cycle_start = active.index(profile_name)
-            cycle = (*active[cycle_start:], profile_name)
+        if identity in active_ids:
+            cycle_start = next(
+                index
+                for index, active_definition in enumerate(active)
+                if active_definition is definition
+            )
+            cycle = (*[item.name for item in active[cycle_start:]], definition.name)
             raise KediExecutionError(f"Cyclic subagent profile reference: {' -> '.join(cycle)}")
-        active.append(profile_name)
-        active_set.add(profile_name)
-        for child_name in graph[profile_name]:
-            visit(child_name)
+        active.append(definition)
+        active_ids.add(identity)
+        for member in definition.members:
+            if member.kind == "subagents":
+                visit(child_definition(definition, member.name))
         active.pop()
-        active_set.remove(profile_name)
-        visited.add(profile_name)
+        active_ids.remove(identity)
+        visited.add(identity)
 
-    for profile_name in graph:
-        visit(profile_name)
+    for definition in registry.values():
+        visit(definition)
 
 
 def _assert_profile_adapter_selection_is_not_mixed(stmt: ProfileDefStmt) -> None:

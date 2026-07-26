@@ -424,7 +424,13 @@ def eval_profile_definition(
     profile = AgentProfile.empty()
     for member in definition.members:
         profile = profile.merge(_member_to_patch(rt, member, env))
-    return profile.merge(AgentProfile(name=definition.name))
+    return profile.merge(
+        AgentProfile(
+            name=definition.name,
+            tool_bindings=definition.tool_bindings,
+            subagent_bindings=definition.subagent_bindings,
+        )
+    )
 
 
 def eval_use_profile(
