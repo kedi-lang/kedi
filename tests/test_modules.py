@@ -18,8 +18,8 @@ from kedi.lang.ast import ModelDirectiveStmt, OutputSegment, Program, TemplateLi
 from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.module_registry import (
     describe_module_search_paths,
-    internal_module_path,
     installed_module_path,
+    internal_module_path,
     module_search_paths,
     resolve_module_path,
 )
@@ -35,8 +35,8 @@ from kedi.package_registry import (
     add_package,
     install_git_package,
     install_package,
-    kedi_home,
     installed_package_root,
+    kedi_home,
 )
 from tests.mock_adapter import MockAdapter
 

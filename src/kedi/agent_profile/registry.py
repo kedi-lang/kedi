@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.tool_override import ToolSpec
-
     from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
 
 
