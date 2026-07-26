@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast as py_ast
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
 from ...agent_profile.profile import SKILLS_USE_TARGET
@@ -32,17 +34,23 @@ from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    AssignBlockStmt,
+    AssignStmt,
     EffortDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
+    OutputSegment,
     ProcedureDef,
     ProfileDefStmt,
     Program,
+    RawInvokeStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
     SystemDirectiveStmt,
+    TemplateBlock,
     TemplateLine,
+    TypeDef,
     UseDirectiveStmt,
 )
 from .evaluation import evaluate_python_inline, execute_python_block
@@ -59,6 +67,81 @@ if TYPE_CHECKING:
 def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
     if current is not None and current != incoming:
         raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")
+
+
+@dataclass(frozen=True)
+class _LoadedModule:
+    """One executable imported module for one root-program compilation."""
+
+    path: Path
+    program: Program
+    runtime: KediRuntime
+
+
+@dataclass(frozen=True)
+class _StaticExportSurface:
+    """Names provably exported without executing a module."""
+
+    names: frozenset[str]
+    complete: bool
+
+
+class _ModuleLoader:
+    """Compilation-local imported-module cache with deterministic cycle reporting."""
+
+    def __init__(self) -> None:
+        self._programs: dict[Path, Program] = {}
+        self._loaded: dict[Path, _LoadedModule] = {}
+        self._loading: list[Path] = []
+
+    def program_for(
+        self,
+        module_path: Path,
+        load_program: Callable[[Path], Program],
+    ) -> tuple[Path, Program]:
+        path = module_path.resolve()
+        program = self._programs.get(path)
+        if program is None:
+            program = load_program(path)
+            self._programs[path] = program
+        return path, program
+
+    def load(
+        self,
+        module_path: Path,
+        program: Program,
+        compile_module: Callable[[Program], KediRuntime],
+    ) -> _LoadedModule:
+        path = module_path.resolve()
+        loaded = self._loaded.get(path)
+        if loaded is not None:
+            return loaded
+        if path in self._loading:
+            cycle_start = self._loading.index(path)
+            cycle = " -> ".join(str(item) for item in (*self._loading[cycle_start:], path))
+            raise RuntimeError(f"Cyclic Kedi import detected: {cycle}")
+
+        self._loading.append(path)
+        try:
+            runtime = compile_module(program)
+            # Module initialization follows Python import semantics: top-level
+            # code runs once, then every importer shares the loaded runtime.
+            runtime.run_main()
+            loaded = _LoadedModule(path=path, program=program, runtime=runtime)
+            self._loaded[path] = loaded
+            return loaded
+        finally:
+            self._loading.pop()
+
+    def loaded_for(self, module_path: Path) -> _LoadedModule:
+        """Return a previously initialized module for a source-order rebinding."""
+        path = module_path.resolve()
+        try:
+            return self._loaded[path]
+        except KeyError as exc:  # pragma: no cover - defensive compiler invariant.
+            raise RuntimeError(
+                f"Kedi module {path} was not initialized during compilation"
+            ) from exc
 
 
 def compile_program(
@@ -103,6 +186,7 @@ class ProgramCompiler:
         *,
         executor: Executor | None = None,
         module_stack: tuple[Path, ...] = (),
+        module_loader: _ModuleLoader | None = None,
         runtime_globals: dict[str, Any] | None = None,
         engine: Any | None = None,
         default_agent_profile: AgentProfile | None = None,
@@ -114,6 +198,7 @@ class ProgramCompiler:
     ):
         self.adapter = adapter
         self.module_stack = module_stack
+        self.module_loader = module_loader or _ModuleLoader()
         self.engine = engine
         self.default_agent_profile = default_agent_profile
         self.subagent_max_depth = subagent_max_depth
@@ -137,6 +222,7 @@ class ProgramCompiler:
         self.proc_compiler = ProcedureCompiler(self.rt)
         self.executor = StatementExecutor(self.rt)
         self.stmt_compiler = StatementCompiler(self.rt)
+        self._local_profile_registry: dict[str, ProfileDefinition] = {}
 
     def compile(self, prog: Program) -> KediRuntime:
         """Compile program and return configured runtime."""
@@ -146,6 +232,10 @@ class ProgramCompiler:
         self.rt._source_map = prog.source_map
         self.rt._source_text = prog.source_text
         current_path = self._program_path(prog)
+        if prog.package is not None and (
+            current_path is None or current_path.name != "package.kedi"
+        ):
+            raise ValueError("package metadata is only allowed in package.kedi")
         active_stack = self.module_stack
         if current_path is not None:
             if current_path in active_stack:
@@ -161,7 +251,8 @@ class ProgramCompiler:
         if prog.prelude is not None:
             self._setup_prelude(prog.prelude, prog.prelude_loc)
 
-        self.rt._profile_registry.update(build_profile_registry(prog))
+        self._local_profile_registry = build_profile_registry(prog)
+        self.rt._profile_registry.update(self._local_profile_registry)
         validate_subagent_graph(self.rt._profile_registry)
         capture_procedure_profiles(self.rt, prog)
 
@@ -197,22 +288,171 @@ class ProgramCompiler:
                 )
             ):
                 module_path = self._resolve_import_path(prog, module_import)
-                imported_prog = self._load_imported_program(module_path)
-                # Share the importer's globals (immutable CLI ``args``) with the module.
-                imported_rt = ProgramCompiler(
-                    self.adapter,
-                    executor=self.rt.executor,
-                    module_stack=active_stack,
-                    runtime_globals=dict(self.rt._initial_globals_env),
-                    engine=self.engine,
-                    default_agent_profile=self.default_agent_profile,
-                    subagent_max_depth=self.subagent_max_depth,
-                    subagent_max_concurrency=self.subagent_max_concurrency,
-                    subagent_timeout_seconds=self.subagent_timeout_seconds,
-                    subagent_usage_limits=self.subagent_usage_limits,
-                ).compile(imported_prog)
-                imported_rt.run_main()
-                self._merge_exports(module_import, module_path, imported_prog, imported_rt)
+                module_path, imported_prog = self.module_loader.program_for(
+                    module_path,
+                    self._load_imported_program,
+                )
+                self._validate_selected_import_before_execution(
+                    module_import,
+                    module_path,
+                    imported_prog,
+                )
+
+                def compile_module(program: Program) -> KediRuntime:
+                    # Share immutable CLI globals and the loader, while keeping the
+                    # module's runtime state private to its canonical path.
+                    return ProgramCompiler(
+                        self.adapter,
+                        executor=self.rt.executor,
+                        module_stack=active_stack,
+                        module_loader=self.module_loader,
+                        runtime_globals=dict(self.rt._initial_globals_env),
+                        engine=self.engine,
+                        default_agent_profile=self.default_agent_profile,
+                        subagent_max_depth=self.subagent_max_depth,
+                        subagent_max_concurrency=self.subagent_max_concurrency,
+                        subagent_timeout_seconds=self.subagent_timeout_seconds,
+                        subagent_usage_limits=self.subagent_usage_limits,
+                        subagent_state_path=self.subagent_state_path,
+                    ).compile(program)
+
+                loaded = self.module_loader.load(module_path, imported_prog, compile_module)
+                self._merge_exports(module_import, loaded.path, loaded.program, loaded.runtime)
+
+    def _validate_selected_import_before_execution(
+        self,
+        module_import: ModuleImport,
+        module_path: Path,
+        imported_prog: Program,
+    ) -> None:
+        """Reject provably absent selective imports before module initialization."""
+        if not module_import.names:
+            return
+
+        surface = self._static_export_surface(module_path, imported_prog, visiting=set())
+        missing = [name for name in module_import.names if name not in surface.names]
+        if missing and surface.complete:
+            rendered = ", ".join(repr(name) for name in missing)
+            raise ImportError(f"Kedi module {module_import.module!r} does not export {rendered}")
+
+    def _static_export_surface(
+        self,
+        module_path: Path,
+        prog: Program,
+        *,
+        visiting: set[Path],
+    ) -> _StaticExportSurface:
+        """Inventory an export surface without running embedded code.
+
+        Explicit export directives are authoritative even when their value is
+        created dynamically. ``export: *`` additionally receives statically
+        knowable local and imported names. A genuinely dynamic prelude keeps
+        the surface open, preserving the historical runtime fallback only for
+        cases that cannot be proven before initialization.
+        """
+        path = module_path.resolve()
+        if path in visiting:
+            return _StaticExportSurface(frozenset(), complete=False)
+
+        next_visiting = {*visiting, path}
+        local_names, complete = self._static_local_runtime_names(prog)
+        imported_names: set[str] = set()
+        for nested_import in prog.imports:
+            nested_path = self._resolve_import_path(prog, nested_import)
+            nested_path, nested_prog = self.module_loader.program_for(
+                nested_path,
+                self._load_imported_program,
+            )
+            nested_surface = self._static_export_surface(
+                nested_path,
+                nested_prog,
+                visiting=next_visiting,
+            )
+            complete = complete and nested_surface.complete
+            if nested_import.names:
+                imported_names.update(
+                    name for name in nested_import.names if name in nested_surface.names
+                )
+            else:
+                imported_names.update(nested_surface.names)
+
+        names: set[str] = set()
+        for export in prog.exports:
+            names.update(export.names)
+            if export.export_all:
+                names.update(
+                    name for name in (*local_names, *imported_names) if self._is_public_name(name)
+                )
+
+        # A module with only explicit exports is fully known even if its
+        # prelude dynamically creates values: the explicit list is its public
+        # contract. Dynamic names only affect an export-star surface.
+        if not any(export.export_all for export in prog.exports):
+            complete = True
+        return _StaticExportSurface(frozenset(names), complete)
+
+    def _static_local_runtime_names(self, prog: Program) -> tuple[set[str], bool]:
+        names = {proc.name for proc in prog.procedures}
+        names.update(typedef.name for typedef in prog.type_defs)
+        names.update(prog.profile_defs)
+        complete = True
+
+        if prog.prelude is not None:
+            prelude_names, prelude_complete = self._static_python_names(prog.prelude)
+            names.update(prelude_names)
+            complete = prelude_complete
+
+        for stmt in prog.toplevel_body:
+            if isinstance(stmt, (AssignStmt, AssignBlockStmt, RawInvokeStmt)):
+                names.add(stmt.name)
+            elif isinstance(stmt, TemplateBlock):
+                names.update(self._template_output_names(stmt.lines))
+            elif isinstance(stmt, TemplateLine):
+                names.update(self._template_output_names([stmt]))
+        return names, complete
+
+    def _static_python_names(self, code: str) -> tuple[set[str], bool]:
+        try:
+            module = py_ast.parse(code)
+        except SyntaxError:
+            return set(), False
+
+        names: set[str] = set()
+        dynamic = False
+        for stmt in module.body:
+            if isinstance(stmt, (py_ast.FunctionDef, py_ast.AsyncFunctionDef, py_ast.ClassDef)):
+                names.add(stmt.name)
+                continue
+            if isinstance(stmt, py_ast.Import):
+                names.update(alias.asname or alias.name.partition(".")[0] for alias in stmt.names)
+                continue
+            if isinstance(stmt, py_ast.ImportFrom):
+                if any(alias.name == "*" for alias in stmt.names):
+                    dynamic = True
+                else:
+                    names.update(alias.asname or alias.name for alias in stmt.names)
+                continue
+            names.update(
+                node.id
+                for node in py_ast.walk(stmt)
+                if isinstance(node, py_ast.Name) and isinstance(node.ctx, py_ast.Store)
+            )
+            dynamic = dynamic or any(
+                isinstance(node, py_ast.Call)
+                and isinstance(node.func, py_ast.Name)
+                and node.func.id == "exec"
+                for node in py_ast.walk(stmt)
+            )
+        return names, not dynamic
+
+    @staticmethod
+    def _template_output_names(lines: list[TemplateLine]) -> set[str]:
+        return {
+            segment.name
+            for line in lines
+            for segment in line.segments
+            if isinstance(segment, OutputSegment)
+        }
 
     def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
         try:
@@ -243,21 +483,29 @@ class ProgramCompiler:
         module_path: Path,
         imported_prog: Program,
         imported_rt: KediRuntime,
+        *,
+        target_env: dict[str, Any] | None = None,
     ) -> None:
+        from .environment import assert_not_cli_args_identifier
+
         export_names = self._export_names(imported_prog, imported_rt)
         names = self._selected_import_names(module_import, export_names)
         for name in names:
+            assert_not_cli_args_identifier(name)
             kind, value = self._resolve_export(name, imported_rt, module_path)
             self._remove_imported_binding(name)
+            if target_env is not None:
+                target_env.pop(name, None)
             if kind == "procedure":
                 self.rt._procedures[name] = self._wrap_imported_procedure(name, value, imported_rt)
             elif kind == "type":
                 self.rt._type_env_stack[0][name] = value
             elif kind == "profile":
-                self.rt._profile_registry[name] = value
-                self._merge_profile_dependencies(value, imported_rt, seen={name})
+                self.rt._profile_registry[name] = self._bind_imported_profile(value, imported_rt)
             else:
                 self.rt._import_env[name] = value
+                if target_env is not None:
+                    target_env[name] = value
 
     def _selected_import_names(
         self,
@@ -281,47 +529,55 @@ class ProgramCompiler:
         self.rt._profile_registry.pop(name, None)
         self.rt._import_env.pop(name, None)
 
-    def _merge_profile_dependencies(
+    def _bind_imported_profile(
         self,
         profile: AgentProfile | ProfileDefinition,
         imported_rt: KediRuntime,
         *,
-        seen: set[str],
-    ) -> None:
-        self._merge_profile_tool_dependencies(profile, imported_rt)
-        for child_name in self._profile_subagent_names(profile):
-            if child_name in seen:
-                continue
-            child = imported_rt._profile_registry.get(child_name)
-            if child is None:
-                continue
-            seen.add(child_name)
-            self.rt._profile_registry.setdefault(child_name, child)
-            self._merge_profile_dependencies(child, imported_rt, seen=seen)
+        bound_profiles: dict[str, ProfileDefinition] | None = None,
+    ) -> AgentProfile | ProfileDefinition:
+        """Attach imported private dependencies to one profile without exporting them."""
+        if isinstance(profile, AgentProfile):
+            return profile
 
-    def _merge_profile_tool_dependencies(
-        self,
-        profile: AgentProfile | ProfileDefinition,
-        imported_rt: KediRuntime,
-    ) -> None:
+        bound_profiles = {} if bound_profiles is None else bound_profiles
+        existing = bound_profiles.get(profile.name)
+        if existing is not None:
+            return existing
+
+        tool_bindings = dict(profile.tool_bindings)
         for tool_name in self._profile_tool_names(profile):
-            if tool_name in self.rt._procedures or tool_name in self.rt._import_env:
-                continue
-            if tool_name in imported_rt._procedures:
-                self.rt._procedures[tool_name] = self._wrap_imported_procedure(
-                    tool_name,
-                    imported_rt._procedures[tool_name],
+            spec = self._imported_tool_spec(tool_name, imported_rt)
+            if spec is not None:
+                tool_bindings[tool_name] = spec
+
+        # Store the shell before recursively binding children so cycles do not
+        # accidentally publish a caller-owned profile under the same name.
+        bound = replace(profile, tool_bindings=tool_bindings, subagent_bindings={})
+        bound_profiles[profile.name] = bound
+        subagent_bindings: dict[str, ProfileDefinition] = {}
+        for child_name in self._profile_subagent_names(profile):
+            child = imported_rt._profile_registry.get(child_name)
+            if isinstance(child, ProfileDefinition):
+                bound_child = self._bind_imported_profile(
+                    child,
                     imported_rt,
+                    bound_profiles=bound_profiles,
                 )
-                continue
-            for env in (
-                imported_rt._globals_env,
-                imported_rt._prelude_env,
-                imported_rt._import_env,
-            ):
-                if env is not None and tool_name in env:
-                    self.rt._import_env[tool_name] = env[tool_name]
-                    break
+                subagent_bindings[child_name] = cast(ProfileDefinition, bound_child)
+        bound = replace(bound, subagent_bindings=subagent_bindings)
+        bound_profiles[profile.name] = bound
+        return bound
+
+    def _imported_tool_spec(self, tool_name: str, imported_rt: KediRuntime) -> Any | None:
+        from ...agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+        from ...agent_profile.tools import procedure_def_for_tool, python_callable_for_tool
+
+        proc = procedure_def_for_tool(imported_rt, tool_name)
+        if proc is not None:
+            return kedi_procedure_tool_spec(imported_rt, proc)
+        tool_fn = python_callable_for_tool(imported_rt, tool_name)
+        return None if tool_fn is None else python_callable_tool_spec(tool_name, tool_fn)
 
     def _profile_tool_names(self, profile: AgentProfile | ProfileDefinition) -> tuple[str, ...]:
         if isinstance(profile, AgentProfile):
@@ -464,6 +720,22 @@ class ProgramCompiler:
             ):
                 for item in toplevel_sequence:
                     if isinstance(item, ProcedureDef):
+                        if not item.auto_spec and not item.ai_prompt:
+                            self.rt.procedure(self.proc_compiler.compile_procedure(item))
+                        continue
+                    if isinstance(item, TypeDef):
+                        register_type(self.rt, item, self.rt._type_env_stack[0])
+                        continue
+                    if isinstance(item, ModuleImport):
+                        module_path = self._resolve_import_path(prog, item)
+                        loaded = self.module_loader.loaded_for(module_path)
+                        self._merge_exports(
+                            item,
+                            loaded.path,
+                            loaded.program,
+                            loaded.runtime,
+                            target_env=kwargs,
+                        )
                         continue
                     if isinstance(item, AgentDirectiveStmt):
                         _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
@@ -507,6 +779,7 @@ class ProgramCompiler:
                         )
                         continue
                     if isinstance(item, ProfileDefStmt):
+                        profile_registry[item.name] = self._local_profile_registry[item.name]
                         continue
                     if isinstance(item, TemplateLine):
                         raise ValueError(

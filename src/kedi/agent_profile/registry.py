@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
+    from kedi.agent_adapter.tool_override import ToolSpec
+
     from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
 
 
@@ -87,6 +89,10 @@ class ProfileMaxAgentsMember:
 class ProfileDefinition:
     name: str
     description: str | None = None
+    # These bindings are compiler-owned implementation details for imported
+    # profiles. Source-level profile syntax remains name based.
+    tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
+    subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     members: list[
         ProfileAgentMember
         | ProfileAdapterMember

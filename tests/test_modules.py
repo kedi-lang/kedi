@@ -1,24 +1,53 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from kedi import module_registry
+from kedi import module_registry, package_registry
+from kedi.agent_profile import AgentProfile
 from kedi.errors import KediExecutionError
-from kedi.lang import KediParseError, compile_program, parse_program
+from kedi.lang import KediParseError, PackageMetadata, compile_program, parse_program
+from kedi.lang.ast import ModelDirectiveStmt, OutputSegment, Program, TemplateLine
+from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.module_registry import (
     describe_module_search_paths,
     internal_module_path,
+    installed_module_path,
     module_search_paths,
     resolve_module_path,
+)
+from kedi.package_manifest import (
+    load_package_manifest,
+    parse_python_requirement,
+    validate_package_metadata,
+)
+from kedi.package_registry import (
+    CorruptInstalledPackageError,
+    MockPackageRegistryClient,
+    ResolvedPackageSource,
+    add_package,
+    install_git_package,
+    install_package,
+    kedi_home,
+    installed_package_root,
 )
 from tests.mock_adapter import MockAdapter
 
 
-def _compile_file(path: Path, *, adapter=None):
+def _compile_file(path: Path, *, adapter=None, runtime_globals: dict | None = None):
     source = path.read_text(encoding="utf-8")
-    return compile_program(parse_program(source, source_path=str(path.resolve())), adapter=adapter)
+    return compile_program(
+        parse_program(source, source_path=str(path.resolve())),
+        adapter=adapter,
+        runtime_globals=runtime_globals,
+    )
 
 
 def test_parser_reads_import_and_export_directives() -> None:
@@ -108,6 +137,197 @@ def test_selective_import_rejects_name_outside_export_surface(tmp_path: Path) ->
 
     with pytest.raises(KediExecutionError, match="does not export 'private'"):
         _compile_file(main)
+
+
+def test_invalid_selective_import_does_not_execute_module_prelude(tmp_path: Path) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "```\nevents.append('values prelude')\n```\n[public: str] = yes\n> export:\n  public\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: values:\n  absent\n", encoding="utf-8")
+    events: list[str] = []
+
+    with pytest.raises(KediExecutionError, match="does not export 'absent'"):
+        _compile_file(main, runtime_globals={"events": events})
+
+    assert events == []
+
+
+def test_invalid_selective_import_from_star_export_does_not_execute_module_prelude(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "```\nevents.append('values prelude')\n```\n[public: str] = yes\n> export: *\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: values:\n  absent\n", encoding="utf-8")
+    events: list[str] = []
+
+    with pytest.raises(KediExecutionError, match="does not export 'absent'"):
+        _compile_file(main, runtime_globals={"events": events})
+
+    assert events == []
+
+
+def test_star_export_static_surface_includes_reexported_names_without_initializing_modules(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "```\nevents.append('values prelude')\n```\n[public: str] = yes\n> export: *\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "facade.kedi").write_text(
+        "> import: values:\n  public\n> export: *\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: facade:\n  absent\n", encoding="utf-8")
+    events: list[str] = []
+
+    with pytest.raises(KediExecutionError, match="does not export 'absent'"):
+        _compile_file(main, runtime_globals={"events": events})
+
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("main_source", "expected"),
+    [
+        (
+            "[value: str] = local\n> import: values\n= <value>\n",
+            "imported",
+        ),
+        (
+            "> import: values\n[value: str] = local\n= <value>\n",
+            "local",
+        ),
+    ],
+)
+def test_import_and_local_value_collisions_follow_source_order(
+    tmp_path: Path,
+    main_source: str,
+    expected: str,
+) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "[value: str] = imported\n> export:\n  value\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(main_source, encoding="utf-8")
+
+    assert _compile_file(main).run_main() == expected
+
+
+@pytest.mark.parametrize(
+    ("main_source", "expected"),
+    [
+        (
+            "@source() -> str:\n  = local\n> import: values\n= <source()>\n",
+            "imported",
+        ),
+        (
+            "> import: values\n@source() -> str:\n  = local\n= <source()>\n",
+            "local",
+        ),
+    ],
+)
+def test_import_and_local_procedure_collisions_follow_source_order(
+    tmp_path: Path,
+    main_source: str,
+    expected: str,
+) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "@source() -> str:\n  = imported\n> export:\n  source\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(main_source, encoding="utf-8")
+
+    assert _compile_file(main).run_main() == expected
+
+
+@pytest.mark.parametrize(
+    ("main_source", "expects_imported_type"),
+    [
+        (
+            "~Record(value: str)\n> import: values\n= done\n",
+            True,
+        ),
+        (
+            "> import: values\n~Record(value: str)\n= done\n",
+            False,
+        ),
+    ],
+)
+def test_import_and_local_type_collisions_follow_source_order(
+    tmp_path: Path,
+    main_source: str,
+    expects_imported_type: bool,
+) -> None:
+    (tmp_path / "values.kedi").write_text(
+        "~Record(value: str, source: str)\n> export:\n  Record\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text(main_source, encoding="utf-8")
+
+    runtime = _compile_file(main)
+    runtime.run_main()
+    result_type = runtime._type_env_stack[0]["Record"]
+
+    assert ("source" in result_type.model_fields) is expects_imported_type
+
+
+def test_compiler_rejects_package_metadata_without_a_package_manifest_path() -> None:
+    program = parse_program("> package: demo:\n  source: src/demo\n")
+
+    with pytest.raises(ValueError, match="only allowed in package.kedi"):
+        compile_program(program)
+
+
+def test_repeated_import_runs_module_prelude_once_per_root_compilation(tmp_path: Path) -> None:
+    (tmp_path / "common.kedi").write_text(
+        "```\nevents.append('common')\n```\n[value: str] = ready\n> export:\n  value\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: common\n> import: common\n= <value>\n", encoding="utf-8")
+    events: list[str] = []
+
+    runtime = _compile_file(main, runtime_globals={"events": events})
+
+    assert runtime.run_main() == "ready"
+    assert events == ["common"]
+
+
+def test_diamond_import_runs_shared_module_prelude_once(tmp_path: Path) -> None:
+    (tmp_path / "common.kedi").write_text(
+        "```\n"
+        "events.append('common')\n"
+        "```\n"
+        "[common_value: str] = shared\n"
+        "> export:\n"
+        "  common_value\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "left.kedi").write_text(
+        "> import: common\n> export:\n  common_value\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "right.kedi").write_text(
+        "> import: common\n> export:\n  common_value\n",
+        encoding="utf-8",
+    )
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: left\n> import: right\n= <common_value>\n", encoding="utf-8")
+    events: list[str] = []
+
+    runtime = _compile_file(main, runtime_globals={"events": events})
+
+    assert runtime.run_main() == "shared"
+    assert events == ["common"]
 
 
 def test_submodule_imports_resolve_relative_to_importing_module(tmp_path: Path) -> None:
@@ -630,3 +850,1026 @@ def test_module_registry_builds_relative_submodule_path(tmp_path: Path) -> None:
         module_search_paths("package/service", source_path=source)[0]
         == (tmp_path / "package" / "service.kedi").resolve()
     )
+
+
+def test_package_manifest_reads_fixed_python_version_and_dependencies(tmp_path: Path) -> None:
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n"
+        "  version: 1.0\n"
+        "  source: src/kedi_http\n"
+        "  python: python@3.11\n"
+        "  python_dependencies:\n"
+        "    httpx>=0.27\n"
+        "    pydantic>=2\n",
+        encoding="utf-8",
+    )
+
+    metadata = load_package_manifest(manifest)
+
+    assert metadata.name == "kedi_http"
+    assert metadata.python_requirement == "python@3.11"
+    assert metadata.python_dependencies == ["httpx>=0.27", "pydantic>=2"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("version", "not a version", "invalid package version"),
+        ("python_dependencies", "not a valid requirement @", "invalid Python dependency"),
+    ],
+)
+def test_package_manifest_rejects_semantically_invalid_metadata(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    if field == "python_dependencies":
+        field_source = f"  {field}:\n    {value}\n"
+    else:
+        field_source = f"  {field}: {value}\n"
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n" + field_source,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_package_manifest(manifest)
+
+
+def test_install_package_rejects_python_incompatible_manifest(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (source / "main.kedi").write_text("= done\n", encoding="utf-8")
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n  python: python@3.99\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="requires Python"):
+        install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+def test_parser_rejects_duplicate_selective_import_names() -> None:
+    source = "> import: profiles:\n  get_profile\n  get_profile\n"
+
+    with pytest.raises(KediParseError, match="duplicate selective import name"):
+        parse_program(source, source_path="/tmp/main.kedi")
+
+
+def test_package_directive_is_only_legal_in_package_manifest() -> None:
+    source = "> package: demo:\n  source: src/demo\n"
+
+    with pytest.raises(KediParseError, match="only allowed in package.kedi"):
+        parse_program(source, source_path="/tmp/main.kedi")
+
+    assert parse_program(source, source_path="/tmp/package.kedi").package is not None
+
+
+def test_package_manifest_rejects_type_definitions(tmp_path: Path) -> None:
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        "> package: demo:\n  source: src/demo\n~Config(name: str)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="package metadata only"):
+        load_package_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("filename", "source", "message"),
+    [
+        ("manifest.kedi", "> package: demo:\n", "must be named"),
+        ("package.kedi", "# metadata is required\n", "does not define a package"),
+    ],
+)
+def test_package_manifest_requires_its_name_and_package_directive(
+    tmp_path: Path, filename: str, source: str, message: str
+) -> None:
+    manifest = tmp_path / filename
+    manifest.write_text(source, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_package_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            "> package: first:\n  version: 1.0\n> package: second:\n  version: 1.0\n",
+            "only one package",
+        ),
+        (
+            "> package: demo:\n  unknown: value\n",
+            "unknown package metadata field",
+        ),
+        (
+            "> package: demo:\n  version: 1.0\n  version: 2.0\n",
+            "duplicate package metadata field",
+        ),
+        (
+            "> package: demo:\n  python_dependencies:\n    httpx\n  python_dependencies:\n    pydantic\n",
+            "only one python_dependencies",
+        ),
+    ],
+)
+def test_package_parser_rejects_invalid_manifest_metadata(source: str, message: str) -> None:
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source, source_path="/tmp/package.kedi")
+
+
+@pytest.mark.parametrize("value", ["python@3", ">=3.11", "python@3.14-3.11"])
+def test_package_manifest_rejects_invalid_python_requirements(tmp_path: Path, value: str) -> None:
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text(
+        f"> package: kedi_http:\n  source: src/kedi_http\n  python: {value}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(KediParseError, match="python"):
+        load_package_manifest(manifest)
+
+
+def test_installed_package_resolves_root_and_submodule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package-source"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text(
+        "@root() -> str:\n  = root\n> export:\n  root\n",
+        encoding="utf-8",
+    )
+    (source / "client.kedi").write_text(
+        "@request() -> str:\n  = client\n> export:\n  request\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+    install_package(package / "package.kedi")
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: kedi_http\n> import: kedi_http/client\n= <root()>:<request()>\n",
+        encoding="utf-8",
+    )
+
+    assert _compile_file(main).run_main() == "root:client"
+
+
+def test_package_registry_defaults_to_the_user_kedi_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KEDI_HOME", raising=False)
+
+    assert kedi_home() == Path.home() / ".kedi"
+    assert installed_package_root("kedi_http") == Path.home() / ".kedi" / "registry" / "kedi_http"
+
+
+def test_installed_module_path_rejects_invalid_or_incomplete_package_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "kedi-home" / "registry"
+    invalid = registry / "invalid"
+    incomplete = registry / "incomplete"
+    invalid.mkdir(parents=True)
+    incomplete.mkdir(parents=True)
+    (invalid / "package.kedi").write_text("# no package\n", encoding="utf-8")
+    (incomplete / "package.kedi").write_text(
+        "> package: incomplete:\n  version: 1.0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    with pytest.raises(CorruptInstalledPackageError, match="invalid package manifest"):
+        installed_module_path("invalid")
+    with pytest.raises(CorruptInstalledPackageError, match="unsafe source"):
+        installed_module_path("incomplete")
+
+
+def test_corrupt_installed_package_does_not_shadow_a_local_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry_package = tmp_path / "kedi-home" / "registry" / "profiles"
+    registry_package.mkdir(parents=True)
+    (registry_package / "package.kedi").write_text("# corrupt\n", encoding="utf-8")
+    local = tmp_path / "profiles.kedi"
+    local.write_text("= local\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: profiles\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    assert resolve_module_path("profiles", source_path=main) == local.resolve()
+
+
+@pytest.mark.parametrize(
+    ("source_value", "setup_source", "message"),
+    [
+        (None, False, "requires a source"),
+        ("../outside", False, "relative path"),
+        ("/outside", False, "relative path"),
+        ("src/kedi_http", False, "source directory not found"),
+        ("src/kedi_http", True, "must contain main.kedi"),
+    ],
+)
+def test_install_package_rejects_invalid_source_layout(
+    tmp_path: Path,
+    source_value: str | None,
+    setup_source: bool,
+    message: str,
+) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    metadata = "> package: kedi_http:\n  version: 1.0\n"
+    if source_value is not None:
+        metadata += f"  source: {source_value}\n"
+    (package / "package.kedi").write_text(metadata, encoding="utf-8")
+    if setup_source:
+        (package / "src" / "kedi_http").mkdir(parents=True)
+
+    with pytest.raises((ValueError, FileNotFoundError), match=message):
+        install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+def test_install_package_rejects_sparse_checkout_pattern_in_source(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  source: src/*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="sparse-checkout pattern"):
+        install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+def test_install_package_replaces_an_existing_package(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    main = source / "main.kedi"
+    main.write_text("= first\n", encoding="utf-8")
+    registry = tmp_path / "registry"
+    install_package(manifest, registry_root=registry)
+
+    main.write_text("= second\n", encoding="utf-8")
+    installed = install_package(manifest, registry_root=registry)
+
+    assert (installed.source / "main.kedi").read_text(encoding="utf-8") == "= second\n"
+    assert not list(registry.glob(".kedi_http.backup-*"))
+
+
+def test_install_package_restores_previous_package_when_atomic_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    main = source / "main.kedi"
+    main.write_text("= first\n", encoding="utf-8")
+    registry = tmp_path / "registry"
+    install_package(manifest, registry_root=registry)
+    main.write_text("= second\n", encoding="utf-8")
+
+    original_replace = Path.replace
+
+    def fail_staging_replace(path: Path, target: Path) -> Path:
+        if ".kedi_http.staging-" in path.name:
+            raise OSError("replace failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_staging_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        install_package(manifest, registry_root=registry)
+
+    restored = registry / "kedi_http" / "src" / "kedi_http" / "main.kedi"
+    assert restored.read_text(encoding="utf-8") == "= first\n"
+    assert not list(registry.glob(".kedi_http.staging-*"))
+
+
+def test_install_package_keeps_successful_swap_when_backup_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    main = source / "main.kedi"
+    main.write_text("= first\n", encoding="utf-8")
+    registry = tmp_path / "registry"
+    install_package(manifest, registry_root=registry)
+    main.write_text("= second\n", encoding="utf-8")
+
+    original_rmtree = package_registry.shutil.rmtree
+
+    def fail_backup_cleanup(path: Path) -> None:
+        if ".kedi_http.backup-" in path.name:
+            raise OSError("backup cleanup failed")
+        original_rmtree(path)
+
+    monkeypatch.setattr(package_registry.shutil, "rmtree", fail_backup_cleanup)
+
+    installed = install_package(manifest, registry_root=registry)
+
+    installed_main = installed.source / "main.kedi"
+    assert installed_main.read_text(encoding="utf-8") == "= second\n"
+    assert list(registry.glob(".kedi_http.backup-*"))
+
+
+def test_add_package_installs_from_mock_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "mock-registry" / "kedi_http"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  version: 1.0\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= installed\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    installed = add_package("kedi_http", client=MockPackageRegistryClient(package.parent))
+
+    assert (
+        installed.source == tmp_path / "kedi-home" / "registry" / "kedi_http" / "src" / "kedi_http"
+    )
+
+
+def test_add_package_requires_a_configured_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KEDI_REGISTRY_MOCK_ROOT", raising=False)
+
+    with pytest.raises(RuntimeError, match="public Kedi package registry"):
+        add_package("kedi_http")
+
+
+def test_mock_registry_rejects_missing_package(tmp_path: Path) -> None:
+    with pytest.raises(ModuleNotFoundError, match="not available"):
+        MockPackageRegistryClient(tmp_path).package_root("kedi_http")
+
+
+def test_add_package_rejects_registry_name_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "mock-registry" / "requested"
+    source = package / "src" / "different"
+    source.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: different:\n  source: src/different\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= installed\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    with pytest.raises(ValueError, match="name mismatch"):
+        add_package("requested", client=MockPackageRegistryClient(package.parent))
+
+    assert not (tmp_path / "kedi-home" / "registry" / "different").exists()
+
+
+@pytest.mark.parametrize("link_kind", ["source", "file", "directory"])
+def test_install_package_rejects_source_tree_symlinks(tmp_path: Path, link_kind: str) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "main.kedi").write_text("= outside\n", encoding="utf-8")
+    (outside / "secret.kedi").write_text("= secret\n", encoding="utf-8")
+    (package / "package.kedi").parent.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n", encoding="utf-8"
+    )
+
+    if link_kind == "source":
+        source.parent.mkdir(parents=True)
+        source.symlink_to(outside, target_is_directory=True)
+    else:
+        source.mkdir(parents=True)
+        (source / "main.kedi").write_text("= safe\n", encoding="utf-8")
+        if link_kind == "file":
+            (source / "secret.kedi").symlink_to(outside / "secret.kedi")
+        else:
+            (source / "nested").symlink_to(outside, target_is_directory=True)
+
+    registry = tmp_path / "registry"
+    with pytest.raises(ValueError, match="symlink"):
+        install_package(package / "package.kedi", registry_root=registry)
+    assert not (registry / "kedi_http").exists()
+
+
+def test_install_package_rejects_special_files_in_source_tree(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    (package / "package.kedi").write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n", encoding="utf-8"
+    )
+    (source / "main.kedi").write_text("= safe\n", encoding="utf-8")
+    os.mkfifo(source / "unexpected.pipe")
+
+    with pytest.raises(ValueError, match="regular files and directories"):
+        install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+def test_install_package_rejects_package_root_source_cleanly(tmp_path: Path) -> None:
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "package.kedi").write_text("> package: kedi_http:\n  source: .\n", encoding="utf-8")
+    (package / "main.kedi").write_text("= safe\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="relative path"):
+        install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+def test_mock_registry_rejects_path_traversal_before_lookup(tmp_path: Path) -> None:
+    outside = tmp_path / "outside" / "evil"
+    outside.mkdir(parents=True)
+    (outside / "package.kedi").write_text("> package: evil:\n  source: src\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="package names"):
+        MockPackageRegistryClient(tmp_path / "mock-registry").package_root("../outside/evil")
+
+
+def test_installed_module_path_rejects_tampered_manifest_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "kedi-home" / "registry"
+    package = registry / "evil"
+    outside = tmp_path / "outside"
+    package.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "main.kedi").write_text("= escaped\n", encoding="utf-8")
+    (package / "package.kedi").write_text(
+        "> package: evil:\n  source: ../../outside\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    with pytest.raises(CorruptInstalledPackageError, match="unsafe source"):
+        installed_module_path("evil")
+
+
+def test_installed_module_path_rejects_tampered_symlinked_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "kedi-home" / "registry"
+    package = registry / "evil"
+    source = package / "src"
+    outside = tmp_path / "outside.kedi"
+    source.mkdir(parents=True)
+    outside.write_text("= escaped\n", encoding="utf-8")
+    (package / "package.kedi").write_text("> package: evil:\n  source: src\n", encoding="utf-8")
+    (source / "main.kedi").symlink_to(outside)
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    with pytest.raises(CorruptInstalledPackageError, match="symlink"):
+        installed_module_path("evil")
+
+
+def test_concurrent_package_replacement_is_serialized(tmp_path: Path) -> None:
+    registry = tmp_path / "registry"
+    manifests: list[Path] = []
+    for index in range(12):
+        package = tmp_path / f"package-{index}"
+        source = package / "src" / "kedi_http"
+        source.mkdir(parents=True)
+        manifest = package / "package.kedi"
+        manifest.write_text("> package: kedi_http:\n  source: src/kedi_http\n", encoding="utf-8")
+        (source / "main.kedi").write_text(f"= {index}\n", encoding="utf-8")
+        manifests.append(manifest)
+
+    with ThreadPoolExecutor(max_workers=len(manifests)) as executor:
+        installed = list(
+            executor.map(
+                lambda manifest: install_package(manifest, registry_root=registry), manifests
+            )
+        )
+
+    assert all(item.root == registry / "kedi_http" for item in installed)
+    assert (registry / "kedi_http" / "src" / "kedi_http" / "main.kedi").is_file()
+    assert not list(registry.glob(".kedi_http.staging-*"))
+
+
+def test_installed_module_path_caches_manifest_until_an_install_invalidates_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text("> package: kedi_http:\n  source: src/kedi_http\n", encoding="utf-8")
+    (source / "main.kedi").write_text("= first\n", encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+    install_package(manifest)
+
+    module_registry.clear_installed_module_cache()
+    # ``installed_module_path`` imports this dependency lazily, so patch its source module.
+    from kedi import package_manifest
+
+    calls = 0
+    real_load = package_manifest.load_package_manifest
+
+    def count_load(path: Path):
+        nonlocal calls
+        calls += 1
+        return real_load(path)
+
+    monkeypatch.setattr(package_manifest, "load_package_manifest", count_load)
+    assert installed_module_path("kedi_http") is not None
+    assert installed_module_path("kedi_http") is not None
+    assert calls == 1
+
+    (source / "main.kedi").write_text("= second\n", encoding="utf-8")
+    install_package(manifest)
+    assert installed_module_path("kedi_http").read_text(encoding="utf-8") == "= second\n"
+
+
+def test_relative_kedi_home_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("KEDI_HOME", "relative-kedi-home")
+
+    with pytest.raises(ValueError, match="KEDI_HOME must be an absolute path"):
+        kedi_home()
+
+
+def test_add_git_package_clones_then_installs_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from subprocess import CompletedProcess
+
+    sparse_patterns: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> CompletedProcess[str]:
+        if args[1] == "clone":
+            assert "--filter=blob:none" in args
+            assert "--no-checkout" in args
+            assert "--no-tags" in args
+            checkout = Path(args[-1])
+            source = checkout / "src" / "kedi_http"
+            source.mkdir(parents=True)
+            (checkout / "package.kedi").write_text(
+                "> package: kedi_http:\n  source: src/kedi_http\n",
+                encoding="utf-8",
+            )
+            (source / "main.kedi").write_text("= ok\n", encoding="utf-8")
+            return CompletedProcess(args, 0, stdout="", stderr="")
+        if args[3:5] == ["sparse-checkout", "set"]:
+            sparse_patterns.append(args[6:])
+            return CompletedProcess(args, 0, stdout="", stderr="")
+        if args[3:] == ["checkout", "--quiet"]:
+            return CompletedProcess(args, 0, stdout="", stderr="")
+        assert args[3:] == ["rev-parse", "HEAD"]
+        return CompletedProcess(args, 0, stdout="abc123\n", stderr="")
+
+    monkeypatch.setattr("kedi.package_registry.subprocess.run", fake_run)
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    installed = add_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+    assert installed.name == "kedi_http"
+    assert installed.source_revision == "abc123"
+    assert (installed.source / "main.kedi").is_file()
+    assert sparse_patterns == [
+        ["/package.kedi"],
+        ["/package.kedi", "/src/kedi_http/**"],
+    ]
+    receipt = json.loads((installed.root / ".kedi-install.json").read_text(encoding="utf-8"))
+    assert receipt == {
+        "format_version": 1,
+        "install_source_kind": "git",
+        "manifest_sha256": hashlib.sha256(
+            (installed.root / "package.kedi").read_bytes()
+        ).hexdigest(),
+        "package": "kedi_http",
+        "source": "src/kedi_http",
+        "source_revision": "abc123",
+        "source_url": "https://github.com/kedi-lang/kedi-http.git",
+    }
+
+
+def test_install_git_package_rejects_a_symlinked_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from subprocess import CompletedProcess
+
+    outside_manifest = tmp_path / "outside-package.kedi"
+    outside_manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+
+    def fake_run(args: list[str], **_kwargs: object) -> CompletedProcess[str]:
+        if args[1] == "clone":
+            checkout = Path(args[-1])
+            checkout.mkdir()
+            (checkout / "package.kedi").symlink_to(outside_manifest)
+        return CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(package_registry.subprocess, "run", fake_run)
+
+    with pytest.raises(ValueError, match="package manifest must not be a symlink"):
+        install_git_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "git+ssh://github.com/kedi-lang/package.git",
+        "https://example.com/x",
+        "git+https://token@example.com/package.git",
+        "git+https://example.com/package.git?token=secret",
+        "git+https://gitlab.com/kedi-lang/package.git",
+    ],
+)
+def test_install_git_package_rejects_non_https_sources(source: str) -> None:
+    with pytest.raises(ValueError, match="Git package sources"):
+        install_git_package(source)
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "message"),
+    [
+        ("", "clone failed", "clone failed"),
+        ("clone failed", "", "clone failed"),
+        ("", "", "unknown git error"),
+    ],
+)
+def test_install_git_package_reports_git_errors(
+    monkeypatch: pytest.MonkeyPatch, stdout: str, stderr: str, message: str
+) -> None:
+    from subprocess import CompletedProcess
+
+    monkeypatch.setattr(
+        package_registry.subprocess,
+        "run",
+        lambda args, **_kwargs: CompletedProcess(args, 1, stdout=stdout, stderr=stderr),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        install_git_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+
+def test_install_git_package_redacts_credentials_from_git_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subprocess import CompletedProcess
+
+    monkeypatch.setattr(
+        package_registry.subprocess,
+        "run",
+        lambda args, **_kwargs: CompletedProcess(
+            args,
+            1,
+            stdout="",
+            stderr="fatal: https://token:secret@example.com/private.git failed",
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        install_git_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+    assert "token" not in str(exc_info.value)
+    assert "secret" not in str(exc_info.value)
+    assert "https://<redacted>@example.com" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("limit_name", "limit", "files"),
+    [
+        ("MAX_PACKAGE_SOURCE_FILES", 1, {"extra.kedi": "= extra\n"}),
+        ("MAX_PACKAGE_SOURCE_BYTES", 1, {}),
+    ],
+)
+def test_install_package_enforces_source_resource_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    limit_name: str,
+    limit: int,
+    files: dict[str, str],
+) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "kedi_http"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text(
+        "> package: kedi_http:\n  source: src/kedi_http\n",
+        encoding="utf-8",
+    )
+    (source / "main.kedi").write_text("= main\n", encoding="utf-8")
+    for name, content in files.items():
+        (source / name).write_text(content, encoding="utf-8")
+    monkeypatch.setattr(package_registry, limit_name, limit)
+
+    with pytest.raises(ValueError, match="exceeds the maximum"):
+        install_package(manifest, registry_root=tmp_path / "registry")
+
+    assert not (tmp_path / "registry" / "kedi_http").exists()
+
+
+def test_install_git_package_requires_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_git(*_args: object, **_kwargs: object) -> None:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(package_registry.subprocess, "run", missing_git)
+
+    with pytest.raises(ModuleNotFoundError, match="Git is required"):
+        install_git_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+
+def test_install_git_package_times_out_cleanly(monkeypatch: pytest.MonkeyPatch) -> None:
+    def timed_out(*_args: object, **_kwargs: object) -> None:
+        raise package_registry.subprocess.TimeoutExpired("git clone", 60)
+
+    monkeypatch.setattr(package_registry.subprocess, "run", timed_out)
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        install_git_package("git+https://github.com/kedi-lang/kedi-http.git")
+
+
+def test_package_manifest_validation_covers_invalid_ranges_and_compatible_runtime() -> None:
+    with pytest.raises(ValueError, match="package python must"):
+        parse_python_requirement("python@3")
+    with pytest.raises(ValueError, match="end at or after"):
+        parse_python_requirement("python@3.14-3.11")
+
+    validate_package_metadata(
+        PackageMetadata(name="demo", source="src/demo", python_requirement="python@3.11-3.14"),
+        enforce_python_compatibility=True,
+        python_version=(3, 12),
+    )
+
+
+def test_installed_module_path_rejects_corrupt_package_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = tmp_path / "kedi-home" / "registry"
+    registry.mkdir(parents=True)
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    (registry / "missing").mkdir()
+    with pytest.raises(CorruptInstalledPackageError, match="missing package.kedi"):
+        installed_module_path("missing")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (registry / "linked").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(CorruptInstalledPackageError, match="must not be a symlink"):
+        installed_module_path("linked")
+
+    manifest_link = registry / "manifest_link"
+    manifest_link.mkdir()
+    outside_manifest = tmp_path / "outside-package.kedi"
+    outside_manifest.write_text("> package: manifest_link:\n  source: src\n", encoding="utf-8")
+    (manifest_link / "package.kedi").symlink_to(outside_manifest)
+    with pytest.raises(CorruptInstalledPackageError, match="symlinked package manifest"):
+        installed_module_path("manifest_link")
+
+    mismatch = registry / "mismatch"
+    mismatch.mkdir()
+    (mismatch / "package.kedi").write_text("> package: another:\n  source: src\n", encoding="utf-8")
+    with pytest.raises(CorruptInstalledPackageError, match="does not match"):
+        installed_module_path("mismatch")
+
+
+def test_installed_module_path_rejects_a_registry_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setattr(
+        package_registry, "installed_package_root", lambda *_args, **_kwargs: outside
+    )
+
+    with pytest.raises(CorruptInstalledPackageError, match="escapes the package registry"):
+        module_registry._installed_module_path_cached.__wrapped__("evil", tmp_path / "registry")
+
+
+def test_package_registry_defensive_helpers_reject_invalid_files_and_paths(tmp_path: Path) -> None:
+    source_path = tmp_path / "source"
+    source_path.mkdir()
+    source = ResolvedPackageSource(tmp_path, Path("source"), source_path)
+
+    with pytest.raises(CorruptInstalledPackageError, match="escapes"):
+        package_registry.resolve_installed_package_file(source, Path("../outside.kedi"))
+    assert package_registry.resolve_installed_package_file(source, Path("missing.kedi")) is None
+
+    manifest = tmp_path / "package.kedi"
+    manifest.write_text("> package: demo:\n  source: src/demo\n", encoding="utf-8")
+    symlink = tmp_path / "linked-package.kedi"
+    symlink.symlink_to(manifest)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        package_registry.prepare_package(symlink)
+
+    with pytest.raises(ValueError, match="Unknown Kedi package installation source kind"):
+        install_package(manifest, registry_root=tmp_path / "registry", source_kind="remote")
+
+    with pytest.raises(ValueError, match="not a directory"):
+        package_registry._copy_source_tree(manifest, tmp_path / "destination")
+    with pytest.raises(FileNotFoundError, match="not found"):
+        package_registry._require_regular_file(
+            tmp_path / "absent", "test file", error_type=ValueError
+        )
+    with pytest.raises(ValueError, match="regular file"):
+        package_registry._require_regular_file(source_path, "test directory", error_type=ValueError)
+    with pytest.raises(ValueError, match="remain inside"):
+        package_registry._require_contained(tmp_path / "outside", source_path, "test path")
+    with pytest.raises(ValueError, match="package directory not found"):
+        package_registry._validated_package_root(tmp_path / "absent-root", error_type=ValueError)
+
+
+def test_package_registry_copy_and_cleanup_defenses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (source / "main.kedi").write_text("= main\n", encoding="utf-8")
+    (nested / "extra.kedi").write_text("= extra\n", encoding="utf-8")
+    copied = tmp_path / "copied"
+    package_registry._copy_source_tree(source, copied)
+    assert (copied / "nested" / "extra.kedi").is_file()
+
+    file_source = source / "main.kedi"
+    original_fstat = package_registry.os.fstat
+    monkeypatch.setattr(
+        package_registry.os,
+        "fstat",
+        lambda descriptor: SimpleNamespace(st_mode=stat.S_IFIFO, st_size=0),
+    )
+    with pytest.raises(ValueError, match="not a regular file"):
+        package_registry._copy_regular_file(file_source, tmp_path / "bad-copy.kedi")
+    monkeypatch.setattr(package_registry.os, "fstat", original_fstat)
+
+    removable = tmp_path / "removable.kedi"
+    removable.write_text("= removable\n", encoding="utf-8")
+    with monkeypatch.context() as context:
+        context.setattr(
+            Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no"))
+        )
+        with pytest.raises(OSError, match="no"):
+            package_registry._remove_tree(removable)
+        package_registry._remove_tree(removable, ignore_errors=True)
+    removable.unlink()
+
+    removable_directory = tmp_path / "removable-directory"
+    removable_directory.mkdir()
+    with monkeypatch.context() as context:
+        context.setattr(
+            package_registry.shutil,
+            "rmtree",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no")),
+        )
+        with pytest.raises(OSError, match="no"):
+            package_registry._remove_tree(removable_directory)
+        package_registry._remove_tree(removable_directory, ignore_errors=True)
+
+
+def test_package_registry_handles_uncreated_staging_and_truncated_git_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "package"
+    source = package / "src" / "demo"
+    source.mkdir(parents=True)
+    manifest = package / "package.kedi"
+    manifest.write_text("> package: demo:\n  source: src/demo\n", encoding="utf-8")
+    (source / "main.kedi").write_text("= ok\n", encoding="utf-8")
+
+    original_mkdir = Path.mkdir
+
+    def reject_staging(path: Path, *args: object, **kwargs: object) -> None:
+        if path.name.startswith(".demo.staging-"):
+            raise OSError("staging unavailable")
+        original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", reject_staging)
+    with pytest.raises(OSError, match="staging unavailable"):
+        install_package(manifest, registry_root=tmp_path / "registry")
+
+    monkeypatch.setattr(
+        package_registry.subprocess,
+        "run",
+        lambda args, **_kwargs: package_registry.subprocess.CompletedProcess(
+            args, 1, stdout="", stderr="x" * (package_registry.MAX_GIT_ERROR_CHARS + 1)
+        ),
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        install_git_package("git+https://github.com/kedi-lang/demo.git")
+    assert len(str(exc_info.value)) <= package_registry.MAX_GIT_ERROR_CHARS + 120
+
+
+def test_static_import_analysis_covers_dynamic_exports_and_profile_helpers(tmp_path: Path) -> None:
+    compiler = ProgramCompiler(None)
+    loop = tmp_path / "loop.kedi"
+    loop.write_text("= done\n", encoding="utf-8")
+    loop_program = parse_program(loop.read_text(encoding="utf-8"), source_path=str(loop))
+    with pytest.raises(RuntimeError, match="Cyclic Kedi import"):
+        ProgramCompiler(None, module_stack=(loop.resolve(),)).compile(loop_program)
+
+    assert compiler._static_python_names("not valid python(") == (set(), False)
+    names, complete = compiler._static_python_names(
+        "def fn(): pass\nclass Type: pass\nimport os.path as path\nfrom mod import value\n"
+    )
+    assert names == {"fn", "Type", "path", "value"}
+    assert complete
+    assert compiler._static_python_names("from mod import *\n") == (set(), False)
+
+    source = "[value: str] = value\n[raw] << raw\n>> Block [output].\n"
+    names, complete = compiler._static_local_runtime_names(parse_program(source))
+    assert names == {"value", "raw", "output"}
+    assert complete
+
+    inline_output = Program(
+        toplevel_body=[
+            ModelDirectiveStmt(plain_value="test-model"),
+            TemplateLine(segments=[OutputSegment(name="inline_output")]),
+            TemplateLine(segments=[OutputSegment(name="another_output")]),
+        ]
+    )
+    names, complete = compiler._static_local_runtime_names(inline_output)
+    assert names == {"inline_output", "another_output"}
+    assert complete
+
+    module = tmp_path / "module.kedi"
+    module.write_text("> import: module\n> export: *\n", encoding="utf-8")
+    program = parse_program(module.read_text(encoding="utf-8"), source_path=str(module))
+    assert not compiler._static_export_surface(module, program, visiting=set()).complete
+
+    selective = parse_program("> import: values:\n  missing\n")
+    with pytest.raises(ImportError, match="does not export"):
+        compiler._selected_import_names(selective.imports[0], ["present"])
+
+    profile = AgentProfile(tools=("tool",), subagents=("child",))
+    assert compiler._bind_imported_profile(profile, SimpleNamespace()) is profile
+    assert compiler._profile_tool_names(profile) == ("tool",)
+    assert compiler._profile_subagent_names(profile) == ("child",)
+
+
+def test_profile_binding_skips_missing_private_subagent_and_merges_bindings() -> None:
+    from kedi.agent_profile.registry import ProfileDefinition, ProfileSubagentMember
+
+    compiler = ProgramCompiler(None)
+    definition = ProfileDefinition(
+        name="parent",
+        members=[ProfileSubagentMember(name="missing")],
+    )
+    bound = compiler._bind_imported_profile(
+        definition,
+        SimpleNamespace(_profile_registry={}),
+    )
+    child = ProfileDefinition(name="child")
+    merged = AgentProfile().merge(AgentProfile(subagent_bindings={"child": child}))
+
+    assert bound.subagent_bindings == {}
+    assert merged.subagents == ()
+    assert merged.subagent_bindings == {"child": child}
+
+
+def test_package_registry_handles_commit_collision_and_platform_copy_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "registry"
+    root.mkdir()
+    target = root / "demo"
+    target.mkdir()
+    (target / "old.kedi").write_text("= old\n", encoding="utf-8")
+    staging = root / "staging"
+    staging.mkdir()
+    (staging / "main.kedi").write_text("= new\n", encoding="utf-8")
+    original_replace = Path.replace
+
+    def fail_staging_commit(path: Path, destination: Path) -> Path:
+        if path == staging:
+            destination.mkdir()
+            raise OSError("commit collision")
+        return original_replace(path, destination)
+
+    monkeypatch.setattr(Path, "replace", fail_staging_commit)
+    with pytest.raises(OSError, match="commit collision"):
+        package_registry._commit_staged_package(root, "demo", staging, target)
+    assert target.is_dir()
+
+    source = tmp_path / "source.kedi"
+    source.write_text("= copied\n", encoding="utf-8")
+    monkeypatch.delattr(package_registry.os, "O_NOFOLLOW", raising=False)
+    package_registry._copy_regular_file(source, tmp_path / "copied.kedi")
+    assert (tmp_path / "copied.kedi").read_text(encoding="utf-8") == "= copied\n"

@@ -225,6 +225,7 @@ src/kedi/executors/experimental.py
 # Temporary
 tmp
 /*.kedi
+!/package.kedi
 kedi-docs/
 
 # Optimizer

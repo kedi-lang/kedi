@@ -1,0 +1,5 @@
+@request_url(host: str, path: str) -> str:
+  = <host>/<path>
+
+> export:
+  request_url

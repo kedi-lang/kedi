@@ -105,7 +105,7 @@ In `profiles.kedi`:
   profile_id
 ```
 
-Imports resolve relative to the importing file. If no sibling module exists, Kedi falls back to bundled internal modules such as `> import: this`. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
+Imports resolve relative to the importing file. If no sibling module exists, Kedi falls back to bundled internal modules such as `> import: this`, then packages installed in the local Kedi registry. Only names listed under `> export:` are visible to importers; non-exported procedures, types, and top-level values stay private to the module.
 
 Use `/` to import a module from a nested directory:
 
@@ -121,7 +121,10 @@ To import only part of a module's exported surface, list the required names in a
   get_profile
 ```
 
-Selective imports do not create a namespace object; the selected names enter the current environment directly. Imports are applied in source order, so when multiple imports provide the same name, the last imported binding wins. Imports inside nested modules remain relative to the file containing that import.
+Selective imports do not create a namespace object; the selected names enter the current environment directly. Imports and top-level declarations share source-order write semantics, so the last declaration or import that provides a name wins. A module is initialized at most once per root program compilation; its already-loaded exported bindings are then published at each import directive's source position. Imports inside nested modules remain relative to the file containing that import.
+
+Each name in one selective-import list must be unique. Repeating a name is a parse error rather
+than an ambiguous duplicate binding.
 
 To export every public name in a module, use `> export: *`:
 
@@ -135,6 +138,42 @@ To export every public name in a module, use `> export: *`:
 ```
 
 Public names are names that do not start with `_`. If a module has no export directive, importing it does not expose any names.
+
+### Packages
+
+A distributable Kedi package is declared by a `package.kedi` file at its root:
+
+```kedi
+> package: kedi_http:
+  author: Mert Sirakaya
+  contact: mert@kedi-lang.org
+  version: 1.0
+  source: src/kedi_http
+  python: python@3.11-3.14
+  license: Apache-2.0
+  python_dependencies:
+    httpx>=0.27
+    pydantic>=2.0
+```
+
+`source` is relative to `package.kedi` and must contain `main.kedi`. From the package root, run `kedi install` (or `kedi install path/to/package.kedi`) to copy the manifest and that source tree into `$HOME/.kedi/registry/<package-name>`. Imports resolve the package root to `main.kedi`, so `> import: kedi_http` loads `src/kedi_http/main.kedi`; `> import: kedi_http/client` loads `src/kedi_http/client.kedi`.
+
+The `python` field accepts only a fixed version (`python@3.11`) or an inclusive closed range (`python@3.11-3.14`). `python_dependencies` records PEP 508 dependency strings for package tooling; `kedi install` does not install them into the active Python environment.
+
+`kedi add <package-name>` uses the future `registry.kedi-lang.org/v1/package/<package-name>` registry contract. Until that service exists, set `KEDI_REGISTRY_MOCK_ROOT` to a directory containing package source directories and the same install path is used. Package installation writes a Kedi-owned `.kedi-install.json` receipt with the source kind, source path, manifest digest, and, for Git installs, the normalized URL and checked-out commit.
+
+To install an explicit GitHub source locally without involving the registry, pass a `git+https` URL:
+
+```sh
+kedi add git+https://github.com/user/project.git
+```
+
+Kedi performs a shallow, no-checkout clone with Git's blob filter, reads `package.kedi` at the repository root, then sparse-checks out only the declared source tree before installing it and printing the checked-out commit. The Git source must be credential-free and hosted on `github.com`; package sources are limited to regular files/directories, a bounded source-tree size, and literal directory paths rather than Git sparse-checkout patterns. This is intentionally separate from package-registry resolution: when the public registry is available, its response will identify the registry-verified commit for each package rather than treating every Git release as a package release.
+
+`KEDI_HOME`, when set, must be an absolute path. Kedi rejects a relative override so a program cannot switch registries merely because it changes its working directory.
+
+> [!WARNING]
+> Kedi packages are executable code. Importing a third-party package can execute its embedded Python with the importing process's permissions. A future registry's verified commit proves package identity and integrity; it does not sandbox that package or audit its capabilities.
 
 ### Template Blocks (`>>`)
 

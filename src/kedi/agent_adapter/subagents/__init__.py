@@ -113,7 +113,8 @@ def subagent_tool_specs(
     supports_background: bool,
 ) -> tuple[ToolSpec, ...]:
     allowed = tuple(profile.subagents)
-    descriptions = _subagent_descriptions(rt, allowed)
+    subagent_definitions = dict(profile.subagent_bindings)
+    descriptions = _subagent_descriptions(rt, allowed, subagent_definitions)
     budget = DelegationBudget.for_profile(
         profile_name=profile.name,
         max_agents=profile.max_agents,
@@ -143,6 +144,7 @@ def subagent_tool_specs(
                         parent_profile=profile,
                         parent_budget=budget,
                         parent_concurrency=concurrency,
+                        subagent_definitions=subagent_definitions,
                     )
                     return handle.as_tool_result()
                 result = await rt._delegate_task(
@@ -153,6 +155,7 @@ def subagent_tool_specs(
                     parent_profile=profile,
                     parent_budget=budget,
                     parent_concurrency=concurrency,
+                    subagent_definitions=subagent_definitions,
                 )
             except BaseException as exc:
                 if attempt is not None:
@@ -188,6 +191,7 @@ def subagent_tool_specs(
                 parent_profile=profile,
                 parent_budget=budget,
                 parent_concurrency=concurrency,
+                subagent_definitions=subagent_definitions,
             )
             return handle.as_tool_result()
         result = await rt._continue_subagent(
@@ -198,6 +202,7 @@ def subagent_tool_specs(
             parent_profile=profile,
             parent_budget=budget,
             parent_concurrency=concurrency,
+            subagent_definitions=subagent_definitions,
         )
         return result.as_tool_result()
 
@@ -498,10 +503,14 @@ def new_subagent_run_id() -> str:
     return uuid4().hex
 
 
-def _subagent_descriptions(rt: KediRuntime, allowed: tuple[str, ...]) -> str:
+def _subagent_descriptions(
+    rt: KediRuntime,
+    allowed: tuple[str, ...],
+    bindings: Mapping[str, Any],
+) -> str:
     entries: list[str] = []
     for name in allowed:
-        definition = rt._profile_registry.get(name)
+        definition = bindings.get(name) or rt._profile_registry.get(name)
         description = getattr(definition, "description", None)
         entries.append(f"- {name}: {description}" if description else f"- {name}")
     return "\n\nAvailable subagents:\n" + "\n".join(entries)

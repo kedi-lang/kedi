@@ -18,14 +18,63 @@ from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
+from kedi.package_registry import add_package, install_package
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
 
-context_settings = {"ignore_unknown_options": True, "allow_extra_args": True}
+context_settings = {
+    "ignore_unknown_options": True,
+    "allow_extra_args": True,
+    # The default eager help option runs before the source positional argument
+    # is available, so `kedi install --help` cannot show package-command help.
+    "help_option_names": [],
+}
+_PACKAGE_COMMANDS = frozenset({"install", "add"})
+
+
+def _package_command_help(command: str) -> str:
+    if command == "install":
+        return (
+            "Usage: kedi install [PACKAGE.KEDI]\n\n"
+            "Install package.kedi from the current directory or the supplied manifest path."
+        )
+    return (
+        "Usage: kedi add <PACKAGE-NAME | git+https://github.com/OWNER/REPOSITORY.git>\n\n"
+        "Install a package from the Kedi registry or an explicit GitHub source."
+    )
+
+
+def _run_package_command(command: str, arguments: list[str]) -> int:
+    if any(argument.startswith("-") for argument in arguments):
+        raise click.UsageError(f"Unexpected option for 'kedi {command}'.")
+
+    if command == "install":
+        if len(arguments) > 1:
+            raise click.UsageError("'kedi install' accepts at most one manifest path.")
+        try:
+            installed = install_package(Path(arguments[0]) if arguments else Path("package.kedi"))
+        except (FileNotFoundError, ModuleNotFoundError, RuntimeError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    else:
+        if not arguments:
+            raise click.UsageError("Missing argument for 'kedi add'.")
+        if len(arguments) > 1:
+            raise click.UsageError("'kedi add' accepts exactly one package source.")
+        try:
+            installed = add_package(arguments[0])
+        except (FileNotFoundError, ModuleNotFoundError, RuntimeError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+
+    message = f"Installed {installed.name} at {installed.root}"
+    if installed.source_revision is not None:
+        message += f" ({installed.source_revision})"
+    click.secho(message, fg="green")
+    return 0
 
 
 @click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
 @click.argument("source", required=False)
+@click.option("-h", "--help", "show_help", is_flag=True, help="Show this message and exit.")
 @click.option(
     "-c",
     "--command",
@@ -176,7 +225,16 @@ def main(
     no_cache: bool = False,
     quiet: bool = False,
     parse_only: bool = False,
+    show_help: bool = False,
 ):
+    if show_help:
+        if source in _PACKAGE_COMMANDS and command_source is None:
+            click.echo(_package_command_help(source))
+        else:
+            click.echo(ctx.get_help())
+        return 0
+    if source in _PACKAGE_COMMANDS and command_source is None:
+        return _run_package_command(source, list(ctx.args))
     if acp_command is not None:
         os.environ["KEDI_ACP_AGENT_COMMAND"] = acp_command
     if source == "parse":

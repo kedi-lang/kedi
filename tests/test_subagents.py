@@ -63,7 +63,6 @@ from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.model import eval_profile_definition
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
-from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.lsp import features
 from kedi.agent_adapter.subagents.budget import (
     MAX_SUBAGENT_CONCURRENCY,
@@ -2668,6 +2667,71 @@ def test_subagent_start_cleans_up_when_task_creation_fails(
     assert isinstance(coordinator.events.snapshot()[-1], SubagentFailed)
 
 
+def test_subagent_start_falls_back_to_global_definition_after_private_lookup_miss() -> None:
+    _, runtime, _ = _manager_tool()
+    coordinator = runtime._subagent_coordinator
+    definition = runtime._profile_registry["manager"]
+    parent_profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+
+    async def scenario() -> None:
+        handle = coordinator.start(
+            allowed_subagents=("worker",),
+            subagent="worker",
+            task="reply",
+            final_schema=None,
+            parent_profile=parent_profile,
+            parent_budget=DelegationBudget.for_profile(profile_name="manager", max_agents=1),
+            parent_concurrency=coordinator.new_concurrency(),
+            subagent_definitions={},
+        )
+        result = await coordinator.wait(handle.run_id)
+        assert result.task_summary == "child:reply"
+
+    asyncio.run(scenario())
+
+
+def test_subagent_start_uses_private_definition_without_global_lookup() -> None:
+    _, runtime, _ = _manager_tool()
+    coordinator = runtime._subagent_coordinator
+    definition = runtime._profile_registry["manager"]
+    parent_profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+
+    async def scenario() -> None:
+        handle = coordinator.start(
+            allowed_subagents=("worker",),
+            subagent="worker",
+            task="reply",
+            final_schema=None,
+            parent_profile=parent_profile,
+            parent_budget=DelegationBudget.for_profile(profile_name="manager", max_agents=1),
+            parent_concurrency=coordinator.new_concurrency(),
+            subagent_definitions={"worker": runtime._profile_registry["worker"]},
+        )
+        result = await coordinator.wait(handle.run_id)
+        assert result.task_summary == "child:reply"
+
+    asyncio.run(scenario())
+
+
+def test_subagent_start_rejects_unknown_global_definition_after_private_lookup_miss() -> None:
+    _, runtime, _ = _manager_tool()
+    coordinator = runtime._subagent_coordinator
+    definition = runtime._profile_registry["manager"]
+    parent_profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+
+    with pytest.raises(KediExecutionError, match="Unknown subagent profile: 'missing'"):
+        coordinator.start(
+            allowed_subagents=("missing",),
+            subagent="missing",
+            task="reply",
+            final_schema=None,
+            parent_profile=parent_profile,
+            parent_budget=DelegationBudget.for_profile(profile_name="manager", max_agents=1),
+            parent_concurrency=coordinator.new_concurrency(),
+            subagent_definitions={},
+        )
+
+
 def test_subagent_handle_wait_cancel_timeout_and_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3287,16 +3351,12 @@ def test_imported_profile_brings_private_subagent_dependencies(tmp_path: Path) -
         adapter=adapter,
     )
 
-    assert {"manager", "worker", "leaf"} <= runtime._profile_registry.keys()
-
-    compiler = ProgramCompiler(adapter=None)
-    imported_runtime = KediRuntime()
-    compiler._merge_profile_dependencies(
-        AgentProfile(subagents=("missing",)),
-        imported_runtime,
-        seen=set(),
-    )
-    assert compiler._profile_subagent_names(AgentProfile(subagents=("leaf",))) == ("leaf",)
+    assert set(runtime._profile_registry) == {"manager"}
+    manager = runtime._profile_registry["manager"]
+    worker = manager.subagent_bindings["worker"]
+    leaf = worker.subagent_bindings["leaf"]
+    assert worker.name == "worker"
+    assert leaf.name == "leaf"
 
 
 def test_subagent_lsp_diagnostics_definition_and_tokens() -> None:

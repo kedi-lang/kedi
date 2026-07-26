@@ -15,6 +15,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Mapping,
     Optional,
     Sequence,
     Tuple,
@@ -901,7 +902,12 @@ class KediRuntime:
             )
 
         specs: list[Any] = []
+        bound_tools = getattr(profile, "tool_bindings", {})
         for tool_name in tool_names:
+            bound_spec = bound_tools.get(tool_name)
+            if bound_spec is not None:
+                specs.append(bound_spec)
+                continue
             proc = procedure_def_for_tool(self, tool_name)
             if proc is not None:
                 specs.append(kedi_procedure_tool_spec(self, proc))
@@ -979,6 +985,7 @@ class KediRuntime:
         parent_profile: Any,
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> Any:
         return await self._subagent_coordinator.delegate(
             allowed_subagents=allowed_subagents,
@@ -988,6 +995,7 @@ class KediRuntime:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
 
     def _start_subagent(
@@ -1000,6 +1008,7 @@ class KediRuntime:
         parent_profile: Any,
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> Any:
         return self._subagent_coordinator.start(
             allowed_subagents=allowed_subagents,
@@ -1009,6 +1018,7 @@ class KediRuntime:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
 
     async def _continue_subagent(
@@ -1021,6 +1031,7 @@ class KediRuntime:
         parent_profile: Any,
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> Any:
         return await self._subagent_coordinator.continue_run(
             run_id=run_id,
@@ -1030,6 +1041,7 @@ class KediRuntime:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
 
     def _start_subagent_continuation(
@@ -1042,6 +1054,7 @@ class KediRuntime:
         parent_profile: Any,
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
+        subagent_definitions: Mapping[str, Any] | None = None,
     ) -> Any:
         return self._subagent_coordinator.start_continuation(
             run_id=run_id,
@@ -1051,6 +1064,7 @@ class KediRuntime:
             parent_profile=parent_profile,
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
+            subagent_definitions=subagent_definitions,
         )
 
     async def _wait_subagent(

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..effort import EffortValue
 from .mcp import McpServerSpec
+
+if TYPE_CHECKING:
+    from ..agent_adapter.tool_override import ToolSpec
+    from .registry import ProfileDefinition
 
 AgentCommand = str | tuple[str, ...]
 SKILLS_USE_TARGET = "skills"
@@ -26,10 +30,14 @@ class AgentProfile:
     system: str | None = None
     settings: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[str, ...] = ()
+    # Imported profiles keep their private dependencies here instead of publishing
+    # them into the importer's flat procedure/environment namespaces.
+    tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
     mcp_servers: tuple[McpServerSpec, ...] = ()
     approval: ApprovalPolicy | None = None
     skills: bool | None = None
     subagents: tuple[str, ...] = ()
+    subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
 
     @classmethod
@@ -53,16 +61,30 @@ class AgentProfile:
             updates["system"] = other.system
         if other.settings:
             updates["settings"] = {**(self.settings or {}), **other.settings}
-        if other.tools:
-            updates["tools"] = _merge_tool_names(self.tools, other.tools)
+        if other.tools or other.tool_bindings:
+            bindings = dict(self.tool_bindings)
+            # A later unbound ``> use: tool`` deliberately restores normal
+            # caller-scope lookup for that name.
+            for tool_name in other.tools:
+                bindings.pop(tool_name, None)
+            bindings.update(other.tool_bindings)
+            if other.tools:
+                updates["tools"] = _merge_tool_names(self.tools, other.tools)
+            updates["tool_bindings"] = bindings
         if other.mcp_servers:
             updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
         if other.approval is not None:
             updates["approval"] = other.approval
         if other.skills is not None:
             updates["skills"] = other.skills
-        if other.subagents:
-            updates["subagents"] = _merge_names(self.subagents, other.subagents)
+        if other.subagents or other.subagent_bindings:
+            bindings = dict(self.subagent_bindings)
+            for subagent_name in other.subagents:
+                bindings.pop(subagent_name, None)
+            bindings.update(other.subagent_bindings)
+            if other.subagents:
+                updates["subagents"] = _merge_names(self.subagents, other.subagents)
+            updates["subagent_bindings"] = bindings
         if other.max_agents is not None:
             updates["max_agents"] = other.max_agents
         if not updates:
@@ -70,7 +92,12 @@ class AgentProfile:
         return replace(self, **updates)
 
     def frozen_copy(self) -> AgentProfile:
-        return replace(self, settings=dict(self.settings or {}))
+        return replace(
+            self,
+            settings=dict(self.settings or {}),
+            tool_bindings=dict(self.tool_bindings),
+            subagent_bindings=dict(self.subagent_bindings),
+        )
 
     def needs_adapter_selection(self, adapter_shortname: str | None) -> bool:
         if self.adapter_shortname is None:

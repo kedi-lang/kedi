@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -763,6 +764,25 @@ def test_diagnostics_report_missing_imported_module(tmp_path):
     assert diag.range.start.line == 0
 
 
+def test_diagnostics_report_corrupt_installed_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = tmp_path / "kedi-home" / "registry" / "profiles"
+    package.mkdir(parents=True)
+    (package / "package.kedi").write_text("# invalid manifest\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: profiles\n"
+    main.write_text(source, encoding="utf-8")
+    monkeypatch.setenv("KEDI_HOME", str(tmp_path / "kedi-home"))
+
+    diagnostics = features.compute_diagnostics(source, str(main))
+
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.code == "K-IMPORT-CORRUPT"
+    assert "invalid package manifest" in diagnostic.message
+
+
 def test_diagnostics_accept_internal_registry_import(tmp_path):
     main = tmp_path / "main.kedi"
     src = "> import: this\n\n= ok\n"
@@ -791,3 +811,13 @@ def test_diagnostics_report_invalid_template_escape() -> None:
     assert len(diagnostics) == 1
     assert diagnostics[0].code == "K-TEXT-ESCAPE"
     assert "Literal '=' must be escaped" in diagnostics[0].message
+
+
+def test_missing_import_diagnostics_ignore_corrupt_import_without_a_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    program = Program()
+    program.imports = [SimpleNamespace(module="broken", loc=None, name_locs={}, names=[])]
+    monkeypatch.setattr(features, "import_resolution_error", lambda *_args: "invalid package")
+
+    assert features._missing_import_diagnostics(program) == []
