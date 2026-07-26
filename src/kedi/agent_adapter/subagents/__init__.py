@@ -20,8 +20,8 @@ from .budget import DelegationBudget
 from .limits import SubagentUsageLimits
 
 if TYPE_CHECKING:
-    from kedi.agent_profile import AgentProfile
     from kedi.agent_adapter.approval import ApprovalPolicy
+    from kedi.agent_profile import AgentProfile
     from kedi.core import KediRuntime
 
 

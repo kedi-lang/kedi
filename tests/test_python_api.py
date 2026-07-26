@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 import kedi
-import kedi.api as api_module
 import kedi.agent_adapter.registry as adapter_registry
+import kedi.api as api_module
 from kedi import (
     bind,
     cache_info,
@@ -26,10 +26,10 @@ from kedi import (
 )
 from kedi import type as kedi_type
 from kedi.agent_adapter import AgentAdapter
-from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
+from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
 from kedi.errors import KediExecutionError
 from kedi.resolved_types import ResolvedKediType

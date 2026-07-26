@@ -4,10 +4,10 @@ import asyncio
 import contextvars
 import copy
 import inspect
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
+from pathlib import Path
 from typing import (
     Any,
     Awaitable,
@@ -23,8 +23,6 @@ from typing import (
 from pydantic import BaseModel, TypeAdapter
 from pydantic_ai.tools import Tool
 
-from .approval import ToolRisk
-from .invocation import InvocationUsage, report_invocation
 from ..core import CallExpr, InputExpr, KediRuntime
 from ..lang.ast import ProcedureDef, Program, ProgramWithValidation
 from ..lang.compiler.type_system import KediType, coerce_model_value
@@ -36,6 +34,8 @@ from ..lang.procedure_schema import (
     program_procedure_json_schemas,
 )
 from ..module_registry import internal_module_path
+from .approval import ToolRisk
+from .invocation import InvocationUsage, report_invocation
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"

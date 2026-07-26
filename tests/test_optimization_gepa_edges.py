@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
 from typing import Any, cast

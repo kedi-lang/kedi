@@ -13,10 +13,9 @@ import kedi
 import kedi.api as kedi_api
 import kedi.app as app_module
 from kedi.agent_adapter import approval as approval_module
-from kedi.agent_adapter.adapters.lazy import LazyAdapter
-from kedi.agent_adapter.cli_approval import CliApprovalHandler
 from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_adapter.adapters import PydanticAdapter
+from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -25,6 +24,7 @@ from kedi.agent_adapter.approval import (
     resolve_tool_approval,
     resolve_tool_approval_async,
 )
+from kedi.agent_adapter.cli_approval import CliApprovalHandler
 from kedi.agent_adapter.tool_override import ToolSpec, with_approval
 from kedi.agent_adapter.utils import (
     _procedure_tool_risk,
@@ -36,8 +36,8 @@ from kedi.agent_profile.model import eval_approval_directive, eval_profile_defin
 from kedi.agent_profile.registry import ProfileApprovalMember, ProfileDefinition
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
-from kedi.lang.ast import ApprovalDirectiveStmt
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ApprovalDirectiveStmt
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
 

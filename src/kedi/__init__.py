@@ -1,4 +1,5 @@
 from ._version import __version__
+from .agent_profile import McpServerSpec
 from .api import (
     AdapterLike,
     AgentName,
@@ -9,8 +10,8 @@ from .api import (
     ApprovalRequest,
     CacheInfo,
     FrameworkAdapterName,
-    bind,
     approval,
+    bind,
     cache_info,
     clear_cache,
     configure,
@@ -21,7 +22,6 @@ from .api import (
     tool,
     type,
 )
-from .agent_profile import McpServerSpec
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-import inspect
 from typing import Literal
 
 from .approval import ApprovalDecision, ApprovalRequest, ToolRisk

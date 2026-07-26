@@ -3,25 +3,25 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
-from ..agent_adapter.approval import ApprovalPolicy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import AgentCommand, AgentProfile, SKILLS_USE_TARGET
+from .profile import SKILLS_USE_TARGET, AgentCommand, AgentProfile
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
     ProfileDefinition,
     ProfileEffortMember,
-    ProfileMcpMember,
     ProfileMaxAgentsMember,
+    ProfileMcpMember,
     ProfileModelMember,
     ProfileSettingsMember,
-    ProfileSystemMember,
     ProfileSubagentMember,
+    ProfileSystemMember,
     ProfileToolMember,
 )
 from .settings import parse_plain_setting_value

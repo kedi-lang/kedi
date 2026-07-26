@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import KediExecutionError
 from .model import eval_profile_definition
-from .profile import AgentProfile, SKILLS_USE_TARGET
+from .profile import SKILLS_USE_TARGET, AgentProfile
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime

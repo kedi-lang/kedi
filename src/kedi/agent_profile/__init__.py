@@ -3,11 +3,11 @@ from __future__ import annotations
 from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
-    AgentToolOverrideUnsupported,
     AgentSubagentUnsupported,
-    eval_approval_directive,
+    AgentToolOverrideUnsupported,
     eval_adapter_directive,
     eval_agent_directive,
+    eval_approval_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -22,12 +22,12 @@ from .registry import (
     ProfileApprovalMember,
     ProfileDefinition,
     ProfileEffortMember,
-    ProfileMcpMember,
     ProfileMaxAgentsMember,
+    ProfileMcpMember,
     ProfileModelMember,
     ProfileSettingsMember,
-    ProfileSystemMember,
     ProfileSubagentMember,
+    ProfileSystemMember,
     ProfileToolMember,
 )
 from .settings import (

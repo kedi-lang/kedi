@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 import kedi
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.adapters import PydanticAdapter
+from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.skills import (
     MAX_SKILL_BYTES,
     MAX_SKILL_LIST_LIMIT,

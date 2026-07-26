@@ -26,7 +26,6 @@ from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
@@ -40,11 +39,13 @@ from kedi.agent_adapter.adapters import claude as claude_adapter_module
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
+from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
 )
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import (
     ToolScope,
     ToolSpec,
@@ -61,7 +62,6 @@ from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
-from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 
 
 class DirectOutput(BaseModel):
