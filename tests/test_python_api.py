@@ -46,6 +46,11 @@ class Person(BaseModel):
 class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
     kind = "agent-framework"
     shortname = "test"
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_profile_override=True,
+    )
 
     def __init__(self) -> None:
         self.templates: list[str] = []
@@ -234,6 +239,94 @@ def test_query_response_cache_reuses_same_call(adapter: ApiAdapter) -> None:
     assert summarize("Kedi") == "short summary"
     assert summarize("Kedi") == "short summary"
     assert len(adapter.templates) == 1
+
+
+def test_query_rejects_response_cache_with_explicit_conversation(
+    adapter: ApiAdapter,
+) -> None:
+    state = kedi.ConversationState()
+
+    @query(adapter=adapter, conversation=state, cache=True)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    try:
+        with pytest.raises(
+            ValueError,
+            match="response caching cannot be combined with a conversation session",
+        ):
+            answer()
+        assert adapter.templates == []
+    finally:
+        state.close()
+
+
+def test_session_binds_explicit_conversation_without_changing_default_calls(
+    adapter: ApiAdapter,
+) -> None:
+    @query(adapter=adapter)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    with kedi.session() as state:
+        assert answer() == "ok"
+        assert [turn.role for turn in state.snapshot()] == ["user", "assistant"]
+
+    with pytest.raises(RuntimeError, match="conversation state is closed"):
+        with state.adapter_turn("test"):
+            pass
+
+
+def test_session_supports_async_context_management() -> None:
+    async def exercise() -> None:
+        async with kedi.session() as state:
+            with state.adapter_turn("test"):
+                pass
+
+        with pytest.raises(RuntimeError, match="conversation state is closed"):
+            with state.adapter_turn("test"):
+                pass
+
+    asyncio.run(exercise())
+
+
+def test_session_exit_without_enter_still_closes_state() -> None:
+    session_context = kedi.session()
+    session_context.__exit__()
+
+    with pytest.raises(RuntimeError, match="conversation state is closed"):
+        with session_context.state.adapter_turn("test"):
+            pass
+
+
+def test_query_conversation_override_wins_over_configured_state(
+    adapter: ApiAdapter,
+) -> None:
+    configured_state = kedi.ConversationState()
+    query_state = kedi.ConversationState()
+    configure(adapter=adapter, conversation=configured_state)
+
+    @query(adapter=adapter, conversation=query_state)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    try:
+        assert answer() == "ok"
+        assert configured_state.snapshot() == ()
+        assert [turn.role for turn in query_state.snapshot()] == ["user", "assistant"]
+    finally:
+        configured_state.close()
+        query_state.close()
 
 
 def test_query_response_cache_coalesces_concurrent_first_call(adapter: ApiAdapter) -> None:

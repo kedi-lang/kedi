@@ -53,6 +53,10 @@ class LangChainAdapter:
         supports_native_approval_handler=True,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_artifacts=True,
+        supports_native_artifacts=False,
+        supports_stateful_history=False,
+        supports_history_replay=False,
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 

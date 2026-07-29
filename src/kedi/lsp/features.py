@@ -77,6 +77,8 @@ from ..lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
+    ArtifactsField,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -100,6 +102,7 @@ from ..lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMaxAgentsEntry,
@@ -986,6 +989,15 @@ def _profile_capability_diagnostics(
                 "MCP server directives",
             )
         )
+    for member in profile.artifacts_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "artifacts",
+                [_directive_keyword_span(prog, member.loc, "artifacts") or member.loc],
+                "model-facing artifact tools",
+            )
+        )
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1083,6 +1095,16 @@ def _scan_capability_scope(
                     "mcp",
                     [_directive_keyword_span(prog, stmt.loc, "mcp") or stmt.loc],
                     "MCP server directives",
+                )
+            )
+            continue
+        if isinstance(stmt, ArtifactsDirectiveStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "artifacts",
+                    [_directive_keyword_span(prog, stmt.loc, "artifacts") or stmt.loc],
+                    "model-facing artifact tools",
                 )
             )
             continue
@@ -2604,6 +2626,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.settings_members:
                 visit(member)
+            for member in node.artifacts_members:
+                visit(member)
             for member in node.subagent_members:
                 visit(member)
             for member in node.max_agents_members:
@@ -2621,11 +2645,19 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, ArtifactsDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, ProfileMcpEntry):
             for field in node.fields:
                 visit(field)
             return
         if isinstance(node, ProfileSettingsEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileArtifactsEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -2791,6 +2823,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _settings_directive_markdown(node)
     if isinstance(node, SettingsField):
         return _settings_field_markdown(node)
+    if isinstance(node, ArtifactsDirectiveStmt):
+        return _artifacts_directive_markdown(node)
+    if isinstance(node, ArtifactsField):
+        return _artifacts_field_markdown(node)
     if isinstance(node, ProfileAgentEntry):
         return _profile_agent_entry_markdown(node)
     if isinstance(node, ProfileAdapterEntry):
@@ -2807,6 +2843,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_mcp_entry_markdown(node)
     if isinstance(node, ProfileSettingsEntry):
         return _profile_settings_entry_markdown(node)
+    if isinstance(node, ProfileArtifactsEntry):
+        return _profile_artifacts_entry_markdown(node)
     if isinstance(node, ProfileMaxAgentsEntry):
         return (
             f"**Subagent budget** `> max_agents: {node.value}`\n\n"
@@ -2977,6 +3015,33 @@ def _settings_field_markdown(field: SettingsField) -> str:
     return f"`{field.name}` = {value}\n\nSupported by: {adapters}."
 
 
+def _artifacts_directive_markdown(stmt: ArtifactsDirectiveStmt) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in stmt.fields) or "`<empty>`"
+    return (
+        "**`> artifacts:`**\n\nConfigure large-value storage for subsequent "
+        "model calls in the current scope. Native Kedi and Python reads retain "
+        f"the original logical value. Configured fields: {fields}."
+    )
+
+
+def _artifacts_field_markdown(field: ArtifactsField) -> str:
+    value = _artifacts_field_value_preview(field)
+    descriptions = {
+        "enabled": "Enable artifact creation and agent-facing artifact tools.",
+        "store": "Payload backend: `memory` or `file`.",
+        "path": "Root directory used by the file artifact store.",
+        "threshold": "Minimum payload size before a value becomes an artifact.",
+        "ttl": "Maximum lifetime measured from artifact creation.",
+        "idle_ttl": "Optional expiry duration measured from the last access.",
+        "preview_chars": "Maximum model-visible preview length.",
+        "read_max_chars": "Hard character limit for one `read_artifact` call.",
+        "session_quota": "Maximum active payload bytes in this artifact session.",
+        "max_artifacts": "Maximum active artifact count in this session.",
+        "cleanup_interval": "Interval used by background expiry cleanup.",
+    }
+    return f"`{field.name}` = {value}\n\n{descriptions[field.name]}"
+
+
 def _profile_mcp_entry_markdown(entry: ProfileMcpEntry) -> str:
     fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
     return (
@@ -2989,6 +3054,14 @@ def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
     fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
     return (
         f"**`> settings:`**\n\nModel configuration stored in this profile. "
+        f"Fields: {fields}.\n\nApplied when the profile is used."
+    )
+
+
+def _profile_artifacts_entry_markdown(entry: ProfileArtifactsEntry) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
+    return (
+        "**`> artifacts:`**\n\nArtifact policy stored in this profile. "
         f"Fields: {fields}.\n\nApplied when the profile is used."
     )
 
@@ -3111,6 +3184,12 @@ def _settings_field_value_preview(field: SettingsField) -> str:
     return f"`{field.plain_value or ''}`"
 
 
+def _artifacts_field_value_preview(field: ArtifactsField) -> str:
+    if field.backtick_code is not None:
+        return f"`{field.backtick_code}`"
+    return f"`{field.plain_value or ''}`"
+
+
 def _setting_adapter_label(name: str) -> str:
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
@@ -3181,6 +3260,9 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
     setting_count = sum(len(member.fields) for member in profile.settings_members)
     if setting_count:
         summary.append(f"Settings: {setting_count}")
+    artifact_field_count = sum(len(member.fields) for member in profile.artifacts_members)
+    if artifact_field_count:
+        summary.append(f"Artifact settings: {artifact_field_count}")
 
     text = f"**Agent profile** `> profile: {profile.name}:`"
     if profile.docstring:
@@ -4137,6 +4219,20 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
             lsp.DocumentSymbol(
                 name=f"> system: {value}",
                 detail="agent instructions",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.artifacts_members:
+        if member.loc is None:
+            continue
+        fields = ", ".join(field.name for field in member.fields)
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> artifacts: {fields}",
+                detail="artifact policy",
                 kind=lsp.SymbolKind.Event,
                 range=_span_to_range(member.loc),
                 selection_range=_span_to_range(member.loc),

@@ -40,6 +40,7 @@ from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
@@ -47,6 +48,7 @@ from kedi.agent_adapter.subagents import (
 )
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import (
+    SupportsToolRegistration,
     ToolScope,
     ToolSpec,
     approval_request_for_tool,
@@ -83,6 +85,30 @@ class FormattedClaudeOutput(BaseModel):
     file: FileUrl
 
 
+def test_artifact_capabilities_require_structured_tool_adapters() -> None:
+    artifact_adapters = (
+        PydanticAdapter,
+        LangChainAdapter,
+        DSPyAdapter,
+        ClaudeAdapter,
+        CodexAdapter,
+        WebGPUAdapter,
+    )
+
+    for adapter in artifact_adapters:
+        capabilities = adapter.capabilities
+        assert capabilities.supports("artifacts")
+        assert capabilities.supports("structured_output")
+        assert capabilities.supports("tool_registration")
+        assert isinstance(adapter, type)
+        assert issubclass(adapter, SupportsToolRegistration)
+
+    with pytest.raises(ValueError, match="structured output and tool registration"):
+        AdapterCapabilities(supports_artifacts=True)
+    with pytest.raises(ValueError, match="requires artifact support"):
+        AdapterCapabilities(supports_native_artifacts=True)
+
+
 def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
     setattr(
         adapter,
@@ -94,6 +120,23 @@ def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
         "_subagent_conversation_var",
         ContextVar(f"test_subagent_conversation_{id(adapter)}", default=None),
     )
+
+
+@pytest.mark.parametrize(
+    "adapter",
+    [
+        PydanticAdapter(model=TestModel()),
+        ClaudeAdapter(model="claude"),
+    ],
+)
+def test_stateful_adapters_bind_and_reset_conversation_scope(adapter: Any) -> None:
+    conversation = AdapterConversationContext()
+    context_var = adapter._subagent_conversation_var
+
+    assert context_var.get() is None
+    with adapter.conversation_scope(conversation):
+        assert context_var.get() is conversation
+    assert context_var.get() is None
 
 
 def test_make_repr_uses_class_name_for_standard_class_repr() -> None:

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
+from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .mcp import McpServerSpec
 
@@ -39,6 +40,7 @@ class AgentProfile:
     subagents: tuple[str, ...] = ()
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
+    artifacts: ArtifactPolicy | None = None
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -87,6 +89,12 @@ class AgentProfile:
             updates["subagent_bindings"] = bindings
         if other.max_agents is not None:
             updates["max_agents"] = other.max_agents
+        if other.artifacts is not None:
+            updates["artifacts"] = (
+                other.artifacts
+                if self.artifacts is None
+                else self.artifacts.overlay(other.artifacts)
+            )
         if not updates:
             return self
         return replace(self, **updates)

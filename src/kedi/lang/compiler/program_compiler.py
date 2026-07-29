@@ -17,6 +17,7 @@ from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
     eval_approval_directive,
+    eval_artifacts_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -34,6 +35,7 @@ from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     EffortDirectiveStmt,
@@ -59,6 +61,7 @@ from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type
 
 if TYPE_CHECKING:
+    from ...agent_adapter.conversation import ConversationState
     from ...agent_adapter.meta import AgentAdapter
     from ...agent_adapter.subagents.limits import SubagentUsageLimits
     from ...executors.base import Executor
@@ -157,6 +160,7 @@ def compile_program(
     subagent_timeout_seconds: float | None = 120.0,
     subagent_usage_limits: SubagentUsageLimits | None = None,
     subagent_state_path: str | Path | None = None,
+    conversation_state: ConversationState | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -173,6 +177,7 @@ def compile_program(
         subagent_timeout_seconds=subagent_timeout_seconds,
         subagent_usage_limits=subagent_usage_limits,
         subagent_state_path=subagent_state_path,
+        conversation_state=conversation_state,
     )
     return compiler.compile(prog)
 
@@ -195,6 +200,7 @@ class ProgramCompiler:
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: SubagentUsageLimits | None = None,
         subagent_state_path: str | Path | None = None,
+        conversation_state: ConversationState | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -206,6 +212,7 @@ class ProgramCompiler:
         self.subagent_timeout_seconds = subagent_timeout_seconds
         self.subagent_usage_limits = subagent_usage_limits
         self.subagent_state_path = subagent_state_path
+        self.conversation_state = conversation_state
         self.rt = KediRuntime(
             adapter=adapter,
             executor=executor,
@@ -216,6 +223,7 @@ class ProgramCompiler:
             subagent_timeout_seconds=subagent_timeout_seconds,
             subagent_usage_limits=subagent_usage_limits,
             subagent_state_path=subagent_state_path,
+            conversation_state=conversation_state,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
@@ -314,6 +322,7 @@ class ProgramCompiler:
                         subagent_timeout_seconds=self.subagent_timeout_seconds,
                         subagent_usage_limits=self.subagent_usage_limits,
                         subagent_state_path=self.subagent_state_path,
+                        conversation_state=self.conversation_state,
                     ).compile(program)
 
                 loaded = self.module_loader.load(module_path, imported_prog, compile_module)
@@ -766,6 +775,9 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, SettingsDirectiveStmt):
                         active = active.merge(eval_settings_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, ArtifactsDirectiveStmt):
+                        active = active.merge(eval_artifacts_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, UseDirectiveStmt):
                         active = active.merge(

@@ -27,6 +27,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_artifacts=True,
     )
 
     def __init__(self, *, default_model: str | None = None) -> None:

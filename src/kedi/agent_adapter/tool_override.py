@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import secrets
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
@@ -12,6 +13,7 @@ from typing import (
     Any,
     Callable,
     Iterator,
+    Literal,
     Protocol,
     Sequence,
     cast,
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
 
 
 ToolArgumentValidator = Callable[[Mapping[str, Any]], dict[str, Any]]
+ToolArtifactMode = Literal["auto", "never"]
 
 _RISK_ORDER: dict[ToolRisk, int] = {
     "read_only": 0,
@@ -53,6 +56,7 @@ class ToolSpec:
     risk: ToolRisk = "mutating"
     risk_resolver: Callable[[Mapping[str, Any]], ToolRisk] | None = None
     argument_validator: ToolArgumentValidator | None = None
+    artifact_result: ToolArtifactMode = "auto"
 
 
 def with_approval(
@@ -91,6 +95,79 @@ def with_approval(
         return tool.fn(**final_kwargs)
 
     return replace(tool, fn=approved_tool)
+
+
+def with_artifact_result(
+    tool: ToolSpec,
+    *,
+    manager: Any,
+    policy: Any,
+) -> ToolSpec:
+    """Return a signature-preserving tool that exposes large results as compact refs."""
+
+    metadata = dict(tool.metadata or {})
+    if tool.artifact_result == "never" or metadata.get("kedi_artifact_wrapped") is True:
+        return tool
+    metadata["kedi_artifact_wrapped"] = True
+
+    def compact_result(result: Any, *, call_id: str) -> Any:
+        from kedi.artifacts import ArtifactHandle
+
+        manager.history.append(
+            "tool_call",
+            data={"tool_name": tool.name, "call_id": call_id},
+        )
+        stored = manager.artifactize(
+            result,
+            policy=policy,
+            source=f"tool:{tool.name}",
+        )
+        if not isinstance(stored, ArtifactHandle):
+            manager.history.append(
+                "tool_result",
+                data={
+                    "tool_name": tool.name,
+                    "call_id": call_id,
+                    "artifacted": False,
+                },
+            )
+            return stored
+        ref = stored.as_ref()
+        manager.history.append(
+            "tool_result",
+            ref_id=ref.ref_id,
+            data={
+                "tool_name": tool.name,
+                "call_id": call_id,
+                "artifacted": True,
+            },
+        )
+        return ref.model_dump(mode="json")
+
+    is_async = _is_async_callable(tool.fn)
+    if is_async:
+
+        @wraps(tool.fn)
+        async def artifact_async_tool(*args: Any, **kwargs: Any) -> Any:
+            call_id = f"call_{secrets.token_urlsafe(10)}"
+            result = await tool.fn(*args, **kwargs)
+            return compact_result(result, call_id=call_id)
+
+        return replace(tool, fn=artifact_async_tool, metadata=metadata)
+
+    @wraps(tool.fn)
+    def artifact_tool(*args: Any, **kwargs: Any) -> Any:
+        call_id = f"call_{secrets.token_urlsafe(10)}"
+        result = tool.fn(*args, **kwargs)
+        if inspect.isawaitable(result):
+
+            async def await_and_compact() -> Any:
+                return compact_result(await result, call_id=call_id)
+
+            return await_and_compact()
+        return compact_result(result, call_id=call_id)
+
+    return replace(tool, fn=artifact_tool, metadata=metadata)
 
 
 def approval_request_for_tool(

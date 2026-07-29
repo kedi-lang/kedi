@@ -7,6 +7,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileArtifactsMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMaxAgentsMember,
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
         ProfileAdapterEntry,
         ProfileAgentEntry,
         ProfileApprovalEntry,
+        ProfileArtifactsEntry,
         ProfileDefStmt,
         ProfileEffortEntry,
         ProfileMcpEntry,
@@ -45,6 +47,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
     ] = []
@@ -65,6 +68,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_mcp_entry_to_member(entry))
     for entry in stmt.settings_members:
         members.append(_settings_entry_to_member(entry))
+    for entry in stmt.artifacts_members:
+        members.append(_artifacts_entry_to_member(entry))
     for entry in stmt.subagent_members:
         members.append(ProfileSubagentMember(name=entry.name, loc=entry.loc))
     for entry in stmt.max_agents_members:
@@ -125,6 +130,10 @@ def _mcp_entry_to_member(entry: ProfileMcpEntry) -> ProfileMcpMember:
 
 def _settings_entry_to_member(entry: ProfileSettingsEntry) -> ProfileSettingsMember:
     return ProfileSettingsMember(fields=tuple(entry.fields))
+
+
+def _artifacts_entry_to_member(entry: ProfileArtifactsEntry) -> ProfileArtifactsMember:
+    return ProfileArtifactsMember(fields=tuple(entry.fields))
 
 
 def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:
@@ -204,6 +213,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
         ApprovalDirectiveStmt,
+        ArtifactsDirectiveStmt,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
@@ -217,6 +227,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_adapter_directive,
         eval_agent_directive,
         eval_approval_directive,
+        eval_artifacts_directive,
         eval_effort_directive,
         eval_mcp_directive,
         eval_model_directive,
@@ -255,6 +266,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_mcp_directive(rt, item, env))
         elif isinstance(item, SettingsDirectiveStmt):
             active = active.merge(eval_settings_directive(rt, item, env))
+        elif isinstance(item, ArtifactsDirectiveStmt):
+            active = active.merge(eval_artifacts_directive(rt, item, env))
         elif isinstance(item, UseDirectiveStmt):
             active = active.merge(
                 eval_use_directive(

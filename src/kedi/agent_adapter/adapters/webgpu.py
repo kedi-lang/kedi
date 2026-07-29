@@ -90,6 +90,10 @@ class WebGPUAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_artifacts=True,
+        supports_native_artifacts=False,
+        supports_stateful_history=False,
+        supports_history_replay=False,
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 

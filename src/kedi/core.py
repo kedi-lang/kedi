@@ -35,6 +35,7 @@ from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
 if TYPE_CHECKING:
+    from .agent_adapter.conversation import ConversationState
     from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from .agent_adapter.subagents.limits import SubagentUsageLimits
 
@@ -161,8 +162,10 @@ class KediRuntime:
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
         subagent_state_path: str | Path | None = None,
+        conversation_state: "ConversationState | None" = None,
     ) -> None:
         from .agent_profile import AgentProfile
+        from .artifacts import ArtifactManager
 
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
@@ -207,6 +210,10 @@ class KediRuntime:
         self._prelude_env: ValueEnv | None = None
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
+        self.conversation_state = conversation_state
+        self.artifacts = (
+            conversation_state.artifacts if conversation_state is not None else ArtifactManager()
+        )
         from .agent_adapter.subagents.coordinator import (
             SubagentCoordinator,
             SubagentCoordinatorDependencies,
@@ -296,7 +303,9 @@ class KediRuntime:
         # Drain awaits every scheduled template (parallel mode) so side effects fire and errors
         # surface; force resolves a promise result before handing it to the caller.
         self.drain()
-        return force(result)
+        from .lang.compiler.environment import native_value
+
+        return native_value(force(result))
 
     def set_initial_globals(self, values: ValueEnv) -> None:
         self._initial_globals_env = dict(values)
@@ -310,22 +319,12 @@ class KediRuntime:
             raise KeyError(f"Unknown procedure: {name}") from e
 
     def _lookup_value(self, key: str, env: ValueEnv) -> Any:
-        if key in env:
-            return env[key]
+        from .lang.compiler.environment import raw_lookup_value
 
-        current_env = self._current_env.get()
-        if isinstance(current_env, dict) and key in current_env:
-            return current_env[key]
-
-        for layer in (
-            self._globals_env,
-            self._initial_globals_env,
-            self._prelude_env,
-            self._import_env,
-        ):
-            if isinstance(layer, dict) and key in layer:
-                return layer[key]
-
+        try:
+            return raw_lookup_value(self, key, env)
+        except KeyError:
+            pass
         raise NameError(f"Value not found in environment: {key}")
 
     @staticmethod
@@ -357,8 +356,12 @@ class KediRuntime:
             # to a STRING — matching the sequential path's eager ``str(value)`` so a non-str typed
             # output (list/model/int) chained into a prompt renders identically in both modes.
             if isinstance(value, KediPromise):
-                return value.map(str), None
-            return str(value), None
+                from .lang.compiler.environment import model_text
+
+                return value.map(model_text), None
+            from .lang.compiler.environment import model_text
+
+            return model_text(value), None
         if isinstance(expr, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
             callee = self._get_proc(expr.func_name)
@@ -374,7 +377,9 @@ class KediRuntime:
     def _evaluate_value(self, value: Any, env: ValueEnv) -> Any:
         # Procedure arguments are forced to concrete values at the call boundary.
         if isinstance(value, InputExpr):
-            return force(self._lookup_value(value.key, env))
+            from .lang.compiler.environment import native_value
+
+            return native_value(force(self._lookup_value(value.key, env)))
         if isinstance(value, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in value.args]
             callee = self._get_proc(value.func_name)
@@ -638,7 +643,13 @@ class KediRuntime:
                 if instructions is not None:
                     run_kwargs["instructions"] = instructions
                 with override_ctx:
-                    return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
+                    return self._run_conversation_call(
+                        adapter,
+                        prompt,
+                        lambda active_prompt: str(
+                            adapter.invoke_sync(prompt=active_prompt, **run_kwargs)
+                        ),
+                    )
 
         if not parallel:
             response = _call_invoke()
@@ -757,6 +768,35 @@ class KediRuntime:
             if captured_tool_specs:
                 tool_adapter = cast(Any, adapter)  # _resolve_tool_specs verified tool support
                 tool_ctx = tool_adapter.tool_scope()
+
+            def produce_and_validate(active_question: str) -> Dict[str, Any]:
+                result = adapter.produce_sync(
+                    template=active_question,
+                    output_schema=typed_fields,
+                    **run_kwargs,
+                )
+                out_map: Dict[str, Any] = {}
+                artifact_policy = profile.artifacts
+                for key in required:
+                    value = getattr(result, key, NotFound)
+                    if value is NotFound:
+                        raise ValueError(f"LLM did not return required key: {key}")
+                    validated = self._validate_adapter_output(
+                        value,
+                        typed_fields[key],
+                        explicit_type=key in explicit_typed_fields,
+                    )
+                    out_map[key] = (
+                        self.artifacts.artifactize(
+                            validated,
+                            policy=artifact_policy,
+                            source=f"output:{key}",
+                        )
+                        if artifact_policy is not None
+                        else validated
+                    )
+                return out_map
+
             with tool_ctx:
                 if tool_adapter is not None:
                     for spec in captured_tool_specs:
@@ -767,23 +807,11 @@ class KediRuntime:
                     run_kwargs["instructions"] = instructions
 
                 with override_ctx:
-                    result = adapter.produce_sync(
-                        template=question,
-                        output_schema=typed_fields,
-                        **run_kwargs,
+                    return self._run_conversation_call(
+                        adapter,
+                        question,
+                        produce_and_validate,
                     )
-
-            out_map: Dict[str, Any] = {}
-            for key in required:
-                value = getattr(result, key, NotFound)  # Ensure result has the attribute
-                if value is NotFound:
-                    raise ValueError(f"LLM did not return required key: {key}")
-                out_map[key] = self._validate_adapter_output(
-                    value,
-                    typed_fields[key],
-                    explicit_type=key in explicit_typed_fields,
-                )
-            return out_map
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
         # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
@@ -823,6 +851,38 @@ class KediRuntime:
         for key in required:
             env[key] = views[key]
         return dict(views)
+
+    def _run_conversation_call(
+        self,
+        adapter: Any,
+        prompt: str,
+        call: Callable[[str], Any],
+    ) -> Any:
+        """Run one successful adapter turn through explicit continuation state."""
+        state = self.conversation_state
+        if state is None:
+            return call(prompt)
+
+        from .agent_adapter.conversation import SupportsConversationState
+        from .lang.compiler.environment import model_value
+
+        capabilities = adapter.capabilities
+        with state.adapter_turn(adapter.shortname) as conversation:
+            active_prompt = (
+                state.replay_prompt(prompt)
+                if conversation.replay_required and capabilities.supports("history_replay")
+                else prompt
+            )
+            conversation_scope = (
+                adapter.conversation_scope(conversation)
+                if capabilities.supports("stateful_history")
+                and isinstance(adapter, SupportsConversationState)
+                else nullcontext()
+            )
+            with conversation_scope:
+                result = call(active_prompt)
+            state.record_exchange(prompt, model_value(result))
+            return result
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
@@ -972,6 +1032,44 @@ class KediRuntime:
                     supports_background=capabilities.supports("background_subagents"),
                 )
             )
+        artifact_policy = getattr(profile, "artifacts", None)
+        if artifact_policy is not None and artifact_policy.resolved().enabled:
+            from .agent_adapter.meta import AdapterCapabilities
+            from .agent_adapter.tool_override import (
+                SupportsToolRegistration,
+                with_approval,
+                with_artifact_result,
+            )
+            from .artifacts import ArtifactCapabilityError, artifact_tool_specs
+
+            capabilities = getattr(adapter, "capabilities", None)
+            if (
+                not isinstance(adapter, SupportsToolRegistration)
+                or not isinstance(capabilities, AdapterCapabilities)
+                or not capabilities.supports("artifacts")
+            ):
+                raise ArtifactCapabilityError(
+                    "Active adapter does not support Kedi artifact references and tools"
+                )
+            management_specs = artifact_tool_specs(self.artifacts)
+            if not self._adapter_uses_native_approvals(adapter):
+                management_specs = tuple(
+                    with_approval(
+                        spec,
+                        policy=profile.approval,
+                        adapter_shortname=getattr(adapter, "shortname", None),
+                    )
+                    for spec in management_specs
+                )
+            specs.extend(management_specs)
+            specs = [
+                with_artifact_result(
+                    spec,
+                    manager=self.artifacts,
+                    policy=artifact_policy,
+                )
+                for spec in specs
+            ]
         return tuple(specs)
 
     async def _delegate_task(
@@ -1108,14 +1206,19 @@ class KediRuntime:
 
     @staticmethod
     def _agent_instructions(profile: Any) -> str | None:
-        """Append the skill contract without replacing user-provided system instructions."""
-        instructions = getattr(profile, "system", None)
-        if not getattr(profile, "skills", False):
-            return instructions
-        from .agent_adapter.skills import skill_instructions
+        """Append enabled runtime contracts without replacing user instructions."""
 
-        skill_prompt = skill_instructions()
-        return skill_prompt if instructions is None else f"{instructions}\n\n{skill_prompt}"
+        parts = [getattr(profile, "system", None)]
+        if getattr(profile, "skills", False):
+            from .agent_adapter.skills import skill_instructions
+
+            parts.append(skill_instructions())
+        artifact_policy = getattr(profile, "artifacts", None)
+        if artifact_policy is not None and artifact_policy.resolved().enabled:
+            from .artifacts import artifact_instructions
+
+            parts.append(artifact_instructions())
+        return "\n\n".join(part for part in parts if part) or None
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

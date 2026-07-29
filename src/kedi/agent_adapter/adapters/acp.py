@@ -289,6 +289,10 @@ class ACPAdapter:
         supports_model_override=False,
         supports_effort=False,
         supports_settings=True,
+        supports_artifacts=False,
+        supports_native_artifacts=False,
+        supports_stateful_history=False,
+        supports_history_replay=False,
         settings=ACP_AGENT_SETTING_KEYS,
     )
 

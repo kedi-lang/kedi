@@ -6,10 +6,13 @@ Handles variable lookup, environment building, and context management.
 from __future__ import annotations
 
 import builtins
+import dataclasses
+import json
 import keyword
 import linecache
 import re
 import typing
+from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -195,14 +198,15 @@ class KediEnv(dict[str, Any]):
         dict.clear(self)
 
     def __getitem__(self, key: str) -> Any:
-        value = dict.__getitem__(self, key)
-        from ...promise import KediPromise
+        return native_value(dict.__getitem__(self, key))
 
-        if isinstance(value, KediPromise):
-            resolved = value.resolve()
-            dict.__setitem__(self, key, resolved)
-            return resolved
-        return value
+    def raw_value(self, key: str) -> Any:
+        """Return the stored value without resolving promises or artifacts."""
+        return dict.__getitem__(self, key)
+
+    def native_value(self, key: str) -> Any:
+        """Return the Python-native value while retaining lazy storage."""
+        return native_value(self.raw_value(key))
 
 
 def assert_kedienv_routing() -> None:
@@ -240,23 +244,224 @@ def assert_kedienv_routing() -> None:
         )
 
 
-def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
-    """Look up a variable in the environment hierarchy."""
+def raw_lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
+    """Look up a variable without materializing promises or artifacts."""
     if name in local_env:
-        return local_env[name]
+        return _raw_mapping_value(local_env, name)
 
     try:
         current = rt._current_env.get()
         if isinstance(current, dict) and name in current:
-            return current[name]
+            return _raw_mapping_value(current, name)
     except Exception:
         pass
 
     for env in (rt._globals_env, rt._prelude_env, rt._import_env):
         if env is not None and name in env:
-            return env[name]
+            return _raw_mapping_value(env, name)
 
     raise KeyError(f"Unknown variable: {name}")
+
+
+def lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
+    """Look up and materialize a value for native Kedi/Python execution."""
+    return native_value(raw_lookup_value(rt, name, local_env))
+
+
+def model_lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
+    """Look up a value for a model prompt without opening artifact payloads."""
+    return model_value(raw_lookup_value(rt, name, local_env))
+
+
+def native_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
+    """Resolve promises and artifacts recursively into their logical Python values."""
+    from ...artifacts import ArtifactHandle
+    from ...promise import KediPromise
+
+    if isinstance(value, KediPromise):
+        return native_value(value.resolve(), _memo=_memo)
+    if isinstance(value, ArtifactHandle):
+        return native_value(value.get_value(), _memo=_memo)
+    if not _contains_lazy_value(value):
+        return value
+    return _map_nested(value, model=False, memo={} if _memo is None else _memo)
+
+
+def model_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
+    """Resolve promises while replacing artifacts with compact JSON-safe refs."""
+    from ...artifacts import ArtifactHandle
+    from ...promise import KediPromise
+
+    if isinstance(value, KediPromise):
+        return model_value(value.resolve(), _memo=_memo)
+    if isinstance(value, ArtifactHandle):
+        return value.as_ref().model_dump(mode="json")
+    if not _contains_lazy_value(value):
+        return value
+    return _map_nested(value, model=True, memo={} if _memo is None else _memo)
+
+
+def model_text(value: Any) -> str:
+    """Render a model-facing value, using stable JSON for artifact references."""
+    resolved = model_value(value)
+    if _contains_artifact_ref(value):
+        try:
+            return json.dumps(resolved, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError, RecursionError):
+            return repr(resolved)
+    return str(resolved)
+
+
+def _raw_mapping_value(mapping: dict[str, Any], key: str) -> Any:
+    if isinstance(mapping, KediEnv):
+        return mapping.raw_value(key)
+    return dict.__getitem__(mapping, key)
+
+
+def _contains_artifact_ref(value: Any, *, seen: set[int] | None = None) -> bool:
+    from ...artifacts import ArtifactHandle
+    from ...promise import KediPromise
+
+    if isinstance(value, ArtifactHandle):
+        return True
+    if isinstance(value, KediPromise):
+        return _contains_artifact_ref(value.resolve(), seen=seen)
+    seen = set() if seen is None else seen
+    identity = id(value)
+    if identity in seen:
+        return False
+    seen.add(identity)
+    if isinstance(value, Mapping):
+        return any(
+            _contains_artifact_ref(key, seen=seen) or _contains_artifact_ref(item, seen=seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_artifact_ref(item, seen=seen) for item in value)
+    if isinstance(value, BaseModel):
+        return _contains_artifact_ref(value.__dict__, seen=seen)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _contains_artifact_ref(getattr(value, item.name), seen=seen)
+            for item in dataclasses.fields(value)
+        )
+    return False
+
+
+def _contains_lazy_value(value: Any, *, seen: set[int] | None = None) -> bool:
+    from ...artifacts import ArtifactHandle
+    from ...promise import KediPromise
+
+    if isinstance(value, (ArtifactHandle, KediPromise)):
+        return True
+    seen = set() if seen is None else seen
+    identity = id(value)
+    if identity in seen:
+        return False
+    seen.add(identity)
+    if isinstance(value, Mapping):
+        return any(
+            _contains_lazy_value(key, seen=seen) or _contains_lazy_value(item, seen=seen)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(_contains_lazy_value(item, seen=seen) for item in value)
+    if isinstance(value, BaseModel):
+        return _contains_lazy_value(value.__dict__, seen=seen)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return any(
+            _contains_lazy_value(getattr(value, item.name), seen=seen)
+            for item in dataclasses.fields(value)
+        )
+    return False
+
+
+def _map_nested(value: Any, *, model: bool, memo: dict[int, Any]) -> Any:
+    from ...artifacts import ArtifactHandle
+    from ...promise import KediPromise
+
+    if isinstance(value, KediPromise):
+        return model_value(value, _memo=memo) if model else native_value(value, _memo=memo)
+    if isinstance(value, ArtifactHandle):
+        return (
+            value.as_ref().model_dump(mode="json")
+            if model
+            else native_value(value.get_value(), _memo=memo)
+        )
+    if isinstance(value, (str, bytes, bytearray, int, float, bool, type(None))):
+        return value
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
+    if isinstance(value, list):
+        result: list[Any] = []
+        memo[identity] = result
+        result.extend(_map_nested(item, model=model, memo=memo) for item in value)
+        return result
+    if isinstance(value, dict):
+        result_dict: dict[Any, Any] = {}
+        memo[identity] = result_dict
+        for key, item in value.items():
+            result_dict[_map_nested(key, model=model, memo=memo)] = _map_nested(
+                item, model=model, memo=memo
+            )
+        return result_dict
+    if isinstance(value, tuple):
+        result_tuple = tuple(_map_nested(item, model=model, memo=memo) for item in value)
+        memo[identity] = result_tuple
+        return result_tuple
+    if isinstance(value, set):
+        if model:
+            result_list = [_map_nested(item, model=True, memo=memo) for item in value]
+            memo[identity] = result_list
+            return result_list
+        result_set = {_map_nested(item, model=False, memo=memo) for item in value}
+        memo[identity] = result_set
+        return result_set
+    if isinstance(value, frozenset):
+        if model:
+            result_list = [_map_nested(item, model=True, memo=memo) for item in value]
+            memo[identity] = result_list
+            return result_list
+        result_frozen = frozenset(_map_nested(item, model=False, memo=memo) for item in value)
+        memo[identity] = result_frozen
+        return result_frozen
+    if isinstance(value, BaseModel):
+        if model:
+            model_fields: dict[str, Any] = {}
+            memo[identity] = model_fields
+            model_fields.update(
+                {
+                    name: _map_nested(item, model=True, memo=memo)
+                    for name, item in value.__dict__.items()
+                }
+            )
+            return model_fields
+        updates = {
+            name: _map_nested(item, model=False, memo=memo) for name, item in value.__dict__.items()
+        }
+        result_model = value.model_copy(update=updates)
+        memo[identity] = result_model
+        return result_model
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        if model:
+            dataclass_fields: dict[str, Any] = {}
+            memo[identity] = dataclass_fields
+            dataclass_fields.update(
+                {
+                    item.name: _map_nested(getattr(value, item.name), model=True, memo=memo)
+                    for item in dataclasses.fields(value)
+                }
+            )
+            return dataclass_fields
+        updates = {
+            item.name: _map_nested(getattr(value, item.name), model=False, memo=memo)
+            for item in dataclasses.fields(value)
+        }
+        result_dataclass = dataclasses.replace(value, **updates)
+        memo[identity] = result_dataclass
+        return result_dataclass
+    return value
 
 
 def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:

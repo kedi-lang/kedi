@@ -141,6 +141,29 @@ def test_semantic_tokens_cover_approval_directive_values():
     )
 
 
+def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
+    src = "> artifacts:\n  threshold: 100kb\n  cleanup_interval: `timedelta(seconds=5)`\n"
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/artifacts.kedi").data
+    )
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 1 and col == 2 and token_type == property_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and col == len("  threshold: ") and token_type == string_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 2 and col > len("  cleanup_interval: `") and token_type == variable_type
+        for line, col, _, token_type, _ in tokens
+    )
+
+
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
     tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)

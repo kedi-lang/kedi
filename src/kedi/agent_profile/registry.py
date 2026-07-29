@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.tool_override import ToolSpec
-    from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
+    from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -72,6 +72,12 @@ class ProfileSettingsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileArtifactsMember:
+    kind: Literal["artifacts"] = "artifacts"
+    fields: tuple["ArtifactsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSubagentMember:
     kind: Literal["subagents"] = "subagents"
     name: str
@@ -102,6 +108,7 @@ class ProfileDefinition:
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
     ] = field(default_factory=list)

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
+from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .mcp import McpServerSpec, mcp_spec_from_mapping
@@ -14,6 +15,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileArtifactsMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMaxAgentsMember,
@@ -32,6 +34,8 @@ if TYPE_CHECKING:
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
         ApprovalDirectiveStmt,
+        ArtifactsDirectiveStmt,
+        ArtifactsField,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         McpField,
@@ -323,6 +327,38 @@ def eval_settings_directive(
     return AgentProfile(settings=eval_settings_fields(rt, stmt.fields, env))
 
 
+def eval_artifacts_field_value(
+    rt: KediRuntime,
+    field: ArtifactsField,
+    env: dict[str, Any],
+) -> Any:
+    if field.backtick_code is not None:
+        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+    if field.plain_value is not None:
+        return parse_plain_setting_value(field.plain_value)
+    return None
+
+
+def eval_artifacts_fields(
+    rt: KediRuntime,
+    fields: list[ArtifactsField] | tuple[ArtifactsField, ...],
+    env: dict[str, Any],
+) -> ArtifactPolicy:
+    values = {field.name: eval_artifacts_field_value(rt, field, env) for field in fields}
+    policy = normalize_artifact_policy(values)
+    if policy is None:
+        raise KediExecutionError("artifacts directive did not produce a policy")
+    return policy
+
+
+def eval_artifacts_directive(
+    rt: KediRuntime,
+    stmt: ArtifactsDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return AgentProfile(artifacts=eval_artifacts_fields(rt, stmt.fields, env))
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -335,6 +371,7 @@ def _member_to_patch(
         | ProfileToolMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
     ),
@@ -409,6 +446,8 @@ def _member_to_patch(
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     if member.kind == "settings":
         return AgentProfile(settings=eval_settings_fields(rt, member.fields, env))
+    if member.kind == "artifacts":
+        return AgentProfile(artifacts=eval_artifacts_fields(rt, member.fields, env))
     if member.kind == "subagents":
         return AgentProfile(subagents=(member.name,))
     if member.kind == "max_agents":

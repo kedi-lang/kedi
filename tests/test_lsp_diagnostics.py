@@ -88,6 +88,47 @@ def test_diagnostics_ignore_comments_inside_directive_bodies():
     assert features.compute_diagnostics(settings, "settings.kedi") == []
 
 
+def test_artifact_diagnostics_validate_values_and_adapter_capabilities() -> None:
+    invalid = features.compute_diagnostics(
+        "> artifacts:\n  threshold: invalid\n",
+        "artifacts.kedi",
+    )
+    assert [diagnostic.code for diagnostic in invalid] == ["K-ARTIFACTS-VALUE"]
+    assert invalid[0].range.start.line == 1
+    assert invalid[0].range.start.character == len("  threshold: ")
+
+    unsupported = features.compute_diagnostics(
+        "> agent: acp\n> artifacts:\n  enabled: true\n",
+        "artifacts.kedi",
+    )
+    assert {diagnostic.code for diagnostic in unsupported} == {"K-ADAPTER-CAPABILITY"}
+    assert len(unsupported) == 1
+
+    supported = features.compute_diagnostics(
+        "> adapter: pydantic\n> artifacts:\n  enabled: true\n",
+        "artifacts.kedi",
+    )
+    assert supported == []
+
+
+def test_profile_artifact_diagnostics_follow_profile_adapter_capabilities() -> None:
+    diagnostics = features.compute_diagnostics(
+        "> profile: remote:\n  > agent: acp\n  > artifacts:\n    enabled: true\n",
+        "artifacts.kedi",
+    )
+
+    assert len(diagnostics) == 1
+    assert {diagnostic.code for diagnostic in diagnostics} == {"K-ADAPTER-CAPABILITY"}
+
+
+def test_artifact_inline_python_is_exposed_as_python_range() -> None:
+    source = "> artifacts:\n  threshold: `args.threshold`\n"
+
+    ranges = features.compute_python_ranges(source)
+
+    assert any(item["kind"] == "inline" and item["text"] == "args.threshold" for item in ranges)
+
+
 def test_diagnostics_accept_tools_fixture() -> None:
     path = Path("tests/files/tools.kedi").resolve()
     src = path.read_text(encoding="utf-8")
