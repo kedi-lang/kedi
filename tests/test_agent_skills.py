@@ -181,7 +181,15 @@ def test_single_line_use_skills_registers_skill_tools_and_instructions(
     )
 
     assert runtime.run_main() == "answer-value"
-    assert adapter.tool_calls == [("list_skills", "read_skill")]
+    assert adapter.tool_calls == [
+        (
+            "list_skills",
+            "read_skill",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+        )
+    ]
     assert adapter.instruction_calls[0] is not None
     assert "Be concise." in adapter.instruction_calls[0]
     assert "<SKILL_INSTRUCTIONS>" in adapter.instruction_calls[0]
@@ -260,7 +268,15 @@ def test_profile_use_skills_enables_skill_tools(
     )
 
     assert runtime.run_main() == "answer-value"
-    assert adapter.tool_calls == [("list_skills", "read_skill")]
+    assert adapter.tool_calls == [
+        (
+            "list_skills",
+            "read_skill",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+        )
+    ]
 
 
 def test_profile_can_combine_skills_with_named_procedure_tools(
@@ -284,7 +300,16 @@ def test_profile_can_combine_skills_with_named_procedure_tools(
     )
 
     assert runtime.run_main() == "answer-value"
-    assert adapter.tool_calls == [("lookup", "list_skills", "read_skill")]
+    assert adapter.tool_calls == [
+        (
+            "lookup",
+            "list_skills",
+            "read_skill",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+        )
+    ]
 
 
 def test_procedure_named_skills_keeps_procedure_precedence() -> None:
@@ -295,7 +320,9 @@ def test_procedure_named_skills_keeps_procedure_precedence() -> None:
     )
 
     runtime.run_main()
-    assert adapter.tool_calls == [("skills",)]
+    assert adapter.tool_calls == [
+        ("skills", "read_artifact", "search_artifacts", "release_artifact")
+    ]
 
 
 def test_use_skills_requires_adapter_tool_registration() -> None:
@@ -332,7 +359,15 @@ def test_python_api_skills_option_registers_skill_tools(
             """
 
         assert answer() == "answer-value"
-        assert adapter.tool_calls == [("list_skills", "read_skill")]
+        assert adapter.tool_calls == [
+            (
+                "list_skills",
+                "read_skill",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+            )
+        ]
         assert "<SKILL_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
     finally:
         kedi.reset_config()

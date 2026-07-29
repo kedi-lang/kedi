@@ -715,6 +715,9 @@ def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> Non
             "list_directory",
             "create_directory",
             "get_file_info",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
         )
     ]
 

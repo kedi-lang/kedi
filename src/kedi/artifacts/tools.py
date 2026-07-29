@@ -35,8 +35,8 @@ def artifact_tool_specs(manager: ArtifactManager) -> tuple[ToolSpec, ToolSpec, T
 
         return [item.model_dump(mode="json") for item in manager.search(query, limit=limit)]
 
-    def invalidate_artifact(*, ref_id: str) -> dict[str, Any]:
-        """Invalidate an artifact and compact its linked portable history."""
+    def release_artifact(*, ref_id: str) -> dict[str, Any]:
+        """Release an artifact and compact its linked portable history."""
 
         return manager.release(ref_id).model_dump(mode="json")
 
@@ -100,10 +100,10 @@ def artifact_tool_specs(manager: ArtifactManager) -> tuple[ToolSpec, ToolSpec, T
             artifact_result="never",
         ),
         ToolSpec(
-            fn=invalidate_artifact,
-            name="invalidate_artifact",
+            fn=release_artifact,
+            name="release_artifact",
             description=(
-                "Invalidate an artifact that is no longer needed and compact its linked history."
+                "Release an artifact that is no longer needed and compact its linked history."
             ),
             json_schema={
                 "type": "object",

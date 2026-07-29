@@ -276,6 +276,13 @@ class ArtifactManager:
             span.set_attribute("kedi.artifact.search_results", len(results))
             return results
 
+    def has_active_artifacts(self) -> bool:
+        """Return whether this session owns content that an agent may need to read."""
+
+        self.cleanup_expired()
+        with self._lock:
+            return any(record.status is ArtifactStatus.ACTIVE for record in self._all_records())
+
     def release(
         self,
         ref_id: str,

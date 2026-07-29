@@ -31,6 +31,7 @@ from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
+from kedi.artifacts import artifact_instructions
 from kedi.errors import KediExecutionError
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
@@ -50,6 +51,7 @@ class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
         supports_structured_output=True,
         supports_tool_registration=True,
         supports_profile_override=True,
+        supports_artifacts=True,
     )
 
     def __init__(self) -> None:
@@ -883,9 +885,9 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
 
     assert current_block_agent_profile() == AgentProfile.empty()
     assert answer() == "ok"
-    assert adapter.instructions == ["Use terse prose."]
+    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
     assert current_block_agent_profile() == AgentProfile.empty()
 
 
@@ -912,8 +914,10 @@ def test_tool_decorator_sets_name_description_and_retries(adapter: ApiAdapter) -
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("search_docs",)]
-    assert adapter.tool_descriptions == [("Search indexed docs.",)]
+    assert adapter.tools == [
+        ("search_docs", "read_artifact", "search_artifacts", "release_artifact")
+    ]
+    assert adapter.tool_descriptions[0][0] == "Search indexed docs."
 
 
 def test_tool_direct_decorator_without_docstring() -> None:
@@ -971,7 +975,7 @@ def test_query_registers_callable_tools(adapter: ApiAdapter) -> None:
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
 
 
 def test_bind_file_exposes_kedi_source_as_python_callable(
@@ -1089,9 +1093,9 @@ def test_bind_file_profile_arguments_apply_for_one_call(
     def answer() -> str: ...
 
     assert answer() == "ok"
-    assert adapter.instructions == ["Use terse prose."]
+    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
 
 
 def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: Path) -> None:
@@ -1153,7 +1157,7 @@ def test_configure_default_tools_are_available_to_use_directive(
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
 
 
 def test_query_requires_kedi_docstring_header() -> None:

@@ -144,6 +144,57 @@ def test_policy_parses_units_and_overlays_only_specified_fields(tmp_path: Path) 
     assert PublicArtifactPolicy is ArtifactPolicy
 
 
+def test_artifacts_are_enabled_by_default_without_initial_prompt_overhead() -> None:
+    class LargeOutputAdapter(ArtifactRecordingAdapter):
+        def produce_sync(
+            self,
+            *,
+            template: str,
+            output_schema: dict[str, Any] | None = None,
+            **kwargs: Any,
+        ) -> AttrDict[str, Any]:
+            super().produce_sync(
+                template=template,
+                output_schema=output_schema,
+                **kwargs,
+            )
+            return AttrDict({"payload": "x" * 100_000})
+
+    adapter = LargeOutputAdapter()
+    runtime = compile_program(
+        parse_program(">> A large value is [payload].\n= `payload`\n"),
+        adapter=adapter,
+    )
+
+    result = runtime.run_main()
+
+    assert ArtifactPolicy().enabled is True
+    assert result == "x" * 100_000
+    assert runtime.artifacts.has_active_artifacts()
+    assert adapter.tool_calls == [()]
+    assert adapter.instruction_calls == [None]
+    runtime.artifacts.close()
+
+
+def test_default_artifacts_do_not_advertise_management_tools_for_mcp_only_calls() -> None:
+    adapter = MockAdapter()
+    runtime = compile_program(
+        parse_program(
+            "> mcp:\n"
+            "  transport: http\n"
+            "  url: http://localhost:8000/mcp\n"
+            "\n"
+            ">> Return [answer].\n"
+            "= <answer>\n"
+        ),
+        adapter=adapter,
+    )
+
+    assert runtime.run_main() == "answer-value"
+    assert adapter.tool_calls == [()]
+    assert adapter.instruction_calls == [None]
+
+
 def test_artifacts_directive_parses_top_level_and_profile_members() -> None:
     program = parse_program(
         "> artifacts:\n"
@@ -859,7 +910,7 @@ def test_artifact_management_tools_are_registered_and_never_artifacted() -> None
 
     runtime.run_main()
 
-    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "invalidate_artifact")]
+    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "release_artifact")]
     assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
     runtime.artifacts.close()
 
@@ -947,7 +998,7 @@ def test_pydantic_agent_reads_compact_tool_artifact_before_final_output() -> Non
         "read_artifact",
     ]
     assert all(
-        {"load_reference_material", "read_artifact", "search_artifacts", "invalidate_artifact"}
+        {"load_reference_material", "read_artifact", "search_artifacts", "release_artifact"}
         <= set(call)
         for call in calls
     )
@@ -991,14 +1042,14 @@ def test_native_approval_adapter_receives_unwrapped_artifact_tools() -> None:
 
     runtime.run_main()
 
-    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "invalidate_artifact")]
+    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "release_artifact")]
     runtime.artifacts.close()
 
 
 def test_disabled_artifacts_do_not_register_management_tools() -> None:
     adapter = ArtifactRecordingAdapter()
     runtime = compile_program(
-        parse_program(">> Give [payload].\n"),
+        parse_program("> artifacts:\n  enabled: false\n\n>> Give [payload].\n"),
         adapter=adapter,
     )
 

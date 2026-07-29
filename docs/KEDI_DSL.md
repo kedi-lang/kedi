@@ -1146,12 +1146,11 @@ a procedure-tool list, so it does not enable skills.
 ### Large values and artifacts
 
 Artifacts keep large generated fields and tool results out of model prompts
-without changing their native Kedi or Python value. They are disabled by
-default and can be enabled at top level, inside a procedure, or in a profile:
+without changing their native Kedi or Python value. They are enabled by
+default and can be configured at top level, inside a procedure, or in a profile:
 
 ```kedi
 > artifacts:
-    enabled: true
     store: memory
     threshold: 100kb
     ttl: 1h
@@ -1167,7 +1166,7 @@ Artifact fields and defaults:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Enables artifact conversion in the current agent scope. |
+| `enabled` | `true` | Enables artifact conversion in the current agent scope. |
 | `store` | `memory` | Uses the process-local `memory` store or the bounded `file` store. |
 | `path` | `.kedi/artifacts` | File-store root. It is ignored by the memory store. |
 | `threshold` | `100kb` | Minimum serialized byte size converted into an artifact. |
@@ -1258,10 +1257,10 @@ When artifacts are enabled, Kedi registers three management tools:
   text, JSON, or base64 chunk. `offset` paginates content and `path` accepts an
   RFC 6901 JSON Pointer for structured values. `max_chars=-1` means the
   configured bounded limit, not an unbounded read.
-- `invalidate_artifact(ref_id)` releases content that is no longer needed and
+- `release_artifact(ref_id)` releases content that is no longer needed and
   compacts portable history linked to that ref.
 
-Search and read are read-only tools. Invalidation is mutating and follows the
+Search and read are read-only tools. Release is mutating and follows the
 normal approval policy. Management-tool results are never converted into new
 artifacts.
 
@@ -1289,7 +1288,7 @@ Expired records are removed lazily and by one process-level cleanup service;
 Kedi does not create one cleanup thread per runtime.
 
 Portable conversation history stores compact refs and bounded read chunks, not
-raw artifact payloads. Invalidating or expiring a ref removes its obsolete read
+raw artifact payloads. Releasing or expiring a ref removes its obsolete read
 chunks while preserving valid tool-call/result structure and leaves a
 metadata-only tombstone. Provider-native checkpoints may still contain earlier
 content, so Kedi marks them stale and rotates/replays from compact portable
@@ -1437,9 +1436,9 @@ Rules:
 - `skills=True` on `kedi.configure`, `kedi.context`, `@kedi.query`, or
   `@kedi.bind` enables the same explicit `list_skills` / `read_skill` tools as
   `> use: skills`.
-- `artifacts=True` enables default artifact handling. A mapping such as
-  `artifacts={"enabled": True, "threshold": "100kb", "ttl": "1h"}` applies
-  the same policy fields as `> artifacts:`. Pass `artifacts=False` in a nested
+- Artifact handling is enabled by default. A mapping such as
+  `artifacts={"threshold": "100kb", "ttl": "1h"}` applies the same policy
+  fields as `> artifacts:`. Pass `artifacts=False` in a nested
   context or callable to disable an inherited policy.
 - `conversation=` accepts a `ConversationState` when calls must reuse portable
   history and artifact ownership. Prefer `with kedi.session():` for bounded

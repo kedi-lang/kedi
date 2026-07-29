@@ -71,7 +71,7 @@ _NUMBER_WITH_UNIT = re.compile(r"^\s*(?P<number>(?:\d+(?:\.\d*)?|\.\d+))\s*(?P<u
 class ArtifactPolicy:
     """Normalized artifact policy with field-aware overlay semantics."""
 
-    enabled: bool = False
+    enabled: bool = True
     store: ArtifactStoreKind = "memory"
     path: Path = Path(".kedi/artifacts")
     threshold_bytes: int = 100_000
@@ -114,6 +114,10 @@ class ArtifactPolicy:
 
     def resolved(self) -> ArtifactPolicy:
         return replace(self, _specified_fields=_ALL_POLICY_FIELDS)
+
+    @property
+    def is_explicit(self) -> bool:
+        return bool(self._specified_fields)
 
     def as_cache_key(self) -> tuple[object, ...]:
         return (

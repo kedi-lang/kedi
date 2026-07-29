@@ -810,6 +810,8 @@ def test_dsl_static_approval_reaches_the_registered_tool() -> None:
     source = """@write_file(path: str) -> str:
   = <path>
 
+> artifacts:
+  enabled: false
 > use: write_file
 > approval: allow
 >> Write [answer]
@@ -884,6 +886,8 @@ def test_dsl_static_deny_prevents_the_registered_tool() -> None:
     source = """@write_file(path: str) -> str:
   = <path>
 
+> artifacts:
+  enabled: false
 > use: write_file
 > approval: deny
 >> Write [answer]
@@ -906,6 +910,8 @@ def test_dsl_dynamic_approval_handler_is_evaluated_from_python_environment() -> 
     source = """@write_file(path: str) -> str:
   = <path>
 
+> artifacts:
+  enabled: false
 > use: write_file
 > approval: `approve`
 >> Write [answer]
@@ -932,6 +938,8 @@ def approval_handler(_request):
 @write_file(path: str) -> str:
   = <path>
 
+> artifacts:
+  enabled: false
 > use: write_file
 > approval: `approval_handler`
 >> Write [answer]
@@ -947,6 +955,8 @@ def test_procedure_approval_directive_is_applied_in_its_call_scope() -> None:
   = <path>
 
 @run() -> str:
+  > artifacts:
+    enabled: false
   > use: write_file
   > approval: allow
   >> Write [answer]
@@ -969,6 +979,8 @@ def test_profile_approval_is_applied_when_profile_is_used() -> None:
   = <path>
 
 > profile: guarded:
+  > artifacts:
+    enabled: false
   > approval: allow
   > use: write_file
 

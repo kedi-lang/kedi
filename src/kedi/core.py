@@ -1033,7 +1033,7 @@ class KediRuntime:
                 )
             )
         artifact_policy = getattr(profile, "artifacts", None)
-        if artifact_policy is not None and artifact_policy.resolved().enabled:
+        if self._artifact_contract_needed(profile, has_tools=bool(specs)):
             from .agent_adapter.meta import AdapterCapabilities
             from .agent_adapter.tool_override import (
                 SupportsToolRegistration,
@@ -1204,8 +1204,7 @@ class KediRuntime:
             return Path(source_path).resolve().parent / ".agents" / "skills"
         return Path.cwd() / ".agents" / "skills"
 
-    @staticmethod
-    def _agent_instructions(profile: Any) -> str | None:
+    def _agent_instructions(self, profile: Any) -> str | None:
         """Append enabled runtime contracts without replacing user instructions."""
 
         parts = [getattr(profile, "system", None)]
@@ -1213,12 +1212,24 @@ class KediRuntime:
             from .agent_adapter.skills import skill_instructions
 
             parts.append(skill_instructions())
-        artifact_policy = getattr(profile, "artifacts", None)
-        if artifact_policy is not None and artifact_policy.resolved().enabled:
+        if self._artifact_contract_needed(
+            profile,
+            has_tools=bool(
+                getattr(profile, "tools", ())
+                or getattr(profile, "skills", False)
+                or getattr(profile, "subagents", ())
+            ),
+        ):
             from .artifacts import artifact_instructions
 
             parts.append(artifact_instructions())
         return "\n\n".join(part for part in parts if part) or None
+
+    def _artifact_contract_needed(self, profile: Any, *, has_tools: bool) -> bool:
+        policy = getattr(profile, "artifacts", None)
+        if policy is None or not policy.resolved().enabled:
+            return False
+        return policy.is_explicit or has_tools or self.artifacts.has_active_artifacts()
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

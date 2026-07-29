@@ -159,7 +159,7 @@ def test_use_procedure_over_profile_when_both_exist() -> None:
     assert agent_def.captured_agent_profile.model is None
 
     rt._invoke_procedure(rt._procedures["agent"], [])
-    assert adapter.tool_calls == [("foo",)]
+    assert adapter.tool_calls == [("foo", "read_artifact", "search_artifacts", "release_artifact")]
 
 
 def test_nested_tool_override_and_scope_restore() -> None:
@@ -182,7 +182,10 @@ def test_nested_tool_override_and_scope_restore() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert len(adapter.tool_calls) == 2
-    assert adapter.tool_calls == [("bar",), ("bar",)]
+    assert adapter.tool_calls == [
+        ("bar", "read_artifact", "search_artifacts", "release_artifact"),
+        ("bar", "read_artifact", "search_artifacts", "release_artifact"),
+    ]
 
 
 def test_sample_nested_tool_override_uses_inner_then_restores_outer(
@@ -207,11 +210,8 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
     class LocAwareAdapter(MockAdapter):
         def register_tool(self, tool: ToolSpec) -> None:
             proc = tool.proc
-            assert proc is not None
-            assert proc.loc is not None
-            self._tool_scope.register_tool(
-                SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}")
-            )
+            name = f"{proc.name}:{proc.loc.start_line}" if proc and proc.loc else tool.name
+            self._tool_scope.register_tool(SimpleNamespace(name=name))
 
     adapter = LocAwareAdapter(default_model="default-model")
     rt = compile_program(parse_program(src), adapter=adapter)
@@ -221,7 +221,11 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
     # Each prompt is scoped to exactly its own tool (inner bar:7 for foo, outer bar:1 for the
     # top level). Compared order-independently: under the parallel engine these two independent
     # templates may execute in either order, but each must still see only its correct tool.
-    assert sorted(adapter.tool_calls) == [("bar:1",), ("bar:7",)]
+    artifact_tools = ("read_artifact", "search_artifacts", "release_artifact")
+    assert sorted(adapter.tool_calls) == [
+        ("bar:1", *artifact_tools),
+        ("bar:7", *artifact_tools),
+    ]
 
 
 def test_profile_body_use_registers_tools() -> None:
@@ -245,7 +249,9 @@ def test_profile_body_use_registers_tools() -> None:
     assert agent_def.captured_agent_profile.tools == ("web_search",)
 
     rt._invoke_procedure(rt._procedures["agent"], [])
-    assert adapter.tool_calls == [("web_search",)]
+    assert adapter.tool_calls == [
+        ("web_search", "read_artifact", "search_artifacts", "release_artifact")
+    ]
     assert adapter.model_calls == ["opus"]
 
 
@@ -280,7 +286,14 @@ def test_imported_profile_can_use_prelude_python_callable_tool(tmp_path) -> None
 
     assert "read_file_content" not in rt._import_env
     assert rt.run_main() == "content-value"
-    assert adapter.tool_calls == [("read_file_content",)]
+    assert adapter.tool_calls == [
+        (
+            "read_file_content",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+        )
+    ]
 
 
 def test_imported_profile_can_use_private_kedi_procedure_tool(tmp_path) -> None:
@@ -312,7 +325,14 @@ def test_imported_profile_can_use_private_kedi_procedure_tool(tmp_path) -> None:
 
     assert "read_file_content" not in rt._procedures
     assert rt.run_main() == "content-value"
-    assert adapter.tool_calls == [("read_file_content",)]
+    assert adapter.tool_calls == [
+        (
+            "read_file_content",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+        )
+    ]
 
 
 def test_imported_profile_tool_binding_does_not_publish_or_rebind_dependency() -> None:
@@ -456,7 +476,12 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
     rt = compile_program(parse_program(src), adapter=adapter)
 
     assert rt.run_main().endswith(" ok")
-    assert len(seen_tools) == 1
+    assert [getattr(tool, "name") for tool in seen_tools] == [
+        "tool_proc",
+        "read_artifact",
+        "search_artifacts",
+        "release_artifact",
+    ]
     tool = seen_tools[0]
     assert getattr(tool, "name") == "tool_proc"
     assert getattr(tool, "desc") == "Returns `str` instance."

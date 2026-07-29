@@ -44,7 +44,7 @@ class AgentProfile:
 
     @classmethod
     def empty(cls) -> AgentProfile:
-        return cls()
+        return cls(artifacts=ArtifactPolicy.patch({}))
 
     def merge(self, other: AgentProfile) -> AgentProfile:
         updates: dict[str, object] = {}
