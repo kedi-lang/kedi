@@ -23,7 +23,7 @@ from .api import (
     tool,
     type,
 )
-from .agent_adapter import ConversationState
+from .agent_adapter import ApprovalCancelled, ConversationState
 from .artifacts import (
     ArtifactChunk,
     ArtifactHandle,
@@ -31,6 +31,7 @@ from .artifacts import (
     ArtifactRef,
     ArtifactReleaseResult,
     ArtifactSearchResult,
+    ArtifactStream,
 )
 from .core import KediRuntime, c, i, o
 from .executors.base import DefaultExecutor, Executor
@@ -51,12 +52,14 @@ __all__ = [
     "ApprovalMode",
     "ApprovalPolicy",
     "ApprovalRequest",
+    "ApprovalCancelled",
     "ArtifactChunk",
     "ArtifactHandle",
     "ArtifactPolicy",
     "ArtifactRef",
     "ArtifactReleaseResult",
     "ArtifactSearchResult",
+    "ArtifactStream",
     "CacheInfo",
     "ConversationState",
     "FrameworkAdapterName",

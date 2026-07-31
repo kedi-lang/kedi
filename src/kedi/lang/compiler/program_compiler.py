@@ -562,8 +562,25 @@ class ProgramCompiler:
 
         # Store the shell before recursively binding children so cycles do not
         # accidentally publish a caller-owned profile under the same name.
-        bound = replace(profile, tool_bindings=tool_bindings, subagent_bindings={})
+        bound = replace(
+            profile,
+            tool_bindings=tool_bindings,
+            profile_bindings={},
+            subagent_bindings={},
+        )
         bound_profiles[profile.name] = bound
+        profile_bindings: dict[str, ProfileDefinition] = {}
+        for used_name in self._profile_use_names(profile):
+            if used_name in tool_bindings:
+                continue
+            used_profile = imported_rt._profile_registry.get(used_name)
+            if isinstance(used_profile, ProfileDefinition):
+                bound_profile = self._bind_imported_profile(
+                    used_profile,
+                    imported_rt,
+                    bound_profiles=bound_profiles,
+                )
+                profile_bindings[used_name] = cast(ProfileDefinition, bound_profile)
         subagent_bindings: dict[str, ProfileDefinition] = {}
         for child_name in self._profile_subagent_names(profile):
             child = imported_rt._profile_registry.get(child_name)
@@ -574,7 +591,11 @@ class ProgramCompiler:
                     bound_profiles=bound_profiles,
                 )
                 subagent_bindings[child_name] = cast(ProfileDefinition, bound_child)
-        bound = replace(bound, subagent_bindings=subagent_bindings)
+        bound = replace(
+            bound,
+            profile_bindings=profile_bindings,
+            subagent_bindings=subagent_bindings,
+        )
         bound_profiles[profile.name] = bound
         return bound
 
@@ -595,7 +616,12 @@ class ProgramCompiler:
         for member in profile.members:
             if member.kind == "tools":
                 names.extend(name for name in member.tool_names if name != SKILLS_USE_TARGET)
+            elif member.kind == "use":
+                names.append(member.name)
         return tuple(names)
+
+    def _profile_use_names(self, profile: ProfileDefinition) -> tuple[str, ...]:
+        return tuple(member.name for member in profile.members if member.kind == "use")
 
     def _profile_subagent_names(
         self,

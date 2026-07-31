@@ -363,6 +363,7 @@ class ProfileDefStmt(Stmt):
     artifacts_members: List["ProfileArtifactsEntry"] = field(default_factory=list)
     subagent_members: List["ProfileSubagentEntry"] = field(default_factory=list)
     max_agents_members: List["ProfileMaxAgentsEntry"] = field(default_factory=list)
+    use_targets: List[str] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)

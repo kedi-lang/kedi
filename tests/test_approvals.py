@@ -13,10 +13,12 @@ import kedi
 import kedi.api as kedi_api
 import kedi.app as app_module
 from kedi.agent_adapter import approval as approval_module
+from kedi.agent_adapter import approval_telemetry
 from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.approval import (
+    ApprovalCancelled,
     ApprovalDecision,
     ApprovalPolicy,
     ApprovalRequest,
@@ -62,6 +64,105 @@ def test_read_only_tools_auto_allow_without_policy() -> None:
     assert tool.fn(path="notes.txt", content="ignored") == "notes.txt:ignored"
 
 
+def test_approval_telemetry_records_states_without_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spans: list[object] = []
+
+    class FakeSpan:
+        def __init__(self, attributes: dict[str, object]) -> None:
+            self.attributes = dict(attributes)
+            self.events: list[str] = []
+
+        def set_attribute(self, name: str, value: object) -> None:
+            self.attributes[name] = value
+
+        def add_event(self, name: str) -> None:
+            self.events.append(name)
+
+    @contextmanager
+    def start_span(_name: str, *, attributes: dict[str, object]) -> Iterator[FakeSpan]:
+        span = FakeSpan(attributes)
+        spans.append(span)
+        yield span
+
+    monkeypatch.setattr(
+        approval_telemetry._tracer,
+        "start_as_current_span",
+        start_span,
+    )
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={"path": ".env", "content": "secret"},
+        risk="sensitive",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    decision = resolve_tool_approval(
+        ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.edit({"path": "safe.txt"})),
+        request,
+    )
+
+    assert decision.decision == "edit"
+    span = spans[0]
+    assert isinstance(span, FakeSpan)
+    assert span.attributes == {
+        "approval.tool_name": "write_file",
+        "approval.risk": "sensitive",
+        "approval.state": "allowed",
+        "approval.adapter": "pydantic",
+        "approval.arguments_edited": True,
+    }
+    assert span.events == [
+        "approval.requested",
+        "approval.pending",
+        "approval.allowed",
+    ]
+    assert "path" not in span.attributes
+    assert "content" not in span.attributes
+
+
+def test_approval_telemetry_records_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    states: list[str] = []
+
+    class FakeSpan:
+        def set_attribute(self, name: str, value: object) -> None:
+            if name == "approval.state":
+                states.append(str(value))
+
+        def add_event(self, _name: str) -> None:
+            pass
+
+    @contextmanager
+    def start_span(_name: str, *, attributes: dict[str, object]) -> Iterator[FakeSpan]:
+        states.append(str(attributes["approval.state"]))
+        yield FakeSpan()
+
+    monkeypatch.setattr(
+        approval_telemetry._tracer,
+        "start_as_current_span",
+        start_span,
+    )
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname=None,
+        description=None,
+        metadata=None,
+    )
+
+    def cancel(_request: ApprovalRequest) -> ApprovalDecision:
+        raise ApprovalCancelled("cancelled")
+
+    with pytest.raises(ApprovalCancelled, match="cancelled"):
+        resolve_tool_approval(ApprovalPolicy.dynamic(cancel), request)
+
+    assert states == ["requested", "pending", "cancelled"]
+
+
 def test_mutating_tools_default_to_denied() -> None:
     tool = with_approval(_tool(), policy=None, adapter_shortname="test")
 
@@ -69,7 +170,7 @@ def test_mutating_tools_default_to_denied() -> None:
         tool.fn(path="notes.txt", content="blocked")
 
 
-def test_cli_approval_handler_allows_once_and_denies_cancelled_prompt() -> None:
+def test_cli_approval_handler_allows_once_and_aborts_cancelled_prompt() -> None:
     request = ApprovalRequest.create(
         tool_name="write_file",
         arguments={"path": "notes.txt"},
@@ -82,7 +183,8 @@ def test_cli_approval_handler_allows_once_and_denies_cancelled_prompt() -> None:
     cancelled = CliApprovalHandler(prompt=lambda _request: None, is_interactive=lambda: True)
 
     assert allowed(request).decision == "allow"
-    assert cancelled(request).decision == "deny"
+    with pytest.raises(ApprovalCancelled, match="Approval cancelled"):
+        cancelled(request)
 
 
 def test_cli_approval_handler_allow_always_is_session_local_and_risk_scoped() -> None:
@@ -226,6 +328,58 @@ def test_cli_approval_handler_uses_questionary_choices(monkeypatch: pytest.Monke
         ("Allow once", "allow"),
         ("Allow always for this run", "always"),
     ]
+
+
+def test_cli_approval_handler_maps_questionary_interrupts_to_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePrompt:
+        def ask(self) -> str:
+            raise EOFError
+
+        async def ask_async(self) -> str:
+            raise KeyboardInterrupt
+
+    class FakeQuestionary:
+        @staticmethod
+        def Choice(title: str, *, value: str) -> tuple[str, str]:
+            return title, value
+
+        @staticmethod
+        def select(message: str, *, choices: object) -> FakePrompt:
+            return FakePrompt()
+
+    monkeypatch.setitem(sys.modules, "questionary", FakeQuestionary)
+    handler = CliApprovalHandler(is_interactive=lambda: True)
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    with pytest.raises(ApprovalCancelled, match="write_file"):
+        handler(request)
+    with pytest.raises(ApprovalCancelled, match="write_file"):
+        asyncio.run(handler.resolve_async(request))
+
+
+def test_async_approval_resolution_records_cancellation() -> None:
+    async def cancel(_request: ApprovalRequest) -> ApprovalDecision:
+        raise ApprovalCancelled("async cancelled")
+
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+    with pytest.raises(ApprovalCancelled, match="async cancelled"):
+        asyncio.run(resolve_tool_approval_async(ApprovalPolicy.dynamic(cancel), request))
 
 
 def test_run_source_cli_supplies_interactive_default_profile(
@@ -535,7 +689,9 @@ def test_filesystem_secret_read_requires_approval(tmp_path: Path) -> None:
         blocked.fn(file_path=str(secret_path), secret_files=True)
 
     allowed = with_approval(spec, policy=ApprovalPolicy.allow(), adapter_shortname="test")
-    assert allowed.fn(file_path=str(secret_path), secret_files=True) == "TOKEN=hidden\n"
+    streamed = allowed.fn(file_path=str(secret_path), secret_files=True)
+    assert isinstance(streamed, kedi.ArtifactStream)
+    assert list(streamed.iter_chunks()) == ["TOKEN=hidden\n"]
     with pytest.raises(KediExecutionError, match="secret_files=True"):
         allowed.fn(file_path=str(secret_path), secret_files=False)
 

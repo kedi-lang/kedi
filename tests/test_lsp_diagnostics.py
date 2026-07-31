@@ -13,6 +13,7 @@ from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
     OutputSegment,
     Program,
+    ProfileDefStmt,
     Span,
     TemplateLine,
     TypeApply,
@@ -417,6 +418,57 @@ def test_diagnostics_warn_when_adapter_lacks_tool_registration(
     assert "agent tool registration" in diag.message
     assert diag.range.start.line == 5
     assert diag.range.start.character == len("> use: ")
+
+
+def test_diagnostics_follow_composed_profile_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_tool_registration=False),
+    )
+    src = (
+        "> agent: codex\n\n"
+        "@lookup():\n"
+        "    = ok\n\n"
+        "> profile: inner:\n"
+        "    > use: lookup\n\n"
+        "> profile: outer:\n"
+        "    > use: inner\n\n"
+        "> use: outer\n"
+    )
+
+    diagnostics = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CAPABILITY"
+    assert "agent tool registration from this profile" in diagnostics[0].message
+
+    cyclic = ProfileDefStmt(name="cyclic", use_targets=["cyclic"])
+    assert (
+        features._profile_capability_usage(
+            cyclic,
+            profile_defs={"cyclic": cyclic},
+            proc_names=set(),
+        )
+        == set()
+    )
+    explicit_tools = ProfileDefStmt(name="tools", tool_names=["lookup"])
+    assert features._profile_capability_usage(
+        explicit_tools,
+        profile_defs={},
+        proc_names=set(),
+    ) == {"tool_registration"}
+    unknown = ProfileDefStmt(name="unknown", use_targets=["missing"])
+    assert (
+        features._profile_capability_usage(
+            unknown,
+            profile_defs={},
+            proc_names=set(),
+        )
+        == set()
+    )
 
 
 def test_diagnostics_warn_when_adapter_lacks_skill_tool_registration(

@@ -14,6 +14,7 @@ from .conversation import (
     ConversationTurn,
     SupportsConversationState,
 )
+from .approval import ApprovalCancelled
 from .tool_override import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
@@ -73,6 +74,7 @@ __all__ = [
     "AdapterCapability",
     "AdapterConversationContext",
     "AgentAdapterKind",
+    "ApprovalCancelled",
     "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import threading
@@ -9,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, AsyncIterator, Iterator
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -38,7 +39,23 @@ from kedi.artifacts import (
 from kedi.artifacts import telemetry as artifact_telemetry
 from kedi.artifacts.cleanup import ArtifactCleanupService
 from kedi.artifacts.models import ArtifactRecord, ArtifactRef
-from kedi.artifacts.store import InMemoryArtifactStore, store_size
+from kedi.artifacts.store import (
+    InMemoryArtifactStore,
+    _JsonPointerLocator,
+    _build_utf8_checkpoints,
+    _count_utf8_chars,
+    _load_projection_index,
+    _locate_json_pointer_range,
+    _read_base64_chars,
+    _read_utf8_chars,
+    _validated_checkpoints,
+    _validated_pointer_ranges,
+    store_size,
+)
+from kedi.artifacts.streaming import StreamedArtifact
+from kedi.artifacts.stream import ArtifactStream
+from kedi.artifacts.streaming import ArtifactStreamEncoder
+from kedi.artifacts.manager import _StreamingWrite, _is_expired
 from kedi.artifacts.tools import artifact_tool_specs
 from kedi.lang.compiler.environment import (
     KediEnv,
@@ -292,13 +309,12 @@ def test_file_store_rejects_duplicate_records_and_symlink_sessions(tmp_path: Pat
         )
 
 
-def test_file_store_ignores_invalid_metadata_and_reads_after_cache_clear(tmp_path: Path) -> None:
+def test_file_store_ignores_invalid_metadata_and_reads_without_native_cache(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     store = FileArtifactStore(root)
     record = _record()
     store.put(record, serialize_artifact("value", preview_chars=10))
     assert store.get_value("session", "art_test") == "value"
-    store._native_cache.clear()
     assert store.get_value("session", "art_test") == "value"
     store.close()
 
@@ -425,7 +441,7 @@ def test_manager_disabled_search_read_quota_and_stats() -> None:
         empty = manager.read(first.ref.ref_id, offset=99)
         assert empty.content == ""
         assert empty.complete is True
-        manager.release(first.ref.ref_id, compact_history=False)
+        manager.release(first.ref.ref_id)
         assert manager.search() == []
         assert manager.stats()["released_artifacts"] == 1
     finally:
@@ -448,6 +464,643 @@ def test_manager_json_pointer_escapes_lists_and_scalar_failure() -> None:
             manager.read(artifact.ref.ref_id, path="/a~1b/~0key/1/value")
     finally:
         manager.close()
+
+
+def test_file_json_pointer_index_survives_restore_without_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_policy = policy(store="file", path=tmp_path)
+    first = ArtifactManager(session_id="pointer-restore")
+    artifact = first.artifactize(
+        {"şehir": {"a/b": ["zero", "Ağβ🙂Z"]}},
+        policy=file_policy,
+    )
+    assert isinstance(artifact, ArtifactHandle)
+    ref_id = artifact.ref.ref_id
+    first.close()
+
+    second = ArtifactManager(session_id="pointer-restore")
+    try:
+        store = second._store_for_policy(file_policy)
+
+        def reject_materialization(*args: object, **kwargs: object) -> object:
+            raise AssertionError("restored JSON pointer reads must not call get_value")
+
+        monkeypatch.setattr(store, "get_value", reject_materialization)
+        chunk = second.read(ref_id, path="/şehir/a~1b/1", offset=1, max_chars=3)
+        assert chunk.content == "Ağβ"
+        assert chunk.next_offset == 4
+    finally:
+        second.close()
+
+
+def test_file_json_pointer_rejects_corrupt_projection_index(tmp_path: Path) -> None:
+    file_policy = policy(store="file", path=tmp_path)
+    manager = ArtifactManager(session_id="pointer-corrupt")
+    try:
+        artifact = manager.artifactize({"value": "ok"}, policy=file_policy)
+        assert isinstance(artifact, ArtifactHandle)
+        index_path = next(tmp_path.rglob(f"{artifact.ref.ref_id}.index"))
+        index_path.write_text('{"version":1}', encoding="utf-8")
+        with pytest.raises(ArtifactSerializationError, match="projection index"):
+            manager.read(artifact.ref.ref_id, path="/value")
+    finally:
+        manager.close()
+
+
+def test_file_json_pointer_legacy_scan_does_not_materialize_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file_policy = policy(store="file", path=tmp_path)
+    manager = ArtifactManager(session_id="pointer-legacy")
+    try:
+        artifact = manager.artifactize(
+            {"outer": [{"a/b": "Ağβ🙂Z"}]},
+            policy=file_policy,
+        )
+        assert isinstance(artifact, ArtifactHandle)
+        next(tmp_path.rglob(f"{artifact.ref.ref_id}.index")).unlink()
+        store = manager._ref_stores[artifact.ref.ref_id]
+
+        def reject_materialization(*args: object, **kwargs: object) -> object:
+            raise AssertionError("legacy JSON pointer scans must not call get_value")
+
+        monkeypatch.setattr(store, "get_value", reject_materialization)
+        chunk = manager.read(
+            artifact.ref.ref_id,
+            path="/outer/0/a~1b",
+            offset=1,
+            offset_from="end",
+            max_chars=3,
+        )
+        assert chunk.content == "β🙂Z"
+        assert chunk.next_offset == 4
+    finally:
+        manager.close()
+
+
+def _streamed(codec: str = "text", *, size: int = 5) -> StreamedArtifact:
+    return StreamedArtifact(
+        codec=codec,
+        media_type="text/plain",
+        logical_type="str",
+        size_bytes=size,
+        char_count=size,
+        preview="value",
+        summary="value",
+        digest="digest",
+    )
+
+
+def test_memory_stream_writer_rejects_identity_duplicates_and_closed_state() -> None:
+    store = InMemoryArtifactStore()
+    writer = store.begin_write("session", "art_test")
+    writer.write(b"value")
+    with pytest.raises(ArtifactSerializationError, match="identity"):
+        writer.commit(_record(ref_id="other"), _streamed())
+
+    writer.commit(_record(), _streamed())
+    with pytest.raises(ArtifactSerializationError, match="already closed"):
+        writer.write(b"again")
+
+    duplicate = store.begin_write("session", "art_test")
+    duplicate.write(b"value")
+    with pytest.raises(ArtifactSerializationError, match="already exists"):
+        duplicate.commit(_record(), _streamed())
+    duplicate.abort()
+    store.close()
+
+
+def test_file_stream_writer_rejects_identity_duplicates_and_closed_state(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "writer")
+    mismatch = store.begin_write("session", "art_wrong")
+    mismatch.write(b"value")
+    with pytest.raises(ArtifactSerializationError, match="identity"):
+        mismatch.commit(_record(), _streamed())
+    mismatch.abort()
+
+    writer = store.begin_write("session", "art_test")
+    writer.write(b"value")
+    writer.commit(_record(), _streamed())
+    writer.abort()
+    with pytest.raises(ArtifactSerializationError, match="already closed"):
+        writer.write(b"again")
+
+    duplicate = store.begin_write("session", "art_test")
+    duplicate.write(b"value")
+    with pytest.raises(ArtifactSerializationError, match="already exists"):
+        duplicate.commit(_record(), _streamed())
+    assert not tuple((tmp_path / "writer").rglob("*.tmp"))
+    store.close()
+
+
+def test_store_projection_helpers_cover_binary_unicode_and_invalid_payloads(tmp_path: Path) -> None:
+    payload = tmp_path / "payload"
+    payload.write_text("Ağβ🙂Z", encoding="utf-8")
+    assert _count_utf8_chars(payload) == 5
+    assert _read_utf8_chars(payload, start=0, limit=0) == ""
+    assert _read_utf8_chars(payload, start=1, limit=3) == "ğβ🙂"
+    assert _read_utf8_chars(payload, start=0, limit=20) == "Ağβ🙂Z"
+
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"abcdef")
+    assert _read_base64_chars(binary, start=2, limit=4) == "JjZG"
+
+    invalid = tmp_path / "invalid"
+    invalid.write_bytes(b"\xff")
+    with pytest.raises(ArtifactSerializationError, match="not valid UTF-8"):
+        _read_utf8_chars(invalid, start=0, limit=1)
+
+
+def test_file_and_memory_projection_reject_invalid_codec_or_json_path(tmp_path: Path) -> None:
+    memory = InMemoryArtifactStore()
+    memory.put(_record(), serialize_artifact("value", preview_chars=10))
+    with pytest.raises(ArtifactSerializationError, match="JSON paths"):
+        memory.read_json_pointer_projection(
+            "session",
+            "art_test",
+            pointer="/value",
+            offset=0,
+            offset_from="start",
+            max_chars=10,
+        )
+    memory.close()
+
+    store = FileArtifactStore(tmp_path / "projection")
+    record = _record()
+    record.codec = "opaque"
+    directory = store._session_directory("session")
+    payload_path = store._payload_path("session", "art_test")
+    payload_path.write_bytes(b"value")
+    record.payload = payload_path
+    store._records[record.ref_id] = record
+    with pytest.raises(ArtifactSerializationError, match="no file-backed text projection"):
+        store.read_projection(
+            "session",
+            "art_test",
+            offset=0,
+            offset_from="start",
+            max_chars=10,
+        )
+    assert directory.exists()
+    store.close()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        [[0]],
+        [[-1, 0]],
+        [[1, 1]],
+        [[0, 0], [0, 1]],
+    ],
+)
+def test_projection_checkpoint_validation_rejects_malformed_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _validated_checkpoints(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {1: [0, 1, 0, 1]},
+        {"/a": [0, 1, 0]},
+        {"/a": [-1, 1, 0, 1]},
+        {"/a": [2, 1, 0, 1]},
+    ],
+)
+def test_projection_pointer_range_validation_rejects_malformed_values(value: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _validated_pointer_ranges(value)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"null trailing",
+        b"?",
+        b'{"a":}',
+        b'{"a" 1}',
+        b'{"a":1 x}',
+        b"[1 x]",
+        b'"unterminated',
+        b'{"\\uZZZZ":1}',
+    ],
+)
+def test_legacy_json_pointer_locator_rejects_malformed_json(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    path = tmp_path / "malformed.json"
+    path.write_bytes(payload)
+    with pytest.raises(ArtifactSerializationError):
+        _locate_json_pointer_range(path, "/missing")
+
+
+def test_projection_index_loader_rejects_all_malformed_fields(tmp_path: Path) -> None:
+    path = tmp_path / "index"
+    invalid_indexes = [
+        [],
+        {"version": 2},
+        {
+            "version": 1,
+            "utf8_checkpoints": [[0, 0]],
+            "json_pointer_ranges": {},
+            "json_pointer_index_complete": "yes",
+        },
+    ]
+    for value in invalid_indexes:
+        path.write_text(json.dumps(value), encoding="utf-8")
+        with pytest.raises(ArtifactSerializationError, match="projection index"):
+            _load_projection_index(path)
+
+
+def test_json_pointer_encoder_rejects_zero_cap_and_reports_partial_index() -> None:
+    from kedi.artifacts.serialization import encode_json_with_pointers
+
+    with pytest.raises(ValueError, match="must be positive"):
+        encode_json_with_pointers({"value": 1}, max_entries=0)
+    encoded = encode_json_with_pointers({"outer": {"inner": 1}}, max_entries=1)
+    assert encoded.index_complete is False
+    assert set(encoded.pointer_ranges) == {""}
+
+
+def test_read_artifact_tool_rejects_pattern_with_json_path() -> None:
+    manager = ArtifactManager(session_id="pattern-path")
+    artifact = manager.artifactize({"value": "alpha"}, policy=policy())
+    assert isinstance(artifact, ArtifactHandle)
+    read = next(spec for spec in artifact_tool_specs(manager) if spec.name == "read_artifact")
+    try:
+        with pytest.raises(ValueError, match="does not support JSON Pointer"):
+            read.fn(ref_id=artifact.ref.ref_id, pattern="alpha", path="/value")
+    finally:
+        manager.close()
+
+
+def test_manager_find_and_read_reject_invalid_arguments_and_cap_results() -> None:
+    manager = ArtifactManager(session_id="manager-arguments")
+    artifact = manager.artifactize("alpha alpha alpha", policy=policy(read_max_chars=5))
+    assert isinstance(artifact, ArtifactHandle)
+    try:
+        with pytest.raises(ValueError, match="cannot be empty"):
+            manager.find(artifact.ref.ref_id, "")
+        with pytest.raises(ValueError, match="must be positive"):
+            manager.find(artifact.ref.ref_id, "alpha", max_matches=0)
+        with pytest.raises(ValueError, match="offset_from"):
+            manager.read(artifact.ref.ref_id, offset_from="middle")  # type: ignore[arg-type]
+        assert len(manager.find(artifact.ref.ref_id, "alpha", max_matches=1)) == 1
+    finally:
+        manager.close()
+
+
+def test_async_stream_failure_aborts_transaction_and_closes_source() -> None:
+    async def run() -> None:
+        closed = False
+
+        async def chunks() -> AsyncIterator[str]:
+            nonlocal closed
+            try:
+                yield "large"
+                raise RuntimeError("stream failed")
+            finally:
+                closed = True
+
+        manager = ArtifactManager(session_id="async-stream-failure")
+        try:
+            with pytest.raises(RuntimeError, match="stream failed"):
+                await manager.artifactize_stream_async(
+                    ArtifactStream.text(chunks()),
+                    policy=policy(threshold=1),
+                )
+            assert closed
+            assert manager._reserved_artifacts == 0
+            assert manager._reserved_bytes == 0
+            assert manager.stats()["active_artifacts"] == 0
+        finally:
+            manager.close()
+
+    asyncio.run(run())
+
+
+def test_manager_cleanup_error_is_reported_and_reservations_handle_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = 0.0
+
+    def monotonic() -> float:
+        return clock
+
+    manager = ArtifactManager(session_id="cleanup-error", monotonic=monotonic)
+    artifact = manager.artifactize("value", policy=policy(ttl="1s"))
+    assert isinstance(artifact, ArtifactHandle)
+    clock = 2.0
+    monkeypatch.setattr(
+        manager,
+        "_delete_payload",
+        lambda _record: (_ for _ in ()).throw(RuntimeError("delete failed")),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="delete failed"):
+            manager.cleanup_expired()
+        manager._grow_stream_reservation(policy(), 0)
+    finally:
+        manager.close()
+
+
+def test_manager_ref_collision_and_stream_state_invariants() -> None:
+    manager = ArtifactManager(session_id="stream-state")
+    stream = ArtifactStream.text([])
+    encoder = ArtifactStreamEncoder(stream, preview_chars=10)
+    state = _StreamingWrite(manager, policy(), None, False, stream, encoder)
+    streamed = _streamed(size=0)
+    try:
+        manager._ref_stores["artifact_1"] = manager._memory_store
+        assert manager._new_ref_id(None) == "artifact_2"
+
+        state.finished = True
+        with pytest.raises(RuntimeError, match="already finished"):
+            state.finish(streamed)
+        state.abort()
+
+        incomplete = _StreamingWrite(manager, policy(), None, False, stream, encoder)
+        incomplete.writer = object()
+        with pytest.raises(RuntimeError, match="incomplete state"):
+            incomplete.finish(streamed)
+    finally:
+        manager._ref_stores.pop("artifact_1", None)
+        manager.close()
+
+
+def test_stream_registration_and_discard_without_digest_or_metered_size() -> None:
+    manager = ArtifactManager(session_id="stream-no-digest")
+    store = InMemoryArtifactStore()
+    record = _record(ref_id="artifact_1", session_id=manager.session_id)
+    record.digest = None
+    store.put(record, serialize_artifact("value", preview_chars=10))
+    resolved = policy()
+    try:
+        handle = manager._register_streamed(record=record, store=store, policy=resolved)
+        assert handle.ref.ref_id == "artifact_1"
+        manager._metered_active_refs.pop("artifact_1")
+        manager._discard_streamed(record=record, store=store, policy=resolved)
+        assert manager.stats()["active_artifacts"] == 0
+    finally:
+        manager.close()
+
+
+def test_expiry_predicate_handles_terminal_idle_and_pending_records() -> None:
+    released = _record(ref_id="released")
+    released.status = ArtifactStatus.RELEASED
+    assert not _is_expired(released, now=10_000)
+
+    pending = _record(ref_id="pending")
+    pending.status = ArtifactStatus.PENDING_RELEASE
+    pending.expires_monotonic = 100
+    pending.idle_ttl_seconds = 2
+    pending.last_accessed_monotonic = 1
+    assert not _is_expired(pending, now=2)
+    assert _is_expired(pending, now=3)
+
+
+def test_manager_find_handles_absent_and_duplicate_overlap_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = ArtifactManager(session_id="find-overlap")
+    artifact = manager.artifactize("alpha", policy=policy(read_max_chars=5))
+    assert isinstance(artifact, ArtifactHandle)
+    calls = 0
+
+    def repeated_page(*_args: object, **_kwargs: object) -> tuple[str, int | None, bool]:
+        nonlocal calls
+        calls += 1
+        return ("alpha", 0, False) if calls == 1 else ("alpha", None, True)
+
+    try:
+        assert manager.find(artifact.ref.ref_id, "missing") == []
+        monkeypatch.setattr(manager._memory_store, "read_projection", repeated_page)
+        matches = manager.find(artifact.ref.ref_id, "alpha", context_chars=0)
+        assert matches == [{"offset": 0, "match": "alpha", "context": "alpha"}]
+    finally:
+        manager.close()
+
+
+def test_file_store_reads_missing_char_count_and_binary_projection(tmp_path: Path) -> None:
+    text_store = FileArtifactStore(tmp_path / "text")
+    text_record = _record()
+    text_record.ref = text_record.ref.model_copy(update={"char_count": None})
+    text_store.put(text_record, serialize_artifact("Ağβ🙂Z", preview_chars=10))
+    assert (
+        text_store.read_projection(
+            "session",
+            "art_test",
+            offset=1,
+            offset_from="start",
+            max_chars=3,
+        )[0]
+        == "ğβ🙂"
+    )
+    text_store.close()
+
+    byte_store = FileArtifactStore(tmp_path / "bytes")
+    byte_record = _record(ref_id="art_bytes")
+    byte_record.codec = "bytes"
+    byte_record.ref = byte_record.ref.model_copy(
+        update={"ref_id": "art_bytes", "char_count": None, "size_bytes": 6}
+    )
+    byte_store.put(byte_record, serialize_artifact(b"abcdef", preview_chars=10))
+    assert (
+        byte_store.read_projection(
+            "session",
+            "art_bytes",
+            offset=2,
+            offset_from="start",
+            max_chars=4,
+        )[0]
+        == "JjZG"
+    )
+    byte_store.close()
+
+
+def test_file_json_pointer_rejects_invalid_non_json_and_missing_paths(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "json-paths")
+    text_record = _record(ref_id="art_text")
+    text_record.ref = text_record.ref.model_copy(update={"ref_id": "art_text"})
+    store.put(text_record, serialize_artifact("value", preview_chars=10))
+
+    json_record = _record(ref_id="art_json")
+    json_record.codec = "json"
+    json_record.ref = json_record.ref.model_copy(update={"ref_id": "art_json"})
+    store.put(json_record, serialize_artifact({"value": 1}, preview_chars=10))
+    try:
+        with pytest.raises(ValueError, match="RFC 6901"):
+            store.read_json_pointer_projection(
+                "session",
+                "art_json",
+                pointer="value",
+                offset=0,
+                offset_from="start",
+                max_chars=10,
+            )
+        with pytest.raises(ArtifactSerializationError, match="JSON paths"):
+            store.read_json_pointer_projection(
+                "session",
+                "art_text",
+                pointer="/value",
+                offset=0,
+                offset_from="start",
+                max_chars=10,
+            )
+        with pytest.raises(ValueError, match="was not found"):
+            store.read_json_pointer_projection(
+                "session",
+                "art_json",
+                pointer="/missing",
+                offset=0,
+                offset_from="start",
+                max_chars=10,
+            )
+
+        store._projection_index_path("session", "art_json").unlink()
+        store._projection_indexes.pop(("session", "art_json"), None)
+        with pytest.raises(ValueError, match="was not found"):
+            store.read_json_pointer_projection(
+                "session",
+                "art_json",
+                pointer="/missing",
+                offset=0,
+                offset_from="start",
+                max_chars=10,
+            )
+    finally:
+        store.close()
+
+
+def test_file_stream_writer_removes_payload_when_metadata_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import kedi.artifacts.store as store_module
+
+    store = FileArtifactStore(tmp_path / "writer-failure")
+    writer = store.begin_write("session", "art_test")
+    writer.write(b"value")
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("metadata failed")
+
+    monkeypatch.setattr(store_module, "_atomic_write", fail_write)
+    try:
+        with pytest.raises(OSError, match="metadata failed"):
+            writer.commit(_record(), _streamed())
+        assert not store._payload_path("session", "art_test").exists()
+        assert not store._projection_index_path("session", "art_test").exists()
+    finally:
+        writer.abort()
+        store.close()
+
+
+def test_file_stream_writer_commits_binary_without_projection_index(tmp_path: Path) -> None:
+    store = FileArtifactStore(tmp_path / "binary-writer")
+    writer = store.begin_write("session", "art_bytes")
+    writer.write(b"abc")
+    record = _record(ref_id="art_bytes")
+    record.codec = "bytes"
+    record.ref = record.ref.model_copy(
+        update={"ref_id": "art_bytes", "size_bytes": 3, "char_count": None}
+    )
+    streamed = _streamed(codec="bytes", size=3)
+    try:
+        writer.commit(record, streamed)
+        assert store.get_value("session", "art_bytes") == b"abc"
+        assert not store._projection_index_path("session", "art_bytes").exists()
+    finally:
+        store.close()
+
+
+def test_projection_helpers_cover_large_checkpoints_eof_and_skipped_binary_chunks(
+    tmp_path: Path,
+) -> None:
+    large_text = tmp_path / "large-text"
+    large_text.write_text("a" * 4_097, encoding="utf-8")
+    checkpoints = _build_utf8_checkpoints(large_text)
+    assert checkpoints[-1] == (4_096, 4_096)
+
+    mixed_text = tmp_path / "mixed-large-text"
+    mixed_text.write_text("a" * 65_536 + "ğ" + "b" * 4_096, encoding="utf-8")
+    mixed_checkpoints = _build_utf8_checkpoints(mixed_text)
+    assert mixed_checkpoints[-2:] == ((65_536, 65_536), (69_632, 69_633))
+
+    incomplete = tmp_path / "incomplete-utf8"
+    incomplete.write_bytes(b"\xc3")
+    with pytest.raises(ArtifactSerializationError, match="not valid UTF-8"):
+        _read_utf8_chars(incomplete, start=0, limit=2)
+
+    binary = tmp_path / "large-binary"
+    binary.write_bytes(b"a" * 60_000)
+    assert _read_base64_chars(binary, start=70_000, limit=8) == "YWFhYWFh"
+    assert _read_base64_chars(binary, start=90_000, limit=8) == ""
+
+
+def test_utf8_reader_accepts_decoder_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import kedi.artifacts.store as store_module
+
+    class Decoder:
+        def decode(self, payload: bytes, final: bool = False) -> str:
+            return "tail" if final else payload.decode("ascii")
+
+    path = tmp_path / "tail"
+    path.write_bytes(b"a")
+    monkeypatch.setattr(store_module.codecs, "getincrementaldecoder", lambda _name: Decoder)
+    assert _read_utf8_chars(path, start=0, limit=10) == "atail"
+
+
+@pytest.mark.parametrize(
+    ("payload", "pointer", "expected"),
+    [
+        (b"{}", "/missing", None),
+        (b'{"a":1}', "/missing", None),
+        (b'{"a":1, "b":2}', "/missing", None),
+        (b"[]", "/0", None),
+        (b"[1]", "/1", None),
+        (b"[1, 2]", "/2", None),
+    ],
+)
+def test_legacy_json_locator_handles_valid_missing_paths(
+    tmp_path: Path,
+    payload: bytes,
+    pointer: str,
+    expected: object,
+) -> None:
+    path = tmp_path / "valid.json"
+    path.write_bytes(payload)
+    assert _locate_json_pointer_range(path, pointer) is expected
+
+
+def test_legacy_json_locator_defensive_parser_invariants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from io import BytesIO
+    import kedi.artifacts.store as store_module
+
+    missing_key = _JsonPointerLocator(BytesIO(b'{"a":1}'), target=("missing",))
+    monkeypatch.setattr(missing_key, "_parse_string", lambda *, decode: None)
+    with pytest.raises(ArtifactSerializationError, match="object key"):
+        missing_key.locate()
+
+    invalid_key = _JsonPointerLocator(BytesIO(b'"x"'), target=())
+    monkeypatch.setattr(store_module.json, "loads", lambda _value: 1)
+    with pytest.raises(ArtifactSerializationError, match="key is not a string"):
+        invalid_key._parse_string(decode=True)
+
+    empty_literal = _JsonPointerLocator(BytesIO(b""), target=())
+    with pytest.raises(ArtifactSerializationError, match="literal"):
+        empty_literal._parse_literal()
 
 
 def test_manager_bytes_quota_and_expired_release() -> None:
@@ -632,6 +1285,56 @@ def test_artifact_spans_never_attach_structured_payloads(
     ]
 
 
+def test_noop_cleanup_records_metrics_without_opening_a_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spans: list[str] = []
+    cleanup_metrics: list[float] = []
+
+    @contextmanager
+    def artifact_span(action: str, **_attributes: object) -> Iterator[SimpleNamespace]:
+        spans.append(action)
+        yield SimpleNamespace(set_attribute=lambda *_args: None, record_exception=lambda _exc: None)
+
+    monkeypatch.setattr(artifact_telemetry, "artifact_span", artifact_span)
+    monkeypatch.setattr(
+        artifact_telemetry,
+        "record_cleanup",
+        lambda *, duration_seconds: cleanup_metrics.append(duration_seconds),
+    )
+
+    manager = ArtifactManager(session_id="quiet-cleanup")
+    try:
+        assert manager.cleanup_expired() == 0
+    finally:
+        manager.close()
+
+    assert spans == []
+    assert len(cleanup_metrics) == 1
+
+
+def test_productive_cleanup_remains_traced(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 0.0
+    spans: list[str] = []
+
+    @contextmanager
+    def artifact_span(action: str, **_attributes: object) -> Iterator[SimpleNamespace]:
+        spans.append(action)
+        yield SimpleNamespace(set_attribute=lambda *_args: None, record_exception=lambda _exc: None)
+
+    monkeypatch.setattr(artifact_telemetry, "artifact_span", artifact_span)
+    manager = ArtifactManager(session_id="productive-cleanup", monotonic=lambda: now)
+    try:
+        manager.artifactize("payload", policy=policy(ttl="1s"))
+        spans.clear()
+        now = 2.0
+        assert manager.cleanup_expired() == 1
+    finally:
+        manager.close()
+
+    assert spans == ["cleanup", "expire"]
+
+
 class BlockingCleanupTarget:
     def __init__(self) -> None:
         self.entered = threading.Event()
@@ -730,9 +1433,8 @@ def test_nested_environment_values_materialize_for_native_and_model_paths() -> N
         manager.close()
 
 
-def test_conversation_replay_serialization_compaction_and_close() -> None:
+def test_conversation_serialization_release_and_close() -> None:
     state = ConversationState(session_id="conversation_edges")
-    assert state.replay_prompt("first") == "first"
 
     class BrokenJSON:
         pass
@@ -740,7 +1442,6 @@ def test_conversation_replay_serialization_compaction_and_close() -> None:
     state.record_exchange("prompt", {"value": BrokenJSON()})
     first_snapshot = state.snapshot()
     assert "BrokenJSON" in first_snapshot[1].content
-    assert "Current request:\nnext" in state.replay_prompt("next")
     assert state.as_jsonable()["session_id"] == "conversation_edges"
 
     artifact = state.artifacts.artifactize("payload", policy=policy())
@@ -753,14 +1454,14 @@ def test_conversation_replay_serialization_compaction_and_close() -> None:
     )
     with state.adapter_turn("mock") as turn:
         turn.result_state = {"thread_id": "one"}
+    turns_before_release = state.snapshot()
     state.artifacts.release(ref_id)
-    with state.adapter_turn("mock") as replay:
-        assert replay.replay_required is True
-        assert replay.resume_state == {}
-        replay.result_state = {"thread_id": "two"}
-    compacted = state.snapshot()
-    assert all(ref_id not in turn.ref_ids for turn in compacted)
-    assert "unavailable artifact" in compacted[-1].content
+    with state.adapter_turn("mock") as resumed:
+        assert resumed.resume_state == {"thread_id": "one"}
+        resumed.result_state = {"thread_id": "two"}
+    assert state.snapshot() == turns_before_release
+    assert ref_id in state.snapshot()[-1].content
+    assert state.history.snapshot()[-1].kind == "artifact_released"
 
     state.close()
     state.close()
@@ -797,10 +1498,13 @@ def test_artifact_management_tool_functions_delegate_to_manager() -> None:
     try:
         artifact = manager.artifactize("payload", policy=policy())
         assert isinstance(artifact, ArtifactHandle)
-        read, search, invalidate = artifact_tool_specs(manager)
+        tools = {tool.name: tool for tool in artifact_tool_specs(manager)}
+        read = tools["read_artifact"]
+        search = tools["search_artifacts"]
+        release = tools["release_artifact"]
 
         assert read.fn(ref_id=artifact.ref.ref_id)["content"] == "payload"
         assert search.fn(query="builtins.str")[0]["ref_id"] == artifact.ref.ref_id
-        assert invalidate.fn(ref_id=artifact.ref.ref_id)["status"] == "released"
+        assert release.fn(ref_id=artifact.ref.ref_id)["status"] == "released"
     finally:
         manager.close()

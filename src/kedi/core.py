@@ -147,6 +147,18 @@ def c(func_name: str, *args: Any) -> CallExpr:
     return CallExpr(func_name=func_name, args=tuple(args))
 
 
+def _tool_request_context(tools: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.json_schema,
+            "returns": tool.return_schema,
+        }
+        for tool in tools
+    ]
+
+
 class KediRuntime:
     """Isolated kedi runtime with its own registry and environment."""
 
@@ -192,6 +204,12 @@ class KediRuntime:
         # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
         # outermost invocation, regardless of entry point (run_main / query / direct invoke).
         self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
+        from .agent_adapter.request_budget import ModelRequestBudget
+
+        self._request_budget: ContextVar[ModelRequestBudget | None] = ContextVar(
+            "kedi_model_request_budget",
+            default=None,
+        )
         self._initial_globals_env: ValueEnv = {}
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
@@ -230,7 +248,9 @@ class KediRuntime:
                 resolve_tools=lambda profile, adapter: self._resolve_agent_tool_specs(
                     profile, adapter
                 ),
-                instructions_for_profile=lambda profile: self._agent_instructions(profile),
+                instructions_for_profile=lambda profile, adapter: self._agent_instructions(
+                    profile, adapter
+                ),
                 trace_frame=lambda frame: self.trace_frame(frame),
                 active_stack=self._subagent_stack,
                 default_cwd=Path.cwd,
@@ -409,6 +429,11 @@ class KediRuntime:
 
         depth = self._invoke_depth.get()
         depth_token = self._invoke_depth.set(depth + 1)
+        request_budget_token = None
+        if depth == 0:
+            from .agent_adapter.request_budget import ModelRequestBudget
+
+            request_budget_token = self._request_budget.set(ModelRequestBudget())
         token = self._current_env.set(local_env)
         primary_exc: BaseException | None = None
         try:
@@ -442,7 +467,11 @@ class KediRuntime:
             # Nested calls (depth > 0, incl. worker threads) never drain. A drain failure becomes
             # the error only if the body didn't already raise; otherwise it's logged, not masked.
             if depth == 0:
-                self._drain_outermost(primary_exc)
+                try:
+                    self._drain_outermost(primary_exc)
+                finally:
+                    assert request_budget_token is not None
+                    self._request_budget.reset(request_budget_token)
 
         return final
 
@@ -639,7 +668,7 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile)
+                instructions = self._agent_instructions(profile, adapter)
                 if instructions is not None:
                     run_kwargs["instructions"] = instructions
                 with override_ctx:
@@ -648,6 +677,10 @@ class KediRuntime:
                         prompt,
                         lambda active_prompt: str(
                             adapter.invoke_sync(prompt=active_prompt, **run_kwargs)
+                        ),
+                        context=(
+                            instructions,
+                            _tool_request_context(captured_tool_specs),
                         ),
                     )
 
@@ -802,7 +835,7 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile)
+                instructions = self._agent_instructions(profile, adapter)
                 if instructions is not None:
                     run_kwargs["instructions"] = instructions
 
@@ -811,6 +844,11 @@ class KediRuntime:
                         adapter,
                         question,
                         produce_and_validate,
+                        context=(
+                            instructions,
+                            _tool_request_context(captured_tool_specs),
+                            {key: repr(value) for key, value in typed_fields.items()},
+                        ),
                     )
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
@@ -857,21 +895,37 @@ class KediRuntime:
         adapter: Any,
         prompt: str,
         call: Callable[[str], Any],
+        *,
+        context: Sequence[Any] = (),
     ) -> Any:
         """Run one successful adapter turn through explicit continuation state."""
+        from .agent_adapter.invocation import observe_invocations
+
+        from .agent_adapter.request_budget import ModelRequestBudget
+
+        budget = self._request_budget.get() or ModelRequestBudget()
+
         state = self.conversation_state
         if state is None:
-            return call(prompt)
+            reservation = budget.reserve(prompt, context=context)
+            try:
+                with observe_invocations(reservation.observe):
+                    result = call(prompt)
+            except BaseException:
+                reservation.finish(raise_on_exceeded=False)
+                raise
+            reservation.finish()
+            return result
 
         from .agent_adapter.conversation import SupportsConversationState
         from .lang.compiler.environment import model_value
 
         capabilities = adapter.capabilities
         with state.adapter_turn(adapter.shortname) as conversation:
-            active_prompt = (
-                state.replay_prompt(prompt)
-                if conversation.replay_required and capabilities.supports("history_replay")
-                else prompt
+            reservation = budget.reserve(
+                prompt,
+                context=context,
+                resume_state=conversation.resume_state,
             )
             conversation_scope = (
                 adapter.conversation_scope(conversation)
@@ -879,8 +933,13 @@ class KediRuntime:
                 and isinstance(adapter, SupportsConversationState)
                 else nullcontext()
             )
-            with conversation_scope:
-                result = call(active_prompt)
+            try:
+                with conversation_scope, observe_invocations(reservation.observe):
+                    result = call(prompt)
+            except BaseException:
+                reservation.finish(raise_on_exceeded=False)
+                raise
+            reservation.finish()
             state.record_exchange(prompt, model_value(result))
             return result
 
@@ -1033,7 +1092,12 @@ class KediRuntime:
                 )
             )
         artifact_policy = getattr(profile, "artifacts", None)
-        if self._artifact_contract_needed(profile, has_tools=bool(specs)):
+        artifact_contract_needed = self._artifact_contract_needed(
+            profile,
+            adapter,
+            has_tools=bool(specs),
+        )
+        if artifact_contract_needed:
             from .agent_adapter.meta import AdapterCapabilities
             from .agent_adapter.tool_override import (
                 SupportsToolRegistration,
@@ -1051,7 +1115,7 @@ class KediRuntime:
                 raise ArtifactCapabilityError(
                     "Active adapter does not support Kedi artifact references and tools"
                 )
-            management_specs = artifact_tool_specs(self.artifacts)
+            management_specs = artifact_tool_specs(self.artifacts, artifact_policy)
             if not self._adapter_uses_native_approvals(adapter):
                 management_specs = tuple(
                     with_approval(
@@ -1062,6 +1126,9 @@ class KediRuntime:
                     for spec in management_specs
                 )
             specs.extend(management_specs)
+        if specs and artifact_policy is not None:
+            from .agent_adapter.tool_override import with_artifact_result
+
             specs = [
                 with_artifact_result(
                     spec,
@@ -1204,7 +1271,7 @@ class KediRuntime:
             return Path(source_path).resolve().parent / ".agents" / "skills"
         return Path.cwd() / ".agents" / "skills"
 
-    def _agent_instructions(self, profile: Any) -> str | None:
+    def _agent_instructions(self, profile: Any, adapter: Any) -> str | None:
         """Append enabled runtime contracts without replacing user instructions."""
 
         parts = [getattr(profile, "system", None)]
@@ -1214,6 +1281,7 @@ class KediRuntime:
             parts.append(skill_instructions())
         if self._artifact_contract_needed(
             profile,
+            adapter,
             has_tools=bool(
                 getattr(profile, "tools", ())
                 or getattr(profile, "skills", False)
@@ -1225,11 +1293,24 @@ class KediRuntime:
             parts.append(artifact_instructions())
         return "\n\n".join(part for part in parts if part) or None
 
-    def _artifact_contract_needed(self, profile: Any, *, has_tools: bool) -> bool:
+    def _artifact_contract_needed(
+        self,
+        profile: Any,
+        adapter: Any,
+        *,
+        has_tools: bool,
+    ) -> bool:
+        """Choose a cache-stable artifact contract from static call capabilities."""
+
         policy = getattr(profile, "artifacts", None)
         if policy is None or not policy.resolved().enabled:
             return False
-        return policy.is_explicit or has_tools or self.artifacts.has_active_artifacts()
+        from .agent_adapter.meta import AdapterCapabilities
+
+        capabilities = getattr(adapter, "capabilities", None)
+        if isinstance(capabilities, AdapterCapabilities) and capabilities.supports("artifacts"):
+            return True
+        return policy.is_explicit or has_tools
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

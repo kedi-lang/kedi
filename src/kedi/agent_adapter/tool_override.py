@@ -110,18 +110,58 @@ def with_artifact_result(
         return tool
     metadata["kedi_artifact_wrapped"] = True
 
+    def record_admission_failure(*, call_id: str, error: str) -> None:
+        manager.history.append(
+            "tool_result",
+            data={
+                "tool_name": tool.name,
+                "call_id": call_id,
+                "artifacted": False,
+                "error": error,
+            },
+        )
+
+    def quota_error(exc: Exception) -> dict[str, object]:
+        return {
+            "ok": False,
+            "error": "artifact_quota_exceeded",
+            "message": str(exc),
+            "recovery": (
+                "The tool output was not retained. Retry the source tool with a narrower "
+                "query or bounded output, and release artifacts that are no longer needed."
+            ),
+        }
+
     def compact_result(result: Any, *, call_id: str) -> Any:
-        from kedi.artifacts import ArtifactHandle
+        from kedi.artifacts import ArtifactHandle, ArtifactStream
+        from kedi.artifacts.errors import (
+            ArtifactQuotaExceededError,
+            ToolOutputTooLargeError,
+        )
 
         manager.history.append(
             "tool_call",
             data={"tool_name": tool.name, "call_id": call_id},
         )
-        stored = manager.artifactize(
-            result,
-            policy=policy,
-            source=f"tool:{tool.name}",
-        )
+        try:
+            if isinstance(result, ArtifactStream):
+                stored = manager.artifactize_stream(
+                    result,
+                    policy=policy,
+                    source=f"tool:{tool.name}",
+                )
+            else:
+                stored = manager.admit_tool_result(
+                    result,
+                    policy=policy,
+                    source=f"tool:{tool.name}",
+                )
+        except ToolOutputTooLargeError:
+            record_admission_failure(call_id=call_id, error="tool_output_too_large")
+            raise
+        except ArtifactQuotaExceededError as exc:
+            record_admission_failure(call_id=call_id, error="artifact_quota_exceeded")
+            return quota_error(exc)
         if not isinstance(stored, ArtifactHandle):
             manager.history.append(
                 "tool_result",
@@ -144,6 +184,45 @@ def with_artifact_result(
         )
         return ref.model_dump(mode="json")
 
+    async def compact_result_async(result: Any, *, call_id: str) -> Any:
+        from kedi.artifacts import ArtifactHandle, ArtifactStream
+        from kedi.artifacts.errors import (
+            ArtifactQuotaExceededError,
+            ToolOutputTooLargeError,
+        )
+
+        if not isinstance(result, ArtifactStream):
+            return compact_result(result, call_id=call_id)
+        manager.history.append(
+            "tool_call",
+            data={"tool_name": tool.name, "call_id": call_id},
+        )
+        try:
+            stored = await manager.artifactize_stream_async(
+                result,
+                policy=policy,
+                source=f"tool:{tool.name}",
+            )
+        except ToolOutputTooLargeError:
+            record_admission_failure(call_id=call_id, error="tool_output_too_large")
+            raise
+        except ArtifactQuotaExceededError as exc:
+            record_admission_failure(call_id=call_id, error="artifact_quota_exceeded")
+            return quota_error(exc)
+        if not isinstance(stored, ArtifactHandle):
+            manager.history.append(
+                "tool_result",
+                data={"tool_name": tool.name, "call_id": call_id, "artifacted": False},
+            )
+            return stored
+        ref = stored.as_ref()
+        manager.history.append(
+            "tool_result",
+            ref_id=ref.ref_id,
+            data={"tool_name": tool.name, "call_id": call_id, "artifacted": True},
+        )
+        return ref.model_dump(mode="json")
+
     is_async = _is_async_callable(tool.fn)
     if is_async:
 
@@ -151,7 +230,7 @@ def with_artifact_result(
         async def artifact_async_tool(*args: Any, **kwargs: Any) -> Any:
             call_id = f"call_{secrets.token_urlsafe(10)}"
             result = await tool.fn(*args, **kwargs)
-            return compact_result(result, call_id=call_id)
+            return await compact_result_async(result, call_id=call_id)
 
         return replace(tool, fn=artifact_async_tool, metadata=metadata)
 
@@ -162,9 +241,17 @@ def with_artifact_result(
         if inspect.isawaitable(result):
 
             async def await_and_compact() -> Any:
-                return compact_result(await result, call_id=call_id)
+                return await compact_result_async(await result, call_id=call_id)
 
             return await_and_compact()
+        from kedi.artifacts import ArtifactStream
+
+        if isinstance(result, ArtifactStream) and result.is_async:
+
+            async def compact_async_stream() -> Any:
+                return await compact_result_async(result, call_id=call_id)
+
+            return compact_async_stream()
         return compact_result(result, call_id=call_id)
 
     return replace(tool, fn=artifact_tool, metadata=metadata)

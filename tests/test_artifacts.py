@@ -29,10 +29,12 @@ from kedi.artifacts import (
     ArtifactPolicy,
     ArtifactPolicyError,
     ArtifactQuotaExceededError,
+    ArtifactRef,
     ArtifactReleasedError,
     ArtifactSerializationError,
     ArtifactStatus,
     FileArtifactStore,
+    artifact_instructions,
     deserialize_artifact,
     estimate_object_size,
     normalize_artifact_policy,
@@ -144,7 +146,7 @@ def test_policy_parses_units_and_overlays_only_specified_fields(tmp_path: Path) 
     assert PublicArtifactPolicy is ArtifactPolicy
 
 
-def test_artifacts_are_enabled_by_default_without_initial_prompt_overhead() -> None:
+def test_artifacts_are_enabled_by_default_with_cache_stable_contract() -> None:
     class LargeOutputAdapter(ArtifactRecordingAdapter):
         def produce_sync(
             self,
@@ -171,12 +173,25 @@ def test_artifacts_are_enabled_by_default_without_initial_prompt_overhead() -> N
     assert ArtifactPolicy().enabled is True
     assert result == "x" * 100_000
     assert runtime.artifacts.has_active_artifacts()
-    assert adapter.tool_calls == [()]
-    assert adapter.instruction_calls == [None]
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
+    ]
+    assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
     runtime.artifacts.close()
 
 
-def test_default_artifacts_do_not_advertise_management_tools_for_mcp_only_calls() -> None:
+def test_artifact_contract_routes_simple_and_complex_inspection() -> None:
+    instructions = artifact_instructions()
+    usage_hint = ArtifactRef.model_fields["usage_hint"].default
+
+    assert "read_artifact for a known literal or bounded inspection" in instructions
+    assert "filtering, aggregation, joins, or multi-artifact transformations" in instructions
+    assert isinstance(usage_hint, str)
+    assert "read_artifact for a known literal or bounded inspection" in usage_hint
+    assert "filtering, aggregation, joins, or multi-artifact transformations" in usage_hint
+
+
+def test_default_artifact_contract_is_stable_for_mcp_only_calls() -> None:
     adapter = MockAdapter()
     runtime = compile_program(
         parse_program(
@@ -191,8 +206,47 @@ def test_default_artifacts_do_not_advertise_management_tools_for_mcp_only_calls(
     )
 
     assert runtime.run_main() == "answer-value"
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
+    ]
+    assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
+
+
+def test_default_artifact_contract_does_not_change_between_model_turns() -> None:
+    adapter = ArtifactRecordingAdapter()
+    runtime = compile_program(
+        parse_program("[first] << First turn.\n[second] << Second turn.\n= <first> <second>\n"),
+        adapter=adapter,
+    )
+
+    assert runtime.run_main() == "response:First turn.response:Second turn."
+    assert len(adapter.instruction_calls) == 2
+    assert adapter.instruction_calls[0] == adapter.instruction_calls[1]
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code"),
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code"),
+    ]
+    runtime.artifacts.close()
+
+
+def test_default_artifacts_do_not_require_contract_from_unsupported_adapter() -> None:
+    class TextOnlyAdapter(MockAdapter):
+        capabilities = AdapterCapabilities(
+            supports_structured_output=True,
+            supports_tool_registration=True,
+            supports_profile_override=True,
+        )
+
+    adapter = TextOnlyAdapter()
+    runtime = compile_program(
+        parse_program("[answer] << A plain text turn.\n= <answer>\n"),
+        adapter=adapter,
+    )
+
+    assert runtime.run_main() == "response:A plain text turn."
     assert adapter.tool_calls == [()]
     assert adapter.instruction_calls == [None]
+    runtime.artifacts.close()
 
 
 def test_artifacts_directive_parses_top_level_and_profile_members() -> None:
@@ -322,15 +376,17 @@ def test_artifacts_directive_rejects_invalid_fields(source: str, code: str) -> N
     assert any(diagnostic.code == code for diagnostic in exc_info.value.diagnostics)
 
 
-def test_artifact_history_compaction_is_idempotent() -> None:
+def test_artifact_history_is_append_only_across_release() -> None:
     history = ArtifactHistory()
     history.append("artifact_created", ref_id="artifact_1")
     history.append("artifact_read", ref_id="artifact_1")
+    before_release = history.snapshot()
 
-    assert history.compact("artifact_1", reason="released") == 1
-    assert history.compact("artifact_1", reason="released") == 0
-    tombstones = [event for event in history.snapshot() if event.kind == "artifact_tombstone"]
-    assert len(tombstones) == 1
+    history.append("artifact_released", ref_id="artifact_1")
+
+    after_release = history.snapshot()
+    assert after_release[: len(before_release)] == before_release
+    assert after_release[-1].kind == "artifact_released"
 
 
 class ArtifactRecordingAdapter(MockAdapter):
@@ -427,7 +483,7 @@ def test_runtime_returns_native_output_but_reuses_compact_model_reference() -> N
 
     assert result == "payload-value"
     assert "payload-value" not in adapter.templates[1]
-    assert '"ref_id": "art_' in adapter.templates[1]
+    assert '"ref_id": "template_output_1"' in adapter.templates[1]
     assert '"preview": "payload…"' in adapter.templates[1]
     assert runtime.artifacts.stats()["active_artifacts"] == 2
     runtime.artifacts.close()
@@ -596,6 +652,8 @@ def test_manager_artifacts_only_values_at_or_above_threshold(
     assert isinstance(artifact, ArtifactHandle)
     assert artifact.get_value() == "12345"
     assert artifact.as_ref().size_bytes == 5
+    assert "run_artifact_code" in artifact.as_ref().usage_hint
+    assert "read_artifact for a known literal" in artifact.as_ref().usage_hint
 
 
 def test_manager_deduplicates_before_enforcing_quota(manager: ArtifactManager) -> None:
@@ -626,9 +684,11 @@ def test_manager_reads_searches_and_releases(manager: ArtifactManager) -> None:
     assert chunk.complete is True
     assert results[0].ref_id == artifact.ref.ref_id
     assert released.status is ArtifactStatus.RELEASED
-    assert released.compacted_events == 1
-    assert manager.history.checkpoint_stale is True
-    assert all(event.kind != "artifact_read" for event in manager.history.snapshot())
+    assert [event.kind for event in manager.history.snapshot()] == [
+        "artifact_created",
+        "artifact_read",
+        "artifact_released",
+    ]
     with pytest.raises(ArtifactReleasedError):
         artifact.get_value()
     assert manager.release(artifact.ref.ref_id).already_released is True
@@ -750,7 +810,7 @@ def test_tool_result_artifact_wrapper_preserves_approval_order_and_signature(
     result = wrapped.fn(query="requested")
 
     assert calls == ["requested"]
-    assert result["ref_id"].startswith("art_")
+    assert result["ref_id"] == "tool_call_result_1"
     assert manager.get_value(result["ref_id"]) == "large-result"
     assert wrapped.fn.__name__ == "lookup"
     assert wrapped.metadata == {"kedi_artifact_wrapped": True}
@@ -901,6 +961,27 @@ def test_tool_result_wrapper_records_small_native_results_without_artifacting(
     assert events[-1].data["artifacted"] is False
 
 
+def test_tool_result_wrapper_returns_recoverable_quota_error(
+    manager: ArtifactManager,
+) -> None:
+    wrapped = with_artifact_result(
+        ToolSpec(fn=lambda: "oversized", name="load_all"),
+        manager=manager,
+        policy=artifact_policy(threshold="1b", session_quota=4),
+    )
+
+    result = wrapped.fn()
+
+    assert result["ok"] is False
+    assert result["error"] == "artifact_quota_exceeded"
+    assert "active=0" in result["message"]
+    assert "requested=9" in result["message"]
+    assert "narrower query" in result["recovery"]
+    events = manager.history.snapshot()
+    assert [event.kind for event in events] == ["tool_call", "tool_result"]
+    assert events[-1].data["error"] == "artifact_quota_exceeded"
+
+
 def test_artifact_management_tools_are_registered_and_never_artifacted() -> None:
     adapter = ArtifactRecordingAdapter()
     runtime = compile_program(
@@ -910,7 +991,9 @@ def test_artifact_management_tools_are_registered_and_never_artifacted() -> None
 
     runtime.run_main()
 
-    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
+    ]
     assert "<ARTIFACT_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
     runtime.artifacts.close()
 
@@ -998,7 +1081,13 @@ def test_pydantic_agent_reads_compact_tool_artifact_before_final_output() -> Non
         "read_artifact",
     ]
     assert all(
-        {"load_reference_material", "read_artifact", "search_artifacts", "release_artifact"}
+        {
+            "load_reference_material",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        }
         <= set(call)
         for call in calls
     )
@@ -1042,7 +1131,9 @@ def test_native_approval_adapter_receives_unwrapped_artifact_tools() -> None:
 
     runtime.run_main()
 
-    assert adapter.tool_calls == [("read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
+    ]
     runtime.artifacts.close()
 
 
@@ -1108,7 +1199,7 @@ def test_failed_conversation_turn_does_not_commit_checkpoint_or_history() -> Non
     state.close()
 
 
-def test_release_invalidates_checkpoint_and_replays_compact_history() -> None:
+def test_release_preserves_checkpoint_and_append_only_conversation_history() -> None:
     state = ConversationState()
     adapter = ConversationAdapter()
     artifact = state.artifacts.artifactize(
@@ -1128,12 +1219,16 @@ def test_release_invalidates_checkpoint_and_replays_compact_history() -> None:
         conversation_state=state,
     )
 
-    assert runtime.run_main() == "response-1"
-    assert adapter.resume_states == [{}]
-    assert "Continue from this compact Kedi conversation transcript" in adapter.prompts[0]
-    assert f"[unavailable artifact {ref_id}]" in adapter.prompts[0]
-    assert "private-payload" not in adapter.prompts[0]
-    assert state.history.checkpoint_stale is False
+    turns_before_run = state.snapshot()
+
+    assert runtime.run_main() == "response-8"
+    assert adapter.resume_states == [{"turn": 7}]
+    assert adapter.prompts == ["Continue."]
+    assert state.snapshot()[: len(turns_before_run)] == turns_before_run
+    assert [event.kind for event in state.history.snapshot()] == [
+        "artifact_created",
+        "artifact_released",
+    ]
     state.close()
 
 
@@ -1164,7 +1259,7 @@ def test_conversation_serializes_concurrent_turns() -> None:
     state.close()
 
 
-def test_conversation_compacts_only_released_ref_from_multi_ref_turn() -> None:
+def test_conversation_keeps_released_refs_in_immutable_prior_turns() -> None:
     state = ConversationState()
     first = state.artifacts.artifactize("first-secret", policy=artifact_policy())
     second = state.artifacts.artifactize("second-secret", policy=artifact_policy())
@@ -1180,15 +1275,18 @@ def test_conversation_compacts_only_released_ref_from_multi_ref_turn() -> None:
         },
     )
 
+    turns_before_release = state.snapshot()
+    events_before_release = state.history.snapshot()
     state.artifacts.release(first_ref)
     with state.adapter_turn("test"):
         pass
 
     assistant_turn = state.snapshot()[-1]
-    assert f"[unavailable artifact {first_ref}]" in assistant_turn.content
-    assert first_ref not in assistant_turn.ref_ids
+    assert state.snapshot() == turns_before_release
+    assert first_ref in assistant_turn.content
     assert second_ref in assistant_turn.content
-    assert assistant_turn.ref_ids == (second_ref,)
+    assert state.history.snapshot()[: len(events_before_release)] == events_before_release
+    assert state.history.snapshot()[-1].kind == "artifact_released"
     state.close()
 
 

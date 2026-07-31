@@ -495,6 +495,31 @@ def test_hover_on_profile_name_in_multiline_use_is_tool_entry() -> None:
     assert "No procedure named `light`" in body
 
 
+def test_hover_on_profile_composed_inside_profile_resolves_profile() -> None:
+    src = """
+> profile: readonlyfs:
+    > system: Read files only.
+
+> profile: filesystem:
+    > use: readonlyfs
+
+> use: filesystem
+"""
+    body = hover_text_at(src, "main.kedi", "readonlyfs", occurrence=2)
+    assert "**Agent profile** `> profile: readonlyfs:`" in body
+    assert "System instructions: configured" in body
+
+
+def test_hover_on_unknown_profile_use_target_reports_missing_tool() -> None:
+    src = """
+> profile: filesystem:
+    > use: missing
+"""
+    body = hover_text_at(src, "main.kedi", "missing")
+    assert "Agent tool" in body
+    assert "No procedure named `missing`" in body
+
+
 def test_hover_on_tool_inside_procedure_multiline_use() -> None:
     src = """
 @tool():

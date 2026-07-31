@@ -887,7 +887,15 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
     assert answer() == "ok"
     assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
     assert current_block_agent_profile() == AgentProfile.empty()
 
 
@@ -915,7 +923,13 @@ def test_tool_decorator_sets_name_description_and_retries(adapter: ApiAdapter) -
 
     assert answer() == "ok"
     assert adapter.tools == [
-        ("search_docs", "read_artifact", "search_artifacts", "release_artifact")
+        (
+            "search_docs",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
     ]
     assert adapter.tool_descriptions[0][0] == "Search indexed docs."
 
@@ -975,7 +989,15 @@ def test_query_registers_callable_tools(adapter: ApiAdapter) -> None:
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_bind_file_exposes_kedi_source_as_python_callable(
@@ -1095,7 +1117,15 @@ def test_bind_file_profile_arguments_apply_for_one_call(
     assert answer() == "ok"
     assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: Path) -> None:
@@ -1157,7 +1187,15 @@ def test_configure_default_tools_are_available_to_use_directive(
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup", "read_artifact", "search_artifacts", "release_artifact")]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_query_requires_kedi_docstring_header() -> None:

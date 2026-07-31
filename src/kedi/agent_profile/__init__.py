@@ -29,6 +29,7 @@ from .registry import (
     ProfileSubagentMember,
     ProfileSystemMember,
     ProfileToolMember,
+    ProfileUseMember,
 )
 from .settings import (
     ACP_AGENT_SETTING_KEYS,
@@ -70,6 +71,7 @@ __all__ = [
     "ProfileSystemMember",
     "ProfileSubagentMember",
     "ProfileToolMember",
+    "ProfileUseMember",
     "DSPY_LM_SETTING_KEYS",
     "MODEL_SETTING_KEYS",
     "PYDANTIC_MODEL_SETTING_KEYS",

@@ -2,8 +2,12 @@
 from pathlib import Path
 import shutil
 
+from kedi import ArtifactStream
+from kedi.tool_context import inside_kedi_tool_call
+
 _ROOT = Path.cwd().resolve()
 _MAX_READ_BYTES = 1_000_000
+_MAX_READ_CHARS = 65_536
 _MAX_DIRECTORY_ENTRIES = 1_000
 
 def _is_secret_file(path: Path) -> bool:
@@ -22,15 +26,40 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
     if for_delete and resolved in {_ROOT, Path(resolved.anchor).resolve(), Path.home().resolve()}:
         raise PermissionError(f"refusing to delete a protected root directory: {resolved}")
     return resolved
+
+def _read_text_chunks(path: Path, *, offset: int, limit: int | None):
+    with path.open("r", encoding="utf-8") as handle:
+        remaining_offset = offset
+        while remaining_offset:
+            skipped = handle.read(min(_MAX_READ_CHARS, remaining_offset))
+            if not skipped:
+                return
+            remaining_offset -= len(skipped)
+
+        remaining_limit = limit
+        while remaining_limit is None or remaining_limit > 0:
+            read_size = (
+                _MAX_READ_CHARS
+                if remaining_limit is None
+                else min(_MAX_READ_CHARS, remaining_limit)
+            )
+            chunk = handle.read(read_size)
+            if not chunk:
+                return
+            yield chunk
+            if remaining_limit is not None:
+                remaining_limit -= len(chunk)
 ```
 
-@read_text_file(file_path: str, secret_files: bool = `False`) -> str:
+@read_text_file(file_path: str, secret_files: bool = `False`, offset: int = `0`, max_chars: int = `-1`) -> str:
     ###
     Read a UTF-8 text file.
 
     Args:
         file_path (str): Path to the file.
         secret_files (bool): Request a secret file such as .env. This requires approval.
+        offset (int): Character offset to start reading from.
+        max_chars (int): Maximum characters to return. Use -1 only for files up to 1 MB.
 
     Returns:
         str: File contents.
@@ -41,9 +70,22 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
         raise PermissionError(
             f"refusing to read secret file: {file_path}; set secret_files=True to request approval"
         )
-    if path.stat().st_size > _MAX_READ_BYTES:
-        raise ValueError(f"file is too large to read: {file_path}")
-    return path.read_text(encoding="utf-8")
+    if offset < 0:
+        raise ValueError("offset must not be negative")
+    if max_chars == 0 or max_chars < -1:
+        raise ValueError("max_chars must be -1 or positive")
+    size = path.stat().st_size
+    if max_chars == -1:
+        if size > _MAX_READ_BYTES:
+            raise ValueError(
+                f"file is too large for an unbounded read: {file_path}; "
+                "use offset and max_chars"
+            )
+    limit = None if max_chars == -1 else max_chars
+    chunks = _read_text_chunks(path, offset=offset, limit=limit)
+    if inside_kedi_tool_call():
+        return ArtifactStream.text(chunks)
+    return "".join(chunks)
     ```
 
 @write_text_file(file_path: str, content: str) -> str:
@@ -136,10 +178,12 @@ def _safe_path(raw_path: str, *, for_delete: bool = False) -> Path:
         list[str]: Child names sorted alphabetically.
     ###
     = ```
-    entries = sorted(path.name for path in _safe_path(dir_path).iterdir())
-    if len(entries) > _MAX_DIRECTORY_ENTRIES:
-        raise ValueError(f"directory has too many entries: {dir_path}")
-    return entries
+    entries = []
+    for path in _safe_path(dir_path).iterdir():
+        entries.append(path.name)
+        if len(entries) > _MAX_DIRECTORY_ENTRIES:
+            raise ValueError(f"directory has too many entries: {dir_path}")
+    return sorted(entries)
     ```
 
 @create_directory(dir_path: str) -> str:

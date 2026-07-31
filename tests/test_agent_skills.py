@@ -15,7 +15,8 @@ from kedi.agent_adapter.skills import (
     SkillStore,
     skill_tool_specs,
 )
-from kedi.agent_adapter.tool_override import with_approval
+from kedi.agent_adapter.tool_override import with_approval, with_artifact_result
+from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
 from kedi.agent_profile import AgentProfile
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -62,6 +63,9 @@ def test_skill_store_handles_missing_root_and_non_utf8_content(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="UTF-8"):
         SkillStore(root).read_skill(skill_name="binary")
+    with pytest.raises(ValueError, match="UTF-8"):
+        list(SkillStore(root).stream_skill(skill_name="binary").iter_chunks())
+    assert SkillStore(root).list_skills() == []
 
 
 def test_skill_store_skips_unreadable_skills_but_direct_reads_still_fail(
@@ -71,14 +75,14 @@ def test_skill_store_skips_unreadable_skills_but_direct_reads_still_fail(
     root = tmp_path / ".agents" / "skills"
     _write_skill(root, "readable")
     unreadable = _write_skill(root, "locked")
-    original_read_text = Path.read_text
+    original_open = Path.open
 
-    def deny_locked_skill(path: Path, *args: Any, **kwargs: Any) -> str:
+    def deny_locked_skill(path: Path, *args: Any, **kwargs: Any) -> Any:
         if path == unreadable:
             raise PermissionError("permission denied")
-        return original_read_text(path, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", deny_locked_skill)
+    monkeypatch.setattr(Path, "open", deny_locked_skill)
     store = SkillStore(root)
 
     assert store.list_skills() == ["readable"]
@@ -148,8 +152,33 @@ def test_skill_tools_are_read_only_and_bypass_dynamic_approval(tmp_path: Path) -
     )
 
     assert protected_list.fn() == ["research"]
-    assert protected_read.fn(skill_name="research") == "Use concise steps.\n"
+    streamed = protected_read.fn(skill_name="research")
+    assert isinstance(streamed, ArtifactStream)
+    assert list(streamed.iter_chunks()) == ["Use concise steps.\n"]
     assert approval_calls == []
+
+
+def test_read_skill_tool_streams_into_artifact_store_without_changing_logical_type(
+    tmp_path: Path,
+) -> None:
+    content = "Follow the research workflow.\n" * 3_000
+    _write_skill(tmp_path / ".agents" / "skills", "research", content)
+    _, read_spec = skill_tool_specs(tmp_path / ".agents" / "skills")
+    manager = ArtifactManager(session_id="skill-stream")
+    try:
+        wrapped = with_artifact_result(
+            read_spec,
+            manager=manager,
+            policy=ArtifactPolicy.patch({"threshold": "1kb"}).resolved(),
+        )
+
+        result = wrapped.fn(skill_name="research")
+
+        assert result["ref_id"] == "tool_call_result_1"
+        assert manager.get_value(result["ref_id"]) == content
+        assert read_spec.return_schema == {"type": "string"}
+    finally:
+        manager.close()
 
 
 def test_native_approval_adapters_receive_unwrapped_skill_tools(tmp_path: Path) -> None:
@@ -188,6 +217,7 @@ def test_single_line_use_skills_registers_skill_tools_and_instructions(
             "read_artifact",
             "search_artifacts",
             "release_artifact",
+            "run_artifact_code",
         )
     ]
     assert adapter.instruction_calls[0] is not None
@@ -275,6 +305,7 @@ def test_profile_use_skills_enables_skill_tools(
             "read_artifact",
             "search_artifacts",
             "release_artifact",
+            "run_artifact_code",
         )
     ]
 
@@ -308,6 +339,7 @@ def test_profile_can_combine_skills_with_named_procedure_tools(
             "read_artifact",
             "search_artifacts",
             "release_artifact",
+            "run_artifact_code",
         )
     ]
 
@@ -321,7 +353,13 @@ def test_procedure_named_skills_keeps_procedure_precedence() -> None:
 
     runtime.run_main()
     assert adapter.tool_calls == [
-        ("skills", "read_artifact", "search_artifacts", "release_artifact")
+        (
+            "skills",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
     ]
 
 
@@ -366,6 +404,7 @@ def test_python_api_skills_option_registers_skill_tools(
                 "read_artifact",
                 "search_artifacts",
                 "release_artifact",
+                "run_artifact_code",
             )
         ]
         assert "<SKILL_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")

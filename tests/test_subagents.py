@@ -583,7 +583,13 @@ def test_delegate_task_runs_text_child_in_isolated_profile() -> None:
         (
             "Inspect the parser",
             f"Work carefully.\n\n{artifact_instructions()}",
-            ("lookup", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "lookup",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
             (),
         )
     ]
@@ -617,7 +623,13 @@ def test_delegate_task_runs_structured_child_and_validates_result() -> None:
         (
             "Build a value",
             f"Work carefully.\n\n{artifact_instructions()}",
-            ("lookup", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "lookup",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
             (),
         )
     ]
@@ -1127,7 +1139,13 @@ def test_delegate_task_uses_adapter_neutral_child_execution_seam(
     assert all(request.profile.name == "worker" for request in adapter.child_requests)
     assert all(
         tuple(tool.name for tool in request.tools)
-        == ("lookup", "read_artifact", "search_artifacts", "release_artifact")
+        == (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
         for request in adapter.child_requests
     )
     assert all(
@@ -1192,7 +1210,7 @@ def test_pydantic_subagent_execution_requires_an_object_result(
         )
 
 
-def test_delegate_task_without_child_system_has_no_instructions() -> None:
+def test_delegate_task_without_child_system_has_default_artifact_contract() -> None:
     source = """
 > profile: worker:
     > adapter: pydantic
@@ -1208,7 +1226,50 @@ def test_delegate_task_without_child_system_has_no_instructions() -> None:
 
     asyncio.run(tool.fn(subagent="worker", task="Inspect the parser"))
 
-    assert adapter.invocations == [("Inspect the parser", None, (), ())]
+    assert adapter.invocations == [
+        (
+            "Inspect the parser",
+            artifact_instructions(),
+            (
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
+            (),
+        )
+    ]
+
+
+def test_delegate_task_omits_artifact_contract_for_unsupported_child_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = """
+> profile: worker:
+    > adapter: pydantic
+> profile: manager:
+    > adapter: pydantic
+    > subagent: worker
+"""
+    parent_adapter = RecordingPydanticAdapter()
+    child_adapter = RecordingNeutralChildAdapter()
+    child_adapter.capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_profile_override=True,
+        supports_subagents=True,
+    )
+    runtime = compile_program(parse_program(source), adapter=parent_adapter)
+    monkeypatch.setattr(runtime, "_resolve_adapter", lambda _profile: child_adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tool = runtime._resolve_agent_tool_specs(profile, parent_adapter)[0]
+
+    asyncio.run(tool.fn(subagent="worker", task="Inspect the parser"))
+
+    assert child_adapter.child_requests[0].instructions is None
+    assert child_adapter.child_requests[0].tools == ()
+    assert "instructions" not in child_adapter.child_calls[0][1]
 
 
 def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
@@ -1267,9 +1328,14 @@ def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
         "cancel_subagent",
         "subagent_status",
     )
-    artifact_tools = ("read_artifact", "search_artifacts", "release_artifact")
+    artifact_tools = (
+        "read_artifact",
+        "search_artifacts",
+        "release_artifact",
+        "run_artifact_code",
+    )
     assert calls[0] == (lifecycle_tools + artifact_tools, ())
-    assert calls[1] == ((), ())
+    assert calls[1] == (artifact_tools, ())
     assert calls[2][0] == lifecycle_tools + artifact_tools
     tool_name, tool_result = calls[2][1][0]
     assert tool_name == "delegate_task"
@@ -1733,19 +1799,43 @@ def test_parallel_subagent_results_keep_profile_tools_schema_and_run_identity_is
     assert observed == {
         "slow-int": (
             "alpha",
-            ("alpha_tool", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "alpha_tool",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
         ),
         "fast-text": (
             "alpha",
-            ("alpha_tool", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "alpha_tool",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
         ),
         "beta-object": (
             "beta",
-            ("beta_tool", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "beta_tool",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
         ),
         "beta-failure": (
             "beta",
-            ("beta_tool", "read_artifact", "search_artifacts", "release_artifact"),
+            (
+                "beta_tool",
+                "read_artifact",
+                "search_artifacts",
+                "release_artifact",
+                "run_artifact_code",
+            ),
         ),
     }
     assert len({result["run_id"] for result in successful}) == 3
@@ -2092,7 +2182,7 @@ def test_pydantic_parent_failure_policy_controls_unresolved_delegation(
         info: AgentInfo,
     ) -> ModelResponse:
         nonlocal parent_calls
-        if not info.function_tools:
+        if "delegate_task" not in {tool.name for tool in info.function_tools}:
             raise RuntimeError("API_KEY=very-secret child exploded")
         parent_calls += 1
         if parent_calls == 1:
@@ -2157,7 +2247,7 @@ def test_pydantic_parent_can_recover_with_successful_replacement_delegation() ->
         info: AgentInfo,
     ) -> ModelResponse:
         nonlocal child_calls, parent_calls
-        if not info.function_tools:
+        if "delegate_task" not in {tool.name for tool in info.function_tools}:
             child_calls += 1
             if child_calls == 1:
                 raise RuntimeError("first child attempt failed")
@@ -2610,7 +2700,7 @@ def test_subagent_records_native_pydantic_usage_and_invocation_metadata() -> Non
     > adapter: pydantic
     > subagent: worker
 """
-    adapter = PydanticAdapter(TestModel(custom_output_text="child output"))
+    adapter = PydanticAdapter(TestModel(custom_output_text="child output", call_tools=[]))
     runtime = compile_program(parse_program(source), adapter=adapter)
     definition = runtime._profile_registry["manager"]
     profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))

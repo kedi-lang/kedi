@@ -14,6 +14,17 @@ from pydantic import BaseModel
 from .errors import ArtifactSerializationError
 
 
+JsonPointerRange = tuple[int, int, int, int]
+_MAX_JSON_POINTER_INDEX_ENTRIES = 100_000
+
+
+@dataclass(frozen=True)
+class EncodedJson:
+    payload: bytes
+    pointer_ranges: dict[str, JsonPointerRange]
+    index_complete: bool
+
+
 @dataclass(frozen=True)
 class SerializedArtifact:
     codec: str
@@ -27,6 +38,8 @@ class SerializedArtifact:
     memory_value: Any
     persistable: bool
     digest: str | None
+    json_pointer_ranges: dict[str, JsonPointerRange] | None = None
+    json_pointer_index_complete: bool = True
 
 
 def serialize_artifact(
@@ -64,19 +77,14 @@ def serialize_artifact(
         )
 
     json_value = _json_value(value)
-    payload: bytes | None = None
+    encoded_json: EncodedJson | None = None
     if json_value is not _UNSUPPORTED:
         try:
-            payload = json.dumps(
-                json_value,
-                allow_nan=False,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
+            encoded_json = encode_json_with_pointers(json_value)
         except (TypeError, ValueError):
             pass
-    if payload is not None:
+    if encoded_json is not None:
+        payload = encoded_json.payload
         rendered = payload.decode("utf-8")
         return _serialized_text(
             rendered,
@@ -86,6 +94,8 @@ def serialize_artifact(
             logical_type=logical_type,
             preview_chars=preview_chars,
             memory_value=_snapshot(value),
+            json_pointer_ranges=encoded_json.pointer_ranges,
+            json_pointer_index_complete=encoded_json.index_complete,
         )
 
     if require_persistable:
@@ -131,6 +141,88 @@ def render_artifact_content(codec: str, value: Any) -> str:
             raise ArtifactSerializationError("JSON artifact lost its serializable form")
         return json.dumps(json_value, ensure_ascii=False, indent=2, sort_keys=True)
     return _safe_repr(value, max_chars=None)
+
+
+def encode_json_with_pointers(
+    value: Any,
+    *,
+    root_pointer: str = "",
+    max_entries: int = _MAX_JSON_POINTER_INDEX_ENTRIES,
+) -> EncodedJson:
+    """Encode canonical JSON while recording RFC 6901 value ranges."""
+
+    if max_entries <= 0:
+        raise ValueError("JSON pointer index max_entries must be positive")
+    payload = bytearray()
+    pointer_ranges: dict[str, JsonPointerRange] = {}
+    char_position = 0
+    index_complete = True
+
+    def append(text: str) -> None:
+        nonlocal char_position
+        payload.extend(text.encode("utf-8"))
+        char_position += len(text)
+
+    def encode(item: Any, pointer: str) -> None:
+        nonlocal index_complete
+        byte_start = len(payload)
+        char_start = char_position
+        indexed = pointer in pointer_ranges or len(pointer_ranges) < max_entries
+        if indexed:
+            pointer_ranges[pointer] = (byte_start, byte_start, char_start, char_start)
+        else:
+            index_complete = False
+
+        if isinstance(item, dict):
+            append("{")
+            for position, key in enumerate(sorted(item)):
+                if position:
+                    append(",")
+                append(_encode_json_scalar(key))
+                append(":")
+                encode(item[key], f"{pointer}/{_escape_json_pointer_part(key)}")
+            append("}")
+        elif isinstance(item, list):
+            append("[")
+            for position, child in enumerate(item):
+                if position:
+                    append(",")
+                encode(child, f"{pointer}/{position}")
+            append("]")
+        else:
+            append(_encode_json_scalar(item))
+
+        if indexed:
+            pointer_ranges[pointer] = (
+                byte_start,
+                len(payload),
+                char_start,
+                char_position,
+            )
+
+    encode(value, root_pointer)
+    return EncodedJson(
+        payload=bytes(payload),
+        pointer_ranges=pointer_ranges,
+        index_complete=index_complete,
+    )
+
+
+def resolve_json_pointer(value: Any, pointer: str) -> Any:
+    if pointer == "":
+        return value
+    if not pointer.startswith("/"):
+        raise ValueError("artifact JSON path must be an RFC 6901 pointer")
+    current = value
+    for raw_part in pointer.split("/")[1:]:
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict):
+            current = current[part]
+        elif isinstance(current, list):
+            current = current[int(part)]
+        else:
+            raise ValueError(f"artifact JSON path cannot descend through {type(current).__name__}")
+    return current
 
 
 def estimate_object_size(value: Any, *, max_nodes: int = 10_000) -> int:
@@ -233,6 +325,8 @@ def _serialized_text(
     logical_type: str,
     preview_chars: int,
     memory_value: Any,
+    json_pointer_ranges: dict[str, JsonPointerRange] | None = None,
+    json_pointer_index_complete: bool = True,
 ) -> SerializedArtifact:
     preview = _truncate(rendered, preview_chars)
     return SerializedArtifact(
@@ -247,6 +341,8 @@ def _serialized_text(
         memory_value=memory_value,
         persistable=True,
         digest=_digest(payload),
+        json_pointer_ranges=json_pointer_ranges,
+        json_pointer_index_complete=json_pointer_index_complete,
     )
 
 
@@ -274,3 +370,16 @@ def _digest(payload: bytes) -> str:
 def _logical_type_name(value: Any) -> str:
     cls = type(value)
     return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def _encode_json_scalar(value: Any) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _escape_json_pointer_part(value: str) -> str:
+    return value.replace("~", "~0").replace("/", "~1")

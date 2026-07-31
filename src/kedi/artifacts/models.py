@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +32,11 @@ class ArtifactRef(BaseModel, Generic[T]):
     created_at: datetime
     expires_at: datetime
     sensitive: bool = False
+    usage_hint: str = (
+        "Use read_artifact for a known literal or bounded inspection; use run_artifact_code "
+        "for filtering, aggregation, joins, or multi-artifact transformations. Release when "
+        "done."
+    )
 
 
 class ArtifactChunk(BaseModel):
@@ -44,6 +49,7 @@ class ArtifactChunk(BaseModel):
     complete: bool
     media_type: str
     path: str | None = None
+    offset_from: Literal["start", "end"] = "start"
 
 
 class ArtifactSearchResult(BaseModel):
@@ -65,8 +71,15 @@ class ArtifactReleaseResult(BaseModel):
 
     ref_id: str
     status: ArtifactStatus
-    compacted_events: int = Field(default=0, ge=0)
     already_released: bool = False
+
+
+class ArtifactCodeResult(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    result: Any
+    stdout: str = ""
+    source_refs: tuple[str, ...] = ()
 
 
 class ArtifactManagerProtocol(Protocol):
@@ -101,6 +114,7 @@ class ArtifactRecord:
     idle_ttl_seconds: float | None
     source: str | None = None
     digest: str | None = None
+    provenance: dict[str, Any] | None = None
     payload: Any = None
     active_readers: int = 0
 

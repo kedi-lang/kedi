@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .approval import ApprovalDecision, ApprovalRequest, ToolRisk
+from .approval import ApprovalCancelled, ApprovalDecision, ApprovalRequest, ToolRisk
 
 CliApprovalChoice = Literal["allow", "deny", "always"]
 _PromptResult = CliApprovalChoice | None | Awaitable[CliApprovalChoice | None]
@@ -55,6 +55,8 @@ class CliApprovalHandler:
         if choice == "always":
             self._always_allowed.add((request.tool_name, request.risk))
             return ApprovalDecision.allow(reason="allowed for this CLI run")
+        if choice is None:
+            raise ApprovalCancelled(f"Approval cancelled for tool {request.tool_name!r}")
         return ApprovalDecision.deny(reason="denied in CLI")
 
     def _ask(self, request: ApprovalRequest) -> CliApprovalChoice | None:
@@ -69,14 +71,17 @@ class CliApprovalHandler:
         import questionary
 
         message = f"Allow {request.risk.replace('_', ' ')} tool '{request.tool_name}'?"
-        choice = questionary.select(
-            message,
-            choices=[
-                questionary.Choice("Deny", value="deny"),
-                questionary.Choice("Allow once", value="allow"),
-                questionary.Choice("Allow always for this run", value="always"),
-            ],
-        ).ask()
+        try:
+            choice = questionary.select(
+                message,
+                choices=[
+                    questionary.Choice("Deny", value="deny"),
+                    questionary.Choice("Allow once", value="allow"),
+                    questionary.Choice("Allow always for this run", value="always"),
+                ],
+            ).ask()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise ApprovalCancelled(f"Approval cancelled for tool {request.tool_name!r}") from exc
         return _as_choice(choice)
 
     async def _ask_async(self, request: ApprovalRequest) -> CliApprovalChoice | None:
@@ -89,14 +94,17 @@ class CliApprovalHandler:
         import questionary
 
         message = f"Allow {request.risk.replace('_', ' ')} tool '{request.tool_name}'?"
-        choice = await questionary.select(
-            message,
-            choices=[
-                questionary.Choice("Deny", value="deny"),
-                questionary.Choice("Allow once", value="allow"),
-                questionary.Choice("Allow always for this run", value="always"),
-            ],
-        ).ask_async()
+        try:
+            choice = await questionary.select(
+                message,
+                choices=[
+                    questionary.Choice("Deny", value="deny"),
+                    questionary.Choice("Allow once", value="allow"),
+                    questionary.Choice("Allow always for this run", value="always"),
+                ],
+            ).ask_async()
+        except (EOFError, KeyboardInterrupt) as exc:
+            raise ApprovalCancelled(f"Approval cancelled for tool {request.tool_name!r}") from exc
         return _as_choice(choice)
 
 

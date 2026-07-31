@@ -321,7 +321,7 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
 
         async def run(self, template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
             assert "less known city" in template
-            assert kwargs == {}
+            assert set(kwargs) == {"instructions", "usage"}
             return SimpleNamespace(output=output_type(x="Konya"))
 
     monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
@@ -1018,6 +1018,38 @@ def test_pydantic_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) 
     assert pydantic_adapter_module._validated_tool_arguments(
         ToolSpec(fn=sync_tool, name="plain"), {"query": "docs"}
     ) == {"query": "docs"}
+
+
+def test_pydantic_artifact_code_errors_are_model_retries() -> None:
+    from pydantic_ai import ModelRetry
+
+    from kedi.artifacts import ArtifactCodeError
+
+    def fail_artifact_code(*, code: str) -> None:
+        raise ArtifactCodeError(f"invalid artifact code: {code}")
+
+    wrapped = pydantic_adapter_module._validated_tool_function(
+        ToolSpec(
+            fn=fail_artifact_code,
+            name="run_artifact_code",
+            metadata={"kind": "artifact_management"},
+        )
+    )
+    with pytest.raises(ModelRetry, match="documented helper signatures"):
+        wrapped(code="bad()")
+
+    def fail_unrelated(*, code: str) -> None:
+        raise ValueError(f"unrelated failure: {code}")
+
+    unrelated = pydantic_adapter_module._validated_tool_function(
+        ToolSpec(
+            fn=fail_unrelated,
+            name="run_artifact_code",
+            metadata={"kind": "artifact_management"},
+        )
+    )
+    with pytest.raises(ValueError, match="unrelated failure"):
+        unrelated(code="bad()")
 
 
 def test_langchain_mcp_configs_cover_transports_and_errors() -> None:

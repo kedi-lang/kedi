@@ -1958,6 +1958,7 @@ class _Walker:
         artifacts_members: list[ProfileArtifactsEntry] = []
         subagent_members: list[ProfileSubagentEntry] = []
         max_agents_members: list[ProfileMaxAgentsEntry] = []
+        use_targets: list[str] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -2076,7 +2077,7 @@ class _Walker:
                     if use_stmt.tool_names:
                         tool_names.extend(use_stmt.tool_names)
                     elif use_stmt.name:
-                        tool_names.append(use_stmt.name)
+                        use_targets.append(use_stmt.name)
                 elif child.type == "mcp_directive":
                     mcp_stmt = self._walk_mcp_directive(child)
                     mcp_members.append(
@@ -2128,6 +2129,7 @@ class _Walker:
             and not artifacts_members
             and not subagent_members
             and not max_agents_members
+            and not use_targets
             and not tool_names
         ):
             self._error(
@@ -2148,6 +2150,7 @@ class _Walker:
             artifacts_members=artifacts_members,
             subagent_members=subagent_members,
             max_agents_members=max_agents_members,
+            use_targets=use_targets,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

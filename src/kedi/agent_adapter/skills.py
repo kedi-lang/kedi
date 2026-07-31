@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import format_as_xml
+
+from kedi.artifacts.stream import ArtifactStream
 
 from .tool_override import ToolSpec
 
@@ -14,6 +17,7 @@ _SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SKILL_FILE_NAME = "SKILL.md"
 MAX_SKILL_LIST_LIMIT = 100
 MAX_SKILL_BYTES = 256 * 1024
+_SKILL_READ_CHARS = 64 * 1024
 
 
 class SkillStore:
@@ -41,7 +45,7 @@ class SkillStore:
             if not entry.is_dir() or _SKILL_NAME_RE.fullmatch(entry.name) is None:
                 continue
             try:
-                self.read_skill(skill_name=entry.name)
+                self._validate_skill_text(self._bounded_skill_file(entry.name))
             except (FileNotFoundError, PermissionError, ValueError):
                 continue
             names.append(entry.name)
@@ -49,16 +53,35 @@ class SkillStore:
 
     def read_skill(self, *, skill_name: str) -> str:
         """Read a single valid, project-local plain ``SKILL.md`` file."""
+        path = self._bounded_skill_file(skill_name)
+        return "".join(self._skill_chunks(path, skill_name=skill_name))
+
+    def stream_skill(self, *, skill_name: str) -> ArtifactStream[str]:
+        """Return a lazy text transport for one validated skill file."""
+
+        path = self._bounded_skill_file(skill_name)
+
+        return ArtifactStream.text(self._skill_chunks(path, skill_name=skill_name))
+
+    def _skill_chunks(self, path: Path, *, skill_name: str) -> Iterator[str]:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                while chunk := handle.read(_SKILL_READ_CHARS):
+                    yield chunk
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"Skill {skill_name!r} must be UTF-8 text") from exc
+
+    def _validate_skill_text(self, path: Path) -> None:
+        for _ in self._skill_chunks(path, skill_name=path.parent.name):
+            pass
+
+    def _bounded_skill_file(self, skill_name: str) -> Path:
         path = self._skill_file(skill_name)
-        size = path.stat().st_size
-        if size > MAX_SKILL_BYTES:
+        if path.stat().st_size > MAX_SKILL_BYTES:
             raise ValueError(
                 f"Skill {skill_name!r} exceeds the {MAX_SKILL_BYTES} byte content limit"
             )
-        try:
-            return path.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError(f"Skill {skill_name!r} must be UTF-8 text") from exc
+        return path
 
     def _skill_file(self, skill_name: str) -> Path:
         if not isinstance(skill_name, str) or _SKILL_NAME_RE.fullmatch(skill_name) is None:
@@ -82,8 +105,8 @@ def skill_tool_specs(root: Path | None = None) -> tuple[ToolSpec, ToolSpec]:
     def list_skills(*, all: bool = False, limit: int = 20) -> list[str]:
         return store.list_skills(all=all, limit=limit)
 
-    def read_skill(*, skill_name: str) -> str:
-        return store.read_skill(skill_name=skill_name)
+    def read_skill(*, skill_name: str) -> ArtifactStream[str]:
+        return store.stream_skill(skill_name=skill_name)
 
     metadata: dict[str, Any] = {"kedi_tool_kind": "skill"}
     return (
@@ -114,6 +137,7 @@ def skill_tool_specs(root: Path | None = None) -> tuple[ToolSpec, ToolSpec]:
             },
             metadata=metadata,
             risk="read_only",
+            return_schema={"type": "string"},
         ),
     )
 

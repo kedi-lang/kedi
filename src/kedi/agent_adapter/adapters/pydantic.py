@@ -353,7 +353,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["model_settings"] = {**existing_settings, **model_settings}
             else:
                 run_kwargs["model_settings"] = model_settings
-        from ..utils import inside_kedi_tool_call
+        from ...tool_context import inside_kedi_tool_call
 
         toolsets = self._toolsets_for_run(
             include_scoped_tools=(
@@ -370,7 +370,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         return run_kwargs
 
     def _agent_for_produce(self) -> Agent[Any, Any]:
-        from ..utils import inside_kedi_tool_call
+        from ...tool_context import inside_kedi_tool_call
 
         if (
             not inside_kedi_tool_call()
@@ -647,15 +647,11 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
                 if inspect.isawaitable(result):
                     return await result
                 return result
-            except KediExecutionError as exc:
-                if tool.metadata is None or tool.metadata.get("kind") != "subagent":
+            except Exception as exc:
+                retry = _model_retry_for_tool_error(tool, exc)
+                if retry is None:
                     raise
-                from pydantic_ai import ModelRetry
-
-                from ..subagents.runs import safe_subagent_error_message
-
-                message = safe_subagent_error_message(exc) or "Subagent failed"
-                raise ModelRetry(message) from exc
+                raise retry from exc
 
         return validated_async_tool
 
@@ -663,9 +659,37 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
     def validated_tool(*args: Any, **kwargs: Any) -> Any:
         if args:
             raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
-        return tool.fn(**_validated_tool_arguments(tool, kwargs))
+        try:
+            return tool.fn(**_validated_tool_arguments(tool, kwargs))
+        except Exception as exc:
+            retry = _model_retry_for_tool_error(tool, exc)
+            if retry is None:
+                raise
+            raise retry from exc
 
     return validated_tool
+
+
+def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | None:
+    kind = (tool.metadata or {}).get("kind")
+    if kind == "subagent" and isinstance(exc, KediExecutionError):
+        from pydantic_ai import ModelRetry
+
+        from ..subagents.runs import safe_subagent_error_message
+
+        message = safe_subagent_error_message(exc) or "Subagent failed"
+        return ModelRetry(message)
+    if kind == "artifact_management":
+        from pydantic_ai import ModelRetry
+
+        from kedi.artifacts import ArtifactCodeError
+
+        if isinstance(exc, ArtifactCodeError):
+            return ModelRetry(
+                f"{exc}. Correct the artifact Python using the documented helper signatures "
+                "and retry."
+            )
+    return None
 
 
 def _validated_tool_arguments(tool: ToolSpec, arguments: Mapping[str, Any]) -> dict[str, Any]:

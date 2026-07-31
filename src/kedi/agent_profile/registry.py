@@ -60,6 +60,12 @@ class ProfileToolMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileUseMember:
+    kind: Literal["use"] = "use"
+    name: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileMcpMember:
     kind: Literal["mcp"] = "mcp"
     fields: tuple["McpField", ...] = ()
@@ -97,6 +103,7 @@ class ProfileDefinition:
     # These bindings are compiler-owned implementation details for imported
     # profiles. Source-level profile syntax remains name based.
     tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
+    profile_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     members: list[
         ProfileAgentMember
@@ -106,6 +113,7 @@ class ProfileDefinition:
         | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
+        | ProfileUseMember
         | ProfileMcpMember
         | ProfileSettingsMember
         | ProfileArtifactsMember

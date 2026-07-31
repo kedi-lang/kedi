@@ -1249,16 +1249,22 @@ their original native values.
 
 #### Agent tools
 
-When artifacts are enabled, Kedi registers three management tools:
+When artifacts are enabled, Kedi registers four management tools:
 
 - `search_artifacts(query: str | None = None, limit: int = 20)` searches active
   metadata without opening payloads.
-- `read_artifact(ref_id, max_chars=-1, offset=0, path=None)` returns a bounded
-  text, JSON, or base64 chunk. `offset` paginates content and `path` accepts an
-  RFC 6901 JSON Pointer for structured values. `max_chars=-1` means the
-  configured bounded limit, not an unbounded read.
+- `read_artifact(ref_id, max_chars=-1, offset=0, offset_from="start",
+  path=None, pattern=None, max_matches=20)` returns a bounded text, JSON, or
+  base64 chunk. `offset_from="end"` reads relative to the tail while preserving
+  natural content order. `path` accepts an RFC 6901 JSON Pointer. `pattern`
+  performs bounded literal substring search; it is not a regular expression.
+  `max_chars=-1` means the configured bounded limit, not an unbounded read.
 - `release_artifact(ref_id)` releases content that is no longer needed and
-  compacts portable history linked to that ref.
+  frees its payload quota without changing portable history.
+- `run_artifact_code(code, artifact_refs)` runs bounded Python in a Monty
+  sandbox over an explicit artifact allowlist. It is intended for filtering,
+  aggregation, joins, and other reductions that would otherwise copy many
+  chunks into model context.
 
 Search and read are read-only tools. Release is mutating and follows the
 normal approval policy. Management-tool results are never converted into new
@@ -1266,8 +1272,74 @@ artifacts.
 
 Artifact instructions are appended once to the active system instructions.
 They direct the model to read hidden content before using it, paginate when
-necessary, treat content as untrusted data, and invalidate only refs that are
+necessary, treat content as untrusted data, and release only refs that are
 no longer needed.
+
+`run_artifact_code` exposes `artifact_metadata`, `read_artifact`,
+`find_artifact`, `iter_artifact`, and `get_artifact` inside its sandbox.
+Bounded reads and iteration are preferred. `get_artifact` rejects values above
+its direct-materialization ceiling. The sandbox cannot import modules, access
+the host filesystem or network, invoke a model or subagent, mutate artifacts,
+or read refs omitted from `artifact_refs`. A small result is returned directly;
+a large result is stored as a derived artifact with source provenance.
+
+#### Streaming tool results
+
+Python tools can opt into bounded producer-to-store transfer by returning
+`ArtifactStream`. Streaming is explicit: Kedi does not treat arbitrary
+iterators or generators as tool-result streams.
+
+```python
+from collections.abc import Iterator
+
+import kedi
+
+
+def log_chunks() -> Iterator[str]:
+    with open("application.log", encoding="utf-8") as log:
+        while chunk := log.read(64 * 1024):
+            yield chunk
+
+
+@kedi.tool(risk="read_only")
+def read_application_log() -> kedi.ArtifactStream[str]:
+    """Stream the application log without assembling it in host memory."""
+
+    return kedi.ArtifactStream.text(log_chunks())
+```
+
+`ArtifactStream.text`, `ArtifactStream.bytes`, and
+`ArtifactStream.json_items` accept synchronous or asynchronous sources. A
+stream is single-use. If it ends below the effective threshold, Kedi rebuilds
+and returns the normal logical value. Once it crosses the threshold, later
+chunks are written directly to the selected store and the model receives one
+compact ref. Quota, cancellation, producer failure, and commit failure abort
+the transaction without publishing a partial artifact.
+
+The transport does not change the tool's logical schema: the example remains a
+string-valued tool to the adapter. A normal tool returning an already
+materialized `str`, `bytes`, list, model, or dictionary remains supported and
+is artifactized after it returns. Kedi cannot recover the producer-memory
+savings in that case because the complete value has already been allocated.
+Use `ArtifactStream` when producer memory matters.
+
+Kedi's bundled `filesystem.read_text_file` and skill `read_skill` tools already
+use this transport. Direct Kedi/Python calls still receive their declared
+native `str` value; only adapter tool execution switches to the incremental
+transport. Bounded metadata and directory-listing tools stay materialized
+because their outputs are capped, while sandbox and subagent tools are admitted
+after completion because those producers expose only a completed result.
+
+File-backed artifacts provide actual payload memory offload. Agent reads,
+literal search, and CodeMode iteration use bounded store operations and do not
+materialize the complete payload. The memory store intentionally retains the
+native value and is best for smaller process-local sessions.
+
+Even when `enabled: false` is selected explicitly, Kedi does not permit an
+unbounded tool result to enter model history. Small results remain inline;
+oversized results fail with a compact `ToolOutputTooLargeError` that asks the
+caller to narrow the operation or enable artifacts. The rejected payload is
+not included in the error or telemetry.
 
 #### Storage, lifetime, and history
 
@@ -1288,12 +1360,12 @@ Expired records are removed lazily and by one process-level cleanup service;
 Kedi does not create one cleanup thread per runtime.
 
 Portable conversation history stores compact refs and bounded read chunks, not
-raw artifact payloads. Releasing or expiring a ref removes its obsolete read
-chunks while preserving valid tool-call/result structure and leaves a
-metadata-only tombstone. Provider-native checkpoints may still contain earlier
-content, so Kedi marks them stale and rotates/replays from compact portable
-history where the adapter supports continuation. It does not claim to delete
-content already retained by a remote provider.
+raw artifact payloads. History is append-only within a cache epoch: releasing
+or expiring a ref removes its payload and quota usage, but does not delete,
+rewrite, or reorder earlier messages and does not invalidate provider-native
+checkpoints. The store retains lightweight metadata so stale refs still produce
+precise released or expired errors. A future explicit conversation-compaction
+operation may start a new cache epoch; artifact lifecycle operations never do.
 
 Kedi remains stateless by default. Use an explicit Python session when calls
 must share model history and artifact ownership:

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-import secrets
 import time
+import secrets
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 from .cleanup import cleanup_service
 from .errors import (
     ArtifactExpiredError,
     ArtifactQuotaExceededError,
     ArtifactReleasedError,
+    ToolOutputTooLargeError,
 )
 from .history import ArtifactHistory
 from .models import (
@@ -26,9 +28,11 @@ from .models import (
 )
 from .policy import ArtifactPolicy
 from .serialization import (
-    render_artifact_content,
+    SerializedArtifact,
     serialize_artifact,
 )
+from .stream import ArtifactStream
+from .streaming import ArtifactStreamEncoder, StreamedArtifact, materialize_stream_payload
 from . import telemetry
 from .store import (
     ArtifactStore,
@@ -36,6 +40,8 @@ from .store import (
     InMemoryArtifactStore,
     store_size,
 )
+
+MAX_INLINE_TOOL_RESULT_BYTES = 100_000
 
 
 class ArtifactManager:
@@ -59,6 +65,9 @@ class ArtifactManager:
         self._ref_policies: dict[str, ArtifactPolicy] = {}
         self._digest_refs: dict[tuple[str, str], str] = {}
         self._metered_active_refs: dict[str, int] = {}
+        self._ref_counters: dict[str, int] = defaultdict(int)
+        self._reserved_artifacts = 0
+        self._reserved_bytes = 0
         self._lock = RLock()
         self._last_cleanup = 0.0
         self._cleanup_interval_seconds = 60.0
@@ -76,6 +85,7 @@ class ArtifactManager:
         policy: ArtifactPolicy,
         source: str | None = None,
         sensitive: bool = False,
+        provenance: dict[str, Any] | None = None,
     ) -> Any:
         effective = policy.resolved()
         if not effective.enabled:
@@ -87,6 +97,74 @@ class ArtifactManager:
         )
         if serialized.size_bytes < effective.threshold_bytes:
             return value
+
+        return self._store_serialized(
+            value,
+            serialized=serialized,
+            policy=effective,
+            source=source,
+            sensitive=sensitive,
+            provenance=provenance,
+        )
+
+    def admit_tool_result(
+        self,
+        value: Any,
+        *,
+        policy: ArtifactPolicy,
+        source: str | None = None,
+        sensitive: bool = False,
+    ) -> Any:
+        """Admit a materialized tool result without allowing oversized inline history."""
+
+        effective = policy.resolved()
+        serialized = serialize_artifact(
+            value,
+            preview_chars=effective.preview_chars,
+            require_persistable=effective.enabled and effective.store == "file",
+        )
+        should_artifact = effective.enabled and (
+            serialized.size_bytes >= effective.threshold_bytes
+            or serialized.size_bytes > MAX_INLINE_TOOL_RESULT_BYTES
+        )
+        if not should_artifact and serialized.size_bytes <= MAX_INLINE_TOOL_RESULT_BYTES:
+            telemetry.record_output_admission(
+                decision="inline",
+                size_bytes=serialized.size_bytes,
+            )
+            return value
+        if not effective.enabled:
+            telemetry.record_output_admission(
+                decision="rejected",
+                size_bytes=serialized.size_bytes,
+            )
+            raise ToolOutputTooLargeError(
+                size_bytes=serialized.size_bytes,
+                limit_bytes=MAX_INLINE_TOOL_RESULT_BYTES,
+            )
+        telemetry.record_output_admission(
+            decision="artifact",
+            size_bytes=serialized.size_bytes,
+        )
+        return self._store_serialized(
+            value,
+            serialized=serialized,
+            policy=effective,
+            source=source,
+            sensitive=sensitive,
+        )
+
+    def _store_serialized(
+        self,
+        value: Any,
+        *,
+        serialized: SerializedArtifact,
+        policy: ArtifactPolicy,
+        source: str | None,
+        sensitive: bool,
+        provenance: dict[str, Any] | None = None,
+    ) -> Any:
+        effective = policy
 
         with telemetry.artifact_span(
             "create",
@@ -117,7 +195,7 @@ class ArtifactManager:
 
                 now_monotonic = self._monotonic()
                 now_wall = self._wall_clock()
-                ref_id = f"art_{secrets.token_urlsafe(18)}"
+                ref_id = self._new_ref_id(source)
                 ref = ArtifactRef[Any](
                     ref_id=ref_id,
                     logical_type=serialized.logical_type,
@@ -141,6 +219,7 @@ class ArtifactManager:
                     idle_ttl_seconds=effective.idle_ttl_seconds,
                     source=source,
                     digest=serialized.digest,
+                    provenance=dict(provenance) if provenance is not None else None,
                 )
                 store.put(record, serialized)
                 self._ref_stores[ref_id] = store
@@ -165,15 +244,125 @@ class ArtifactManager:
                 cleanup_service.register(self)
                 return ArtifactHandle(ref=ref, manager=self)
 
+    def artifactize_stream(
+        self,
+        stream: ArtifactStream[Any],
+        *,
+        policy: ArtifactPolicy,
+        source: str | None = None,
+        sensitive: bool = False,
+    ) -> Any:
+        """Consume a synchronous stream once and store it without full materialization."""
+
+        return self._consume_stream(
+            stream,
+            stream.iter_chunks(),
+            policy=policy,
+            source=source,
+            sensitive=sensitive,
+        )
+
+    async def artifactize_stream_async(
+        self,
+        stream: ArtifactStream[Any],
+        *,
+        policy: ArtifactPolicy,
+        source: str | None = None,
+        sensitive: bool = False,
+    ) -> Any:
+        """Consume a sync or async stream once and store it without full materialization."""
+
+        effective = policy.resolved()
+        encoder = ArtifactStreamEncoder(stream, preview_chars=effective.preview_chars)
+        state = _StreamingWrite(self, effective, source, sensitive, stream, encoder)
+        try:
+            state.accept(encoder.start())
+            async for chunk in stream.aiter_chunks():
+                state.accept(encoder.encode(chunk))
+            tail, streamed = encoder.finish()
+            state.accept(tail)
+            return state.finish(streamed)
+        except BaseException:
+            state.abort()
+            await stream.aclose()
+            raise
+
     def get_value(self, ref_id: str) -> Any:
         with self._lease(ref_id) as (store, record):
             return store.get_value(self.session_id, record.ref_id)
+
+    def metadata(self, ref_id: str) -> dict[str, Any]:
+        with self._lease(ref_id) as (_, record):
+            return {
+                **record.ref.model_dump(mode="json"),
+                "status": record.status.value,
+                "source": record.source,
+                "provenance": dict(record.provenance) if record.provenance is not None else None,
+            }
+
+    def find(
+        self,
+        ref_id: str,
+        pattern: str,
+        *,
+        max_matches: int = 20,
+        context_chars: int = 120,
+    ) -> list[dict[str, Any]]:
+        """Find literal text with bounded store reads and cross-chunk matching."""
+
+        if not pattern:
+            raise ValueError("artifact search pattern cannot be empty")
+        if max_matches <= 0:
+            raise ValueError("artifact max_matches must be positive")
+        max_matches = min(max_matches, 100)
+        with self._lease(ref_id) as (store, record):
+            policy = self._ref_policies[ref_id]
+            chunk_chars = max(65_536, policy.read_max_chars, len(pattern) + context_chars * 2)
+            chunk_chars = min(chunk_chars, 65_536)
+            offset = 0
+            overlap = ""
+            results: list[dict[str, Any]] = []
+            seen_offsets: set[int] = set()
+            while len(results) < max_matches:  # pragma: no branch - validated positive limit
+                content, next_offset, complete = store.read_projection(
+                    self.session_id,
+                    record.ref_id,
+                    offset=offset,
+                    offset_from="start",
+                    max_chars=chunk_chars,
+                )
+                window = overlap + content
+                base = offset - len(overlap)
+                cursor = 0
+                while len(results) < max_matches:
+                    index = window.find(pattern, cursor)
+                    if index < 0:
+                        break
+                    absolute = base + index
+                    if absolute not in seen_offsets:
+                        seen_offsets.add(absolute)
+                        left = max(0, index - context_chars)
+                        right = min(len(window), index + len(pattern) + context_chars)
+                        results.append(
+                            {
+                                "offset": absolute,
+                                "match": pattern,
+                                "context": window[left:right],
+                            }
+                        )
+                    cursor = index + max(1, len(pattern))
+                if complete or next_offset is None:
+                    break
+                overlap = window[-max(0, len(pattern) - 1) :]
+                offset = next_offset
+            return results
 
     def read(
         self,
         ref_id: str,
         *,
         offset: int = 0,
+        offset_from: Literal["start", "end"] = "start",
         max_chars: int = -1,
         path: str | None = None,
     ) -> ArtifactChunk:
@@ -185,6 +374,8 @@ class ArtifactManager:
         ):
             if offset < 0:
                 raise ValueError("artifact read offset must not be negative")
+            if offset_from not in {"start", "end"}:
+                raise ValueError("artifact offset_from must be 'start' or 'end'")
             with self._lease(ref_id) as (store, record):
                 policy = self._ref_policies[ref_id]
                 limit = (
@@ -194,12 +385,23 @@ class ArtifactManager:
                 )
                 if limit <= 0:
                     raise ValueError("artifact max_chars must be -1 or positive")
-                value = store.get_value(self.session_id, ref_id)
-                selected = _resolve_json_pointer(value, path) if path is not None else value
-                rendered = render_artifact_content(record.codec, selected)
-                content = rendered[offset : offset + limit]
-                next_offset = offset + len(content)
-                complete = next_offset >= len(rendered)
+                if path is None:
+                    content, next_offset, complete = store.read_projection(
+                        self.session_id,
+                        ref_id,
+                        offset=offset,
+                        offset_from=offset_from,
+                        max_chars=limit,
+                    )
+                else:
+                    content, next_offset, complete = store.read_json_pointer_projection(
+                        self.session_id,
+                        ref_id,
+                        pointer=path,
+                        offset=offset,
+                        offset_from=offset_from,
+                        max_chars=limit,
+                    )
                 chunk = ArtifactChunk(
                     ref_id=ref_id,
                     content=content,
@@ -208,6 +410,7 @@ class ArtifactManager:
                     complete=complete,
                     media_type=record.ref.media_type,
                     path=path,
+                    offset_from=offset_from,
                 )
                 self.history.append(
                     "artifact_read",
@@ -217,6 +420,7 @@ class ArtifactManager:
                         "chars": len(content),
                         "complete": complete,
                         "path": path,
+                        "offset_from": offset_from,
                     },
                 )
                 telemetry.record_read(bytes_returned=len(content.encode("utf-8")))
@@ -283,12 +487,7 @@ class ArtifactManager:
         with self._lock:
             return any(record.status is ArtifactStatus.ACTIVE for record in self._all_records())
 
-    def release(
-        self,
-        ref_id: str,
-        *,
-        compact_history: bool = True,
-    ) -> ArtifactReleaseResult:
+    def release(self, ref_id: str) -> ArtifactReleaseResult:
         with telemetry.artifact_span(
             "release",
             session_id=self.session_id,
@@ -312,38 +511,31 @@ class ArtifactManager:
                 if record.status is ArtifactStatus.RELEASED:
                     self._delete_payload(record)
                 self.history.append("artifact_released", ref_id=ref_id)
-                compacted = (
-                    self.history.compact(ref_id, reason="released") if compact_history else 0
-                )
                 telemetry.record_released()
                 return ArtifactReleaseResult(
                     ref_id=ref_id,
                     status=record.status,
-                    compacted_events=compacted,
                 )
 
     def cleanup_expired(self) -> int:
         started = time.perf_counter()
-        with telemetry.artifact_span("cleanup", session_id=self.session_id) as span:
-            try:
-                with self._lock:
-                    if self._closed:
-                        return 0
-                    now = self._monotonic()
-                    expired = 0
-                    for record in self._all_records():
-                        if record.status not in {
-                            ArtifactStatus.ACTIVE,
-                            ArtifactStatus.PENDING_RELEASE,
-                        }:
-                            continue
-                        idle_deadline = (
-                            record.last_accessed_monotonic + record.idle_ttl_seconds
-                            if record.idle_ttl_seconds is not None
-                            else float("inf")
-                        )
-                        if now < min(record.expires_monotonic, idle_deadline):
-                            continue
+        try:
+            with self._lock:
+                if self._closed:
+                    return 0
+                now = self._monotonic()
+                candidates = tuple(
+                    record for record in self._all_records() if _is_expired(record, now=now)
+                )
+                self._last_cleanup = now
+                if not candidates:
+                    return 0
+
+                with telemetry.artifact_span(
+                    "cleanup",
+                    session_id=self.session_id,
+                ) as span:
+                    for record in candidates:
                         with telemetry.artifact_span(
                             "expire",
                             session_id=self.session_id,
@@ -353,14 +545,19 @@ class ArtifactManager:
                             if not record.active_readers:
                                 self._delete_payload(record)
                             self.history.append("artifact_expired", ref_id=record.ref_id)
-                            self.history.compact(record.ref_id, reason="expired")
                             telemetry.record_expired()
-                            expired += 1
-                    self._last_cleanup = now
-                    span.set_attribute("kedi.artifact.expired_count", expired)
-                    return expired
-            finally:
-                telemetry.record_cleanup(duration_seconds=time.perf_counter() - started)
+                    span.set_attribute("kedi.artifact.expired_count", len(candidates))
+                    return len(candidates)
+        except BaseException as exc:
+            with telemetry.artifact_span(
+                "cleanup",
+                session_id=self.session_id,
+                outcome="error",
+            ) as span:
+                span.record_exception(exc)
+            raise
+        finally:
+            telemetry.record_cleanup(duration_seconds=time.perf_counter() - started)
 
     def stats(self) -> dict[str, int]:
         records = self._all_records()
@@ -390,6 +587,9 @@ class ArtifactManager:
             self._ref_stores.clear()
             self._ref_policies.clear()
             self._digest_refs.clear()
+            self._ref_counters.clear()
+            self._reserved_artifacts = 0
+            self._reserved_bytes = 0
 
     @contextmanager
     def _lease(
@@ -465,14 +665,121 @@ class ArtifactManager:
         new_size: int,
     ) -> None:
         count, size = store_size(self._all_records())
-        if count + 1 > policy.max_artifacts:
+        if count + self._reserved_artifacts + 1 > policy.max_artifacts:
             raise ArtifactQuotaExceededError(
                 f"artifact count would exceed limit {policy.max_artifacts}"
             )
-        if size + new_size > policy.session_quota_bytes:
+        if size + self._reserved_bytes + new_size > policy.session_quota_bytes:
             raise ArtifactQuotaExceededError(
-                f"artifact payload would exceed session quota {policy.session_quota_bytes} bytes"
+                "artifact payload would exceed session quota "
+                f"{policy.session_quota_bytes} bytes "
+                f"(active={size}, requested={new_size})"
             )
+
+    def _reserve_stream(self, policy: ArtifactPolicy, initial_size: int) -> None:
+        with self._lock:
+            self._enforce_quota(policy, initial_size)
+            self._reserved_artifacts += 1
+            self._reserved_bytes += initial_size
+
+    def _grow_stream_reservation(self, policy: ArtifactPolicy, size: int) -> None:
+        if size == 0:
+            return
+        with self._lock:
+            _, active_size = store_size(self._all_records())
+            if active_size + self._reserved_bytes + size > policy.session_quota_bytes:
+                telemetry.record_quota_rejection()
+                raise ArtifactQuotaExceededError(
+                    "artifact payload would exceed session quota "
+                    f"{policy.session_quota_bytes} bytes "
+                    f"(active={active_size}, reserved={self._reserved_bytes}, requested={size})"
+                )
+            self._reserved_bytes += size
+
+    def _release_stream_reservation(self, size: int) -> None:
+        with self._lock:
+            self._reserved_artifacts -= 1
+            self._reserved_bytes -= size
+
+    def _consume_stream(
+        self,
+        stream: ArtifactStream[Any],
+        chunks: Iterator[Any],
+        *,
+        policy: ArtifactPolicy,
+        source: str | None,
+        sensitive: bool,
+    ) -> Any:
+        effective = policy.resolved()
+        encoder = ArtifactStreamEncoder(stream, preview_chars=effective.preview_chars)
+        state = _StreamingWrite(self, effective, source, sensitive, stream, encoder)
+        try:
+            state.accept(encoder.start())
+            for chunk in chunks:
+                state.accept(encoder.encode(chunk))
+            tail, streamed = encoder.finish()
+            state.accept(tail)
+            return state.finish(streamed)
+        except BaseException:
+            state.abort()
+            stream.close()
+            raise
+
+    def _new_ref_id(self, source: str | None) -> str:
+        kind = _artifact_kind(source)
+        while True:
+            self._ref_counters[kind] += 1
+            ref_id = f"{kind}_{self._ref_counters[kind]}"
+            if ref_id not in self._ref_stores:
+                return ref_id
+
+    def _register_streamed(
+        self,
+        *,
+        record: ArtifactRecord,
+        store: ArtifactStore,
+        policy: ArtifactPolicy,
+    ) -> ArtifactHandle[Any]:
+        ref_id = record.ref_id
+        self._ref_stores[ref_id] = store
+        self._ref_policies[ref_id] = policy
+        self._metered_active_refs[ref_id] = record.ref.size_bytes
+        if record.digest is not None:
+            self._digest_refs[(self._store_identity(policy), record.digest)] = ref_id
+        cleanup_service.register(self)
+        telemetry.record_created(
+            size_bytes=record.ref.size_bytes,
+            context_bytes_avoided=(record.ref.size_bytes - len(record.ref.preview.encode("utf-8"))),
+        )
+        self.history.append(
+            "artifact_created",
+            ref_id=ref_id,
+            data={
+                "logical_type": record.ref.logical_type,
+                "media_type": record.ref.media_type,
+                "size_bytes": record.ref.size_bytes,
+                "source": record.source,
+                "streamed": True,
+            },
+        )
+        return ArtifactHandle(ref=record.ref, manager=self)
+
+    def _discard_streamed(
+        self,
+        *,
+        record: ArtifactRecord,
+        store: ArtifactStore,
+        policy: ArtifactPolicy,
+    ) -> None:
+        ref_id = record.ref_id
+        store.discard(self.session_id, ref_id)
+        self._ref_stores.pop(ref_id, None)
+        self._ref_policies.pop(ref_id, None)
+        size_bytes = self._metered_active_refs.pop(ref_id, None)
+        if size_bytes is not None:
+            telemetry.record_payload_removed(size_bytes=size_bytes)
+        if record.digest is not None:
+            self._digest_refs.pop((self._store_identity(policy), record.digest), None)
 
     def _all_records(self) -> tuple[ArtifactRecord, ...]:
         stores: tuple[ArtifactStore, ...] = (
@@ -506,18 +813,167 @@ class ArtifactManager:
             raise RuntimeError("artifact manager is closed")
 
 
-def _resolve_json_pointer(value: Any, pointer: str) -> Any:
-    if pointer == "":
-        return value
-    if not pointer.startswith("/"):
-        raise ValueError("artifact JSON path must be an RFC 6901 pointer")
-    current = value
-    for raw_part in pointer.split("/")[1:]:
-        part = raw_part.replace("~1", "/").replace("~0", "~")
-        if isinstance(current, dict):
-            current = current[part]
-        elif isinstance(current, list):
-            current = current[int(part)]
-        else:
-            raise ValueError(f"artifact JSON path cannot descend through {type(current).__name__}")
-    return current
+class _StreamingWrite:
+    """Threshold buffer and transactional store write for one consumed stream."""
+
+    def __init__(
+        self,
+        manager: ArtifactManager,
+        policy: ArtifactPolicy,
+        source: str | None,
+        sensitive: bool,
+        stream: ArtifactStream[Any],
+        encoder: ArtifactStreamEncoder,
+    ) -> None:
+        self.manager = manager
+        self.policy = policy
+        self.source = source
+        self.sensitive = sensitive
+        self.stream = stream
+        self.encoder = encoder
+        self.buffer = bytearray()
+        self.writer: Any = None
+        self.store: ArtifactStore | None = None
+        self.ref_id: str | None = None
+        self.reserved_bytes = 0
+        self.finished = False
+
+    def accept(self, payload: bytes) -> None:
+        if self.finished or not payload:
+            return
+        if self.writer is None:
+            if not self.policy.enabled:
+                self.buffer.extend(payload)
+                if len(self.buffer) > MAX_INLINE_TOOL_RESULT_BYTES:
+                    telemetry.record_output_admission(
+                        decision="rejected",
+                        size_bytes=len(self.buffer),
+                    )
+                    raise ToolOutputTooLargeError(
+                        size_bytes=len(self.buffer),
+                        limit_bytes=MAX_INLINE_TOOL_RESULT_BYTES,
+                    )
+                return
+            prospective_size = len(self.buffer) + len(payload)
+            if (
+                prospective_size < self.policy.threshold_bytes
+                and prospective_size <= MAX_INLINE_TOOL_RESULT_BYTES
+            ):
+                self.buffer.extend(payload)
+                return
+            telemetry.record_output_admission(
+                decision="artifact",
+                size_bytes=prospective_size,
+            )
+            with self.manager._lock:
+                self.manager._ensure_open()
+                self.manager._cleanup_interval_seconds = min(
+                    self.manager._cleanup_interval_seconds,
+                    self.policy.cleanup_interval_seconds,
+                )
+                self.manager._maybe_cleanup_locked()
+                self.store = self.manager._store_for_policy(self.policy)
+                self.manager._reserve_stream(self.policy, prospective_size)
+                self.reserved_bytes = prospective_size
+                self.ref_id = self.manager._new_ref_id(self.source)
+                self.writer = self.store.begin_write(self.manager.session_id, self.ref_id)
+            if self.buffer:
+                self.writer.write(bytes(self.buffer))
+            self.buffer.clear()
+            self.writer.write(payload)
+            return
+        self.manager._grow_stream_reservation(self.policy, len(payload))
+        self.reserved_bytes += len(payload)
+        self.writer.write(payload)
+
+    def finish(self, streamed: StreamedArtifact) -> Any:
+        if self.finished:
+            raise RuntimeError("artifact stream write is already finished")
+        if self.writer is None:
+            self.finished = True
+            return materialize_stream_payload(streamed, bytes(self.buffer))
+        if self.store is None or self.ref_id is None:
+            raise RuntimeError("artifact stream writer has incomplete state")
+
+        now_monotonic = self.manager._monotonic()
+        now_wall = self.manager._wall_clock()
+        ref = ArtifactRef[Any](
+            ref_id=self.ref_id,
+            logical_type=streamed.logical_type,
+            media_type=streamed.media_type,
+            summary=streamed.summary,
+            preview=streamed.preview,
+            size_bytes=streamed.size_bytes,
+            char_count=streamed.char_count,
+            created_at=now_wall,
+            expires_at=now_wall + timedelta(seconds=self.policy.ttl_seconds),
+            sensitive=self.sensitive,
+        )
+        record = ArtifactRecord(
+            ref=ref,
+            session_id=self.manager.session_id,
+            codec=streamed.codec,
+            status=ArtifactStatus.ACTIVE,
+            created_monotonic=now_monotonic,
+            last_accessed_monotonic=now_monotonic,
+            expires_monotonic=now_monotonic + self.policy.ttl_seconds,
+            idle_ttl_seconds=self.policy.idle_ttl_seconds,
+            source=self.source,
+            digest=streamed.digest,
+        )
+        try:
+            self.writer.commit(record, streamed)
+            try:
+                with self.manager._lock:
+                    result = self.manager._register_streamed(
+                        record=record,
+                        store=self.store,
+                        policy=self.policy,
+                    )
+            except BaseException:
+                with self.manager._lock:
+                    self.manager._discard_streamed(
+                        record=record,
+                        store=self.store,
+                        policy=self.policy,
+                    )
+                raise
+            self.finished = True
+            return result
+        finally:
+            self.manager._release_stream_reservation(self.reserved_bytes)
+            self.reserved_bytes = 0
+
+    def abort(self) -> None:
+        if self.finished:
+            return
+        self.finished = True
+        if self.writer is not None:
+            self.writer.abort()
+        if self.reserved_bytes:
+            self.manager._release_stream_reservation(self.reserved_bytes)
+            self.reserved_bytes = 0
+
+
+def _is_expired(record: ArtifactRecord, *, now: float) -> bool:
+    if record.status not in {
+        ArtifactStatus.ACTIVE,
+        ArtifactStatus.PENDING_RELEASE,
+    }:
+        return False
+    idle_deadline = (
+        record.last_accessed_monotonic + record.idle_ttl_seconds
+        if record.idle_ttl_seconds is not None
+        else float("inf")
+    )
+    return now >= min(record.expires_monotonic, idle_deadline)
+
+
+def _artifact_kind(source: str | None) -> str:
+    if source is not None and source.startswith("tool:"):
+        return "tool_call_result"
+    if source is not None and source.startswith(("template", "output:")):
+        return "template_output"
+    if source is not None and source.startswith("artifact_code"):
+        return "artifact_code_result"
+    return "artifact"

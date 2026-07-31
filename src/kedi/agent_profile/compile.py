@@ -17,6 +17,7 @@ from .registry import (
     ProfileSubagentMember,
     ProfileSystemMember,
     ProfileToolMember,
+    ProfileUseMember,
 )
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
+        | ProfileUseMember
         | ProfileMcpMember
         | ProfileSettingsMember
         | ProfileArtifactsMember
@@ -74,6 +76,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(ProfileSubagentMember(name=entry.name, loc=entry.loc))
     for entry in stmt.max_agents_members:
         members.append(ProfileMaxAgentsMember(value=entry.value))
+    for target in stmt.use_targets:
+        members.append(ProfileUseMember(name=target))
     if stmt.tool_names:
         members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
     return ProfileDefinition(name=stmt.name, description=stmt.docstring, members=members)
