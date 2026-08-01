@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import time
 import secrets
+import time
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Iterator, Literal
 
+from . import telemetry
 from .cleanup import cleanup_service
 from .errors import (
     ArtifactExpiredError,
@@ -31,15 +32,14 @@ from .serialization import (
     SerializedArtifact,
     serialize_artifact,
 )
-from .stream import ArtifactStream
-from .streaming import ArtifactStreamEncoder, StreamedArtifact, materialize_stream_payload
-from . import telemetry
 from .store import (
     ArtifactStore,
     FileArtifactStore,
     InMemoryArtifactStore,
     store_size,
 )
+from .stream import ArtifactStream
+from .streaming import ArtifactStreamEncoder, StreamedArtifact, materialize_stream_payload
 
 MAX_INLINE_TOOL_RESULT_BYTES = 100_000
 

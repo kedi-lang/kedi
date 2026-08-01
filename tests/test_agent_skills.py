@@ -16,8 +16,8 @@ from kedi.agent_adapter.skills import (
     skill_tool_specs,
 )
 from kedi.agent_adapter.tool_override import with_approval, with_artifact_result
-from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
 from kedi.agent_profile import AgentProfile
+from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter

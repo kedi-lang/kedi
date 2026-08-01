@@ -10,7 +10,6 @@ from .errors import ArtifactStreamError
 from .serialization import JsonPointerRange, encode_json_with_pointers
 from .stream import ArtifactStream, ArtifactStreamKind
 
-
 _MAX_JSON_POINTER_INDEX_ENTRIES = 100_000
 
 

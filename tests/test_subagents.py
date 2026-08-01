@@ -87,9 +87,9 @@ from kedi.agent_profile import (
     AgentProfile,
     AgentSubagentUnsupported,
 )
-from kedi.artifacts import artifact_instructions
 from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.model import eval_profile_definition
+from kedi.artifacts import artifact_instructions
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program

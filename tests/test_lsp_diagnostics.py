@@ -12,8 +12,8 @@ from lsprotocol import types as lsp
 from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
     OutputSegment,
-    Program,
     ProfileDefStmt,
+    Program,
     Span,
     TemplateLine,
     TypeApply,

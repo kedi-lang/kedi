@@ -10,10 +10,10 @@ from kedi.agent_adapter.subagents import SupportsSubagentExecution
 
 if TYPE_CHECKING:
     from ...agent_profile import AgentProfile
+    from ..conversation import AdapterConversationContext
     from ..subagents import SubagentExecutionRequest
     from ..subagents.limits import SubagentUsageLimits
     from ..tool_override import ToolSpec
-    from ..conversation import AdapterConversationContext
 
 
 class LazyAdapter:

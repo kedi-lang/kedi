@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import builtins
 import inspect
 import json
-import builtins
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Iterator, Mapping
 from enum import Enum
 from functools import wraps
-from types import UnionType
 from threading import Lock
+from types import UnionType
 from typing import Annotated, Any, Callable, Generic, TypeVar, Union, cast, get_args, get_origin
 
 from .errors import ArtifactStreamConsumedError, ArtifactStreamError

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import base64
+import codecs
 import json
 import os
 import secrets
 import time
-import base64
-import codecs
 from bisect import bisect_right
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -29,7 +29,6 @@ from .serialization import (
     resolve_json_pointer,
 )
 from .streaming import StreamedArtifact, materialize_stream_payload
-
 
 _PROJECTION_INDEX_VERSION = 1
 _UTF8_CHECKPOINT_INTERVAL = 4_096

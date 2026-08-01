@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import inspect
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Annotated, Any, get_type_hints
@@ -9,9 +9,8 @@ from typing import Annotated, Any, get_type_hints
 import pytest
 
 from kedi import ArtifactStream
-from kedi.agent_adapter.utils import python_callable_tool_spec
-from kedi.agent_adapter.utils import kedi_procedure_tool_spec
 from kedi.agent_adapter.tool_override import ToolSpec, with_artifact_result
+from kedi.agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
 from kedi.artifacts import (
     ArtifactHandle,
     ArtifactManager,
@@ -22,11 +21,11 @@ from kedi.artifacts import (
     ArtifactStreamKind,
     ToolOutputTooLargeError,
 )
+from kedi.artifacts import streaming as streaming_module
 from kedi.artifacts.stream import (
     artifact_stream_matches_annotation,
     callable_with_logical_stream_return,
 )
-from kedi.artifacts import streaming as streaming_module
 from kedi.artifacts.streaming import (
     ArtifactStreamEncoder,
     StreamedArtifact,

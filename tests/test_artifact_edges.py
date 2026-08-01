@@ -38,12 +38,13 @@ from kedi.artifacts import (
 )
 from kedi.artifacts import telemetry as artifact_telemetry
 from kedi.artifacts.cleanup import ArtifactCleanupService
+from kedi.artifacts.manager import _is_expired, _StreamingWrite
 from kedi.artifacts.models import ArtifactRecord, ArtifactRef
 from kedi.artifacts.store import (
     InMemoryArtifactStore,
-    _JsonPointerLocator,
     _build_utf8_checkpoints,
     _count_utf8_chars,
+    _JsonPointerLocator,
     _load_projection_index,
     _locate_json_pointer_range,
     _read_base64_chars,
@@ -52,10 +53,8 @@ from kedi.artifacts.store import (
     _validated_pointer_ranges,
     store_size,
 )
-from kedi.artifacts.streaming import StreamedArtifact
 from kedi.artifacts.stream import ArtifactStream
-from kedi.artifacts.streaming import ArtifactStreamEncoder
-from kedi.artifacts.manager import _StreamingWrite, _is_expired
+from kedi.artifacts.streaming import ArtifactStreamEncoder, StreamedArtifact
 from kedi.artifacts.tools import artifact_tool_specs
 from kedi.lang.compiler.environment import (
     KediEnv,
@@ -1153,6 +1152,7 @@ def test_legacy_json_locator_defensive_parser_invariants(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from io import BytesIO
+
     import kedi.artifacts.store as store_module
 
     missing_key = _JsonPointerLocator(BytesIO(b'{"a":1}'), target=("missing",))
