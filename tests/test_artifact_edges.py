@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 import threading
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -331,6 +331,72 @@ def test_file_store_ignores_invalid_metadata_and_reads_without_native_cache(tmp_
     restored.close()
 
 
+def test_file_store_restore_removes_interrupted_files_without_touching_active_writer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "artifacts"
+    store = FileArtifactStore(root)
+    store.put(_record(), serialize_artifact("value", preview_chars=10))
+    writer = store.begin_write("session", "art_active")
+    writer.write(b"value")
+    session = root / "session"
+    interrupted = session / ".art_interrupted.token.tmp"
+    orphaned_payload = session / "art_orphan.payload"
+    orphaned_index = session / "art_orphan.index"
+    interrupted.write_bytes(b"partial")
+    orphaned_payload.write_bytes(b"orphan")
+    orphaned_index.write_bytes(b"orphan")
+
+    records = store.restore_session(
+        "session",
+        monotonic_now=0,
+        wall_now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert [record.ref_id for record in records] == ["art_test"]
+    assert not interrupted.exists()
+    assert not orphaned_payload.exists()
+    assert not orphaned_index.exists()
+    assert tuple(session.glob(".art_active.*.tmp"))
+
+    active_record = _record(ref_id="art_active")
+    writer.commit(active_record, _streamed())
+    assert store.get_value("session", "art_active") == "value"
+    store.close()
+
+
+def test_file_store_handles_concurrent_independent_sessions(tmp_path: Path) -> None:
+    root = tmp_path / "artifacts"
+
+    def round_trip(index: int) -> tuple[str, str]:
+        session_id = f"session_{index}"
+        ref_id = f"tool_call_result_{index}"
+        value = f"{index:05d}"
+        writer = FileArtifactStore(root)
+        writer.put(
+            _record(ref_id=ref_id, session_id=session_id),
+            serialize_artifact(value, preview_chars=10),
+        )
+        writer.close()
+
+        reader = FileArtifactStore(root)
+        try:
+            records = reader.restore_session(
+                session_id,
+                monotonic_now=0,
+                wall_now=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+            assert [record.ref_id for record in records] == [ref_id]
+            return ref_id, reader.get_value(session_id, ref_id)
+        finally:
+            reader.close()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = tuple(executor.map(round_trip, range(32)))
+
+    assert results == tuple((f"tool_call_result_{index}", f"{index:05d}") for index in range(32))
+
+
 def test_file_store_skips_foreign_metadata_and_missing_payload(tmp_path: Path) -> None:
     root = tmp_path / "artifacts"
     session = root / "session"
@@ -590,6 +656,7 @@ def test_file_stream_writer_rejects_identity_duplicates_and_closed_state(tmp_pat
     duplicate.write(b"value")
     with pytest.raises(ArtifactSerializationError, match="already exists"):
         duplicate.commit(_record(), _streamed())
+    assert store.get_value("session", "art_test") == "value"
     assert not tuple((tmp_path / "writer").rglob("*.tmp"))
     store.close()
 

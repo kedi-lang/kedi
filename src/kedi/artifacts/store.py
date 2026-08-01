@@ -189,6 +189,7 @@ class FileArtifactStore:
         self._records: dict[str, ArtifactRecord] = {}
         self._projection_indexes: dict[tuple[str, str], _ProjectionIndex] = {}
         self._restored_sessions: set[str] = set()
+        self._active_temporary_paths: set[Path] = set()
         self._lock = RLock()
 
     def put(
@@ -246,7 +247,10 @@ class FileArtifactStore:
             os.chmod(directory, 0o700)
 
     def begin_write(self, session_id: str, ref_id: str) -> ArtifactStoreWriter:
-        return _FileArtifactWriter(self, session_id=session_id, ref_id=ref_id)
+        with self._lock:
+            writer = _FileArtifactWriter(self, session_id=session_id, ref_id=ref_id)
+            self._active_temporary_paths.add(writer._temporary_path)
+            return writer
 
     def get_record(self, session_id: str, ref_id: str) -> ArtifactRecord:
         with self._lock:
@@ -428,6 +432,9 @@ class FileArtifactStore:
         directory = self._session_directory(session_id)
         monotonic_now = time.monotonic() if monotonic_now is None else monotonic_now
         wall_now = datetime.now(timezone.utc) if wall_now is None else wall_now
+        restored_ref_ids = {
+            record.ref_id for record in self._records.values() if record.session_id == session_id
+        }
         for metadata_path in directory.glob("*.json"):
             try:
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -455,9 +462,31 @@ class FileArtifactStore:
                     provenance=metadata.get("provenance"),
                     payload=payload_path,
                 )
+                restored_ref_ids.add(ref.ref_id)
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 continue
+        self._remove_interrupted_session_files(directory, restored_ref_ids)
         self._restored_sessions.add(session_id)
+
+    def _remove_interrupted_session_files(
+        self,
+        directory: Path,
+        restored_ref_ids: set[str],
+    ) -> None:
+        # Restoring a session assumes one owning process. Cross-process session
+        # ownership requires a lease protocol rather than filesystem heuristics.
+        for path in directory.iterdir():
+            if path in self._active_temporary_paths:
+                continue
+            name = path.name
+            interrupted = name.startswith(".") and name.endswith(".tmp")
+            orphaned = False
+            for suffix in (".payload", ".index"):
+                if name.endswith(suffix):
+                    orphaned = name[: -len(suffix)] not in restored_ref_ids
+                    break
+            if (interrupted or orphaned) and (path.is_file() or path.is_symlink()):
+                path.unlink(missing_ok=True)
 
 
 class _MemoryArtifactWriter:
@@ -543,14 +572,15 @@ class _FileArtifactWriter:
             "provenance": record.provenance,
             "idle_ttl_seconds": record.idle_ttl_seconds,
         }
-        with self._store._lock:
-            if record.ref_id in self._store._records:
-                self.abort()
-                raise ArtifactSerializationError(
-                    f"artifact reference {record.ref_id!r} already exists"
-                )
-            self._temporary_path.replace(payload_path)
-            try:
+        published = False
+        try:
+            with self._store._lock:
+                if record.ref_id in self._store._records:
+                    raise ArtifactSerializationError(
+                        f"artifact reference {record.ref_id!r} already exists"
+                    )
+                self._temporary_path.replace(payload_path)
+                published = True
                 if record.codec in {"text", "json"}:
                     _write_projection_index(
                         index_path,
@@ -563,13 +593,17 @@ class _FileArtifactWriter:
                     json.dumps(metadata, ensure_ascii=False, sort_keys=True).encode("utf-8"),
                     mode=0o600,
                 )
-            except BaseException:
+                record.payload = payload_path
+                self._store._records[record.ref_id] = record
+                self._finished = True
+                self._store._active_temporary_paths.discard(self._temporary_path)
+        except BaseException:
+            if published:
                 payload_path.unlink(missing_ok=True)
+                metadata_path.unlink(missing_ok=True)
                 index_path.unlink(missing_ok=True)
-                raise
-            record.payload = payload_path
-            self._store._records[record.ref_id] = record
-        self._finished = True
+            self.abort()
+            raise
 
     def abort(self) -> None:
         if self._finished:
@@ -579,6 +613,8 @@ class _FileArtifactWriter:
             self._stream.close()
             self._stream = None
         self._temporary_path.unlink(missing_ok=True)
+        with self._store._lock:
+            self._store._active_temporary_paths.discard(self._temporary_path)
 
     def _open_stream(self) -> BinaryIO:
         if self._finished or self._stream is None:
