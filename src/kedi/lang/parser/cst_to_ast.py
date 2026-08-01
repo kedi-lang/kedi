@@ -36,7 +36,16 @@ from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
-from ...agent_profile.settings import MODEL_SETTING_KEYS, is_valid_model_setting_key
+from ...agent_profile.settings import (
+    MODEL_SETTING_KEYS,
+    is_valid_model_setting_key,
+    parse_plain_setting_value,
+)
+from ...artifacts import (
+    ARTIFACT_POLICY_INPUT_FIELDS,
+    ArtifactPolicy,
+    ArtifactPolicyError,
+)
 from ...effort import EFFORT_VALUES, is_valid_effort
 from ...mcp import MCP_TRANSPORT_VALUES, is_valid_mcp_transport
 from ...source_loading import CompositeSourceMap
@@ -44,6 +53,8 @@ from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
+    ArtifactsField,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -69,6 +80,7 @@ from ..ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMaxAgentsEntry,
@@ -363,6 +375,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "settings_directive":
                 stmt = self._walk_settings_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "artifacts_directive":
+                stmt = self._walk_artifacts_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "profile_directive":
@@ -955,6 +971,8 @@ class _Walker:
             return self._walk_mcp_directive(node)
         if t == "settings_directive":
             return self._walk_settings_directive(node)
+        if t == "artifacts_directive":
+            return self._walk_artifacts_directive(node)
         if t == "use_directive":
             return self._walk_use_directive(node)
         if t == "profile_directive":
@@ -1838,6 +1856,62 @@ class _Walker:
             loc=self._span(node),
         )
 
+    def _walk_artifacts_directive(self, node: Node) -> ArtifactsDirectiveStmt:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[ArtifactsField] = []
+        seen: set[str] = set()
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            artifact_field = self._walk_artifacts_field(child)
+            if artifact_field.name in seen:
+                self._error(
+                    child,
+                    f"Duplicate artifacts field: {artifact_field.name!r}",
+                    code="K-ARTIFACTS-DUP",
+                )
+            seen.add(artifact_field.name)
+            fields.append(artifact_field)
+        return ArtifactsDirectiveStmt(fields=fields, loc=self._span(node))
+
+    def _walk_artifacts_field(self, node: Node) -> ArtifactsField:
+        name_node = _field(node, "name")
+        value_node = _field(node, "value")
+        assert name_node is not None
+        assert value_node is not None
+        name = _identifier_name(self.source, name_node)
+        if name not in ARTIFACT_POLICY_INPUT_FIELDS:
+            choices = ", ".join(sorted(ARTIFACT_POLICY_INPUT_FIELDS))
+            self._error(
+                name_node,
+                f"Unknown artifacts field {name!r}; expected one of: {choices}",
+                code="K-ARTIFACTS-FIELD",
+            )
+        if value_node.type == "inline_python_expr":
+            code_node = _field(value_node, "code")
+            assert code_node is not None
+            return ArtifactsField(
+                name=name,
+                backtick_code=_src_text(self.source, code_node),
+                loc=self._span(node),
+            )
+        plain_value = _src_text(self.source, value_node).strip()
+        if name in ARTIFACT_POLICY_INPUT_FIELDS:
+            try:
+                ArtifactPolicy.patch({name: parse_plain_setting_value(plain_value)})
+            except ArtifactPolicyError as exc:
+                self._error(
+                    value_node,
+                    str(exc),
+                    code="K-ARTIFACTS-VALUE",
+                )
+        return ArtifactsField(
+            name=name,
+            plain_value=plain_value,
+            loc=self._span(node),
+        )
+
     def _walk_use_directive(self, node: Node) -> UseDirectiveStmt:
         body_node = _field(node, "body")
         if body_node is not None:
@@ -1881,8 +1955,10 @@ class _Walker:
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
+        artifacts_members: list[ProfileArtifactsEntry] = []
         subagent_members: list[ProfileSubagentEntry] = []
         max_agents_members: list[ProfileMaxAgentsEntry] = []
+        use_targets: list[str] = []
         tool_names: list[str] = []
         docstring: str | None = None
         docstring_loc: Span | None = None
@@ -2001,7 +2077,7 @@ class _Walker:
                     if use_stmt.tool_names:
                         tool_names.extend(use_stmt.tool_names)
                     elif use_stmt.name:
-                        tool_names.append(use_stmt.name)
+                        use_targets.append(use_stmt.name)
                 elif child.type == "mcp_directive":
                     mcp_stmt = self._walk_mcp_directive(child)
                     mcp_members.append(
@@ -2012,6 +2088,14 @@ class _Walker:
                     settings_members.append(
                         ProfileSettingsEntry(
                             fields=settings_stmt.fields,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "artifacts_directive":
+                    artifacts_stmt = self._walk_artifacts_directive(child)
+                    artifacts_members.append(
+                        ProfileArtifactsEntry(
+                            fields=artifacts_stmt.fields,
                             loc=self._span(child),
                         )
                     )
@@ -2042,13 +2126,15 @@ class _Walker:
             and not system_members
             and not mcp_members
             and not settings_members
+            and not artifacts_members
             and not subagent_members
             and not max_agents_members
+            and not use_targets
             and not tool_names
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> subagent:', '> max_agents:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> subagent:', '> max_agents:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2061,8 +2147,10 @@ class _Walker:
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,
+            artifacts_members=artifacts_members,
             subagent_members=subagent_members,
             max_agents_members=max_agents_members,
+            use_targets=use_targets,
             tool_names=tool_names,
             docstring=docstring,
             docstring_loc=docstring_loc,

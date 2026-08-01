@@ -20,6 +20,10 @@ AdapterCapability = Literal[
     "native_approval_handler",
     "subagents",
     "background_subagents",
+    "artifacts",
+    "native_artifacts",
+    "stateful_history",
+    "history_replay",
 ]
 
 
@@ -37,8 +41,22 @@ class AdapterCapabilities:
     supports_native_approval_handler: bool | None = None
     supports_subagents: bool | None = None
     supports_background_subagents: bool | None = None
+    supports_artifacts: bool | None = None
+    supports_native_artifacts: bool | None = None
+    supports_stateful_history: bool | None = None
+    supports_history_replay: bool | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        if self.supports_artifacts and not (
+            self.supports_structured_output and self.supports_tool_registration
+        ):
+            raise ValueError(
+                "Artifact-capable adapters must support structured output and tool registration"
+            )
+        if self.supports_native_artifacts and not self.supports_artifacts:
+            raise ValueError("Native artifact support requires artifact support")
 
     def supports(self, feature: AdapterCapability) -> bool:
         values = {
@@ -54,6 +72,10 @@ class AdapterCapabilities:
             "native_approval_handler": self.supports_native_approval_handler,
             "subagents": self.supports_subagents,
             "background_subagents": self.supports_background_subagents,
+            "artifacts": self.supports_artifacts,
+            "native_artifacts": self.supports_native_artifacts,
+            "stateful_history": self.supports_stateful_history,
+            "history_replay": self.supports_history_replay,
         }
         return bool(values[feature])
 

@@ -602,7 +602,7 @@ def test_find_all_references_for_procedures_and_types(
     duplicate_span = make_edge_span(tmp_path)
     monkeypatch.setattr(
         features,
-        "_profile_tool_entry_spans",
+        "_profile_use_entry_spans",
         lambda prog, profile: [("other", duplicate_span), ("target", duplicate_span)],
     )
     monkeypatch.setattr(

@@ -141,6 +141,34 @@ def test_semantic_tokens_cover_approval_directive_values():
     )
 
 
+def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
+    src = "> artifacts:\n  threshold: 100kb\n  cleanup_interval: `timedelta(seconds=5)`\n"
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/artifacts.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 0 and col == len("> ") and length == len("artifacts") and token_type == keyword_type
+        for line, col, length, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and col == 2 and token_type == property_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and col == len("  threshold: ") and token_type == string_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 2 and col > len("  cleanup_interval: `") and token_type == variable_type
+        for line, col, _, token_type, _ in tokens
+    )
+
+
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
     tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
@@ -193,6 +221,24 @@ def test_tree_sitter_highlights_capture_both_template_angle_delimiters_special()
 
     assert "<" in special
     assert ">" in special
+
+
+def test_tree_sitter_highlights_capture_artifacts_directive_keyword():
+    source = b"> artifacts:\n  enabled: true\n"
+    root = Path(__file__).resolve().parents[1]
+    language = Language(tree_sitter_kedi.language())
+
+    for query_path in (
+        root / "tree-sitter-kedi/queries/highlights.scm",
+        root / "kedi-zed/languages/kedi/highlights.scm",
+    ):
+        query = Query(language, query_path.read_text(encoding="utf-8"))
+        captures = QueryCursor(query).captures(Parser(language).parse(source).root_node)
+        keywords = {
+            source[node.start_byte : node.end_byte].decode("utf-8") for node in captures["keyword"]
+        }
+
+        assert "artifacts" in keywords
 
 
 # ---------------------------------------------------------------------

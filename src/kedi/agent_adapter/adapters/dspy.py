@@ -47,6 +47,10 @@ class DSPyAdapter:
         supports_settings=True,
         supports_subagents=True,
         supports_background_subagents=False,
+        supports_artifacts=True,
+        supports_native_artifacts=False,
+        supports_stateful_history=False,
+        supports_history_replay=False,
         settings=DSPY_LM_SETTING_KEYS,
     )
 

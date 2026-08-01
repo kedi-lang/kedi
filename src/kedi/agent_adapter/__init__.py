@@ -8,6 +8,13 @@ from .meta import (
     AgentAdapterKind,
     T,
 )
+from .conversation import (
+    AdapterConversationContext,
+    ConversationState,
+    ConversationTurn,
+    SupportsConversationState,
+)
+from .approval import ApprovalCancelled
 from .tool_override import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
@@ -65,16 +72,21 @@ __all__ = [
     "AgentAdapter",
     "AdapterCapabilities",
     "AdapterCapability",
+    "AdapterConversationContext",
     "AgentAdapterKind",
+    "ApprovalCancelled",
     "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",
+    "ConversationState",
+    "ConversationTurn",
     "DSPyAdapter",
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
     "SupportsToolRegistration",
+    "SupportsConversationState",
     "T",
     "ToolSpec",
     "WebGPUAdapter",

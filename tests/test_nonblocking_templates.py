@@ -198,7 +198,16 @@ def test_concurrent_tool_using_templates_have_isolated_scopes() -> None:
     adapter = ScopeProbeAdapter(delay=0.1)
     _run(src, adapter, ThreadEngine(max_workers=4))
     # Each call saw exactly one tool, and the right one — scopes did not leak across workers.
-    assert sorted(adapter.tool_calls) == [("bar:1",), ("bar:7",)]
+    artifact_tools = (
+        "read_artifact",
+        "search_artifacts",
+        "release_artifact",
+        "run_artifact_code",
+    )
+    assert sorted(adapter.tool_calls) == [
+        ("bar:1", *artifact_tools),
+        ("bar:7", *artifact_tools),
+    ]
 
 
 def test_call_with_output_evaluates_once() -> None:

@@ -31,6 +31,7 @@ from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
+from kedi.artifacts import artifact_instructions
 from kedi.errors import KediExecutionError
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
@@ -46,6 +47,12 @@ class Person(BaseModel):
 class ApiAdapter(AgentAdapter[AttrDict[str, Any]]):
     kind = "agent-framework"
     shortname = "test"
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_profile_override=True,
+        supports_artifacts=True,
+    )
 
     def __init__(self) -> None:
         self.templates: list[str] = []
@@ -234,6 +241,94 @@ def test_query_response_cache_reuses_same_call(adapter: ApiAdapter) -> None:
     assert summarize("Kedi") == "short summary"
     assert summarize("Kedi") == "short summary"
     assert len(adapter.templates) == 1
+
+
+def test_query_rejects_response_cache_with_explicit_conversation(
+    adapter: ApiAdapter,
+) -> None:
+    state = kedi.ConversationState()
+
+    @query(adapter=adapter, conversation=state, cache=True)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    try:
+        with pytest.raises(
+            ValueError,
+            match="response caching cannot be combined with a conversation session",
+        ):
+            answer()
+        assert adapter.templates == []
+    finally:
+        state.close()
+
+
+def test_session_binds_explicit_conversation_without_changing_default_calls(
+    adapter: ApiAdapter,
+) -> None:
+    @query(adapter=adapter)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    assert answer() == "ok"
+    with kedi.session() as state:
+        assert answer() == "ok"
+        assert [turn.role for turn in state.snapshot()] == ["user", "assistant"]
+
+    with pytest.raises(RuntimeError, match="conversation state is closed"):
+        with state.adapter_turn("test"):
+            pass
+
+
+def test_session_supports_async_context_management() -> None:
+    async def exercise() -> None:
+        async with kedi.session() as state:
+            with state.adapter_turn("test"):
+                pass
+
+        with pytest.raises(RuntimeError, match="conversation state is closed"):
+            with state.adapter_turn("test"):
+                pass
+
+    asyncio.run(exercise())
+
+
+def test_session_exit_without_enter_still_closes_state() -> None:
+    session_context = kedi.session()
+    session_context.__exit__()
+
+    with pytest.raises(RuntimeError, match="conversation state is closed"):
+        with session_context.state.adapter_turn("test"):
+            pass
+
+
+def test_query_conversation_override_wins_over_configured_state(
+    adapter: ApiAdapter,
+) -> None:
+    configured_state = kedi.ConversationState()
+    query_state = kedi.ConversationState()
+    configure(adapter=adapter, conversation=configured_state)
+
+    @query(adapter=adapter, conversation=query_state)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    try:
+        assert answer() == "ok"
+        assert configured_state.snapshot() == ()
+        assert [turn.role for turn in query_state.snapshot()] == ["user", "assistant"]
+    finally:
+        configured_state.close()
+        query_state.close()
 
 
 def test_query_response_cache_coalesces_concurrent_first_call(adapter: ApiAdapter) -> None:
@@ -790,9 +885,17 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
 
     assert current_block_agent_profile() == AgentProfile.empty()
     assert answer() == "ok"
-    assert adapter.instructions == ["Use terse prose."]
+    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
     assert current_block_agent_profile() == AgentProfile.empty()
 
 
@@ -819,8 +922,16 @@ def test_tool_decorator_sets_name_description_and_retries(adapter: ApiAdapter) -
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("search_docs",)]
-    assert adapter.tool_descriptions == [("Search indexed docs.",)]
+    assert adapter.tools == [
+        (
+            "search_docs",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
+    assert adapter.tool_descriptions[0][0] == "Search indexed docs."
 
 
 def test_tool_direct_decorator_without_docstring() -> None:
@@ -878,7 +989,15 @@ def test_query_registers_callable_tools(adapter: ApiAdapter) -> None:
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_bind_file_exposes_kedi_source_as_python_callable(
@@ -996,9 +1115,17 @@ def test_bind_file_profile_arguments_apply_for_one_call(
     def answer() -> str: ...
 
     assert answer() == "ok"
-    assert adapter.instructions == ["Use terse prose."]
+    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
     assert adapter.settings == [{"temperature": 0.2}]
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: Path) -> None:
@@ -1060,7 +1187,15 @@ def test_configure_default_tools_are_available_to_use_directive(
         """
 
     assert answer() == "ok"
-    assert adapter.tools == [("lookup",)]
+    assert adapter.tools == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_query_requires_kedi_docstring_header() -> None:

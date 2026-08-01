@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..subagents import SubagentExecutionRequest
     from ..subagents.limits import SubagentUsageLimits
     from ..tool_override import ToolSpec
+    from ..conversation import AdapterConversationContext
 
 
 class LazyAdapter:
@@ -72,6 +73,12 @@ class LazyAdapter:
 
     def register_tool(self, tool: ToolSpec) -> None:
         self._ensure().register_tool(tool)
+
+    def conversation_scope(
+        self,
+        conversation: AdapterConversationContext,
+    ) -> AbstractContextManager[None]:
+        return self._ensure().conversation_scope(conversation)
 
     def subagent_scope(
         self,

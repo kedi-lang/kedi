@@ -35,7 +35,13 @@ def eval_use_directive(
         return AgentProfile(tools=(name,))
     definition = registry.get(name)
     if definition is not None:
-        return eval_profile_definition(rt, definition, env)
+        return eval_profile_definition(
+            rt,
+            definition,
+            env,
+            registry=registry,
+            available_procedures=available_procedures,
+        )
     if name == SKILLS_USE_TARGET:
         return AgentProfile(skills=True)
     raise KediExecutionError(f"Unknown use target: {name!r}")

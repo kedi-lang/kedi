@@ -19,6 +19,7 @@ from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
+from ..conversation import AdapterConversationContext
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
@@ -65,6 +66,10 @@ class ClaudeAdapter:
         supports_native_approval_handler=True,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_artifacts=True,
+        supports_native_artifacts=False,
+        supports_stateful_history=True,
+        supports_history_replay=False,
         settings=CLAUDE_AGENT_SETTING_KEYS,
     )
 
@@ -91,11 +96,11 @@ class ClaudeAdapter:
             f"kedi_claude_approval_ceiling_{id(self)}",
             default=(),
         )
-        self._subagent_conversation_var: ContextVar[SubagentConversationContext | None] = (
-            ContextVar(
-                f"kedi_claude_subagent_conversation_{id(self)}",
-                default=None,
-            )
+        self._subagent_conversation_var: ContextVar[
+            AdapterConversationContext | SubagentConversationContext | None
+        ] = ContextVar(
+            f"kedi_claude_subagent_conversation_{id(self)}",
+            default=None,
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -265,6 +270,17 @@ class ClaudeAdapter:
                 self.approval_ceiling(request.approval_ceiling),
             ):
                 yield
+        finally:
+            self._subagent_conversation_var.reset(token)
+
+    @contextmanager
+    def conversation_scope(
+        self,
+        conversation: AdapterConversationContext,
+    ) -> Iterator[None]:
+        token = self._subagent_conversation_var.set(conversation)
+        try:
+            yield
         finally:
             self._subagent_conversation_var.reset(token)
 

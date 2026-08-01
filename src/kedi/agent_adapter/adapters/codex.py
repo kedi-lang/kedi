@@ -77,6 +77,10 @@ class CodexAdapter:
         supports_native_approval_handler=False,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_artifacts=True,
+        supports_native_artifacts=False,
+        supports_stateful_history=False,
+        supports_history_replay=False,
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )

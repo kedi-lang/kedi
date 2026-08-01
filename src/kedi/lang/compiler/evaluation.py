@@ -28,7 +28,7 @@ from ..call_arg_access import (
     call_arg_render_segments,
 )
 from ..parser.escapes import preserve_escaped_whitespace
-from .environment import lookup_value
+from .environment import lookup_value, model_lookup_value, model_text
 from .type_system import KediType
 
 
@@ -161,8 +161,12 @@ def prepare_segments(
                 expr.append(rt.i(seg.name))
                 parts.append("")
             else:
-                value = force(lookup_value(rt, seg.name, kwargs))
-                parts.append(str(value))
+                value = (
+                    model_lookup_value(rt, seg.name, kwargs)
+                    if context == "system"
+                    else lookup_value(rt, seg.name, kwargs)
+                )
+                parts.append(model_text(value) if context == "system" else str(value))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             expr.append(str(value))
@@ -288,8 +292,12 @@ def _stringify_segments(
                 # Internal TextSegment, keep as-is
                 parts.append(seg.text)
         elif isinstance(seg, InputSegment):
-            value = force(lookup_value(rt, seg.name, kwargs))
-            parts.append(str(value))
+            value = (
+                model_lookup_value(rt, seg.name, kwargs)
+                if context == "system"
+                else lookup_value(rt, seg.name, kwargs)
+            )
+            parts.append(model_text(value) if context == "system" else str(value))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
             parts.append(str(value))

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from lsprotocol import types as lsp
 
-from kedi.lang.ast import ProfileSubagentEntry
+from kedi.lang.ast import Program, ProfileSubagentEntry, Span, UseDirectiveStmt
 from kedi.lsp import features
 from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, signature_help_at
 
@@ -150,6 +150,54 @@ def test_imported_procedure_references_preserve_the_declaration_uri(tmp_path: Pa
     )
 
     assert [location.uri for location in references] == [module.resolve().as_uri(), main.as_uri()]
+
+
+def test_profile_references_include_composition_subagent_and_use() -> None:
+    source = (
+        "> profile: base:\n"
+        "    > system: Base.\n\n"
+        "> profile: child:\n"
+        "    > use: base\n"
+        "    > subagent: base\n\n"
+        "> profile: other:\n"
+        "    > use: child\n"
+        "    > subagent: child\n\n"
+        "> use: base\n"
+    )
+    position = lsp.Position(line=0, character=len("> profile: "))
+
+    references = features.compute_references(
+        source,
+        "file:///main.kedi",
+        "main.kedi",
+        position,
+        include_declaration=True,
+    )
+
+    assert [(ref.range.start.line, ref.range.start.character) for ref in references] == [
+        (0, 0),
+        (4, len("    > use: ")),
+        (5, len("    > subagent: ")),
+        (11, len("> use: ")),
+    ]
+
+    span = Span(0, 1, 1, 1, 1, 2)
+    no_location = Program(ordered_toplevel=[UseDirectiveStmt(target="base")])
+    symbol = features.SymbolRef(
+        kind="agent_profile",
+        name="base",
+        declaration_span=None,
+        scope_proc=None,
+        cursor_span=span,
+    )
+    assert (
+        features._find_all_references(
+            no_location,
+            symbol,
+            include_declaration=False,
+        )
+        == []
+    )
 
 
 def test_references_include_nested_procedure_calls_and_type_annotations() -> None:

@@ -116,12 +116,27 @@ class ProcedureCompiler:
         self, proc: ProcedureDef, last_return: Any, env: dict[str, Any]
     ) -> Any:
         """Enforce return type annotation."""
+        from ...artifacts.stream import ArtifactStream, artifact_stream_matches_annotation
         from ...promise import force
+        from ...tool_context import inside_kedi_tool_call
 
         # A procedure return is a join point: resolve a promise to a concrete value before
         # type-enforcing or stringifying it.
         last_return = force(last_return)
         kedi_type = KediType.from_node(proc.return_type_expr, proc.return_type_annotation)
+
+        if isinstance(last_return, ArtifactStream):
+            expected = str if kedi_type.is_none() else kedi_type.resolve_required(self.rt, env)
+            if not inside_kedi_tool_call():
+                raise KediTypeExecutionError(
+                    "ArtifactStream is a tool transport and cannot be returned by a direct "
+                    "procedure call"
+                )
+            if not artifact_stream_matches_annotation(last_return, expected):
+                raise KediTypeExecutionError(
+                    "ArtifactStream transport does not match the procedure return type"
+                )
+            return last_return
 
         if kedi_type.is_none():
             # Untyped return is str; a non-string native return is illegal.

@@ -320,6 +320,19 @@ class SettingsDirectiveStmt(Stmt):
 
 
 @dataclass
+class ArtifactsField:
+    name: str = ""
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ArtifactsDirectiveStmt(Stmt):
+    fields: List[ArtifactsField] = field(default_factory=list)
+
+
+@dataclass
 class UseDirectiveStmt(Stmt):
     target: str = ""
     tool_names: List[str] = field(default_factory=list)
@@ -347,8 +360,10 @@ class ProfileDefStmt(Stmt):
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
+    artifacts_members: List["ProfileArtifactsEntry"] = field(default_factory=list)
     subagent_members: List["ProfileSubagentEntry"] = field(default_factory=list)
     max_agents_members: List["ProfileMaxAgentsEntry"] = field(default_factory=list)
+    use_targets: List[str] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
     docstring_loc: Optional[Span] = field(default=None, repr=False, compare=False)
@@ -408,6 +423,12 @@ class ProfileMcpEntry:
 @dataclass
 class ProfileSettingsEntry:
     fields: List[SettingsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileArtifactsEntry:
+    fields: List[ArtifactsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

@@ -13,6 +13,7 @@ from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
     OutputSegment,
     Program,
+    ProfileDefStmt,
     Span,
     TemplateLine,
     TypeApply,
@@ -86,6 +87,47 @@ def test_diagnostics_ignore_comments_inside_directive_bodies():
 
     assert features.compute_diagnostics(mcp, "mcp.kedi") == []
     assert features.compute_diagnostics(settings, "settings.kedi") == []
+
+
+def test_artifact_diagnostics_validate_values_and_adapter_capabilities() -> None:
+    invalid = features.compute_diagnostics(
+        "> artifacts:\n  threshold: invalid\n",
+        "artifacts.kedi",
+    )
+    assert [diagnostic.code for diagnostic in invalid] == ["K-ARTIFACTS-VALUE"]
+    assert invalid[0].range.start.line == 1
+    assert invalid[0].range.start.character == len("  threshold: ")
+
+    unsupported = features.compute_diagnostics(
+        "> agent: acp\n> artifacts:\n  enabled: true\n",
+        "artifacts.kedi",
+    )
+    assert {diagnostic.code for diagnostic in unsupported} == {"K-ADAPTER-CAPABILITY"}
+    assert len(unsupported) == 1
+
+    supported = features.compute_diagnostics(
+        "> adapter: pydantic\n> artifacts:\n  enabled: true\n",
+        "artifacts.kedi",
+    )
+    assert supported == []
+
+
+def test_profile_artifact_diagnostics_follow_profile_adapter_capabilities() -> None:
+    diagnostics = features.compute_diagnostics(
+        "> profile: remote:\n  > agent: acp\n  > artifacts:\n    enabled: true\n",
+        "artifacts.kedi",
+    )
+
+    assert len(diagnostics) == 1
+    assert {diagnostic.code for diagnostic in diagnostics} == {"K-ADAPTER-CAPABILITY"}
+
+
+def test_artifact_inline_python_is_exposed_as_python_range() -> None:
+    source = "> artifacts:\n  threshold: `args.threshold`\n"
+
+    ranges = features.compute_python_ranges(source)
+
+    assert any(item["kind"] == "inline" and item["text"] == "args.threshold" for item in ranges)
 
 
 def test_diagnostics_accept_tools_fixture() -> None:
@@ -376,6 +418,57 @@ def test_diagnostics_warn_when_adapter_lacks_tool_registration(
     assert "agent tool registration" in diag.message
     assert diag.range.start.line == 5
     assert diag.range.start.character == len("> use: ")
+
+
+def test_diagnostics_follow_composed_profile_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_tool_registration=False),
+    )
+    src = (
+        "> agent: codex\n\n"
+        "@lookup():\n"
+        "    = ok\n\n"
+        "> profile: inner:\n"
+        "    > use: lookup\n\n"
+        "> profile: outer:\n"
+        "    > use: inner\n\n"
+        "> use: outer\n"
+    )
+
+    diagnostics = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CAPABILITY"
+    assert "agent tool registration from this profile" in diagnostics[0].message
+
+    cyclic = ProfileDefStmt(name="cyclic", use_targets=["cyclic"])
+    assert (
+        features._profile_capability_usage(
+            cyclic,
+            profile_defs={"cyclic": cyclic},
+            proc_names=set(),
+        )
+        == set()
+    )
+    explicit_tools = ProfileDefStmt(name="tools", tool_names=["lookup"])
+    assert features._profile_capability_usage(
+        explicit_tools,
+        profile_defs={},
+        proc_names=set(),
+    ) == {"tool_registration"}
+    unknown = ProfileDefStmt(name="unknown", use_targets=["missing"])
+    assert (
+        features._profile_capability_usage(
+            unknown,
+            profile_defs={},
+            proc_names=set(),
+        )
+        == set()
+    )
 
 
 def test_diagnostics_warn_when_adapter_lacks_skill_tool_registration(

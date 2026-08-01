@@ -21,7 +21,7 @@ from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, 
 import dotenv
 from typing_extensions import Sentinel
 
-from .agent_adapter import AgentAdapter, AgentAdapterKind
+from .agent_adapter import AgentAdapter, AgentAdapterKind, ConversationState
 from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.approval import (
     ApprovalDecision,
@@ -38,6 +38,7 @@ from .agent_adapter.registry import (
     known_adapter_shortnames,
 )
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
+from .artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from .effort import EffortValue
 from .errors import KediExecutionError
 from .lang import compile_program, parse_program
@@ -81,6 +82,7 @@ class _APIConfig:
     profile: AgentProfile = field(default_factory=AgentProfile.empty)
     tools: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
     env: Mapping[str, Any] = field(default_factory=dict)
+    conversation: ConversationState | None = None
     parallel: bool = False
     max_workers: int = 8
 
@@ -233,6 +235,7 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple(_stable_repr(server) for server in profile.mcp_servers),
         _approval_identity(profile.approval),
         profile.skills,
+        profile.artifacts.as_cache_key() if profile.artifacts is not None else None,
     )
 
 
@@ -297,6 +300,7 @@ def _agent_profile_overrides(
     mcp_servers: Sequence[McpServerSpec],
     approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
     skills: bool | None,
+    artifacts: ArtifactPolicyInput,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
     return tool_map, AgentProfile(
@@ -310,6 +314,7 @@ def _agent_profile_overrides(
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval_policy),
         skills=skills,
+        artifacts=normalize_artifact_policy(artifacts),
     )
 
 
@@ -434,6 +439,7 @@ def _decorate_kedi_program(
     adapter_override: AdapterLike | None,
     use_main: bool,
     cache: bool,
+    conversation_override: ConversationState | None | object,
 ) -> Callable[P, R]:
     def run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
@@ -443,6 +449,13 @@ def _decorate_kedi_program(
             active_program, active_source_hash = reload_program()
         profile = config.profile.merge(profile_override)
         active_adapter = adapter_override or _build_adapter(config)
+        conversation = (
+            config.conversation
+            if conversation_override is _UNSET
+            else cast(ConversationState | None, conversation_override)
+        )
+        if cache and conversation is not None:
+            raise ValueError("Kedi response caching cannot be combined with a conversation session")
         tool_namespace = {
             *config.tools,
             *tool_map,
@@ -501,6 +514,7 @@ def _decorate_kedi_program(
                 adapter=active_adapter,
                 runtime_globals=runtime_globals,
                 engine=engine,
+                conversation_state=conversation,
             )
             with block_agent_profile_scope(profile):
                 if use_main:
@@ -615,6 +629,8 @@ def _build_config(
     mcp_servers: Sequence[McpServerSpec],
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
     skills: bool | None,
+    artifacts: ArtifactPolicyInput,
+    conversation: ConversationState | None | object,
     adapter_kwargs: Mapping[str, Any],
     parallel: bool | None = None,
     max_workers: int | None = None,
@@ -626,6 +642,12 @@ def _build_config(
     base_max_workers = 8 if base is None else base.max_workers
     resolved_parallel = base_parallel if parallel is None else parallel
     resolved_max_workers = base_max_workers if max_workers is None else max_workers
+    base_conversation = None if base is None else base.conversation
+    resolved_conversation = (
+        base_conversation
+        if conversation is _UNSET
+        else cast(ConversationState | None, conversation)
+    )
 
     selection = _resolve_selection(adapter=adapter, agent=agent)
     selection_is_explicit = selection is not None
@@ -685,6 +707,7 @@ def _build_config(
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval),
         skills=skills,
+        artifacts=normalize_artifact_policy(artifacts),
     )
     profile = base_profile.merge(profile_patch)
     return _APIConfig(
@@ -696,6 +719,7 @@ def _build_config(
         profile=profile,
         tools=tool_map,
         env=merged_env,
+        conversation=resolved_conversation,
         parallel=resolved_parallel,
         max_workers=resolved_max_workers,
     )
@@ -720,6 +744,8 @@ def configure(
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -744,6 +770,8 @@ def configure(
             mcp_servers=mcp_servers,
             approval=approval,
             skills=skills,
+            artifacts=artifacts,
+            conversation=conversation,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
@@ -808,6 +836,8 @@ def context(
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
     max_workers: int | None = None,
     **adapter_kwargs: Any,
@@ -827,11 +857,43 @@ def context(
             mcp_servers=mcp_servers,
             approval=approval,
             skills=skills,
+            artifacts=artifacts,
+            conversation=conversation,
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
         )
     )
+
+
+class _KediSessionContext:
+    def __init__(self, state: ConversationState | None = None) -> None:
+        self.state = state or ConversationState()
+        self._context: _KediContext | None = None
+
+    def __enter__(self) -> ConversationState:
+        self._context = context(conversation=self.state)
+        self._context.__enter__()
+        return self.state
+
+    def __exit__(self, *args: object) -> None:
+        try:
+            if self._context is not None:
+                self._context.__exit__(*args)
+        finally:
+            self._context = None
+            self.state.close()
+
+    async def __aenter__(self) -> ConversationState:
+        return self.__enter__()
+
+    async def __aexit__(self, *args: object) -> None:
+        self.__exit__(*args)
+
+
+def session(state: ConversationState | None = None) -> _KediSessionContext:
+    """Continue model history and artifact ownership explicitly within one scope."""
+    return _KediSessionContext(state)
 
 
 def parallel(*, max_workers: int = 8) -> _KediContext:
@@ -964,6 +1026,8 @@ def query(
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -982,6 +1046,8 @@ def query(
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     selection = _resolve_selection(adapter=adapter, agent=agent)
@@ -999,6 +1065,7 @@ def query(
         mcp_servers=mcp_servers,
         approval_policy=approval,
         skills=skills,
+        artifacts=artifacts,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -1018,6 +1085,7 @@ def query(
             adapter_override=adapter_override,
             use_main=False,
             cache=cache,
+            conversation_override=conversation,
         )
 
     if fn is not None:
@@ -1039,6 +1107,8 @@ def bind(
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
     skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,
     reload: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -1057,6 +1127,7 @@ def bind(
         mcp_servers=mcp_servers,
         approval_policy=approval,
         skills=skills,
+        artifacts=artifacts,
     )
 
     def decorate(inner: Callable[P, R]) -> Callable[P, R]:
@@ -1081,6 +1152,7 @@ def bind(
             adapter_override=adapter_override,
             use_main=True,
             cache=cache,
+            conversation_override=conversation,
         )
 
     return decorate
@@ -1105,6 +1177,7 @@ __all__ = [
     "parallel",
     "query",
     "reset_config",
+    "session",
     "tool",
     "type",
 ]

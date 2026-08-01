@@ -484,7 +484,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     tools_signature = features._profile_signature_markdown(
         ProfileDefStmt(name="tools", tool_names=["fetch", "search"])
     )
-    assert "Tools: `fetch`, `search`" in tools_signature
+    assert "Uses: `fetch`, `search`" in tools_signature
     sparse_member = ProfileDefStmt(
         name="sparse",
         model_members=[ProfileModelEntry(loc=member_span)],

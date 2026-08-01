@@ -12,6 +12,7 @@ from kedi.lang.ast import (
     InputSegment,
     ProfileAdapterEntry,
     ProfileAgentEntry,
+    ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileModelEntry,
     ProfileSettingsEntry,
@@ -494,6 +495,31 @@ def test_hover_on_profile_name_in_multiline_use_is_tool_entry() -> None:
     assert "No procedure named `light`" in body
 
 
+def test_hover_on_profile_composed_inside_profile_resolves_profile() -> None:
+    src = """
+> profile: readonlyfs:
+    > system: Read files only.
+
+> profile: filesystem:
+    > use: readonlyfs
+
+> use: filesystem
+"""
+    body = hover_text_at(src, "main.kedi", "readonlyfs", occurrence=2)
+    assert "**Agent profile** `> profile: readonlyfs:`" in body
+    assert "System instructions: configured" in body
+
+
+def test_hover_on_unknown_profile_use_target_reports_missing_tool() -> None:
+    src = """
+> profile: filesystem:
+    > use: missing
+"""
+    body = hover_text_at(src, "main.kedi", "missing")
+    assert "Agent tool" in body
+    assert "No procedure named `missing`" in body
+
+
 def test_hover_on_tool_inside_procedure_multiline_use() -> None:
     src = """
 @tool():
@@ -690,6 +716,7 @@ def test_profile_def_symbol_without_tools() -> None:
                 ),
                 ProfileSystemEntry(plain_value="Skip me."),
             ],
+            artifacts_members=[ProfileArtifactsEntry()],
         )
     )
     child_names = [child.name for child in symbol.children or ()]
@@ -702,3 +729,35 @@ def test_profile_def_symbol_without_tools() -> None:
         ProfileDefStmt(name="empty", system_members=[ProfileSystemEntry()])
     )
     assert "Reusable agent profile." in signature
+
+
+def test_artifact_directive_and_profile_field_hovers() -> None:
+    source = (
+        "> artifacts:\n"
+        "  enabled: true\n"
+        "  threshold: `args.threshold`\n"
+        "\n"
+        "> profile: compact:\n"
+        "  > artifacts:\n"
+        "    store: memory\n"
+    )
+
+    assert "large-value storage" in hover_text_at(
+        source, "artifacts.kedi", "artifacts", occurrence=1
+    )
+    assert "Minimum payload size" in hover_text_at(source, "artifacts.kedi", "threshold")
+    assert "Artifact policy stored in this profile" in hover_text_at(
+        source, "artifacts.kedi", "artifacts", occurrence=2
+    )
+    assert "Payload backend" in hover_text_at(source, "artifacts.kedi", "store")
+
+
+def test_profile_artifacts_appear_in_profile_hover_and_document_symbols() -> None:
+    source = "> profile: compact:\n  > artifacts:\n    enabled: true\n    threshold: 1kb\n"
+
+    profile_hover = hover_text_at(source, "artifacts.kedi", "compact")
+    assert "Artifact settings: 2" in profile_hover
+
+    symbols = features.compute_document_symbols(source, "artifacts.kedi")
+    profile = next(symbol for symbol in symbols if symbol.name == "> profile: compact")
+    assert any(child.name == "> artifacts: enabled, threshold" for child in profile.children or ())

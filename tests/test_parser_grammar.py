@@ -521,7 +521,8 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert profile_with_tool_use.tool_names == ["stmt"]
+    assert profile_with_tool_use.use_targets == ["stmt"]
+    assert profile_with_tool_use.tool_names == []
 
     profile_with_multiline_tool_use = stmt_walker._walk_profile_directive(
         _FakeNode(
@@ -587,7 +588,8 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert profile_with_both_use_forms.tool_names == ["stmt", "stmt"]
+    assert profile_with_both_use_forms.use_targets == ["stmt"]
+    assert profile_with_both_use_forms.tool_names == ["stmt"]
 
     empty_name_use_walker = _fake_walker(b"stmt")
     calls = 0
@@ -615,7 +617,8 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert profile_with_empty_use.tool_names == ["tool"]
+    assert profile_with_empty_use.use_targets == ["tool"]
+    assert profile_with_empty_use.tool_names == []
 
     use_body_with_noise = stmt_walker._walk_use_tool_names(
         _FakeNode(

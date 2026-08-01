@@ -77,7 +77,7 @@ class SubagentCoordinatorDependencies:
     resolve_adapter: Callable[[Any], Any]
     assert_profile_override_supported: Callable[[Any, Any], None]
     resolve_tools: Callable[[Any, Any], tuple[Any, ...]]
-    instructions_for_profile: Callable[[Any], str | None]
+    instructions_for_profile: Callable[[Any, Any], str | None]
     trace_frame: Callable[[KediTraceFrame], AbstractContextManager[None]]
     active_stack: ContextVar[tuple[tuple[str, str], ...]]
     default_cwd: Callable[[], Path]
@@ -620,7 +620,7 @@ class SubagentCoordinator:
                     span.set_attribute("gen_ai.request.model", model)
                 self._deps.assert_profile_override_supported(child_profile, child_adapter)
                 child_tools = self._deps.resolve_tools(child_profile, child_adapter)
-                instructions = self._deps.instructions_for_profile(child_profile)
+                instructions = self._deps.instructions_for_profile(child_profile, child_adapter)
                 conversation = self._conversation_context(conversation_id)
                 child_call = self._run_child(
                     run_id=run_id,

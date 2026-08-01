@@ -333,7 +333,7 @@ def test_profile_validation_and_imported_hover_helper_edges(tmp_path: Path) -> N
         tool_names=["search_docs", "search_docs"],
         loc=Span(0, len(profile_source), 1, 1, 5, 20),
     )
-    profile_spans = features._profile_tool_entry_spans(
+    profile_spans = features._profile_use_entry_spans(
         Program(source_text=profile_source),
         profile,
     )

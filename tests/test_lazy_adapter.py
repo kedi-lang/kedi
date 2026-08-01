@@ -16,6 +16,7 @@ import pytest
 
 import kedi.app as app
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
+from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
@@ -131,6 +132,10 @@ class _RecordingAdapter:
     def register_tool(self, tool: object) -> None:
         self.calls.append(("register_tool", tool))
 
+    def conversation_scope(self, conversation: object) -> object:
+        self.calls.append(("conversation_scope", conversation))
+        return nullcontext()
+
     def telemetry_model_name(self) -> str:
         self.calls.append("telemetry_model_name")
         return "telemetry-m"
@@ -170,6 +175,9 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
         pass
     with lazy.tool_scope(["x"]):
         pass
+    conversation = AdapterConversationContext()
+    with lazy.conversation_scope(conversation):
+        pass
     lazy.register_tool(tool)
     assert lazy.scoped_tools == ("tool-a",)
 
@@ -180,6 +188,7 @@ def test_lazy_adapter_builds_once_and_delegates() -> None:
     assert "invoke" in rec.calls
     assert "profile_override" in rec.calls
     assert "tool_scope" in rec.calls
+    assert ("conversation_scope", conversation) in rec.calls
     assert ("register_tool", tool) in rec.calls
 
 

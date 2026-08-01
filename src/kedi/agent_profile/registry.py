@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, Mapping
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.tool_override import ToolSpec
-    from kedi.lang.ast import McpField, SettingsField, Span, TemplateLine
+    from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -60,6 +60,12 @@ class ProfileToolMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileUseMember:
+    kind: Literal["use"] = "use"
+    name: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileMcpMember:
     kind: Literal["mcp"] = "mcp"
     fields: tuple["McpField", ...] = ()
@@ -69,6 +75,12 @@ class ProfileMcpMember:
 class ProfileSettingsMember:
     kind: Literal["settings"] = "settings"
     fields: tuple["SettingsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileArtifactsMember:
+    kind: Literal["artifacts"] = "artifacts"
+    fields: tuple["ArtifactsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -91,6 +103,7 @@ class ProfileDefinition:
     # These bindings are compiler-owned implementation details for imported
     # profiles. Source-level profile syntax remains name based.
     tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
+    profile_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     members: list[
         ProfileAgentMember
@@ -100,8 +113,10 @@ class ProfileDefinition:
         | ProfileApprovalMember
         | ProfileSystemMember
         | ProfileToolMember
+        | ProfileUseMember
         | ProfileMcpMember
         | ProfileSettingsMember
+        | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
     ] = field(default_factory=list)

@@ -35,6 +35,7 @@ from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
 
 if TYPE_CHECKING:
+    from .agent_adapter.conversation import ConversationState
     from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from .agent_adapter.subagents.limits import SubagentUsageLimits
 
@@ -146,6 +147,18 @@ def c(func_name: str, *args: Any) -> CallExpr:
     return CallExpr(func_name=func_name, args=tuple(args))
 
 
+def _tool_request_context(tools: Sequence[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.json_schema,
+            "returns": tool.return_schema,
+        }
+        for tool in tools
+    ]
+
+
 class KediRuntime:
     """Isolated kedi runtime with its own registry and environment."""
 
@@ -161,8 +174,10 @@ class KediRuntime:
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
         subagent_state_path: str | Path | None = None,
+        conversation_state: "ConversationState | None" = None,
     ) -> None:
         from .agent_profile import AgentProfile
+        from .artifacts import ArtifactManager
 
         self.adapter = adapter
         self.executor = executor or DefaultExecutor()
@@ -189,6 +204,12 @@ class KediRuntime:
         # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
         # outermost invocation, regardless of entry point (run_main / query / direct invoke).
         self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
+        from .agent_adapter.request_budget import ModelRequestBudget
+
+        self._request_budget: ContextVar[ModelRequestBudget | None] = ContextVar(
+            "kedi_model_request_budget",
+            default=None,
+        )
         self._initial_globals_env: ValueEnv = {}
         self._globals_env: ValueEnv = {}
         self._python_origin_counter = 0
@@ -207,6 +228,10 @@ class KediRuntime:
         self._prelude_env: ValueEnv | None = None
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
+        self.conversation_state = conversation_state
+        self.artifacts = (
+            conversation_state.artifacts if conversation_state is not None else ArtifactManager()
+        )
         from .agent_adapter.subagents.coordinator import (
             SubagentCoordinator,
             SubagentCoordinatorDependencies,
@@ -223,7 +248,9 @@ class KediRuntime:
                 resolve_tools=lambda profile, adapter: self._resolve_agent_tool_specs(
                     profile, adapter
                 ),
-                instructions_for_profile=lambda profile: self._agent_instructions(profile),
+                instructions_for_profile=lambda profile, adapter: self._agent_instructions(
+                    profile, adapter
+                ),
                 trace_frame=lambda frame: self.trace_frame(frame),
                 active_stack=self._subagent_stack,
                 default_cwd=Path.cwd,
@@ -296,7 +323,9 @@ class KediRuntime:
         # Drain awaits every scheduled template (parallel mode) so side effects fire and errors
         # surface; force resolves a promise result before handing it to the caller.
         self.drain()
-        return force(result)
+        from .lang.compiler.environment import native_value
+
+        return native_value(force(result))
 
     def set_initial_globals(self, values: ValueEnv) -> None:
         self._initial_globals_env = dict(values)
@@ -310,22 +339,12 @@ class KediRuntime:
             raise KeyError(f"Unknown procedure: {name}") from e
 
     def _lookup_value(self, key: str, env: ValueEnv) -> Any:
-        if key in env:
-            return env[key]
+        from .lang.compiler.environment import raw_lookup_value
 
-        current_env = self._current_env.get()
-        if isinstance(current_env, dict) and key in current_env:
-            return current_env[key]
-
-        for layer in (
-            self._globals_env,
-            self._initial_globals_env,
-            self._prelude_env,
-            self._import_env,
-        ):
-            if isinstance(layer, dict) and key in layer:
-                return layer[key]
-
+        try:
+            return raw_lookup_value(self, key, env)
+        except KeyError:
+            pass
         raise NameError(f"Value not found in environment: {key}")
 
     @staticmethod
@@ -357,8 +376,12 @@ class KediRuntime:
             # to a STRING — matching the sequential path's eager ``str(value)`` so a non-str typed
             # output (list/model/int) chained into a prompt renders identically in both modes.
             if isinstance(value, KediPromise):
-                return value.map(str), None
-            return str(value), None
+                from .lang.compiler.environment import model_text
+
+                return value.map(model_text), None
+            from .lang.compiler.environment import model_text
+
+            return model_text(value), None
         if isinstance(expr, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in expr.args]
             callee = self._get_proc(expr.func_name)
@@ -374,7 +397,9 @@ class KediRuntime:
     def _evaluate_value(self, value: Any, env: ValueEnv) -> Any:
         # Procedure arguments are forced to concrete values at the call boundary.
         if isinstance(value, InputExpr):
-            return force(self._lookup_value(value.key, env))
+            from .lang.compiler.environment import native_value
+
+            return native_value(force(self._lookup_value(value.key, env)))
         if isinstance(value, CallExpr):
             evaluated_args = [self._evaluate_value(a, env) for a in value.args]
             callee = self._get_proc(value.func_name)
@@ -404,6 +429,11 @@ class KediRuntime:
 
         depth = self._invoke_depth.get()
         depth_token = self._invoke_depth.set(depth + 1)
+        request_budget_token = None
+        if depth == 0:
+            from .agent_adapter.request_budget import ModelRequestBudget
+
+            request_budget_token = self._request_budget.set(ModelRequestBudget())
         token = self._current_env.set(local_env)
         primary_exc: BaseException | None = None
         try:
@@ -437,7 +467,11 @@ class KediRuntime:
             # Nested calls (depth > 0, incl. worker threads) never drain. A drain failure becomes
             # the error only if the body didn't already raise; otherwise it's logged, not masked.
             if depth == 0:
-                self._drain_outermost(primary_exc)
+                try:
+                    self._drain_outermost(primary_exc)
+                finally:
+                    assert request_budget_token is not None
+                    self._request_budget.reset(request_budget_token)
 
         return final
 
@@ -634,11 +668,21 @@ class KediRuntime:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile)
+                instructions = self._agent_instructions(profile, adapter)
                 if instructions is not None:
                     run_kwargs["instructions"] = instructions
                 with override_ctx:
-                    return str(adapter.invoke_sync(prompt=prompt, **run_kwargs))
+                    return self._run_conversation_call(
+                        adapter,
+                        prompt,
+                        lambda active_prompt: str(
+                            adapter.invoke_sync(prompt=active_prompt, **run_kwargs)
+                        ),
+                        context=(
+                            instructions,
+                            _tool_request_context(captured_tool_specs),
+                        ),
+                    )
 
         if not parallel:
             response = _call_invoke()
@@ -757,33 +801,55 @@ class KediRuntime:
             if captured_tool_specs:
                 tool_adapter = cast(Any, adapter)  # _resolve_tool_specs verified tool support
                 tool_ctx = tool_adapter.tool_scope()
+
+            def produce_and_validate(active_question: str) -> Dict[str, Any]:
+                result = adapter.produce_sync(
+                    template=active_question,
+                    output_schema=typed_fields,
+                    **run_kwargs,
+                )
+                out_map: Dict[str, Any] = {}
+                artifact_policy = profile.artifacts
+                for key in required:
+                    value = getattr(result, key, NotFound)
+                    if value is NotFound:
+                        raise ValueError(f"LLM did not return required key: {key}")
+                    validated = self._validate_adapter_output(
+                        value,
+                        typed_fields[key],
+                        explicit_type=key in explicit_typed_fields,
+                    )
+                    out_map[key] = (
+                        self.artifacts.artifactize(
+                            validated,
+                            policy=artifact_policy,
+                            source=f"output:{key}",
+                        )
+                        if artifact_policy is not None
+                        else validated
+                    )
+                return out_map
+
             with tool_ctx:
                 if tool_adapter is not None:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
                 run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile)
+                instructions = self._agent_instructions(profile, adapter)
                 if instructions is not None:
                     run_kwargs["instructions"] = instructions
 
                 with override_ctx:
-                    result = adapter.produce_sync(
-                        template=question,
-                        output_schema=typed_fields,
-                        **run_kwargs,
+                    return self._run_conversation_call(
+                        adapter,
+                        question,
+                        produce_and_validate,
+                        context=(
+                            instructions,
+                            _tool_request_context(captured_tool_specs),
+                            {key: repr(value) for key, value in typed_fields.items()},
+                        ),
                     )
-
-            out_map: Dict[str, Any] = {}
-            for key in required:
-                value = getattr(result, key, NotFound)  # Ensure result has the attribute
-                if value is NotFound:
-                    raise ValueError(f"LLM did not return required key: {key}")
-                out_map[key] = self._validate_adapter_output(
-                    value,
-                    typed_fields[key],
-                    explicit_type=key in explicit_typed_fields,
-                )
-            return out_map
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
         # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
@@ -823,6 +889,59 @@ class KediRuntime:
         for key in required:
             env[key] = views[key]
         return dict(views)
+
+    def _run_conversation_call(
+        self,
+        adapter: Any,
+        prompt: str,
+        call: Callable[[str], Any],
+        *,
+        context: Sequence[Any] = (),
+    ) -> Any:
+        """Run one successful adapter turn through explicit continuation state."""
+        from .agent_adapter.invocation import observe_invocations
+
+        from .agent_adapter.request_budget import ModelRequestBudget
+
+        budget = self._request_budget.get() or ModelRequestBudget()
+
+        state = self.conversation_state
+        if state is None:
+            reservation = budget.reserve(prompt, context=context)
+            try:
+                with observe_invocations(reservation.observe):
+                    result = call(prompt)
+            except BaseException:
+                reservation.finish(raise_on_exceeded=False)
+                raise
+            reservation.finish()
+            return result
+
+        from .agent_adapter.conversation import SupportsConversationState
+        from .lang.compiler.environment import model_value
+
+        capabilities = adapter.capabilities
+        with state.adapter_turn(adapter.shortname) as conversation:
+            reservation = budget.reserve(
+                prompt,
+                context=context,
+                resume_state=conversation.resume_state,
+            )
+            conversation_scope = (
+                adapter.conversation_scope(conversation)
+                if capabilities.supports("stateful_history")
+                and isinstance(adapter, SupportsConversationState)
+                else nullcontext()
+            )
+            try:
+                with conversation_scope, observe_invocations(reservation.observe):
+                    result = call(prompt)
+            except BaseException:
+                reservation.finish(raise_on_exceeded=False)
+                raise
+            reservation.finish()
+            state.record_exchange(prompt, model_value(result))
+            return result
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
@@ -972,6 +1091,52 @@ class KediRuntime:
                     supports_background=capabilities.supports("background_subagents"),
                 )
             )
+        artifact_policy = getattr(profile, "artifacts", None)
+        artifact_contract_needed = self._artifact_contract_needed(
+            profile,
+            adapter,
+            has_tools=bool(specs),
+        )
+        if artifact_contract_needed:
+            from .agent_adapter.meta import AdapterCapabilities
+            from .agent_adapter.tool_override import (
+                SupportsToolRegistration,
+                with_approval,
+                with_artifact_result,
+            )
+            from .artifacts import ArtifactCapabilityError, artifact_tool_specs
+
+            capabilities = getattr(adapter, "capabilities", None)
+            if (
+                not isinstance(adapter, SupportsToolRegistration)
+                or not isinstance(capabilities, AdapterCapabilities)
+                or not capabilities.supports("artifacts")
+            ):
+                raise ArtifactCapabilityError(
+                    "Active adapter does not support Kedi artifact references and tools"
+                )
+            management_specs = artifact_tool_specs(self.artifacts, artifact_policy)
+            if not self._adapter_uses_native_approvals(adapter):
+                management_specs = tuple(
+                    with_approval(
+                        spec,
+                        policy=profile.approval,
+                        adapter_shortname=getattr(adapter, "shortname", None),
+                    )
+                    for spec in management_specs
+                )
+            specs.extend(management_specs)
+        if specs and artifact_policy is not None:
+            from .agent_adapter.tool_override import with_artifact_result
+
+            specs = [
+                with_artifact_result(
+                    spec,
+                    manager=self.artifacts,
+                    policy=artifact_policy,
+                )
+                for spec in specs
+            ]
         return tuple(specs)
 
     async def _delegate_task(
@@ -1106,16 +1271,46 @@ class KediRuntime:
             return Path(source_path).resolve().parent / ".agents" / "skills"
         return Path.cwd() / ".agents" / "skills"
 
-    @staticmethod
-    def _agent_instructions(profile: Any) -> str | None:
-        """Append the skill contract without replacing user-provided system instructions."""
-        instructions = getattr(profile, "system", None)
-        if not getattr(profile, "skills", False):
-            return instructions
-        from .agent_adapter.skills import skill_instructions
+    def _agent_instructions(self, profile: Any, adapter: Any) -> str | None:
+        """Append enabled runtime contracts without replacing user instructions."""
 
-        skill_prompt = skill_instructions()
-        return skill_prompt if instructions is None else f"{instructions}\n\n{skill_prompt}"
+        parts = [getattr(profile, "system", None)]
+        if getattr(profile, "skills", False):
+            from .agent_adapter.skills import skill_instructions
+
+            parts.append(skill_instructions())
+        if self._artifact_contract_needed(
+            profile,
+            adapter,
+            has_tools=bool(
+                getattr(profile, "tools", ())
+                or getattr(profile, "skills", False)
+                or getattr(profile, "subagents", ())
+            ),
+        ):
+            from .artifacts import artifact_instructions
+
+            parts.append(artifact_instructions())
+        return "\n\n".join(part for part in parts if part) or None
+
+    def _artifact_contract_needed(
+        self,
+        profile: Any,
+        adapter: Any,
+        *,
+        has_tools: bool,
+    ) -> bool:
+        """Choose a cache-stable artifact contract from static call capabilities."""
+
+        policy = getattr(profile, "artifacts", None)
+        if policy is None or not policy.resolved().enabled:
+            return False
+        from .agent_adapter.meta import AdapterCapabilities
+
+        capabilities = getattr(adapter, "capabilities", None)
+        if isinstance(capabilities, AdapterCapabilities) and capabilities.supports("artifacts"):
+            return True
+        return policy.is_explicit or has_tools
 
     def _register_outstanding(self, future: Any) -> None:
         with self._outstanding_lock:

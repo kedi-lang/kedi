@@ -9,6 +9,7 @@ from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
     eval_approval_directive,
+    eval_artifacts_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -22,6 +23,7 @@ from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
@@ -296,6 +298,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, SettingsDirectiveStmt):
                     active = active.merge(eval_settings_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, ArtifactsDirectiveStmt):
+                    active = active.merge(eval_artifacts_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, UseDirectiveStmt):
                     active = active.merge(

@@ -77,6 +77,8 @@ from ..lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
+    ArtifactsField,
     AssignBlockStmt,
     AssignStmt,
     AutoSpec,
@@ -100,6 +102,7 @@ from ..lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMaxAgentsEntry,
@@ -511,19 +514,19 @@ def _use_tool_entry_spans(
     return spans
 
 
-def _profile_tool_entry_spans(
+def _profile_use_entry_spans(
     prog: Program | ProgramWithValidation,
     profile: ProfileDefStmt,
 ) -> list[tuple[str, Span]]:
-    """Return tool-name spans from a profile's ``> use:`` member.
+    """Return target spans from a profile's ``> use:`` members.
 
-    Profile members are flattened into ``ProfileDefStmt.tool_names`` by the
-    parser, unlike top-level ``UseDirectiveStmt`` nodes. Reconstruct the
-    declaration-like spans from the source, but only on the directive line
-    and its indented identifier entries so prose in a profile system prompt
+    Single-line targets may resolve to either a tool or another profile.
+    Multiline targets are explicit tools. Reconstruct declaration-like spans
+    only from directive lines and their indented entries so profile prose
     cannot become a false reference.
     """
-    if profile.loc is None or not profile.tool_names:
+    target_names = (*profile.use_targets, *profile.tool_names)
+    if profile.loc is None or not target_names:
         return []
 
     spans: list[tuple[str, Span]] = []
@@ -545,20 +548,20 @@ def _profile_tool_entry_spans(
         else:
             search_start = len(line) - len(line.lstrip())
 
-        for tool_name in profile.tool_names:
+        for target_name in target_names:
             name_span = _name_token_span_on_line(
                 prog,
                 line_number=line_number,
                 source_path=profile.loc.source_path,
-                name=tool_name,
+                name=target_name,
                 search_start=search_start,
             )
             if name_span is None:
                 continue
-            key = (tool_name, name_span.start_line, name_span.start_col)
+            key = (target_name, name_span.start_line, name_span.start_col)
             if key not in seen:
                 seen.add(key)
-                spans.append((tool_name, name_span))
+                spans.append((target_name, name_span))
     return spans
 
 
@@ -986,6 +989,15 @@ def _profile_capability_diagnostics(
                 "MCP server directives",
             )
         )
+    for member in profile.artifacts_members:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "artifacts",
+                [_directive_keyword_span(prog, member.loc, "artifacts") or member.loc],
+                "model-facing artifact tools",
+            )
+        )
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1083,6 +1095,16 @@ def _scan_capability_scope(
                     "mcp",
                     [_directive_keyword_span(prog, stmt.loc, "mcp") or stmt.loc],
                     "MCP server directives",
+                )
+            )
+            continue
+        if isinstance(stmt, ArtifactsDirectiveStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "artifacts",
+                    [_directive_keyword_span(prog, stmt.loc, "artifacts") or stmt.loc],
+                    "model-facing artifact tools",
                 )
             )
             continue
@@ -1239,8 +1261,13 @@ def _use_capability_diagnostics(
     if profile is None:
         return []
     merged = _merge_adapter_state(state, profile_states.get(stmt.name, _AdapterDiagnosticState()))
+    capabilities = _profile_capability_usage(
+        profile,
+        profile_defs=profile_defs,
+        proc_names=proc_names,
+    )
     diagnostics: list[lsp.Diagnostic] = []
-    if profile.tool_names:
+    if "tool_registration" in capabilities:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
                 merged,
@@ -1249,7 +1276,7 @@ def _use_capability_diagnostics(
                 "agent tool registration from this profile",
             )
         )
-    if profile.mcp_members:
+    if "mcp" in capabilities:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
                 merged,
@@ -1258,7 +1285,7 @@ def _use_capability_diagnostics(
                 "MCP server directives from this profile",
             )
         )
-    if profile.subagent_members:
+    if "subagents" in capabilities:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
                 merged,
@@ -1270,6 +1297,43 @@ def _use_capability_diagnostics(
             )
         )
     return diagnostics
+
+
+def _profile_capability_usage(
+    profile: ProfileDefStmt,
+    *,
+    profile_defs: dict[str, ProfileDefStmt],
+    proc_names: set[str],
+    active: frozenset[str] = frozenset(),
+) -> set[AdapterCapability]:
+    """Return capabilities exercised by a profile and composed profiles."""
+    if profile.name in active:
+        return set()
+
+    capabilities: set[AdapterCapability] = set()
+    if profile.tool_names:
+        capabilities.add("tool_registration")
+    if profile.mcp_members:
+        capabilities.add("mcp")
+    if profile.subagent_members:
+        capabilities.add("subagents")
+
+    nested_active = active | {profile.name}
+    for target in profile.use_targets:
+        if target == "skills" or target in proc_names:
+            capabilities.add("tool_registration")
+            continue
+        nested = profile_defs.get(target)
+        if nested is not None:
+            capabilities.update(
+                _profile_capability_usage(
+                    nested,
+                    profile_defs=profile_defs,
+                    proc_names=proc_names,
+                    active=nested_active,
+                )
+            )
+    return capabilities
 
 
 def _template_capability_diagnostics(
@@ -1616,14 +1680,31 @@ def _resolve_symbol_at(
                 scope_proc=None,
                 cursor_span=entry.loc,
             )
-        for tool_name, name_span in _profile_tool_entry_spans(prog, profile):
+        for target_name, name_span in _profile_use_entry_spans(prog, profile):
             if not _position_inside(pos, name_span):
                 continue
-            target = proc_by_name.get(tool_name)
+            target_proc = proc_by_name.get(target_name)
+            if target_proc is not None:
+                return SymbolRef(
+                    kind="agent_tool",
+                    name=target_name,
+                    declaration_span=target_proc.loc,
+                    scope_proc=None,
+                    cursor_span=name_span,
+                )
+            target_profile = profile_defs.get(target_name)
+            if target_profile is not None:
+                return SymbolRef(
+                    kind="agent_profile",
+                    name=target_name,
+                    declaration_span=target_profile.loc,
+                    scope_proc=None,
+                    cursor_span=name_span,
+                )
             return SymbolRef(
                 kind="agent_tool",
-                name=tool_name,
-                declaration_span=target.loc if target is not None else None,
+                name=target_name,
+                declaration_span=None,
                 scope_proc=None,
                 cursor_span=name_span,
             )
@@ -2604,6 +2685,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.settings_members:
                 visit(member)
+            for member in node.artifacts_members:
+                visit(member)
             for member in node.subagent_members:
                 visit(member)
             for member in node.max_agents_members:
@@ -2621,11 +2704,19 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, ArtifactsDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, ProfileMcpEntry):
             for field in node.fields:
                 visit(field)
             return
         if isinstance(node, ProfileSettingsEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileArtifactsEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -2791,6 +2882,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _settings_directive_markdown(node)
     if isinstance(node, SettingsField):
         return _settings_field_markdown(node)
+    if isinstance(node, ArtifactsDirectiveStmt):
+        return _artifacts_directive_markdown(node)
+    if isinstance(node, ArtifactsField):
+        return _artifacts_field_markdown(node)
     if isinstance(node, ProfileAgentEntry):
         return _profile_agent_entry_markdown(node)
     if isinstance(node, ProfileAdapterEntry):
@@ -2807,6 +2902,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_mcp_entry_markdown(node)
     if isinstance(node, ProfileSettingsEntry):
         return _profile_settings_entry_markdown(node)
+    if isinstance(node, ProfileArtifactsEntry):
+        return _profile_artifacts_entry_markdown(node)
     if isinstance(node, ProfileMaxAgentsEntry):
         return (
             f"**Subagent budget** `> max_agents: {node.value}`\n\n"
@@ -2977,6 +3074,33 @@ def _settings_field_markdown(field: SettingsField) -> str:
     return f"`{field.name}` = {value}\n\nSupported by: {adapters}."
 
 
+def _artifacts_directive_markdown(stmt: ArtifactsDirectiveStmt) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in stmt.fields) or "`<empty>`"
+    return (
+        "**`> artifacts:`**\n\nConfigure large-value storage for subsequent "
+        "model calls in the current scope. Native Kedi and Python reads retain "
+        f"the original logical value. Configured fields: {fields}."
+    )
+
+
+def _artifacts_field_markdown(field: ArtifactsField) -> str:
+    value = _artifacts_field_value_preview(field)
+    descriptions = {
+        "enabled": "Enable artifact creation and agent-facing artifact tools.",
+        "store": "Payload backend: `memory` or `file`.",
+        "path": "Root directory used by the file artifact store.",
+        "threshold": "Minimum payload size before a value becomes an artifact.",
+        "ttl": "Maximum lifetime measured from artifact creation.",
+        "idle_ttl": "Optional expiry duration measured from the last access.",
+        "preview_chars": "Maximum model-visible preview length.",
+        "read_max_chars": "Hard character limit for one `read_artifact` call.",
+        "session_quota": "Maximum active payload bytes in this artifact session.",
+        "max_artifacts": "Maximum active artifact count in this session.",
+        "cleanup_interval": "Interval used by background expiry cleanup.",
+    }
+    return f"`{field.name}` = {value}\n\n{descriptions[field.name]}"
+
+
 def _profile_mcp_entry_markdown(entry: ProfileMcpEntry) -> str:
     fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
     return (
@@ -2989,6 +3113,14 @@ def _profile_settings_entry_markdown(entry: ProfileSettingsEntry) -> str:
     fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
     return (
         f"**`> settings:`**\n\nModel configuration stored in this profile. "
+        f"Fields: {fields}.\n\nApplied when the profile is used."
+    )
+
+
+def _profile_artifacts_entry_markdown(entry: ProfileArtifactsEntry) -> str:
+    fields = ", ".join(f"`{field.name}`" for field in entry.fields) or "`<empty>`"
+    return (
+        "**`> artifacts:`**\n\nArtifact policy stored in this profile. "
         f"Fields: {fields}.\n\nApplied when the profile is used."
     )
 
@@ -3111,6 +3243,12 @@ def _settings_field_value_preview(field: SettingsField) -> str:
     return f"`{field.plain_value or ''}`"
 
 
+def _artifacts_field_value_preview(field: ArtifactsField) -> str:
+    if field.backtick_code is not None:
+        return f"`{field.backtick_code}`"
+    return f"`{field.plain_value or ''}`"
+
+
 def _setting_adapter_label(name: str) -> str:
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
@@ -3173,14 +3311,18 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
         for member in profile.system_members
     ):
         summary.append("System instructions: configured")
-    if profile.tool_names:
-        tools = ", ".join(f"`{name}`" for name in profile.tool_names)
-        summary.append(f"Tools: {tools}")
+    explicit_tools = (*profile.use_targets, *profile.tool_names)
+    if explicit_tools:
+        targets = ", ".join(f"`{name}`" for name in explicit_tools)
+        summary.append(f"Uses: {targets}")
     if profile.mcp_members:
         summary.append(f"MCP servers: {len(profile.mcp_members)}")
     setting_count = sum(len(member.fields) for member in profile.settings_members)
     if setting_count:
         summary.append(f"Settings: {setting_count}")
+    artifact_field_count = sum(len(member.fields) for member in profile.artifacts_members)
+    if artifact_field_count:
+        summary.append(f"Artifact settings: {artifact_field_count}")
 
     text = f"**Agent profile** `> profile: {profile.name}:`"
     if profile.docstring:
@@ -3399,7 +3541,7 @@ def _find_all_references(
     if sym.kind in ("procedure", "agent_tool"):
         candidates: List[Span] = []
         for profile in prog.profile_defs.values():
-            for tool_name, tool_span in _profile_tool_entry_spans(prog, profile):
+            for tool_name, tool_span in _profile_use_entry_spans(prog, profile):
                 if tool_name == sym.name:
                     candidates.append(tool_span)
         for suite in _validation_suites(prog):
@@ -3437,6 +3579,19 @@ def _find_all_references(
         out.extend(
             candidate for candidate in candidates if _reference_resolves_to(prog, candidate, sym)
         )
+    elif sym.kind == "agent_profile":
+        for profile in prog.profile_defs.values():
+            for target_name, target_span in _profile_use_entry_spans(prog, profile):
+                if target_name == sym.name:
+                    out.append(target_span)
+            for member in profile.subagent_members:
+                if member.name == sym.name and member.loc is not None:
+                    out.append(member.loc)
+        for stmt in prog.ordered_toplevel:
+            if isinstance(stmt, UseDirectiveStmt) and stmt.name == sym.name and not stmt.tool_names:
+                target_span = _use_single_target_span(prog, stmt)
+                if target_span is not None:
+                    out.append(target_span)
     elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):
         if sym.scope_proc is not None:
             for proc, ancestors in _procedure_scope_entries(prog):
@@ -4143,11 +4298,26 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
                 children=[],
             )
         )
-    if profile.tool_names and profile.loc is not None:
+    for member in profile.artifacts_members:
+        if member.loc is None:
+            continue
+        fields = ", ".join(field.name for field in member.fields)
         children.append(
             lsp.DocumentSymbol(
-                name="> use: " + ", ".join(profile.tool_names),
-                detail="agent tools",
+                name=f"> artifacts: {fields}",
+                detail="artifact policy",
+                kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    use_names = (*profile.use_targets, *profile.tool_names)
+    if use_names and profile.loc is not None:
+        children.append(
+            lsp.DocumentSymbol(
+                name="> use: " + ", ".join(use_names),
+                detail="agent profiles or tools",
                 kind=lsp.SymbolKind.Event,
                 range=_span_to_range(profile.loc),
                 selection_range=_span_to_range(profile.loc),

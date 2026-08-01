@@ -71,6 +71,9 @@ check-coverage:
 check-matrix:
 	@for version in $(PYTHON_VERSIONS); do \
 		printf "$(BLUE)==>$(RESET) Running checks on Python $$version...\n"; \
+		if [ ! -f "$(MATRIX_ENV_ROOT)/$$version/pyvenv.cfg" ]; then \
+			$(UV) venv --clear --force --python $$version "$(MATRIX_ENV_ROOT)/$$version" || exit $$?; \
+		fi; \
 		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ruff check || exit $$?; \
 		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ruff format --check || exit $$?; \
 		env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=$(MATRIX_ENV_ROOT)/$$version $(UV) run --group dev --python $$version ty check src --python-version $$version || exit $$?; \

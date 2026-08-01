@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from kedi.core import KediRuntime, o
+from kedi.artifacts import artifact_instructions
 from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -243,8 +244,16 @@ def test_raw_invoke_uses_profile_tools_system_and_parallel_engine() -> None:
 
     assert rt.run_main() == "response:Hello"
     assert adapter.model_calls == ["raw-model"]
-    assert adapter.instruction_calls == ["Keep it short."]
-    assert adapter.tool_calls == [("lookup",)]
+    assert adapter.instruction_calls == [f"Keep it short.\n\n{artifact_instructions()}"]
+    assert adapter.tool_calls == [
+        (
+            "lookup",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
     parallel_adapter = MockAdapter()
     parallel_rt = compile_program(

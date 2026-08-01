@@ -5,7 +5,6 @@ import contextvars
 import copy
 import inspect
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 from typing import (
@@ -13,7 +12,6 @@ from typing import (
     Awaitable,
     Callable,
     Coroutine,
-    Iterator,
     Mapping,
     TypeVar,
     cast,
@@ -34,16 +32,12 @@ from ..lang.procedure_schema import (
     program_procedure_json_schemas,
 )
 from ..module_registry import internal_module_path
+from ..tool_context import kedi_tool_call_context
 from .approval import ToolRisk
 from .invocation import InvocationUsage, report_invocation
 from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
-_KEDI_TOOL_CALL_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
-    "kedi_tool_call_depth",
-    default=0,
-)
-
 _T = TypeVar("_T")
 _FILESYSTEM_READ_ONLY_PROCEDURES = frozenset(
     {"read_text_file", "path_exists", "list_directory", "get_file_info"}
@@ -89,19 +83,6 @@ def _run_awaitable(
         ) from exc
 
 
-def inside_kedi_tool_call() -> bool:
-    return _KEDI_TOOL_CALL_DEPTH.get() > 0
-
-
-@contextmanager
-def kedi_tool_call_context() -> Iterator[None]:
-    token = _KEDI_TOOL_CALL_DEPTH.set(_KEDI_TOOL_CALL_DEPTH.get() + 1)
-    try:
-        yield
-    finally:
-        _KEDI_TOOL_CALL_DEPTH.reset(token)
-
-
 def kedi_procedure_tool_spec(
     rt: KediRuntime,
     proc: ProcedureDef,
@@ -140,6 +121,9 @@ def kedi_procedure_tool_spec(
 
 def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     """Build an adapter-neutral tool spec from a Python callable."""
+    from kedi.artifacts.stream import callable_with_logical_stream_return
+
+    tool_fn, logical_return = callable_with_logical_stream_return(fn)
     description = getattr(fn, "__kedi_tool_description__", None)
     if not isinstance(description, str):
         description = _callable_description(fn)
@@ -147,11 +131,14 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     if risk not in ("read_only", "mutating", "sensitive"):
         raise ValueError(f"invalid Kedi tool risk {risk!r} for {name!r}")
     return ToolSpec(
-        fn=fn,
+        fn=tool_fn,
         name=name,
         description=description,
+        return_schema=(
+            TypeAdapter(logical_return).json_schema() if logical_return is not None else None
+        ),
         risk=risk,
-        argument_validator=_python_callable_argument_validator(fn),
+        argument_validator=_python_callable_argument_validator(tool_fn),
     )
 
 

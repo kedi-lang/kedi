@@ -17,6 +17,7 @@ from ...agent_profile.model import (
     eval_adapter_directive,
     eval_agent_directive,
     eval_approval_directive,
+    eval_artifacts_directive,
     eval_effort_directive,
     eval_mcp_directive,
     eval_model_directive,
@@ -34,6 +35,7 @@ from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
+    ArtifactsDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     EffortDirectiveStmt,
@@ -59,6 +61,7 @@ from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type
 
 if TYPE_CHECKING:
+    from ...agent_adapter.conversation import ConversationState
     from ...agent_adapter.meta import AgentAdapter
     from ...agent_adapter.subagents.limits import SubagentUsageLimits
     from ...executors.base import Executor
@@ -157,6 +160,7 @@ def compile_program(
     subagent_timeout_seconds: float | None = 120.0,
     subagent_usage_limits: SubagentUsageLimits | None = None,
     subagent_state_path: str | Path | None = None,
+    conversation_state: ConversationState | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -173,6 +177,7 @@ def compile_program(
         subagent_timeout_seconds=subagent_timeout_seconds,
         subagent_usage_limits=subagent_usage_limits,
         subagent_state_path=subagent_state_path,
+        conversation_state=conversation_state,
     )
     return compiler.compile(prog)
 
@@ -195,6 +200,7 @@ class ProgramCompiler:
         subagent_timeout_seconds: float | None = 120.0,
         subagent_usage_limits: SubagentUsageLimits | None = None,
         subagent_state_path: str | Path | None = None,
+        conversation_state: ConversationState | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -206,6 +212,7 @@ class ProgramCompiler:
         self.subagent_timeout_seconds = subagent_timeout_seconds
         self.subagent_usage_limits = subagent_usage_limits
         self.subagent_state_path = subagent_state_path
+        self.conversation_state = conversation_state
         self.rt = KediRuntime(
             adapter=adapter,
             executor=executor,
@@ -216,6 +223,7 @@ class ProgramCompiler:
             subagent_timeout_seconds=subagent_timeout_seconds,
             subagent_usage_limits=subagent_usage_limits,
             subagent_state_path=subagent_state_path,
+            conversation_state=conversation_state,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
@@ -314,6 +322,7 @@ class ProgramCompiler:
                         subagent_timeout_seconds=self.subagent_timeout_seconds,
                         subagent_usage_limits=self.subagent_usage_limits,
                         subagent_state_path=self.subagent_state_path,
+                        conversation_state=self.conversation_state,
                     ).compile(program)
 
                 loaded = self.module_loader.load(module_path, imported_prog, compile_module)
@@ -553,8 +562,25 @@ class ProgramCompiler:
 
         # Store the shell before recursively binding children so cycles do not
         # accidentally publish a caller-owned profile under the same name.
-        bound = replace(profile, tool_bindings=tool_bindings, subagent_bindings={})
+        bound = replace(
+            profile,
+            tool_bindings=tool_bindings,
+            profile_bindings={},
+            subagent_bindings={},
+        )
         bound_profiles[profile.name] = bound
+        profile_bindings: dict[str, ProfileDefinition] = {}
+        for used_name in self._profile_use_names(profile):
+            if used_name in tool_bindings:
+                continue
+            used_profile = imported_rt._profile_registry.get(used_name)
+            if isinstance(used_profile, ProfileDefinition):
+                bound_profile = self._bind_imported_profile(
+                    used_profile,
+                    imported_rt,
+                    bound_profiles=bound_profiles,
+                )
+                profile_bindings[used_name] = cast(ProfileDefinition, bound_profile)
         subagent_bindings: dict[str, ProfileDefinition] = {}
         for child_name in self._profile_subagent_names(profile):
             child = imported_rt._profile_registry.get(child_name)
@@ -565,7 +591,11 @@ class ProgramCompiler:
                     bound_profiles=bound_profiles,
                 )
                 subagent_bindings[child_name] = cast(ProfileDefinition, bound_child)
-        bound = replace(bound, subagent_bindings=subagent_bindings)
+        bound = replace(
+            bound,
+            profile_bindings=profile_bindings,
+            subagent_bindings=subagent_bindings,
+        )
         bound_profiles[profile.name] = bound
         return bound
 
@@ -586,7 +616,12 @@ class ProgramCompiler:
         for member in profile.members:
             if member.kind == "tools":
                 names.extend(name for name in member.tool_names if name != SKILLS_USE_TARGET)
+            elif member.kind == "use":
+                names.append(member.name)
         return tuple(names)
+
+    def _profile_use_names(self, profile: ProfileDefinition) -> tuple[str, ...]:
+        return tuple(member.name for member in profile.members if member.kind == "use")
 
     def _profile_subagent_names(
         self,
@@ -766,6 +801,9 @@ class ProgramCompiler:
                         continue
                     if isinstance(item, SettingsDirectiveStmt):
                         active = active.merge(eval_settings_directive(self.rt, item, kwargs))
+                        continue
+                    if isinstance(item, ArtifactsDirectiveStmt):
+                        active = active.merge(eval_artifacts_directive(self.rt, item, kwargs))
                         continue
                     if isinstance(item, UseDirectiveStmt):
                         active = active.merge(

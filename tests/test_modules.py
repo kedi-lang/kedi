@@ -516,6 +516,79 @@ def test_internal_filesystem_module_exports_profile_and_tools(
     assert "filesystem" in rt._profile_registry
     assert "read_text_file" in rt._procedures
 
+    from kedi.artifacts import ArtifactStream
+    from kedi.tool_context import kedi_tool_call_context
+
+    with kedi_tool_call_context():
+        streamed = rt._procedures["read_text_file"](file_path="data.txt")
+    assert isinstance(streamed, ArtifactStream)
+    assert list(streamed.iter_chunks()) == ["hello filesystem"]
+
+
+def test_internal_filesystem_large_reads_require_explicit_bounds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data_file = tmp_path / "large.txt"
+    data_file.write_text("abcdef" + "x" * 1_000_000, encoding="utf-8")
+    unbounded = tmp_path / "unbounded.kedi"
+    unbounded.write_text(
+        '> import: filesystem\n\n= <read_text_file(`"large.txt"`)>\n',
+        encoding="utf-8",
+    )
+    bounded = tmp_path / "bounded.kedi"
+    bounded.write_text(
+        '> import: filesystem\n\n= <read_text_file(`"large.txt"`, `False`, `2`, `4`)>\n',
+        encoding="utf-8",
+    )
+    bounded_large = tmp_path / "bounded_large.kedi"
+    bounded_large.write_text(
+        '> import: filesystem\n\n= <read_text_file(`"large.txt"`, `False`, `0`, `70000`)>\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="use offset and max_chars"):
+        _compile_file(unbounded).run_main()
+    assert _compile_file(bounded).run_main() == "cdef"
+
+    runtime = _compile_file(bounded_large)
+    result = runtime.run_main()
+    assert len(result) == 70_000
+    assert result.startswith("abcdef")
+
+    from kedi.artifacts import ArtifactStream
+    from kedi.tool_context import kedi_tool_call_context
+
+    with kedi_tool_call_context():
+        streamed = runtime._procedures["read_text_file"](
+            file_path="large.txt",
+            max_chars=70_000,
+        )
+    assert isinstance(streamed, ArtifactStream)
+    chunks = list(streamed.iter_chunks())
+    assert [len(chunk) for chunk in chunks] == [65_536, 4_464]
+    assert "".join(chunks) == result
+
+
+def test_internal_filesystem_directory_listing_stops_at_bounded_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    directory = tmp_path / "many"
+    directory.mkdir()
+    for index in range(1_001):
+        (directory / f"entry-{index}").touch()
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        '> import: filesystem\n\n= <list_directory(`"many"`)>\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="directory has too many entries"):
+        _compile_file(main).run_main()
+
 
 def test_internal_filesystem_apply_patch_tool_updates_file(
     tmp_path: Path,
@@ -715,6 +788,10 @@ def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> Non
             "list_directory",
             "create_directory",
             "get_file_info",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
         )
     ]
 

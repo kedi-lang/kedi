@@ -137,7 +137,90 @@ def test_profile_body_single_line_use_adds_tool() -> None:
 """
     prog = parse_program(src)
     profile = prog.profile_defs["web_agent"]
-    assert profile.tool_names == ["web_search"]
+    assert profile.use_targets == ["web_search"]
+
+
+def test_profile_body_single_line_use_composes_profile() -> None:
+    src = """
+> profile: filesystem:
+    > system: Filesystem access.
+
+> profile: orchestrator:
+    > use: filesystem
+    > model: opus
+
+> use: orchestrator
+@agent():
+    >> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    agent_def = _procedure_def(rt._procedures["agent"])
+    assert agent_def.captured_agent_profile.system == "Filesystem access."
+    assert agent_def.captured_agent_profile.model == "opus"
+
+
+def test_profile_body_use_procedure_over_profile_when_both_exist() -> None:
+    src = """
+> profile: lookup:
+    > model: profile-model
+
+@lookup():
+    = done
+
+> profile: orchestrator:
+    > use: lookup
+
+> use: orchestrator
+@agent():
+    >> answer [x]
+"""
+    adapter = _adapter()
+    rt = compile_program(parse_program(src), adapter=adapter)
+    agent_def = _procedure_def(rt._procedures["agent"])
+    assert agent_def.captured_agent_profile.tools == ("lookup",)
+    assert agent_def.captured_agent_profile.model is None
+
+
+def test_profile_body_use_rejects_cycles_and_unknown_targets() -> None:
+    cyclic = """
+> profile: first:
+    > use: second
+
+> profile: second:
+    > use: first
+
+> use: first
+@main():
+    = ok
+"""
+    with pytest.raises(Exception, match="Cyclic profile use reference"):
+        compile_program(parse_program(cyclic), adapter=_adapter())
+
+    unknown = """
+> profile: agent:
+    > use: missing
+
+> use: agent
+@main():
+    = ok
+"""
+    with pytest.raises(Exception, match="Unknown use target 'missing' in profile 'agent'"):
+        compile_program(parse_program(unknown), adapter=_adapter())
+
+
+def test_profile_body_single_line_use_enables_skills() -> None:
+    src = """
+> profile: agent:
+    > use: skills
+
+> use: agent
+@main():
+    >> answer [x]
+"""
+    rt = compile_program(parse_program(src), adapter=_adapter())
+    main = _procedure_def(rt._procedures["main"])
+    assert main.captured_agent_profile.skills is True
 
 
 def test_use_procedure_over_profile_when_both_exist() -> None:
@@ -159,7 +242,15 @@ def test_use_procedure_over_profile_when_both_exist() -> None:
     assert agent_def.captured_agent_profile.model is None
 
     rt._invoke_procedure(rt._procedures["agent"], [])
-    assert adapter.tool_calls == [("foo",)]
+    assert adapter.tool_calls == [
+        (
+            "foo",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_nested_tool_override_and_scope_restore() -> None:
@@ -182,7 +273,10 @@ def test_nested_tool_override_and_scope_restore() -> None:
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
     assert len(adapter.tool_calls) == 2
-    assert adapter.tool_calls == [("bar",), ("bar",)]
+    assert adapter.tool_calls == [
+        ("bar", "read_artifact", "search_artifacts", "release_artifact", "run_artifact_code"),
+        ("bar", "read_artifact", "search_artifacts", "release_artifact", "run_artifact_code"),
+    ]
 
 
 def test_sample_nested_tool_override_uses_inner_then_restores_outer(
@@ -207,11 +301,8 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
     class LocAwareAdapter(MockAdapter):
         def register_tool(self, tool: ToolSpec) -> None:
             proc = tool.proc
-            assert proc is not None
-            assert proc.loc is not None
-            self._tool_scope.register_tool(
-                SimpleNamespace(name=f"{proc.name}:{proc.loc.start_line}")
-            )
+            name = f"{proc.name}:{proc.loc.start_line}" if proc and proc.loc else tool.name
+            self._tool_scope.register_tool(SimpleNamespace(name=name))
 
     adapter = LocAwareAdapter(default_model="default-model")
     rt = compile_program(parse_program(src), adapter=adapter)
@@ -221,7 +312,16 @@ def test_sample_nested_tool_override_uses_inner_then_restores_outer(
     # Each prompt is scoped to exactly its own tool (inner bar:7 for foo, outer bar:1 for the
     # top level). Compared order-independently: under the parallel engine these two independent
     # templates may execute in either order, but each must still see only its correct tool.
-    assert sorted(adapter.tool_calls) == [("bar:1",), ("bar:7",)]
+    artifact_tools = (
+        "read_artifact",
+        "search_artifacts",
+        "release_artifact",
+        "run_artifact_code",
+    )
+    assert sorted(adapter.tool_calls) == [
+        ("bar:1", *artifact_tools),
+        ("bar:7", *artifact_tools),
+    ]
 
 
 def test_profile_body_use_registers_tools() -> None:
@@ -245,7 +345,15 @@ def test_profile_body_use_registers_tools() -> None:
     assert agent_def.captured_agent_profile.tools == ("web_search",)
 
     rt._invoke_procedure(rt._procedures["agent"], [])
-    assert adapter.tool_calls == [("web_search",)]
+    assert adapter.tool_calls == [
+        (
+            "web_search",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
     assert adapter.model_calls == ["opus"]
 
 
@@ -280,7 +388,15 @@ def test_imported_profile_can_use_prelude_python_callable_tool(tmp_path) -> None
 
     assert "read_file_content" not in rt._import_env
     assert rt.run_main() == "content-value"
-    assert adapter.tool_calls == [("read_file_content",)]
+    assert adapter.tool_calls == [
+        (
+            "read_file_content",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
 
 
 def test_imported_profile_can_use_private_kedi_procedure_tool(tmp_path) -> None:
@@ -312,7 +428,72 @@ def test_imported_profile_can_use_private_kedi_procedure_tool(tmp_path) -> None:
 
     assert "read_file_content" not in rt._procedures
     assert rt.run_main() == "content-value"
-    assert adapter.tool_calls == [("read_file_content",)]
+    assert adapter.tool_calls == [
+        (
+            "read_file_content",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
+
+
+def test_imported_profile_can_compose_private_profile(tmp_path) -> None:
+    profile_path = tmp_path / "filesystem_profile.kedi"
+    profile_path.write_text(
+        "@read_file_content(file_path: str) -> str:\n"
+        "    = <file_path>\n\n"
+        "> profile: readonlyfs:\n"
+        "    > use: read_file_content\n\n"
+        "> profile: filesystem:\n"
+        "    > use: readonlyfs\n\n"
+        "> export:\n"
+        "    filesystem\n",
+        encoding="utf-8",
+    )
+    agent_path = tmp_path / "agent.kedi"
+    agent_source = (
+        "> import: filesystem_profile\n\n"
+        "> use: filesystem\n\n"
+        ">> Read user-requests.md and provide [content]\n\n"
+        "= <content>\n"
+    )
+    agent_path.write_text(agent_source, encoding="utf-8")
+
+    adapter = _adapter()
+    rt = compile_program(
+        parse_program(agent_source, source_path=str(agent_path)),
+        adapter=adapter,
+    )
+
+    assert rt.run_main() == "content-value"
+    assert adapter.tool_calls == [
+        (
+            "read_file_content",
+            "read_artifact",
+            "search_artifacts",
+            "release_artifact",
+            "run_artifact_code",
+        )
+    ]
+
+
+def test_imported_profile_reports_unknown_composed_target(tmp_path) -> None:
+    module_path = tmp_path / "profiles.kedi"
+    module_path.write_text(
+        "> profile: outer:\n    > use: missing\n\n> export:\n    outer\n",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.kedi"
+    source = "> import: profiles\n\n> use: outer\n\n@main():\n    = ok\n"
+    main_path.write_text(source, encoding="utf-8")
+
+    with pytest.raises(Exception, match="Unknown use target 'missing' in profile 'outer'"):
+        compile_program(
+            parse_program(source, source_path=str(main_path)),
+            adapter=_adapter(),
+        )
 
 
 def test_imported_profile_tool_binding_does_not_publish_or_rebind_dependency() -> None:
@@ -456,7 +637,13 @@ def test_dspy_adapter_registers_kedi_tool_and_uses_react(
     rt = compile_program(parse_program(src), adapter=adapter)
 
     assert rt.run_main().endswith(" ok")
-    assert len(seen_tools) == 1
+    assert [getattr(tool, "name") for tool in seen_tools] == [
+        "tool_proc",
+        "read_artifact",
+        "search_artifacts",
+        "release_artifact",
+        "run_artifact_code",
+    ]
     tool = seen_tools[0]
     assert getattr(tool, "name") == "tool_proc"
     assert getattr(tool, "desc") == "Returns `str` instance."
