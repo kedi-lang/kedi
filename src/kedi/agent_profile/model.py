@@ -26,6 +26,7 @@ from .registry import (
     ProfileSystemMember,
     ProfileToolMember,
     ProfileUseMember,
+    ProfileWorkflowMember,
 )
 from .settings import parse_plain_setting_value
 
@@ -375,6 +376,7 @@ def _member_to_patch(
         | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
+        | ProfileWorkflowMember
     ),
     env: dict[str, Any],
 ) -> AgentProfile:
@@ -453,6 +455,8 @@ def _member_to_patch(
         return AgentProfile(subagents=(member.name,))
     if member.kind == "max_agents":
         return AgentProfile(max_agents=member.value)
+    if member.kind == "workflow":
+        return AgentProfile(workflow_mode=member.mode)
     raise KediExecutionError(f"Unknown profile member kind: {member.kind!r}")
 
 

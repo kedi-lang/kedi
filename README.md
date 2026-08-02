@@ -200,7 +200,7 @@ kedi-lsp   # language server for editors
 Extra CLI arguments are available inside Python expressions and blocks as `args`:
 
 ```bash
-kedi report.kedi --country Turkey --dry-run
+kedi report.kedi --country Turkiye --dry-run
 ```
 
 ```kedi

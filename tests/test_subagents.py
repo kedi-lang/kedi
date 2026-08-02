@@ -45,6 +45,7 @@ from kedi.agent_adapter.subagents import (
     wrapped_final_schema,
 )
 from kedi.agent_adapter.subagents import coordinator as coordinator_module
+from kedi.agent_adapter.subagents import workflow as workflow_module
 from kedi.agent_adapter.subagents.attempts import (
     DelegationFailurePolicy,
     UnresolvedDelegationError,
@@ -56,6 +57,7 @@ from kedi.agent_adapter.subagents.budget import (
     MAX_SUBAGENT_INVOCATIONS,
     DelegationBudget,
     DelegationConcurrency,
+    SubagentBudgetExceeded,
 )
 from kedi.agent_adapter.subagents.coordinator import (
     MAX_SUBAGENT_CONVERSATION_TURNS,
@@ -82,17 +84,43 @@ from kedi.agent_adapter.subagents.runs import (
     safe_subagent_error_message,
 )
 from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.subagents.workflow import (
+    WorkflowResourceError,
+    WorkflowRuntimeError,
+    WorkflowSyntaxError,
+    WorkflowTypeError,
+    _CompletedCall,
+    _completed_calls_text,
+    _dynamic_workflow_span,
+    _execute_dynamic_child,
+    _profile_description,
+    _sandbox_names,
+    _validate_child_arguments,
+    _workflow_error,
+    _workflow_result,
+)
+from kedi.agent_adapter.subagents.workflow import executor as workflow_executor_module
+from kedi.agent_adapter.subagents.workflow.executor import (
+    WorkflowAbortError,
+    WorkflowExecutor,
+)
+from kedi.agent_adapter.tool_override import (
+    ToolSpec,
+    required_tool_call_scope,
+    validate_required_tool_calls,
+    with_required_before_output,
+)
 from kedi.agent_profile import (
     AgentProfile,
     AgentSubagentUnsupported,
 )
-from kedi.agent_profile.compile import build_capture_env
+from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
 from kedi.agent_profile.model import eval_profile_definition
 from kedi.artifacts import artifact_instructions
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
-from kedi.lang import compile_program, parse_program
+from kedi.lang import KediParseError, compile_program, parse_program
+from kedi.lang.ast import ProfileDefStmt, ProfileWorkflowEntry
 from kedi.lsp import features
 from tests.mock_adapter import MockAdapter
 
@@ -141,6 +169,30 @@ def test_subagent_run_keeps_unrelated_parent_span() -> None:
         "subagent run",
         "self run",
     ]
+
+
+def test_dynamic_workflow_reuses_its_tool_span() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("kedi-test")
+
+    with tracer.start_as_current_span(
+        "execute_tool run_workflow",
+        attributes={
+            "gen_ai.tool.name": "run_workflow",
+            "logfire.msg": "running tool: run_workflow",
+        },
+    ) as tool_span:
+        with _dynamic_workflow_span({"kedi.workflow.id": "workflow-1"}) as workflow_span:
+            assert workflow_span is tool_span
+
+    spans = exporter.get_finished_spans()
+    assert [span.name for span in spans] == ["dynamic workflow"]
+    attributes = spans[0].attributes
+    assert attributes is not None
+    assert attributes["logfire.msg"] == "dynamic workflow"
+    assert attributes["kedi.workflow.id"] == "workflow-1"
 
 
 class RecordingPydanticAdapter(PydanticAdapter):
@@ -501,6 +553,967 @@ def test_subagent_profile_parses_and_compiles() -> None:
     assert profile.subagents == ("worker",)
     assert profile.name == "manager"
     assert profile.max_agents == 5
+    assert profile.workflow_mode is None
+
+
+def test_omitted_workflow_mode_does_not_replace_an_explicit_strategy() -> None:
+    dynamic = AgentProfile(workflow_mode="dynamic")
+    assert dynamic.merge(AgentProfile(model="child-model")).workflow_mode == "dynamic"
+    assert dynamic.merge(AgentProfile(workflow_mode="delegate")).workflow_mode == "delegate"
+
+
+def test_subagent_workflow_profile_parses_and_compiles() -> None:
+    source = _profiles_source().replace(
+        "    > subagent: worker\n",
+        "    > subagent: worker\n    > workflow: dynamic\n",
+    )
+    program = parse_program(source)
+    entry = program.profile_defs["manager"].workflow_members[0]
+    assert entry.mode == "dynamic"
+
+    runtime = compile_program(program, adapter=RecordingPydanticAdapter())
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    assert profile.workflow_mode == "dynamic"
+
+
+def test_explicit_delegate_workflow_preserves_default_tool_surface() -> None:
+    default_adapter, default_runtime, default_tools = _manager_tools()
+    explicit_source = _profiles_source().replace(
+        "    > subagent: worker\n",
+        "    > subagent: worker\n    > workflow: delegate\n",
+    )
+    explicit_adapter = RecordingPydanticAdapter()
+    explicit_runtime = compile_program(parse_program(explicit_source), adapter=explicit_adapter)
+    definition = explicit_runtime._profile_registry["manager"]
+    profile = eval_profile_definition(
+        explicit_runtime,
+        definition,
+        build_capture_env(explicit_runtime),
+    )
+    explicit_tools = explicit_runtime._resolve_agent_tool_specs(profile, explicit_adapter)
+
+    assert tuple(tool.name for tool in explicit_tools) == tuple(
+        tool.name for tool in default_tools.values()
+    )
+    assert default_adapter.invocations == []
+    assert explicit_adapter.invocations == []
+    assert default_runtime._subagent_coordinator.active_runs == 0
+    assert explicit_runtime._subagent_coordinator.active_runs == 0
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            "> profile: manager:\n    > workflow: automatic\n",
+            "workflow mode must be 'delegate' or 'dynamic'",
+        ),
+        (
+            "> profile: manager:\n    > workflow: delegate\n    > workflow: dynamic\n",
+            "profile can define only one workflow mode",
+        ),
+        (
+            "> profile: manager:\n    > workflow: dynamic\n",
+            "dynamic workflow requires at least one direct subagent",
+        ),
+    ],
+)
+def test_subagent_workflow_profile_rejects_invalid_configuration(
+    source: str,
+    message: str,
+) -> None:
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source)
+
+
+def test_workflow_profile_compilation_rechecks_ast_invariants() -> None:
+    with pytest.raises(KediExecutionError, match="only one workflow mode"):
+        profile_stmt_to_definition(
+            ProfileDefStmt(
+                name="manager",
+                workflow_members=[
+                    ProfileWorkflowEntry(mode="delegate"),
+                    ProfileWorkflowEntry(mode="dynamic"),
+                ],
+            )
+        )
+    with pytest.raises(KediExecutionError, match="requires at least one direct subagent"):
+        profile_stmt_to_definition(
+            ProfileDefStmt(
+                name="manager",
+                workflow_members=[ProfileWorkflowEntry(mode="dynamic")],
+            )
+        )
+
+
+def _dynamic_workflow_tool(
+    *,
+    max_agents: int = 5,
+) -> tuple[RecordingPydanticAdapter, KediRuntime, ToolSpec]:
+    source = _profiles_source().replace(
+        "    > subagent: worker\n",
+        f"    > subagent: worker\n    > workflow: dynamic\n    > max_agents: {max_agents}\n",
+    )
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(source), adapter=adapter)
+    definition = runtime._profile_registry["manager"]
+    profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    tools = {tool.name: tool for tool in runtime._resolve_agent_tool_specs(profile, adapter)}
+    assert "delegate_task" not in tools
+    assert "continue_subagent" not in tools
+    return adapter, runtime, tools["run_workflow"]
+
+
+def test_dynamic_workflow_replaces_parent_delegation_tools() -> None:
+    adapter, _runtime, tool = _dynamic_workflow_tool()
+
+    assert tool.name == "run_workflow"
+    assert tool.sequential is True
+    assert (tool.metadata or {})["code_arg_language"] == "python"
+    assert "worker" in (tool.description or "")
+    assert "do not import them" in (tool.description or "")
+    assert "never end the\nparent turn with an empty response" in (tool.description or "")
+    assert (tool.metadata or {})["required_before_output"] is True
+    assert adapter.invocations == []
+
+
+def test_dynamic_workflow_rejects_parent_output_until_workflow_returns() -> None:
+    parent_calls = 0
+
+    async def respond(
+        messages: list[object],
+        info: AgentInfo,
+    ) -> ModelResponse:
+        nonlocal parent_calls
+        tool_names = {tool.name for tool in info.function_tools}
+        if "run_workflow" not in tool_names:
+            return ModelResponse(parts=[TextPart("verified child result")])
+
+        parent_calls += 1
+        if parent_calls == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_workflow",
+                        {"code": "await worker(task="},
+                        tool_call_id="broken-workflow",
+                    )
+                ]
+            )
+        if parent_calls == 2:
+            return ModelResponse(parts=[TextPart("fabricated parent result")])
+        if parent_calls == 3:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_workflow",
+                        {"code": "42"},
+                        tool_call_id="valid-workflow",
+                    )
+                ]
+            )
+        retry_messages = " ".join(
+            str(part)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
+        assert "did not complete successfully" in retry_messages
+        return ModelResponse(parts=[TextPart("parent used verified workflow result")])
+
+    source = (
+        _profiles_source().replace(
+            "    > subagent: worker\n",
+            "    > subagent: worker\n    > workflow: dynamic\n",
+        )
+        + """
+> use: manager
+[answer] << Run the workflow and report its verified result.
+= <answer>
+"""
+    )
+    runtime = compile_program(
+        parse_program(source),
+        adapter=PydanticAdapter(FunctionModel(respond), retries=2),
+    )
+
+    assert runtime.run_main() == "parent used verified workflow result"
+    assert parent_calls == 4
+
+
+def test_dynamic_workflow_retries_when_parent_never_calls_required_tool() -> None:
+    parent_calls = 0
+
+    async def respond(
+        messages: list[object],
+        info: AgentInfo,
+    ) -> ModelResponse:
+        nonlocal parent_calls
+        parent_calls += 1
+        if parent_calls == 1:
+            return ModelResponse(parts=[TextPart("fabricated parent result")])
+        if parent_calls == 2:
+            retry_messages = " ".join(
+                str(part)
+                for message in messages
+                if isinstance(message, ModelRequest)
+                for part in message.parts
+            )
+            assert "Call required tool run_workflow" in retry_messages
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_workflow",
+                        {"code": "42"},
+                        tool_call_id="valid-workflow",
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("parent used verified workflow result")])
+
+    source = (
+        _profiles_source().replace(
+            "    > subagent: worker\n",
+            "    > subagent: worker\n    > workflow: dynamic\n",
+        )
+        + """
+> use: manager
+[answer] << Run the workflow and report its verified result.
+= <answer>
+"""
+    )
+    runtime = compile_program(
+        parse_program(source),
+        adapter=PydanticAdapter(FunctionModel(respond), retries=1),
+    )
+
+    assert runtime.run_main() == "parent used verified workflow result"
+    assert parent_calls == 3
+
+
+class _RequiredWorkflowMockAdapter(MockAdapter):
+    capabilities = AdapterCapabilities(
+        supports_structured_output=True,
+        supports_tool_registration=True,
+        supports_profile_override=True,
+        supports_subagents=True,
+        supports_artifacts=True,
+    )
+
+    def __init__(self, *, workflow_code: str | None, ignore_tool_error: bool = False) -> None:
+        super().__init__()
+        self.workflow_code = workflow_code
+        self.ignore_tool_error = ignore_tool_error
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        del prompt, kwargs
+        workflow = next(tool for tool in self.scoped_tools if tool.name == "run_workflow")
+        if self.workflow_code is None:
+            return "parent adapter response"
+        try:
+            asyncio.run(workflow.fn(code=self.workflow_code))
+        except WorkflowSyntaxError:
+            if not self.ignore_tool_error:
+                raise
+        return "parent adapter response"
+
+
+def _required_workflow_source() -> str:
+    return """
+> profile: worker:
+    > system: Complete one isolated task.
+
+> profile: manager:
+    > subagent: worker
+    > workflow: dynamic
+
+> use: manager
+[answer] << Run the workflow and report its result.
+= <answer>
+"""
+
+
+def test_non_pydantic_adapter_rejects_output_after_required_tool_failure() -> None:
+    runtime = compile_program(
+        parse_program(_required_workflow_source()),
+        adapter=_RequiredWorkflowMockAdapter(
+            workflow_code="await worker(task=",
+            ignore_tool_error=True,
+        ),
+    )
+
+    with pytest.raises(
+        KediExecutionError,
+        match="Required tool run_workflow did not complete successfully",
+    ):
+        runtime.run_main()
+
+
+def test_non_pydantic_adapter_rejects_output_without_required_tool_call() -> None:
+    runtime = compile_program(
+        parse_program(_required_workflow_source()),
+        adapter=_RequiredWorkflowMockAdapter(workflow_code=None),
+    )
+
+    with pytest.raises(
+        KediExecutionError,
+        match="Required tool run_workflow was not called",
+    ):
+        runtime.run_main()
+
+
+def test_non_pydantic_adapter_accepts_output_after_required_tool_returns() -> None:
+    runtime = compile_program(
+        parse_program(_required_workflow_source()),
+        adapter=_RequiredWorkflowMockAdapter(workflow_code="42"),
+    )
+
+    assert runtime.run_main() == "parent adapter response"
+
+
+def test_required_tool_wrapper_handles_sync_and_awaitable_results() -> None:
+    def sync_tool() -> str:
+        return "sync"
+
+    sync_spec = with_required_before_output(
+        ToolSpec(
+            fn=sync_tool,
+            name="required_sync",
+            metadata={"required_before_output": True},
+        )
+    )
+    assert with_required_before_output(sync_spec) is sync_spec
+    assert sync_spec.fn() == "sync"
+    with required_tool_call_scope((sync_spec,)):
+        assert sync_spec.fn() == "sync"
+        validate_required_tool_calls()
+
+    def awaitable_tool() -> Any:
+        async def result() -> str:
+            return "awaited"
+
+        return result()
+
+    awaitable_spec = with_required_before_output(
+        ToolSpec(
+            fn=awaitable_tool,
+            name="required_awaitable",
+            metadata={"required_before_output": True},
+        )
+    )
+    with required_tool_call_scope((awaitable_spec,)):
+        assert asyncio.run(awaitable_spec.fn()) == "awaited"
+        validate_required_tool_calls()
+
+
+def test_pydantic_maps_dynamic_workflow_errors_to_model_retry() -> None:
+    from pydantic_ai import ModelRetry
+
+    async def fail(*, code: str) -> None:
+        raise WorkflowRuntimeError(f"bad workflow: {code}")
+
+    wrapped = _validated_tool_function(
+        ToolSpec(
+            fn=fail,
+            name="run_workflow",
+            metadata={"kind": "dynamic_workflow"},
+        )
+    )
+    with pytest.raises(ModelRetry, match="bad workflow"):
+        asyncio.run(wrapped(code="broken()"))
+
+    async def fail_normally(*, code: str) -> None:
+        raise ValueError(code)
+
+    normal = _validated_tool_function(
+        ToolSpec(
+            fn=fail_normally,
+            name="run_workflow",
+            metadata={"kind": "dynamic_workflow"},
+        )
+    )
+    with pytest.raises(ValueError, match="broken"):
+        asyncio.run(normal(code="broken"))
+
+
+def test_dynamic_workflow_executes_sequential_parallel_and_structured_children() -> None:
+    adapter, _runtime, tool = _dynamic_workflow_tool()
+
+    async def scenario() -> None:
+        sequential = await tool.fn(code="result = await worker(task='one')\nresult['task_summary']")
+        assert sequential == "child:one"
+
+        parallel = await tool.fn(
+            code=(
+                "import asyncio\n"
+                "left, right = await asyncio.gather(\n"
+                "    worker(task='left'), worker(task='right')\n"
+                ")\n"
+                "[left['task_summary'], right['task_summary']]"
+            )
+        )
+        assert parallel == ["child:left", "child:right"]
+
+        structured = await tool.fn(
+            code=(
+                "result = await worker(\n"
+                "    task='structured',\n"
+                "    final_schema={'type': 'object', 'properties': "
+                "{'value': {'type': 'integer'}}, 'required': ['value']}\n"
+                ")\n"
+                "result['final_result']['value']"
+            )
+        )
+        assert structured == 7
+
+    asyncio.run(scenario())
+    assert [call[0] for call in adapter.invocations] == [
+        "one",
+        "left",
+        "right",
+        "structured",
+    ]
+
+
+def test_dynamic_workflow_snapshots_local_child_definitions() -> None:
+    adapter, runtime, tool = _dynamic_workflow_tool()
+    runtime._profile_registry["worker"].members.clear()
+
+    result = asyncio.run(
+        tool.fn(code="result = await worker(task='snapshot')\nresult['task_summary']")
+    )
+
+    assert result == "child:snapshot"
+    assert (adapter.invocations[-1][1] or "").startswith("Work carefully.")
+
+
+def test_dynamic_workflow_validates_before_spending_budget_and_salvages_success() -> None:
+    adapter, _runtime, tool = _dynamic_workflow_tool(max_agents=2)
+
+    async def scenario() -> None:
+        with pytest.raises(WorkflowSyntaxError):
+            await tool.fn(code="await worker(task=")
+        with pytest.raises(WorkflowTypeError):
+            await tool.fn(code="unknown_name")
+        assert adapter.invocations == []
+
+        with pytest.raises(WorkflowRuntimeError, match="Completed calls"):
+            await tool.fn(code="result = await worker(task='paid')\n1 // 0")
+        assert len(adapter.invocations) == 1
+
+        recovered = await tool.fn(code="result = await worker(task='paid')\nresult['task_summary']")
+        assert recovered == "child:paid"
+        assert len(adapter.invocations) == 1
+
+        terminal = await tool.fn(
+            code=("await worker(task='last')\nawait worker(task='over-budget')")
+        )
+        assert terminal == {
+            "ok": False,
+            "error": "subagent_budget_exhausted",
+            "message": "Subagent invocation limit 2 reached for profile 'manager'",
+            "completed_calls": 1,
+        }
+        assert len(adapter.invocations) == 2
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_rejects_invalid_calls_and_nested_execution() -> None:
+    _adapter, _runtime, tool = _dynamic_workflow_tool()
+
+    async def scenario() -> None:
+        with pytest.raises(WorkflowTypeError, match="positional"):
+            await tool.fn(code="await worker('bad')")
+        with pytest.raises(WorkflowTypeError, match="surprise"):
+            await tool.fn(code="await worker(task='bad', surprise=True)")
+        with pytest.raises(WorkflowTypeError, match="final_schema"):
+            await tool.fn(code="await worker(task='bad', final_schema='object')")
+
+        from kedi.agent_adapter.subagents.workflow import _active_workflow
+
+        token = _active_workflow.set(True)
+        try:
+            with pytest.raises(WorkflowRuntimeError, match="do not nest"):
+                await tool.fn(code="1")
+        finally:
+            _active_workflow.reset(token)
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_deduplicates_concurrent_calls_and_recovers_child_failure() -> None:
+    adapter, _runtime, tool = _dynamic_workflow_tool()
+    original_invoke = adapter.invoke
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        if prompt == "bad":
+            raise RuntimeError("child failed")
+        await asyncio.sleep(0.01)
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    adapter.invoke = invoke  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        duplicate = await tool.fn(
+            code=(
+                "import asyncio\n"
+                "left, right = await asyncio.gather(\n"
+                "    worker(task='same'), worker(task='same')\n"
+                ")\n"
+                "[left['task_summary'], right['task_summary']]"
+            )
+        )
+        assert duplicate == ["child:same", "child:same"]
+        assert [call[0] for call in adapter.invocations] == ["same"]
+
+        recovered = await tool.fn(
+            code=(
+                "try:\n"
+                "    await worker(task='bad')\n"
+                "except RuntimeError:\n"
+                "    result = await worker(task='good')\n"
+                "result['task_summary']"
+            )
+        )
+        assert recovered == "child:good"
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_cancellation_unwinds_pending_child() -> None:
+    adapter, runtime, tool = _dynamic_workflow_tool()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def wait_forever(*, prompt: str, **_kwargs: Any) -> str:
+        assert prompt == "wait"
+        started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.set()
+
+    adapter.invoke = wait_forever  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        workflow = asyncio.create_task(tool.fn(code="await worker(task='wait')"))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        workflow.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await workflow
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        assert runtime._subagent_coordinator.active_runs == 0
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_exact_parallel_budget_and_cleanup() -> None:
+    adapter, runtime, tool = _dynamic_workflow_tool(max_agents=2)
+    original_invoke = adapter.invoke
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        await asyncio.sleep(0.01)
+        return await original_invoke(prompt=prompt, **kwargs)
+
+    adapter.invoke = invoke  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        result = await tool.fn(
+            code=(
+                "import asyncio\n"
+                "results = await asyncio.gather(\n"
+                "    worker(task='one'),\n"
+                "    worker(task='two'),\n"
+                "    worker(task='three'),\n"
+                ")\n"
+                "results"
+            )
+        )
+        assert result == {
+            "ok": False,
+            "error": "subagent_budget_exhausted",
+            "message": "Subagent invocation limit 2 reached for profile 'manager'",
+            "completed_calls": 2,
+        }
+        assert sorted(call[0] for call in adapter.invocations) == ["one", "two"]
+        assert runtime._subagent_coordinator.active_runs == 0
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_context_isolated_between_parent_runs() -> None:
+    left_adapter, left_runtime, left_tool = _dynamic_workflow_tool()
+    right_adapter, right_runtime, right_tool = _dynamic_workflow_tool()
+
+    async def scenario() -> None:
+        left, right = await asyncio.gather(
+            left_tool.fn(code="result = await worker(task='left')\nresult['task_summary']"),
+            right_tool.fn(code="result = await worker(task='right')\nresult['task_summary']"),
+        )
+        assert left == "child:left"
+        assert right == "child:right"
+        assert left_runtime._subagent_coordinator.active_runs == 0
+        assert right_runtime._subagent_coordinator.active_runs == 0
+
+    asyncio.run(scenario())
+    assert [call[0] for call in left_adapter.invocations] == ["left"]
+    assert [call[0] for call in right_adapter.invocations] == ["right"]
+
+
+def test_dynamic_workflow_salvage_cache_respects_its_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _runtime, tool = _dynamic_workflow_tool()
+    monkeypatch.setattr(workflow_module, "MAX_WORKFLOW_SALVAGE_RESULTS", 0)
+
+    async def scenario() -> None:
+        code = "result = await worker(task='repeat')\nresult['task_summary']"
+        assert await tool.fn(code=code) == "child:repeat"
+        assert await tool.fn(code=code) == "child:repeat"
+
+    asyncio.run(scenario())
+    assert [call[0] for call in adapter.invocations] == ["repeat", "repeat"]
+
+
+def test_dynamic_child_tracks_attempt_outcomes_and_interrupts() -> None:
+    profile = AgentProfile(name="manager")
+    budget = DelegationBudget(owner_profile="manager", limit=5)
+    concurrency = DelegationConcurrency(limit=2)
+
+    class Result:
+        def as_tool_result(self) -> dict[str, object]:
+            return {"task_summary": "done", "final_result": None}
+
+    class Runtime:
+        def __init__(
+            self,
+            *,
+            start_error: BaseException | None = None,
+            wait_errors: tuple[BaseException, ...] = (),
+            status: str = "completed",
+        ) -> None:
+            self.start_error = start_error
+            self.wait_errors = list(wait_errors)
+            self.cancelled: list[str] = []
+            self._subagent_coordinator = SimpleNamespace(
+                runs=SimpleNamespace(get=lambda _run_id: SimpleNamespace(status=status))
+            )
+
+        def _start_subagent(self, **_kwargs: object) -> SimpleNamespace:
+            if self.start_error is not None:
+                raise self.start_error
+            return SimpleNamespace(run_id="run-1")
+
+        async def _wait_subagent(self, _run_id: str) -> Result:
+            if self.wait_errors:
+                raise self.wait_errors.pop(0)
+            return Result()
+
+        def _cancel_subagent(self, run_id: str) -> None:
+            self.cancelled.append(run_id)
+
+    async def execute(runtime: Runtime) -> dict[str, Any]:
+        return await _execute_dynamic_child(
+            rt=cast(Any, runtime),
+            profile=profile,
+            allowed=("worker",),
+            definitions={},
+            budget=budget,
+            concurrency=concurrency,
+            subagent="worker",
+            task="inspect",
+            final_schema=None,
+        )
+
+    async def scenario() -> None:
+        with delegation_scope("recover") as ledger:
+            assert (await execute(Runtime()))["task_summary"] == "done"
+        assert ledger.snapshot()[0].status == "completed"
+
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(RuntimeError, match="rejected"):
+                await execute(Runtime(start_error=ValueError("rejected")))
+        assert ledger.snapshot()[0].status == "rejected"
+
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(RuntimeError, match="failed"):
+                await execute(Runtime(wait_errors=(ValueError("failed"),), status="failed"))
+        assert ledger.snapshot()[0].status == "failed"
+
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(RuntimeError, match="interrupted"):
+                await execute(
+                    Runtime(
+                        wait_errors=(ValueError("interrupted"),),
+                        status="running",
+                    )
+                )
+        assert ledger.snapshot()[0].status == "pending"
+
+        with delegation_scope("recover") as ledger:
+            with pytest.raises(asyncio.CancelledError):
+                await execute(Runtime(start_error=asyncio.CancelledError()))
+        assert ledger.snapshot()[0].status == "cancelled"
+
+        interrupted = Runtime(
+            wait_errors=(asyncio.CancelledError(), KeyboardInterrupt()),
+        )
+        with pytest.raises(KeyboardInterrupt):
+            await execute(interrupted)
+        assert interrupted.cancelled == ["run-1"]
+
+        with pytest.raises(KeyboardInterrupt):
+            await execute(Runtime(start_error=KeyboardInterrupt()))
+
+        exhausted = SubagentBudgetExceeded("limit reached")
+        exhausted.message = "limit reached"
+        with pytest.raises(WorkflowAbortError, match="limit reached"):
+            await execute(Runtime(start_error=exhausted))
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_helpers_cover_names_arguments_and_results() -> None:
+    assert _sandbox_names(("class", "subagent_class")) == {
+        "subagent_class": "class",
+        "subagent_class_2": "subagent_class",
+    }
+    assert _validate_child_arguments("worker", {"task": "  inspect  "}) == (
+        "  inspect  ",
+        None,
+    )
+    with pytest.raises(TypeError, match="missing required"):
+        _validate_child_arguments("worker", {})
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        _validate_child_arguments("worker", {"task": "x", "other": True})
+    with pytest.raises(TypeError, match="non-empty string"):
+        _validate_child_arguments("worker", {"task": " "})
+    with pytest.raises(TypeError, match="object or null"):
+        _validate_child_arguments("worker", {"task": "x", "final_schema": []})
+
+    assert _workflow_result(None, "") == {}
+    assert _workflow_result(None, "debug\n") == {"output": "debug"}
+    assert _workflow_result(7, "debug\n") == {"output": "debug", "result": 7}
+
+    printed_error = _workflow_error(
+        "Runtime error",
+        SimpleNamespace(display=lambda: "boom"),
+        SimpleNamespace(output="before\n"),
+    )
+    assert "[stdout before error]\nbefore" in printed_error
+
+    completed = [
+        _CompletedCall(
+            subagent="worker",
+            task="inspect",
+            result={"task_summary": "x" * 500},
+        )
+    ]
+    assert "[truncated]" in _completed_calls_text(completed)
+
+
+def test_dynamic_workflow_direct_input_print_and_profile_fallback() -> None:
+    _adapter, runtime, tool = _dynamic_workflow_tool()
+    assert _profile_description(runtime, "worker", {}) == "Handles one isolated worker task."
+
+    async def scenario() -> None:
+        with pytest.raises(WorkflowTypeError, match="non-empty string"):
+            await tool.fn(code="")
+        assert await tool.fn(code="print('debug')") == {"output": "debug"}
+        assert await tool.fn(code="print('debug')\n7") == {
+            "output": "debug",
+            "result": 7,
+        }
+
+    asyncio.run(scenario())
+
+
+def test_dynamic_workflow_maps_sandbox_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    real_monty = workflow_module.Monty
+
+    class FakeMontyError(Exception):
+        def display(self) -> str:
+            return str(self)
+
+    class FakeSyntaxError(FakeMontyError):
+        pass
+
+    class FakeCrashedError(FakeMontyError):
+        pass
+
+    class RaisingMonty:
+        def __init__(self, error: BaseException) -> None:
+            self.error = error
+
+        def __enter__(self) -> RaisingMonty:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def checkout(self, **_kwargs: object) -> None:
+            raise self.error
+
+    _adapter, _runtime, tool = _dynamic_workflow_tool()
+
+    async def assert_failure(
+        source_error: BaseException,
+        expected_error: type[BaseException],
+        message: str,
+    ) -> None:
+        monkeypatch.setattr(workflow_module, "Monty", lambda: RaisingMonty(source_error))
+        with pytest.raises(expected_error, match=message):
+            await tool.fn(code="1")
+
+    async def scenario() -> None:
+        monkeypatch.setattr(workflow_module, "MontySyntaxError", FakeSyntaxError)
+        await assert_failure(FakeSyntaxError("bad syntax"), WorkflowSyntaxError, "bad syntax")
+
+        monkeypatch.setattr(workflow_module, "MontyCrashedError", FakeCrashedError)
+        await assert_failure(
+            FakeCrashedError("crashed"),
+            WorkflowResourceError,
+            "resource limits",
+        )
+
+        panic_type = type("PanicException", (BaseException,), {})
+        await assert_failure(
+            panic_type("panic"),
+            WorkflowResourceError,
+            "stopped unexpectedly",
+        )
+
+        monkeypatch.setattr(
+            workflow_module,
+            "Monty",
+            lambda: RaisingMonty(KeyboardInterrupt()),
+        )
+        with pytest.raises(KeyboardInterrupt):
+            await tool.fn(code="1")
+
+        monkeypatch.setattr(workflow_module, "Monty", real_monty)
+
+        def fail_serialization(_result: object, _printed: str) -> object:
+            from pydantic_core import PydanticSerializationError
+
+            raise PydanticSerializationError("unsupported workflow result")
+
+        monkeypatch.setattr(workflow_module, "_workflow_result", fail_serialization)
+        with pytest.raises(WorkflowRuntimeError, match="not JSON serializable"):
+            await tool.fn(code="1")
+
+    asyncio.run(scenario())
+
+
+def test_workflow_executor_snapshot_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Complete:
+        output = None
+
+    class Lookup:
+        def resume(self) -> Complete:
+            return Complete()
+
+    class Function:
+        def __init__(
+            self,
+            *,
+            name: str,
+            os_function: bool = False,
+            args: tuple[object, ...] = (),
+        ) -> None:
+            self.function_name = name
+            self.is_os_function = os_function
+            self.args = args
+            self.kwargs = {"task": "x"}
+            self.call_id = 1
+            self.resumed: object = None
+
+        def resume_auto(self) -> Complete:
+            return Complete()
+
+        def resume(self, value: object) -> Complete:
+            self.resumed = value
+            return Complete()
+
+    class Future:
+        pending_call_ids = (1,)
+
+        def __init__(self) -> None:
+            self.results: object = None
+
+        def resume(self, results: object) -> Complete:
+            self.results = results
+            return Complete()
+
+    monkeypatch.setattr(workflow_executor_module, "MontyComplete", Complete)
+    monkeypatch.setattr(workflow_executor_module, "NameLookupSnapshot", Lookup)
+
+    async def dispatch(_name: str, _arguments: dict[str, Any]) -> str:
+        return "ok"
+
+    async def scenario() -> None:
+        executor = WorkflowExecutor(dispatch=dispatch, valid_names={"worker"})
+        assert isinstance(await executor.run(Lookup()), Complete)
+
+        assert isinstance(
+            executor._dispatch(Function(name="print", os_function=True)),
+            Complete,
+        )
+
+        unknown = Function(name="unknown")
+        executor._dispatch(unknown)
+        assert isinstance(cast(dict[str, Any], unknown.resumed)["exception"], NameError)
+
+        positional = Function(name="worker", args=("x",))
+        executor._dispatch(positional)
+        assert isinstance(cast(dict[str, Any], positional.resumed)["exception"], TypeError)
+
+        valid = Function(name="worker")
+        executor._dispatch(valid)
+        future = Future()
+        await executor._resolve(cast(Any, future))
+        settled = cast(dict[int, Any], future.results)[1]
+        assert settled["return_value"] == "ok"
+
+        async def pending() -> None:
+            await asyncio.sleep(0)
+
+        raw = pending()
+        executor._pending[2] = raw
+        assert isinstance(await executor.run(Complete()), Complete)
+
+        async def fail() -> None:
+            raise ValueError("child failure")
+
+        failure_executor = WorkflowExecutor(dispatch=dispatch, valid_names={"worker"})
+        failure_executor._pending[1] = asyncio.create_task(fail())
+        failed_future = Future()
+        await failure_executor._resolve(cast(Any, failed_future))
+        settled_error = cast(dict[int, Any], failed_future.results)[1]
+        assert isinstance(settled_error["exception"], ValueError)
+
+        async def abort() -> None:
+            raise WorkflowAbortError("stop")
+
+        abort_executor = WorkflowExecutor(dispatch=dispatch, valid_names={"worker"})
+        abort_executor._pending[1] = asyncio.create_task(abort())
+        with pytest.raises(WorkflowAbortError, match="stop"):
+            await abort_executor._resolve(cast(Any, Future()))
+
+        class Fatal(BaseException):
+            pass
+
+        async def fatal() -> None:
+            raise Fatal()
+
+        fatal_executor = WorkflowExecutor(dispatch=dispatch, valid_names={"worker"})
+        fatal_executor._pending[1] = asyncio.create_task(fatal())
+        with pytest.raises(Fatal):
+            await fatal_executor._resolve(cast(Any, Future()))
+
+    asyncio.run(scenario())
 
 
 def test_delegation_budget_hard_cap() -> None:

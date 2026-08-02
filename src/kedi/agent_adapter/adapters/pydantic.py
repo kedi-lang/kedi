@@ -36,6 +36,9 @@ from ..tool_override import (
     approval_request_for_tool,
     arguments_after_approval,
     arguments_target_secret_file,
+    current_required_tool_calls,
+    required_tool_call_scope,
+    with_required_before_output,
 )
 
 if TYPE_CHECKING:
@@ -119,6 +122,25 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 
+    @staticmethod
+    def _validate_required_tool_calls(output: Any) -> Any:
+        state = current_required_tool_calls()
+        if state is None or state.names <= state.returned:
+            return output
+
+        from pydantic_ai import ModelRetry
+
+        missing_names = state.names - state.returned
+        missing = ", ".join(sorted(missing_names))
+        if missing_names & state.attempted:
+            raise ModelRetry(
+                f"Required tool {missing} did not complete successfully. Correct its previous "
+                "error and call it again before returning the parent response."
+            )
+        raise ModelRetry(
+            f"Call required tool {missing} and use its result before returning the parent response."
+        )
+
     @contextmanager
     def tool_scope(self, tools: Sequence[Any] = ()) -> Iterator[None]:
         """Register Pydantic tools and their Kedi metadata in one lexical scope."""
@@ -133,6 +155,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     def register_tool(self, tool: ToolSpec) -> None:
         from pydantic_ai.tools import Tool
 
+        tool = with_required_before_output(tool)
         function = _validated_tool_function(tool)
         if tool.json_schema is None:
             native_tool = Tool(function, name=tool.name)
@@ -143,6 +166,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 description=tool.description or "",
                 json_schema=tool.json_schema,
                 takes_ctx=False,
+                sequential=tool.sequential,
             )
         native_tool.metadata = tool.metadata
         self._tool_scope.register_tool(native_tool)
@@ -295,7 +319,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                     conversation.resume_state["pydantic_messages"]
                 ),
             )
-        with delegation_scope(self._subagent_failure_policy):
+        with self._required_tool_call_scope(), delegation_scope(self._subagent_failure_policy):
+            agent, run_kwargs = self._agent_with_required_output_validator(agent, run_kwargs)
             observer = invocation_observer()
             if observer is None:
                 result = await agent.run(prompt, **cast(Any, run_kwargs))
@@ -322,6 +347,35 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                         total_tokens=usage.total_tokens,
                     )
                 )
+
+    @contextmanager
+    def _required_tool_call_scope(self) -> Iterator[None]:
+        with required_tool_call_scope(self.scoped_tool_specs):
+            yield
+
+    def _agent_with_required_output_validator(
+        self,
+        agent: Agent[Any, Any],
+        run_kwargs: dict[str, object],
+    ) -> tuple[Agent[Any, Any], dict[str, object]]:
+        state = current_required_tool_calls()
+        if state is None or not state.names:
+            return agent, run_kwargs
+
+        init_kwargs = {
+            name: value
+            for name, value in self._agent_init_kwargs.items()
+            if name not in {"output_type", "tools", "toolsets"}
+        }
+        run_kwargs = dict(run_kwargs)
+        output_type = run_kwargs.pop("output_type", agent.output_type)
+        validated_agent = Agent(
+            self._agent_model_arg,
+            output_type=cast(Any, output_type),
+            **init_kwargs,
+        )
+        validated_agent.output_validator(self._validate_required_tool_calls)
+        return validated_agent, run_kwargs
 
     @staticmethod
     def _capture_subagent_messages(
@@ -645,7 +699,7 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
             try:
                 result = tool.fn(**arguments)
                 if inspect.isawaitable(result):
-                    return await result
+                    result = await result
                 return result
             except Exception as exc:
                 retry = _model_retry_for_tool_error(tool, exc)
@@ -660,7 +714,8 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
         if args:
             raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
         try:
-            return tool.fn(**_validated_tool_arguments(tool, kwargs))
+            result = tool.fn(**_validated_tool_arguments(tool, kwargs))
+            return result
         except Exception as exc:
             retry = _model_retry_for_tool_error(tool, exc)
             if retry is None:
@@ -672,6 +727,13 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
 
 def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | None:
     kind = (tool.metadata or {}).get("kind")
+    if kind == "dynamic_workflow":
+        from pydantic_ai import ModelRetry
+
+        from ..subagents.workflow import WorkflowError
+
+        if isinstance(exc, WorkflowError):
+            return ModelRetry(str(exc))
     if kind == "subagent" and isinstance(exc, KediExecutionError):
         from pydantic_ai import ModelRetry
 

@@ -31,6 +31,28 @@ def test_hover_on_procedure_header_shows_signature():
     assert "str" in body
 
 
+def test_hover_on_profile_workflow_describes_effective_mode() -> None:
+    dynamic = (
+        "> profile: worker:\n"
+        "    > adapter: pydantic\n"
+        "> profile: manager:\n"
+        "    > adapter: pydantic\n"
+        "    > subagent: worker\n"
+        "    > workflow: dynamic\n"
+    )
+    mode_body = hover_text_at(dynamic, "example.kedi", "dynamic")
+    profile_body = hover_text_at(dynamic, "example.kedi", "manager")
+
+    assert "Dynamic subagent workflow" in mode_body
+    assert "run_workflow(code: str)" in mode_body
+    assert "Subagent workflow: `dynamic`" in profile_body
+
+    delegated = dynamic.replace("dynamic", "delegate")
+    delegated_body = hover_text_at(delegated, "example.kedi", "delegate")
+    assert "Delegated subagent workflow" in delegated_body
+    assert "default when `> workflow:` is omitted" in delegated_body
+
+
 def test_hover_on_defaulted_procedure_header_shows_defaults():
     src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
     body = hover_text_at(src, "example.kedi", "translate")

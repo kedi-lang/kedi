@@ -26,7 +26,12 @@ from . import (
     wrapped_final_schema,
 )
 from .attempts import bind_current_delegation_run
-from .budget import DelegationBudget, DelegationConcurrency
+from .budget import (
+    DelegationBudget,
+    DelegationConcurrency,
+    SubagentBudgetExceeded,
+    SubagentConcurrencyExceeded,
+)
 from .limits import SubagentUsageLimits
 from .persistence import StoredConversation, SubagentStateStore
 from .runs import (
@@ -745,12 +750,14 @@ class SubagentCoordinator:
                 None,
             )
             if exhausted is not None:
-                raise KediExecutionError(
+                raise SubagentBudgetExceeded(
                     f"Subagent invocation limit {exhausted.limit} reached for profile "
                     f"{exhausted.owner_profile!r}"
                 )
             if concurrency.active >= concurrency.limit or self._active_runs >= self.max_concurrency:
-                raise KediExecutionError(f"Subagent concurrency limit {concurrency.limit} reached")
+                raise SubagentConcurrencyExceeded(
+                    f"Subagent concurrency limit {concurrency.limit} reached"
+                )
             for budget in unique:
                 budget.started += 1
             concurrency.active += 1

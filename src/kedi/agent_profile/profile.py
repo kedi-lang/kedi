@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .registry import ProfileDefinition
 
 AgentCommand = str | tuple[str, ...]
+WorkflowMode = Literal["delegate", "dynamic"]
 SKILLS_USE_TARGET = "skills"
 
 
@@ -40,6 +41,7 @@ class AgentProfile:
     subagents: tuple[str, ...] = ()
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
+    workflow_mode: WorkflowMode | None = None
     artifacts: ArtifactPolicy | None = None
 
     @classmethod
@@ -89,6 +91,8 @@ class AgentProfile:
             updates["subagent_bindings"] = bindings
         if other.max_agents is not None:
             updates["max_agents"] = other.max_agents
+        if other.workflow_mode is not None:
+            updates["workflow_mode"] = other.workflow_mode
         if other.artifacts is not None:
             updates["artifacts"] = (
                 other.artifacts

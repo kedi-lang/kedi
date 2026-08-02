@@ -15,7 +15,7 @@ from .model import (
     eval_system_directive,
     eval_use_profile,
 )
-from .profile import AgentProfile
+from .profile import AgentProfile, WorkflowMode
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -30,6 +30,7 @@ from .registry import (
     ProfileSystemMember,
     ProfileToolMember,
     ProfileUseMember,
+    ProfileWorkflowMember,
 )
 from .settings import (
     ACP_AGENT_SETTING_KEYS,
@@ -72,6 +73,8 @@ __all__ = [
     "ProfileSubagentMember",
     "ProfileToolMember",
     "ProfileUseMember",
+    "ProfileWorkflowMember",
+    "WorkflowMode",
     "DSPY_LM_SETTING_KEYS",
     "MODEL_SETTING_KEYS",
     "PYDANTIC_MODEL_SETTING_KEYS",
