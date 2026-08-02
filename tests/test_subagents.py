@@ -114,7 +114,6 @@ from kedi.agent_profile import (
     AgentProfile,
     AgentSubagentUnsupported,
 )
-from kedi.artifacts import artifact_instructions
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
 from kedi.agent_profile.model import eval_profile_definition
 from kedi.artifacts import artifact_instructions
