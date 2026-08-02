@@ -5,7 +5,7 @@ import secrets
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
 from typing import (
@@ -57,6 +57,121 @@ class ToolSpec:
     risk_resolver: Callable[[Mapping[str, Any]], ToolRisk] | None = None
     argument_validator: ToolArgumentValidator | None = None
     artifact_result: ToolArtifactMode = "auto"
+    sequential: bool = False
+
+
+@dataclass(slots=True)
+class RequiredToolCalls:
+    """Track tools that must return before an adapter response can be accepted."""
+
+    names: frozenset[str]
+    attempted: set[str] = field(default_factory=set)
+    returned: set[str] = field(default_factory=set)
+
+
+class RequiredToolCallError(RuntimeError):
+    """Raised when an adapter returns before a required tool completes."""
+
+
+_required_tool_calls: ContextVar[RequiredToolCalls | None] = ContextVar(
+    "kedi_required_tool_calls",
+    default=None,
+)
+
+
+def current_required_tool_calls() -> RequiredToolCalls | None:
+    """Return the required-tool state for the active adapter turn."""
+
+    return _required_tool_calls.get()
+
+
+@contextmanager
+def required_tool_call_scope(tools: Sequence[ToolSpec]) -> Iterator[None]:
+    """Isolate required-tool tracking while allowing an adapter's nested scope to reuse it."""
+
+    names = frozenset(
+        tool.name for tool in tools if (tool.metadata or {}).get("required_before_output") is True
+    )
+    current = _required_tool_calls.get()
+    if current is not None and current.names == names:
+        yield
+        return
+
+    token = _required_tool_calls.set(RequiredToolCalls(names) if names else None)
+    try:
+        yield
+    finally:
+        _required_tool_calls.reset(token)
+
+
+def validate_required_tool_calls() -> None:
+    """Reject an adapter result if a required tool did not return successfully."""
+
+    state = _required_tool_calls.get()
+    if state is None or state.names <= state.returned:
+        return
+    missing_names = state.names - state.returned
+    missing = ", ".join(sorted(missing_names))
+    if missing_names & state.attempted:
+        raise RequiredToolCallError(
+            f"Required tool {missing} did not complete successfully; the adapter response "
+            "cannot be accepted"
+        )
+    raise RequiredToolCallError(
+        f"Required tool {missing} was not called; the adapter response cannot be accepted"
+    )
+
+
+def with_required_before_output(tool: ToolSpec) -> ToolSpec:
+    """Track successful completion of a required tool without changing its signature."""
+
+    metadata = dict(tool.metadata or {})
+    if (
+        metadata.get("required_before_output") is not True
+        or metadata.get("kedi_required_tool_wrapped") is True
+    ):
+        return tool
+    metadata["kedi_required_tool_wrapped"] = True
+
+    def mark_attempted() -> RequiredToolCalls | None:
+        state = _required_tool_calls.get()
+        if state is not None and tool.name in state.names:
+            state.attempted.add(tool.name)
+            return state
+        return None
+
+    def mark_returned(state: RequiredToolCalls | None) -> None:
+        if state is not None:
+            state.returned.add(tool.name)
+
+    if _is_async_callable(tool.fn):
+
+        @wraps(tool.fn)
+        async def required_async_tool(*args: Any, **kwargs: Any) -> Any:
+            state = mark_attempted()
+            result = tool.fn(*args, **kwargs)
+            result = await result
+            mark_returned(state)
+            return result
+
+        return replace(tool, fn=required_async_tool, metadata=metadata)
+
+    @wraps(tool.fn)
+    def required_tool(*args: Any, **kwargs: Any) -> Any:
+        state = mark_attempted()
+        result = tool.fn(*args, **kwargs)
+        if inspect.isawaitable(result):
+
+            async def await_required_result() -> Any:
+                resolved = await result
+                mark_returned(state)
+                return resolved
+
+            return await_required_result()
+        mark_returned(state)
+        return result
+
+    return replace(tool, fn=required_tool, metadata=metadata)
 
 
 def with_approval(

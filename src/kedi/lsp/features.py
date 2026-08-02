@@ -110,6 +110,7 @@ from ..lang.ast import (
     ProfileModelEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
+    ProfileWorkflowEntry,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -2691,6 +2692,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.max_agents_members:
                 visit(member)
+            for member in node.workflow_members:
+                visit(member)
             return
         if isinstance(node, SystemDirectiveStmt):
             for line in node.template_lines:
@@ -2908,6 +2911,18 @@ def _describe_ast_node(node) -> Optional[str]:
         return (
             f"**Subagent budget** `> max_agents: {node.value}`\n\n"
             "Maximum descendant subagent invocations that this profile invocation may start."
+        )
+    if isinstance(node, ProfileWorkflowEntry):
+        if node.mode == "dynamic":
+            return (
+                "**Dynamic subagent workflow** `> workflow: dynamic`\n\n"
+                "Exposes one `run_workflow(code: str)` tool. Workflow code may call the "
+                "profile's direct subagents concurrently and returns its final expression."
+            )
+        return (
+            "**Delegated subagent workflow** `> workflow: delegate`\n\n"
+            "Exposes the standard delegation and subagent lifecycle tools. This is the "
+            "default when `> workflow:` is omitted."
         )
     if isinstance(node, UseDirectiveStmt):
         return _use_directive_markdown(node)
@@ -3323,14 +3338,15 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
     artifact_field_count = sum(len(member.fields) for member in profile.artifacts_members)
     if artifact_field_count:
         summary.append(f"Artifact settings: {artifact_field_count}")
+    workflow_mode = profile.workflow_members[-1].mode if profile.workflow_members else "delegate"
+    summary.append(f"Subagent workflow: `{workflow_mode}`")
 
     text = f"**Agent profile** `> profile: {profile.name}:`"
     if profile.docstring:
         text += f"\n\n{profile.docstring}"
     else:
         text += "\n\nReusable agent profile."
-    if summary:
-        text += "\n\n" + "\n\n".join(summary)
+    text += "\n\n" + "\n\n".join(summary)
     return text + "\n\nApplied when `> use:` runs."
 
 

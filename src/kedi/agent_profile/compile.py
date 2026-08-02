@@ -18,6 +18,7 @@ from .registry import (
     ProfileSystemMember,
     ProfileToolMember,
     ProfileUseMember,
+    ProfileWorkflowMember,
 )
 
 if TYPE_CHECKING:
@@ -52,6 +53,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
+        | ProfileWorkflowMember
     ] = []
     _assert_profile_adapter_selection_is_not_mixed(stmt)
     for entry in stmt.agent_members:
@@ -80,6 +82,13 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(ProfileUseMember(name=target))
     if stmt.tool_names:
         members.append(ProfileToolMember(tool_names=tuple(stmt.tool_names)))
+    if len(stmt.workflow_members) > 1:
+        raise KediExecutionError("profile can define only one workflow mode")
+    if stmt.workflow_members:
+        workflow = stmt.workflow_members[0]
+        if workflow.mode == "dynamic" and not stmt.subagent_members:
+            raise KediExecutionError("dynamic workflow requires at least one direct subagent")
+        members.append(ProfileWorkflowMember(mode=workflow.mode))
     return ProfileDefinition(name=stmt.name, description=stmt.docstring, members=members)
 
 

@@ -682,6 +682,7 @@ class KediRuntime:
                             instructions,
                             _tool_request_context(captured_tool_specs),
                         ),
+                        tools=captured_tool_specs,
                     )
 
         if not parallel:
@@ -849,6 +850,7 @@ class KediRuntime:
                             _tool_request_context(captured_tool_specs),
                             {key: repr(value) for key, value in typed_fields.items()},
                         ),
+                        tools=captured_tool_specs,
                     )
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
@@ -897,51 +899,59 @@ class KediRuntime:
         call: Callable[[str], Any],
         *,
         context: Sequence[Any] = (),
+        tools: Sequence[Any] = (),
     ) -> Any:
         """Run one successful adapter turn through explicit continuation state."""
         from .agent_adapter.invocation import observe_invocations
+        from .agent_adapter.tool_override import (
+            required_tool_call_scope,
+            validate_required_tool_calls,
+        )
 
         from .agent_adapter.request_budget import ModelRequestBudget
 
         budget = self._request_budget.get() or ModelRequestBudget()
 
-        state = self.conversation_state
-        if state is None:
-            reservation = budget.reserve(prompt, context=context)
-            try:
-                with observe_invocations(reservation.observe):
-                    result = call(prompt)
-            except BaseException:
-                reservation.finish(raise_on_exceeded=False)
-                raise
-            reservation.finish()
-            return result
+        with required_tool_call_scope(tools):
+            state = self.conversation_state
+            if state is None:
+                reservation = budget.reserve(prompt, context=context)
+                try:
+                    with observe_invocations(reservation.observe):
+                        result = call(prompt)
+                    validate_required_tool_calls()
+                except BaseException:
+                    reservation.finish(raise_on_exceeded=False)
+                    raise
+                reservation.finish()
+                return result
 
-        from .agent_adapter.conversation import SupportsConversationState
-        from .lang.compiler.environment import model_value
+            from .agent_adapter.conversation import SupportsConversationState
+            from .lang.compiler.environment import model_value
 
-        capabilities = adapter.capabilities
-        with state.adapter_turn(adapter.shortname) as conversation:
-            reservation = budget.reserve(
-                prompt,
-                context=context,
-                resume_state=conversation.resume_state,
-            )
-            conversation_scope = (
-                adapter.conversation_scope(conversation)
-                if capabilities.supports("stateful_history")
-                and isinstance(adapter, SupportsConversationState)
-                else nullcontext()
-            )
-            try:
-                with conversation_scope, observe_invocations(reservation.observe):
-                    result = call(prompt)
-            except BaseException:
-                reservation.finish(raise_on_exceeded=False)
-                raise
-            reservation.finish()
-            state.record_exchange(prompt, model_value(result))
-            return result
+            capabilities = adapter.capabilities
+            with state.adapter_turn(adapter.shortname) as conversation:
+                reservation = budget.reserve(
+                    prompt,
+                    context=context,
+                    resume_state=conversation.resume_state,
+                )
+                conversation_scope = (
+                    adapter.conversation_scope(conversation)
+                    if capabilities.supports("stateful_history")
+                    and isinstance(adapter, SupportsConversationState)
+                    else nullcontext()
+                )
+                try:
+                    with conversation_scope, observe_invocations(reservation.observe):
+                        result = call(prompt)
+                    validate_required_tool_calls()
+                except BaseException:
+                    reservation.finish(raise_on_exceeded=False)
+                    raise
+                reservation.finish()
+                state.record_exchange(prompt, model_value(result))
+                return result
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
@@ -1072,9 +1082,10 @@ class KediRuntime:
                 )
             specs.extend(skill_specs)
 
-        if getattr(profile, "subagents", ()):
+        if profile.subagents:
             from .agent_adapter.meta import AdapterCapabilities
             from .agent_adapter.subagents import subagent_tool_specs
+            from .agent_adapter.subagents.workflow import dynamic_workflow_tool_spec
             from .agent_profile import AgentSubagentUnsupported
 
             capabilities = getattr(adapter, "capabilities", None)
@@ -1084,13 +1095,16 @@ class KediRuntime:
                 raise AgentSubagentUnsupported(
                     "Active adapter does not support Kedi subagent delegation"
                 )
-            specs.extend(
-                subagent_tool_specs(
-                    self,
-                    profile,
-                    supports_background=capabilities.supports("background_subagents"),
+            if profile.workflow_mode == "dynamic":
+                specs.append(dynamic_workflow_tool_spec(self, profile))
+            else:
+                specs.extend(
+                    subagent_tool_specs(
+                        self,
+                        profile,
+                        supports_background=capabilities.supports("background_subagents"),
+                    )
                 )
-            )
         artifact_policy = getattr(profile, "artifacts", None)
         artifact_contract_needed = self._artifact_contract_needed(
             profile,
@@ -1137,6 +1151,9 @@ class KediRuntime:
                 )
                 for spec in specs
             ]
+        from .agent_adapter.tool_override import with_required_before_output
+
+        specs = [with_required_before_output(spec) for spec in specs]
         return tuple(specs)
 
     async def _delegate_task(

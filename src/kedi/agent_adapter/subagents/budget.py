@@ -4,8 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ...errors import KediExecutionError
+
 MAX_SUBAGENT_INVOCATIONS = 100
 MAX_SUBAGENT_CONCURRENCY = 32
+
+
+class SubagentBudgetExceeded(KediExecutionError):
+    """Raised when a parent has spent its complete child invocation budget."""
+
+
+class SubagentConcurrencyExceeded(KediExecutionError):
+    """Raised when a parent cannot admit another concurrent child run."""
 
 
 @dataclass(slots=True)

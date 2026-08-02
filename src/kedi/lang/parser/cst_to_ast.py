@@ -89,6 +89,7 @@ from ..ast import (
     ProfileSettingsEntry,
     ProfileSubagentEntry,
     ProfileSystemEntry,
+    ProfileWorkflowEntry,
     Program,
     ProgramWithValidation,
     PythonBlock,
@@ -117,6 +118,7 @@ from ..ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    WorkflowMode,
     UseDirectiveStmt,
 )
 from .diagnostics import KediDiagnostic, KediParseError
@@ -1958,6 +1960,7 @@ class _Walker:
         artifacts_members: list[ProfileArtifactsEntry] = []
         subagent_members: list[ProfileSubagentEntry] = []
         max_agents_members: list[ProfileMaxAgentsEntry] = []
+        workflow_members: list[ProfileWorkflowEntry] = []
         use_targets: list[str] = []
         tool_names: list[str] = []
         docstring: str | None = None
@@ -2117,6 +2120,50 @@ class _Walker:
                             loc=self._span(child),
                         )
                     )
+                elif child.type == "workflow_directive":
+                    value_node = _field(child, "value")
+                    assert value_node is not None
+                    mode = _identifier_name(self.source, value_node)
+                    workflow_mode: WorkflowMode
+                    if mode == "delegate":
+                        workflow_mode = "delegate"
+                    elif mode == "dynamic":
+                        workflow_mode = "dynamic"
+                    else:
+                        self._error(
+                            value_node,
+                            "workflow mode must be 'delegate' or 'dynamic'",
+                            code="K-WORKFLOW-MODE",
+                        )
+                        continue
+                    workflow_members.append(
+                        ProfileWorkflowEntry(
+                            mode=workflow_mode,
+                            loc=self._span(child),
+                        )
+                    )
+        if len(workflow_members) > 1:
+            for entry in workflow_members[1:]:
+                assert entry.loc is not None
+                self.diagnostics.append(
+                    KediDiagnostic(
+                        severity="error",
+                        message="profile can define only one workflow mode",
+                        span=entry.loc,
+                        code="K-WORKFLOW-DUP",
+                    )
+                )
+        if workflow_members and workflow_members[-1].mode == "dynamic" and not subagent_members:
+            entry = workflow_members[-1]
+            assert entry.loc is not None
+            self.diagnostics.append(
+                KediDiagnostic(
+                    severity="error",
+                    message="dynamic workflow requires at least one direct subagent",
+                    span=entry.loc,
+                    code="K-WORKFLOW-SUBAGENT",
+                )
+            )
         if (
             not members
             and not agent_members
@@ -2129,12 +2176,13 @@ class _Walker:
             and not artifacts_members
             and not subagent_members
             and not max_agents_members
+            and not workflow_members
             and not use_targets
             and not tool_names
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> subagent:', '> max_agents:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2150,6 +2198,7 @@ class _Walker:
             artifacts_members=artifacts_members,
             subagent_members=subagent_members,
             max_agents_members=max_agents_members,
+            workflow_members=workflow_members,
             use_targets=use_targets,
             tool_names=tool_names,
             docstring=docstring,

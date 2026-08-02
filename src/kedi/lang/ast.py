@@ -20,7 +20,7 @@ field and the ``type_expr`` field for every annotation it observes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from .parser.diagnostics import KediDiagnostic
@@ -363,6 +363,7 @@ class ProfileDefStmt(Stmt):
     artifacts_members: List["ProfileArtifactsEntry"] = field(default_factory=list)
     subagent_members: List["ProfileSubagentEntry"] = field(default_factory=list)
     max_agents_members: List["ProfileMaxAgentsEntry"] = field(default_factory=list)
+    workflow_members: List["ProfileWorkflowEntry"] = field(default_factory=list)
     use_targets: List[str] = field(default_factory=list)
     tool_names: List[str] = field(default_factory=list)
     docstring: Optional[str] = None
@@ -441,6 +442,15 @@ class ProfileSubagentEntry:
 @dataclass
 class ProfileMaxAgentsEntry:
     value: int
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+WorkflowMode = Literal["delegate", "dynamic"]
+
+
+@dataclass
+class ProfileWorkflowEntry:
+    mode: WorkflowMode
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

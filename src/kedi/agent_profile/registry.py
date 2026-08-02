@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Mapping
 
+from .profile import WorkflowMode
+
 if TYPE_CHECKING:
     from kedi.agent_adapter.tool_override import ToolSpec
     from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine
@@ -97,6 +99,12 @@ class ProfileMaxAgentsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileWorkflowMember:
+    kind: Literal["workflow"] = "workflow"
+    mode: WorkflowMode
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileDefinition:
     name: str
     description: str | None = None
@@ -119,4 +127,5 @@ class ProfileDefinition:
         | ProfileArtifactsMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
+        | ProfileWorkflowMember
     ] = field(default_factory=list)
