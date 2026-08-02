@@ -3,10 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import keyword
-from copy import deepcopy
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from time import perf_counter

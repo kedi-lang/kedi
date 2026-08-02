@@ -118,8 +118,8 @@ from ..ast import (
     TypePython,
     TypeRef,
     TypeUnion,
-    WorkflowMode,
     UseDirectiveStmt,
+    WorkflowMode,
 )
 from .diagnostics import KediDiagnostic, KediParseError
 from .escapes import dedent_block, unescape_text_with_tracking

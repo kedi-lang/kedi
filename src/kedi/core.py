@@ -903,12 +903,11 @@ class KediRuntime:
     ) -> Any:
         """Run one successful adapter turn through explicit continuation state."""
         from .agent_adapter.invocation import observe_invocations
+        from .agent_adapter.request_budget import ModelRequestBudget
         from .agent_adapter.tool_override import (
             required_tool_call_scope,
             validate_required_tool_calls,
         )
-
-        from .agent_adapter.request_budget import ModelRequestBudget
 
         budget = self._request_budget.get() or ModelRequestBudget()
 
