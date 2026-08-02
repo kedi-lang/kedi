@@ -5,7 +5,6 @@ from typing import Any, cast
 import pytest
 
 import kedi.agent_adapter.registry as adapter_registry
-from kedi.artifacts import artifact_instructions
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.registry import (
     AdapterFactory,
@@ -23,6 +22,7 @@ from kedi.agent_profile.model import (
     eval_settings_field_value,
 )
 from kedi.agent_profile.settings import parse_plain_setting_value
+from kedi.artifacts import artifact_instructions
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (

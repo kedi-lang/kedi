@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from .errors import ArtifactSerializationError
 
-
 JsonPointerRange = tuple[int, int, int, int]
 _MAX_JSON_POINTER_INDEX_ENTRIES = 100_000
 

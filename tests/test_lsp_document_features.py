@@ -6,7 +6,7 @@ from pathlib import Path
 
 from lsprotocol import types as lsp
 
-from kedi.lang.ast import Program, ProfileSubagentEntry, Span, UseDirectiveStmt
+from kedi.lang.ast import ProfileSubagentEntry, Program, Span, UseDirectiveStmt
 from kedi.lsp import features
 from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, signature_help_at
 

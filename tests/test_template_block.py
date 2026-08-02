@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
-from kedi.core import KediRuntime, o
 from kedi.artifacts import artifact_instructions
+from kedi.core import KediRuntime, o
 from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program

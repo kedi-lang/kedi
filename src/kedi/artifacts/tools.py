@@ -4,7 +4,8 @@ from typing import Any, Literal
 
 from kedi.agent_adapter.tool_override import ToolSpec
 
-from .codemode import artifact_code_provenance, run_artifact_code as execute_artifact_code
+from .codemode import artifact_code_provenance
+from .codemode import run_artifact_code as execute_artifact_code
 from .manager import ArtifactManager
 from .models import ArtifactHandle
 from .policy import ArtifactPolicy
