@@ -3,11 +3,11 @@ from __future__ import annotations
 import secrets
 import time
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, cast
 
 from . import telemetry
 from .cleanup import cleanup_service
@@ -278,12 +278,12 @@ class ArtifactManager:
         try:
             state.accept(encoder.start())
             async for chunk in stream.aiter_chunks():
-                state.accept(encoder.encode(chunk))
+                state.accept_chunk(encoder.encode(chunk))
             tail, streamed = encoder.finish()
             state.accept(tail)
             return state.finish(streamed)
-        except BaseException:
-            state.abort()
+        except BaseException as exc:
+            state.abort(exc)
             await stream.aclose()
             raise
 
@@ -531,23 +531,18 @@ class ArtifactManager:
                 if not candidates:
                     return 0
 
-                with telemetry.artifact_span(
-                    "cleanup",
-                    session_id=self.session_id,
-                ) as span:
-                    for record in candidates:
-                        with telemetry.artifact_span(
-                            "expire",
-                            session_id=self.session_id,
-                            ref_id=record.ref_id,
-                        ):
-                            record.status = ArtifactStatus.EXPIRED
-                            if not record.active_readers:
-                                self._delete_payload(record)
-                            self.history.append("artifact_expired", ref_id=record.ref_id)
-                            telemetry.record_expired()
-                    span.set_attribute("kedi.artifact.expired_count", len(candidates))
-                    return len(candidates)
+                for record in candidates:
+                    with telemetry.artifact_span(
+                        "expire",
+                        session_id=self.session_id,
+                        ref_id=record.ref_id,
+                    ):
+                        record.status = ArtifactStatus.EXPIRED
+                        if not record.active_readers:
+                            self._delete_payload(record)
+                        self.history.append("artifact_expired", ref_id=record.ref_id)
+                        telemetry.record_expired()
+                return len(candidates)
         except BaseException as exc:
             with telemetry.artifact_span(
                 "cleanup",
@@ -716,12 +711,12 @@ class ArtifactManager:
         try:
             state.accept(encoder.start())
             for chunk in chunks:
-                state.accept(encoder.encode(chunk))
+                state.accept_chunk(encoder.encode(chunk))
             tail, streamed = encoder.finish()
             state.accept(tail)
             return state.finish(streamed)
-        except BaseException:
-            state.abort()
+        except BaseException as exc:
+            state.abort(exc)
             stream.close()
             raise
 
@@ -837,6 +832,9 @@ class _StreamingWrite:
         self.ref_id: str | None = None
         self.reserved_bytes = 0
         self.finished = False
+        self.chunk_count = 0
+        self._store_span_context: AbstractContextManager[telemetry.TelemetrySpan] | None = None
+        self._store_span: telemetry.TelemetrySpan | None = None
 
     def accept(self, payload: bytes) -> None:
         if self.finished or not payload:
@@ -865,6 +863,7 @@ class _StreamingWrite:
                 decision="artifact",
                 size_bytes=prospective_size,
             )
+            self._start_store_span(prospective_size)
             with self.manager._lock:
                 self.manager._ensure_open()
                 self.manager._cleanup_interval_seconds = min(
@@ -885,6 +884,10 @@ class _StreamingWrite:
         self.manager._grow_stream_reservation(self.policy, len(payload))
         self.reserved_bytes += len(payload)
         self.writer.write(payload)
+
+    def accept_chunk(self, payload: bytes) -> None:
+        self.chunk_count += 1
+        self.accept(payload)
 
     def finish(self, streamed: StreamedArtifact) -> Any:
         if self.finished:
@@ -939,20 +942,53 @@ class _StreamingWrite:
                     )
                 raise
             self.finished = True
+            self._finish_store_span(streamed)
             return result
         finally:
             self.manager._release_stream_reservation(self.reserved_bytes)
             self.reserved_bytes = 0
 
-    def abort(self) -> None:
+    def abort(self, exc: BaseException | None = None) -> None:
         if self.finished:
             return
         self.finished = True
-        if self.writer is not None:
-            self.writer.abort()
-        if self.reserved_bytes:
-            self.manager._release_stream_reservation(self.reserved_bytes)
-            self.reserved_bytes = 0
+        try:
+            if self.writer is not None:
+                self.writer.abort()
+            if self.reserved_bytes:
+                self.manager._release_stream_reservation(self.reserved_bytes)
+                self.reserved_bytes = 0
+        finally:
+            self._close_store_span(exc)
+
+    def _start_store_span(self, size_bytes: int) -> None:
+        self._store_span_context = telemetry.artifact_span(
+            "create",
+            source=self.source or "",
+            size_bytes=size_bytes,
+            store=self.policy.store,
+            streamed=True,
+        )
+        self._store_span = self._store_span_context.__enter__()
+
+    def _finish_store_span(self, streamed: StreamedArtifact) -> None:
+        active = cast(telemetry.TelemetrySpan, self._store_span)
+        active.set_attribute("kedi.artifact.size_bytes", streamed.size_bytes)
+        active.set_attribute("kedi.artifact.chunk_count", self.chunk_count)
+        self._close_store_span()
+
+    def _close_store_span(self, exc: BaseException | None = None) -> None:
+        context = self._store_span_context
+        active = self._store_span
+        self._store_span_context = None
+        self._store_span = None
+        if context is None:
+            return
+        if exc is None:
+            context.__exit__(None, None, None)
+        else:
+            cast(telemetry.TelemetrySpan, active).set_attribute("error.type", type(exc).__name__)
+            context.__exit__(type(exc), exc, exc.__traceback__)
 
 
 def _is_expired(record: ArtifactRecord, *, now: float) -> bool:

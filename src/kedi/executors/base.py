@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
+from ..telemetry import TelemetrySpan, capture_enabled, runtime_span
+from ..telemetry.naming import qualified_type_name
 from .debug import ExecutorDebugEvent, ExecutorDebugExporter
 
 if TYPE_CHECKING:
@@ -54,6 +58,12 @@ class DefaultExecutor:
         self.debug_exporter = exporter
 
     def evaluate_inline(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
+        with self._python_execution_span(rt, "inline", code) as active:
+            result = self._evaluate_inline(rt, code, local_env)
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
+
+    def _evaluate_inline(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
         self._emit_debug(
             "execution_started",
             "evaluate_inline",
@@ -110,6 +120,12 @@ class DefaultExecutor:
             raise
 
     def execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
+        with self._python_execution_span(rt, "block", code) as active:
+            result = self._execute_block(rt, code, local_env)
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
+
+    def _execute_block(self, rt: KediRuntime, code: str, local_env: dict[str, Any]) -> Any:
         self._emit_debug(
             "execution_started",
             "execute_block",
@@ -144,6 +160,22 @@ class DefaultExecutor:
             raise
 
     def execute_side_effects(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env_map: dict[str, Any],
+        *,
+        kedi_line_offset: int = 0,
+    ) -> None:
+        with self._python_execution_span(rt, "side_effects", code):
+            self._execute_side_effects(
+                rt,
+                code,
+                env_map,
+                kedi_line_offset=kedi_line_offset,
+            )
+
+    def _execute_side_effects(
         self,
         rt: KediRuntime,
         code: str,
@@ -187,6 +219,12 @@ class DefaultExecutor:
         )
 
     def execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]:
+        with self._python_execution_span(rt, "prelude", code) as active:
+            result = self._execute_prelude(rt, code)
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
+
+    def _execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]:
         self._emit_debug("execution_started", "execute_prelude", code=code)
         env = self._build_python_env(rt, {})
         filename = self._python_filename(rt, "prelude", code, kedi_line_offset=1)
@@ -249,6 +287,17 @@ class DefaultExecutor:
         return fn
 
     def evaluate_type_expression(self, rt: KediRuntime, code: str, env: dict[str, Any]) -> Any:
+        with self._python_execution_span(rt, "type_expression", code) as active:
+            result = self._evaluate_type_expression(rt, code, env)
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
+
+    def _evaluate_type_expression(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env: dict[str, Any],
+    ) -> Any:
         self._emit_debug(
             "execution_started",
             "evaluate_type_expression",
@@ -274,6 +323,45 @@ class DefaultExecutor:
             output=result,
         )
         return result
+
+    @contextmanager
+    def _python_execution_span(
+        self,
+        rt: KediRuntime,
+        kind: str,
+        code: str,
+    ) -> Iterator[TelemetrySpan]:
+        block_kind = {"block": "return", "side_effects": "statement"}.get(kind, kind)
+        executor_name = type(self).__name__
+        attributes: dict[str, bool | str | int] = {
+            "kedi.python.block.kind": block_kind,
+            "kedi.executor.name": executor_name,
+            "kedi.python.code.lines": code.count("\n") + (1 if code else 0),
+        }
+        frames = rt.current_trace_frames()
+        if frames:
+            frame = frames[-1]
+            if frame.procedure_name is not None:
+                attributes["kedi.procedure.name"] = frame.procedure_name
+            if frame.span is not None:
+                attributes["code.line.number"] = frame.span.start_line
+                if frame.span.source_path is not None and capture_enabled("source"):
+                    attributes["code.file.path"] = frame.span.source_path
+        with runtime_span(
+            "run python",
+            "run_python",
+            level="detailed",
+            attributes=attributes,
+            metric_attributes={
+                "executor": executor_name,
+                "block_kind": block_kind,
+            },
+        ) as active:
+            try:
+                yield active
+            except BaseException as exc:
+                active.set_attribute("error.type", type(exc).__name__)
+                raise
 
     def _python_filename(
         self,

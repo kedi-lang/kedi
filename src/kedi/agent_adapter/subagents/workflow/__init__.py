@@ -13,7 +13,6 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from opentelemetry import trace
 from pydantic_core import PydanticSerializationError, to_jsonable_python
 from pydantic_monty import (
     CollectString,
@@ -25,6 +24,7 @@ from pydantic_monty import (
 )
 
 from ...tool_override import ToolSpec
+from ....telemetry import TelemetrySpan, current_span, span as telemetry_span
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt
 from ..budget import (
@@ -47,7 +47,6 @@ WORKFLOW_MEMORY_LIMIT = 256 * 1024 * 1024
 WORKFLOW_CPU_SECONDS = 5.0
 
 _active_workflow: ContextVar[bool] = ContextVar("kedi_active_dynamic_workflow", default=False)
-_tracer = trace.get_tracer("kedi.subagents.workflow")
 
 
 class WorkflowError(RuntimeError):
@@ -89,21 +88,31 @@ class _WorkflowStats:
 
 def _dynamic_workflow_span(
     attributes: Mapping[str, Any],
-) -> AbstractContextManager[trace.Span]:
-    current = trace.get_current_span()
-    current_attributes = getattr(current, "attributes", None)
-    tool_name = (
-        current_attributes.get("gen_ai.tool.name")
-        if isinstance(current_attributes, Mapping)
-        else None
+) -> AbstractContextManager[TelemetrySpan]:
+    current = current_span()
+    tool_name = current.get_attribute("gen_ai.tool.name")
+    profile = attributes.get("kedi.workflow.parent_profile")
+    workflow_name = (
+        f"{profile} workflow" if isinstance(profile, str) and profile else "dynamic workflow"
     )
     if current.is_recording() and tool_name == "run_workflow":
-        current.update_name("dynamic workflow")
-        current.set_attribute("logfire.msg", "dynamic workflow")
+        current.update_name(workflow_name)
+        current.set_attribute("kedi.operation.name", "run_workflow")
+        current.set_attribute("gen_ai.operation.name", "run_workflow")
         for key, value in attributes.items():
-            current.set_attribute(key, value)
+            if isinstance(value, (bool, str, int, float)):
+                current.set_attribute(key, value)
         return nullcontext(current)
-    return _tracer.start_as_current_span("dynamic workflow", attributes=attributes)
+    return telemetry_span(
+        "agentic",
+        workflow_name,
+        "run_workflow",
+        attributes={
+            key: value
+            for key, value in attributes.items()
+            if isinstance(value, (bool, str, int, float))
+        },
+    )
 
 
 def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSpec:

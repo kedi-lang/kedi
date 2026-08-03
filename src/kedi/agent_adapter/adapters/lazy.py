@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from time import perf_counter
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
+
+from typing_extensions import runtime_checkable
 
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.subagents import SupportsSubagentExecution
+from kedi.telemetry import add_counter, record_histogram, span
 
 if TYPE_CHECKING:
     from ...agent_profile import AgentProfile
@@ -14,6 +18,16 @@ if TYPE_CHECKING:
     from ..subagents import SubagentExecutionRequest
     from ..subagents.limits import SubagentUsageLimits
     from ..tool_override import ToolSpec
+
+
+@runtime_checkable
+class _SupportsDefaultModel(Protocol):
+    def default_model(self) -> str | None: ...
+
+
+@runtime_checkable
+class _SupportsTelemetryModelName(Protocol):
+    def telemetry_model_name(self) -> str | None: ...
 
 
 class LazyAdapter:
@@ -44,14 +58,63 @@ class LazyAdapter:
         if self._real is None:
             with self._lock:
                 if self._real is None:
-                    self._real = self._factory()
+                    started_at = perf_counter()
+                    outcome = "success"
+                    kind = "harness" if self.kind == "agent-harness" else "framework"
+                    with span(
+                        "agent",
+                        f"initialize adapter {self.shortname}",
+                        "initialize_adapter",
+                        attributes={
+                            "kedi.adapter.name": self.shortname,
+                            "kedi.adapter.kind": kind,
+                        },
+                    ) as active:
+                        try:
+                            self._real = self._factory()
+                        except BaseException as exc:
+                            outcome = "error"
+                            active.set_attribute("error.type", type(exc).__name__)
+                            raise
+                        else:
+                            active.add_event("kedi.adapter.initialized")
+                        finally:
+                            dimensions = {
+                                "adapter": self.shortname,
+                                "adapter_kind": kind,
+                                "outcome": outcome,
+                            }
+                            add_counter(
+                                "agent",
+                                "kedi.adapter.initializations",
+                                attributes=dimensions,
+                            )
+                            record_histogram(
+                                "agent",
+                                "kedi.adapter.initialization.duration",
+                                max(0.0, perf_counter() - started_at),
+                                unit="s",
+                                attributes=dimensions,
+                            )
         return self._real
 
+    @property
+    def is_initialized(self) -> bool:
+        return self._real is not None
+
     def default_model(self) -> str | None:
-        return self._ensure().default_model()
+        adapter = self._ensure()
+        if isinstance(adapter, _SupportsDefaultModel):
+            return adapter.default_model()
+        return None
 
     def telemetry_model_name(self) -> str | None:
-        return self._subagent_adapter().telemetry_model_name()
+        adapter = self._ensure()
+        if isinstance(adapter, _SupportsTelemetryModelName):
+            return adapter.telemetry_model_name()
+        if isinstance(adapter, _SupportsDefaultModel):
+            return adapter.default_model()
+        return None
 
     def produce_sync(self, *args: Any, **kwargs: Any) -> Any:
         return self._ensure().produce_sync(*args, **kwargs)

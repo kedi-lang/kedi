@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import secrets
 from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from pathlib import Path
@@ -172,6 +173,85 @@ def with_required_before_output(tool: ToolSpec) -> ToolSpec:
         return result
 
     return replace(tool, fn=required_tool, metadata=metadata)
+
+
+def with_tool_telemetry(tool: ToolSpec, *, adapter_shortname: str) -> ToolSpec:
+    """Trace a logical tool call without changing the callable's public signature."""
+
+    metadata = dict(tool.metadata or {})
+    if metadata.get("kedi_telemetry_wrapped") is True:
+        return tool
+    metadata["kedi_telemetry_wrapped"] = True
+
+    if _is_async_callable(tool.fn):
+
+        @wraps(tool.fn)
+        async def telemetry_async_tool(*args: Any, **kwargs: Any) -> Any:
+            from .telemetry import tool_call_span
+
+            with tool_call_span(
+                tool,
+                adapter_shortname=adapter_shortname,
+                argument_count=len(args) + len(kwargs),
+            ) as telemetry:
+                result = tool.fn(*args, **kwargs)
+                result = await result
+                telemetry.complete(result)
+                return result
+
+        return replace(tool, fn=telemetry_async_tool, metadata=metadata)
+
+    @wraps(tool.fn)
+    def telemetry_tool(*args: Any, **kwargs: Any) -> Any:
+        from .telemetry import tool_call_span
+
+        call_context = copy_context()
+        context = tool_call_span(
+            tool,
+            adapter_shortname=adapter_shortname,
+            argument_count=len(args) + len(kwargs),
+        )
+
+        def invoke() -> tuple[Any, Any | None]:
+            telemetry = context.__enter__()
+            try:
+                result = tool.fn(*args, **kwargs)
+            except BaseException as exc:
+                context.__exit__(type(exc), exc, exc.__traceback__)
+                raise
+            if inspect.isawaitable(result):
+                return result, telemetry
+            telemetry.complete(result)
+            context.__exit__(None, None, None)
+            return result, None
+
+        result, pending_telemetry = call_context.run(invoke)
+        if pending_telemetry is not None:
+
+            async def await_telemetry_result() -> Any:
+                try:
+                    future = call_context.run(asyncio.ensure_future, result)
+                    resolved = await future
+                except BaseException as exc:
+                    call_context.run(
+                        context.__exit__,
+                        type(exc),
+                        exc,
+                        exc.__traceback__,
+                    )
+                    raise
+
+                def finish() -> None:
+                    pending_telemetry.complete(resolved)
+                    context.__exit__(None, None, None)
+
+                call_context.run(finish)
+                return resolved
+
+            return await_telemetry_result()
+        return result
+
+    return replace(tool, fn=telemetry_tool, metadata=metadata)
 
 
 def with_approval(

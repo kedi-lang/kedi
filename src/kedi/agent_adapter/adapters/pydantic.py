@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
+from pydantic_ai.capabilities import AbstractCapability, WrapRunHandler
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
+from pydantic_ai.tools import RunContext
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.settings import (
@@ -30,6 +32,7 @@ from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
+from ..telemetry import reclassify_native_agent_span
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -42,7 +45,21 @@ from ..tool_override import (
 )
 
 if TYPE_CHECKING:
+    from pydantic_ai.agent import AgentRunResult
     from pydantic_ai.tools import Tool as PydanticTool
+
+
+class _KediTelemetryCapability(AbstractCapability[Any]):
+    """Reclassify Pydantic AI's native run span with Kedi semantics."""
+
+    async def wrap_run(
+        self,
+        ctx: RunContext[Any],
+        *,
+        handler: WrapRunHandler,
+    ) -> AgentRunResult[Any]:
+        reclassify_native_agent_span()
+        return await handler()
 
 
 def _mcp_toolset_from_config(name: str, server_config: dict[str, object]) -> Any:
@@ -417,11 +434,29 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         )
         if toolsets is not None:
             run_kwargs["toolsets"] = toolsets
+        capabilities = run_kwargs.get("capabilities")
         if toolsets is not None or self._has_native_approval_tools():
-            run_kwargs["capabilities"] = self._with_deferred_approval_capability(
-                run_kwargs.get("capabilities")
-            )
+            capabilities = self._with_deferred_approval_capability(capabilities)
+        capabilities = self._with_telemetry_capability(capabilities)
+        if capabilities:
+            run_kwargs["capabilities"] = capabilities
         return run_kwargs
+
+    @staticmethod
+    def _with_telemetry_capability(existing: object | None) -> list[Any]:
+        from ...telemetry import owns_native_spans
+
+        if existing is None:
+            capabilities: list[Any] = []
+        elif isinstance(existing, (list, tuple)):
+            capabilities = list(existing)
+        else:
+            raise TypeError("Pydantic AI capabilities must be a list or tuple.")
+        if owns_native_spans("pydantic", "run_agent") and not any(
+            isinstance(capability, _KediTelemetryCapability) for capability in capabilities
+        ):
+            capabilities.append(_KediTelemetryCapability())
+        return capabilities
 
     def _agent_for_produce(self) -> Agent[Any, Any]:
         from ...tool_context import inside_kedi_tool_call

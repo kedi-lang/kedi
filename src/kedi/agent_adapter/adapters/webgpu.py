@@ -25,6 +25,11 @@ from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ...dynamic_models import build_dynamic_model
 from ...resolved_types import ResolvedKediType
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..telemetry import (
+    mcp_initialization_span,
+    mcp_server_name,
+    mcp_transport_name,
+)
 from ..tool_override import ToolScope, ToolSpec
 
 
@@ -352,7 +357,7 @@ class WebGPUAdapter:
             for tool in self.scoped_tools
             if isinstance(tool, ToolSpec)
         ]
-        tools.extend(await _mcp_tools(stack, profile.mcp_servers))
+        tools.extend(await _mcp_tools(stack, profile.mcp_servers, self.shortname))
         names = [tool.name for tool in tools]
         if len(names) != len(set(names)):
             raise ValueError("Tool names must be unique within one WebGPU agent run")
@@ -539,6 +544,7 @@ def _mentioned_tools(template: str, tools: Sequence[BrowserTool]) -> tuple[str, 
 async def _mcp_tools(
     stack: AsyncExitStack,
     specs: Sequence[McpServerSpec],
+    adapter_shortname: str = "webgpu",
 ) -> list[_McpRuntimeTool]:
     if not specs:
         return []
@@ -546,17 +552,28 @@ async def _mcp_tools(
 
     tools: list[_McpRuntimeTool] = []
     for index, spec in enumerate(specs):
-        client = Client(_fastmcp_config(spec, index))
-        await stack.enter_async_context(client)
-        for tool in await client.list_tools():
-            tools.append(
-                _McpRuntimeTool(
-                    name=tool.name,
-                    description=tool.description or "",
-                    input_schema=tool.inputSchema,
-                    return_schema=tool.outputSchema,
-                    client=client,
+        with mcp_initialization_span(
+            adapter_shortname=adapter_shortname,
+            server_name=mcp_server_name(command=spec.command, url=spec.url, index=index),
+            transport=mcp_transport_name(spec.transport),
+        ) as active:
+            client = Client(_fastmcp_config(spec, index))
+            await stack.enter_async_context(client)
+            discovered = await client.list_tools()
+            for tool in discovered:
+                tools.append(
+                    _McpRuntimeTool(
+                        name=tool.name,
+                        description=tool.description or "",
+                        input_schema=tool.inputSchema,
+                        return_schema=tool.outputSchema,
+                        client=client,
+                    )
                 )
+            active.set_attribute("kedi.mcp.tool_count", len(discovered))
+            active.add_event(
+                "kedi.mcp.tools_discovered",
+                {"kedi.mcp.tool_count": len(discovered)},
             )
     return tools
 

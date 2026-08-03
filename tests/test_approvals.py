@@ -13,7 +13,6 @@ import kedi
 import kedi.api as kedi_api
 import kedi.app as app_module
 from kedi.agent_adapter import approval as approval_module
-from kedi.agent_adapter import approval_telemetry
 from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
@@ -42,6 +41,7 @@ from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ApprovalDirectiveStmt
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict
+from tests.telemetry_helpers import installed_recording_backend
 
 
 @pytest.fixture(autouse=True)
@@ -64,33 +64,7 @@ def test_read_only_tools_auto_allow_without_policy() -> None:
     assert tool.fn(path="notes.txt", content="ignored") == "notes.txt:ignored"
 
 
-def test_approval_telemetry_records_states_without_arguments(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    spans: list[object] = []
-
-    class FakeSpan:
-        def __init__(self, attributes: dict[str, object]) -> None:
-            self.attributes = dict(attributes)
-            self.events: list[str] = []
-
-        def set_attribute(self, name: str, value: object) -> None:
-            self.attributes[name] = value
-
-        def add_event(self, name: str) -> None:
-            self.events.append(name)
-
-    @contextmanager
-    def start_span(_name: str, *, attributes: dict[str, object]) -> Iterator[FakeSpan]:
-        span = FakeSpan(attributes)
-        spans.append(span)
-        yield span
-
-    monkeypatch.setattr(
-        approval_telemetry._tracer,
-        "start_as_current_span",
-        start_span,
-    )
+def test_approval_telemetry_records_states_without_arguments() -> None:
     request = ApprovalRequest.create(
         tool_name="write_file",
         arguments={"path": ".env", "content": "secret"},
@@ -100,51 +74,34 @@ def test_approval_telemetry_records_states_without_arguments(
         metadata=None,
     )
 
-    decision = resolve_tool_approval(
-        ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.edit({"path": "safe.txt"})),
-        request,
-    )
+    with installed_recording_backend() as backend:
+        decision = resolve_tool_approval(
+            ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.edit({"path": "safe.txt"})),
+            request,
+        )
 
     assert decision.decision == "edit"
-    span = spans[0]
-    assert isinstance(span, FakeSpan)
-    assert span.attributes == {
-        "approval.tool_name": "write_file",
-        "approval.risk": "sensitive",
-        "approval.state": "allowed",
-        "approval.adapter": "pydantic",
-        "approval.arguments_edited": True,
+    recorded = backend.finished_spans[0]
+    assert recorded.name == "await approval write_file"
+    assert recorded.attributes == {
+        "kedi.operation.name": "await_approval",
+        "kedi.approval.tool.name": "write_file",
+        "kedi.approval.risk": "sensitive",
+        "kedi.approval.mechanism": "python_handler",
+        "kedi.approval.state": "edited",
+        "kedi.adapter.name": "pydantic",
+        "kedi.approval.arguments_edited": True,
     }
-    assert span.events == [
-        "approval.requested",
-        "approval.pending",
-        "approval.allowed",
+    assert [event.name for event in recorded.events] == [
+        "kedi.approval.requested",
+        "kedi.approval.pending",
+        "kedi.approval.decided",
     ]
-    assert "path" not in span.attributes
-    assert "content" not in span.attributes
+    assert "path" not in recorded.attributes
+    assert "content" not in recorded.attributes
 
 
-def test_approval_telemetry_records_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
-    states: list[str] = []
-
-    class FakeSpan:
-        def set_attribute(self, name: str, value: object) -> None:
-            if name == "approval.state":
-                states.append(str(value))
-
-        def add_event(self, _name: str) -> None:
-            pass
-
-    @contextmanager
-    def start_span(_name: str, *, attributes: dict[str, object]) -> Iterator[FakeSpan]:
-        states.append(str(attributes["approval.state"]))
-        yield FakeSpan()
-
-    monkeypatch.setattr(
-        approval_telemetry._tracer,
-        "start_as_current_span",
-        start_span,
-    )
+def test_approval_telemetry_records_cancellation() -> None:
     request = ApprovalRequest.create(
         tool_name="write_file",
         arguments={},
@@ -157,10 +114,18 @@ def test_approval_telemetry_records_cancellation(monkeypatch: pytest.MonkeyPatch
     def cancel(_request: ApprovalRequest) -> ApprovalDecision:
         raise ApprovalCancelled("cancelled")
 
-    with pytest.raises(ApprovalCancelled, match="cancelled"):
-        resolve_tool_approval(ApprovalPolicy.dynamic(cancel), request)
+    with installed_recording_backend() as backend:
+        with pytest.raises(ApprovalCancelled, match="cancelled"):
+            resolve_tool_approval(ApprovalPolicy.dynamic(cancel), request)
 
-    assert states == ["requested", "pending", "cancelled"]
+    recorded = backend.finished_spans[0]
+    assert recorded.attributes["kedi.approval.state"] == "cancelled"
+    assert recorded.attributes["error.type"] == "ApprovalCancelled"
+    assert [event.name for event in recorded.events] == [
+        "kedi.approval.requested",
+        "kedi.approval.pending",
+        "kedi.approval.cancelled",
+    ]
 
 
 def test_mutating_tools_default_to_denied() -> None:

@@ -181,7 +181,9 @@ def test_read_skill_tool_streams_into_artifact_store_without_changing_logical_ty
         manager.close()
 
 
-def test_native_approval_adapters_receive_unwrapped_skill_tools(tmp_path: Path) -> None:
+def test_native_approval_adapters_receive_skill_tools_without_approval_wrappers(
+    tmp_path: Path,
+) -> None:
     source_path = tmp_path / "app.kedi"
     source_path.write_text("> use: skills\n>> Return [answer].\n", encoding="utf-8")
     runtime = compile_program(
@@ -195,7 +197,8 @@ def test_native_approval_adapters_receive_unwrapped_skill_tools(tmp_path: Path) 
     )
 
     assert [tool.name for tool in tools] == ["list_skills", "read_skill"]
-    assert all(not hasattr(tool.fn, "__wrapped__") for tool in tools)
+    assert tools[0].fn() == []
+    assert all((tool.metadata or {}).get("kedi_telemetry_wrapped") is True for tool in tools)
 
 
 def test_single_line_use_skills_registers_skill_tools_and_instructions(

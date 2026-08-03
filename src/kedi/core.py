@@ -15,6 +15,7 @@ from typing import (
     Callable,
     Dict,
     List,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -33,6 +34,8 @@ from .errors import (
 )
 from .executors.base import DefaultExecutor, Executor
 from .promise import KediPromise, force
+from .telemetry import capture_enabled
+from .telemetry.naming import qualified_type_name
 
 if TYPE_CHECKING:
     from .agent_adapter.conversation import ConversationState
@@ -428,52 +431,76 @@ class KediRuntime:
         should_trace_procedure = not (fn is self._main and metadata is None)
 
         depth = self._invoke_depth.get()
-        depth_token = self._invoke_depth.set(depth + 1)
-        request_budget_token = None
-        if depth == 0:
-            from .agent_adapter.request_budget import ModelRequestBudget
+        telemetry_name = "main" if fn is self._main else (proc_name or "procedure")
+        attributes: dict[str, bool | str | int] = {
+            "kedi.procedure.name": telemetry_name,
+            "kedi.procedure.argument_count": len(bound.arguments),
+            "kedi.procedure.depth": depth,
+        }
+        if proc_span is not None:
+            attributes["code.line.number"] = proc_span.start_line
+            if proc_span.source_path is not None and capture_enabled("source"):
+                attributes["code.file.path"] = proc_span.source_path
 
-            request_budget_token = self._request_budget.set(ModelRequestBudget())
-        token = self._current_env.set(local_env)
-        primary_exc: BaseException | None = None
-        try:
-            frame_ctx = (
-                self.trace_frame(
-                    KediTraceFrame(
-                        kind="procedure",
-                        label=f"procedure {proc_name}" if proc_name else "procedure",
-                        span=proc_span,
-                        procedure_name=proc_name,
-                    )
-                )
-                if should_trace_procedure
-                else nullcontext()
-            )
-            with frame_ctx:
-                result = fn(*args)
-            final = (
-                self._evaluate_value(result, local_env)
-                if isinstance(result, (InputExpr, CallExpr))
-                else result
-            )
-        except BaseException as exc:
-            primary_exc = exc
-            raise
-        finally:
-            self._current_env.reset(token)
-            self._invoke_depth.reset(depth_token)
-            # Outermost invocation: drain scheduled template jobs — even on the EXCEPTIONAL exit —
-            # so unconsumed templates run, background jobs don't leak, and their errors surface.
-            # Nested calls (depth > 0, incl. worker threads) never drain. A drain failure becomes
-            # the error only if the body didn't already raise; otherwise it's logged, not masked.
+        procedure_kind = "main" if fn is self._main else "procedure"
+        attributes["kedi.procedure.kind"] = procedure_kind
+
+        from .telemetry import runtime_span
+
+        with runtime_span(
+            f"call {telemetry_name}",
+            "call_procedure",
+            attributes=attributes,
+            metric_attributes={"procedure_kind": procedure_kind},
+        ) as active:
+            depth_token = self._invoke_depth.set(depth + 1)
+            request_budget_token = None
             if depth == 0:
-                try:
-                    self._drain_outermost(primary_exc)
-                finally:
-                    assert request_budget_token is not None
-                    self._request_budget.reset(request_budget_token)
+                from .agent_adapter.request_budget import ModelRequestBudget
 
-        return final
+                request_budget_token = self._request_budget.set(ModelRequestBudget())
+            token = self._current_env.set(local_env)
+            primary_exc: BaseException | None = None
+            try:
+                frame_ctx = (
+                    self.trace_frame(
+                        KediTraceFrame(
+                            kind="procedure",
+                            label=f"procedure {proc_name}" if proc_name else "procedure",
+                            span=proc_span,
+                            procedure_name=proc_name,
+                        )
+                    )
+                    if should_trace_procedure
+                    else nullcontext()
+                )
+                with frame_ctx:
+                    result = fn(*args)
+                final = (
+                    self._evaluate_value(result, local_env)
+                    if isinstance(result, (InputExpr, CallExpr))
+                    else result
+                )
+                active.set_attribute("kedi.result.type", qualified_type_name(final))
+            except BaseException as exc:
+                primary_exc = exc
+                active.set_attribute("error.type", type(exc).__name__)
+                raise
+            finally:
+                self._current_env.reset(token)
+                self._invoke_depth.reset(depth_token)
+                # The outermost invocation owns every deferred template spawned by its body.
+                if depth == 0:
+                    try:
+                        self._drain_outermost(primary_exc)
+                    except BaseException as exc:
+                        active.set_attribute("error.type", type(exc).__name__)
+                        raise
+                    finally:
+                        assert request_budget_token is not None
+                        self._request_budget.reset(request_budget_token)
+
+            return final
 
     def _drain_outermost(self, primary_exc: BaseException | None) -> None:
         try:
@@ -683,6 +710,9 @@ class KediRuntime:
                             _tool_request_context(captured_tool_specs),
                         ),
                         tools=captured_tool_specs,
+                        profile=profile,
+                        call_kind="invoke",
+                        output_field_count=0,
                     )
 
         if not parallel:
@@ -851,6 +881,9 @@ class KediRuntime:
                             {key: repr(value) for key, value in typed_fields.items()},
                         ),
                         tools=captured_tool_specs,
+                        profile=profile,
+                        call_kind="produce",
+                        output_field_count=len(required),
                     )
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
@@ -900,57 +933,96 @@ class KediRuntime:
         *,
         context: Sequence[Any] = (),
         tools: Sequence[Any] = (),
+        profile: Any,
+        call_kind: Literal["produce", "invoke"],
+        output_field_count: int,
     ) -> Any:
         """Run one successful adapter turn through explicit continuation state."""
         from .agent_adapter.invocation import observe_invocations
         from .agent_adapter.request_budget import ModelRequestBudget
+        from .agent_adapter.telemetry import (
+            agent_call_span,
+            model_call_span,
+            resolved_adapter_model,
+        )
         from .agent_adapter.tool_override import (
             required_tool_call_scope,
             validate_required_tool_calls,
         )
 
         budget = self._request_budget.get() or ModelRequestBudget()
+        configured_model = profile.model
 
-        with required_tool_call_scope(tools):
-            state = self.conversation_state
-            if state is None:
-                reservation = budget.reserve(prompt, context=context)
-                try:
-                    with observe_invocations(reservation.observe):
-                        result = call(prompt)
-                    validate_required_tool_calls()
-                except BaseException:
-                    reservation.finish(raise_on_exceeded=False)
-                    raise
-                reservation.finish()
-                return result
+        with agent_call_span(
+            adapter,
+            profile_name=profile.name,
+            call_kind=call_kind,
+            prompt_chars=len(prompt),
+            output_field_count=output_field_count,
+            tool_count=len(tools),
+            mcp_server_count=len(profile.mcp_servers),
+            artifacts_enabled=bool(profile.artifacts and profile.artifacts.enabled),
+            configured_model=configured_model,
+        ) as agent_telemetry:
 
-            from .agent_adapter.conversation import SupportsConversationState
-            from .lang.compiler.environment import model_value
+            def run_reserved_call(reservation: Any, active_prompt: str) -> Any:
+                with model_call_span(
+                    adapter,
+                    call_kind=call_kind,
+                    configured_model=configured_model,
+                ) as model_telemetry:
 
-            capabilities = adapter.capabilities
-            with state.adapter_turn(adapter.shortname) as conversation:
-                reservation = budget.reserve(
-                    prompt,
-                    context=context,
-                    resume_state=conversation.resume_state,
-                )
-                conversation_scope = (
-                    adapter.conversation_scope(conversation)
-                    if capabilities.supports("stateful_history")
-                    and isinstance(adapter, SupportsConversationState)
-                    else nullcontext()
-                )
-                try:
-                    with conversation_scope, observe_invocations(reservation.observe):
-                        result = call(prompt)
-                    validate_required_tool_calls()
-                except BaseException:
-                    reservation.finish(raise_on_exceeded=False)
-                    raise
-                reservation.finish()
-                state.record_exchange(prompt, model_value(result))
-                return result
+                    def observe(usage: Any) -> None:
+                        reservation.observe(usage)
+                        agent_telemetry.observe(usage)
+                        model_telemetry.observe(usage)
+
+                    with observe_invocations(observe):
+                        result = call(active_prompt)
+                    model = resolved_adapter_model(adapter, configured_model)
+                    model_telemetry.complete(result, model=model)
+                    agent_telemetry.complete(result, model=model)
+                    return result
+
+            with required_tool_call_scope(tools):
+                state = self.conversation_state
+                if state is None:
+                    reservation = budget.reserve(prompt, context=context)
+                    try:
+                        result = run_reserved_call(reservation, prompt)
+                        validate_required_tool_calls()
+                    except BaseException:
+                        reservation.finish(raise_on_exceeded=False)
+                        raise
+                    reservation.finish()
+                    return result
+
+                from .agent_adapter.conversation import SupportsConversationState
+                from .lang.compiler.environment import model_value
+
+                capabilities = adapter.capabilities
+                with state.adapter_turn(adapter.shortname) as conversation:
+                    reservation = budget.reserve(
+                        prompt,
+                        context=context,
+                        resume_state=conversation.resume_state,
+                    )
+                    conversation_scope = (
+                        adapter.conversation_scope(conversation)
+                        if capabilities.supports("stateful_history")
+                        and isinstance(adapter, SupportsConversationState)
+                        else nullcontext()
+                    )
+                    try:
+                        with conversation_scope:
+                            result = run_reserved_call(reservation, prompt)
+                        validate_required_tool_calls()
+                    except BaseException:
+                        reservation.finish(raise_on_exceeded=False)
+                        raise
+                    reservation.finish()
+                    state.record_exchange(prompt, model_value(result))
+                    return result
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
@@ -1056,6 +1128,9 @@ class KediRuntime:
 
     def _resolve_agent_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve explicit Kedi tools plus the opt-in project-local skill tools."""
+        from .agent_adapter.telemetry import adapter_shortname
+
+        adapter_name = adapter_shortname(adapter)
         specs = list(self._resolve_tool_specs(profile, adapter))
 
         if getattr(profile, "skills", False):
@@ -1075,7 +1150,7 @@ class KediRuntime:
                     with_approval(
                         spec,
                         policy=profile.approval,
-                        adapter_shortname=getattr(adapter, "shortname", None),
+                        adapter_shortname=adapter_name,
                     )
                     for spec in skill_specs
                 )
@@ -1134,7 +1209,7 @@ class KediRuntime:
                     with_approval(
                         spec,
                         policy=profile.approval,
-                        adapter_shortname=getattr(adapter, "shortname", None),
+                        adapter_shortname=adapter_name,
                     )
                     for spec in management_specs
                 )
@@ -1150,9 +1225,13 @@ class KediRuntime:
                 )
                 for spec in specs
             ]
-        from .agent_adapter.tool_override import with_required_before_output
+        from .agent_adapter.tool_override import (
+            with_required_before_output,
+            with_tool_telemetry,
+        )
 
         specs = [with_required_before_output(spec) for spec in specs]
+        specs = [with_tool_telemetry(spec, adapter_shortname=adapter_name) for spec in specs]
         return tuple(specs)
 
     async def _delegate_task(

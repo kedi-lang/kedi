@@ -11,9 +11,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, cast
 
-from opentelemetry import trace
-
 from ...errors import KediExecutionError, KediTraceFrame
+from ...telemetry import TelemetrySpan, current_span, span as telemetry_span
 from ..invocation import InvocationUsage, observe_invocations
 from . import (
     DelegationResult,
@@ -56,23 +55,30 @@ _DELEGATION_TOOL_NAMES = frozenset({"delegate_task", "continue_subagent"})
 
 
 def _subagent_run_span(
-    tracer: trace.Tracer,
     attributes: Mapping[str, Any],
-) -> AbstractContextManager[trace.Span]:
-    current = trace.get_current_span()
-    current_attributes = getattr(current, "attributes", None)
-    tool_name = (
-        current_attributes.get("gen_ai.tool.name")
-        if isinstance(current_attributes, Mapping)
-        else None
-    )
+) -> AbstractContextManager[TelemetrySpan]:
+    current = current_span()
+    tool_name = current.get_attribute("gen_ai.tool.name")
+    profile = attributes.get("kedi.subagent.profile")
+    span_name = f"{profile} run" if isinstance(profile, str) and profile else "subagent run"
     if current.is_recording() and tool_name in _DELEGATION_TOOL_NAMES:
-        current.update_name("subagent run")
-        current.set_attribute("logfire.msg", "subagent run")
+        current.update_name(span_name)
+        current.set_attribute("kedi.operation.name", "run_agent")
+        current.set_attribute("gen_ai.operation.name", "run_agent")
         for key, value in attributes.items():
-            current.set_attribute(key, value)
+            if isinstance(value, (bool, str, int, float)):
+                current.set_attribute(key, value)
         return nullcontext(current)
-    return tracer.start_as_current_span("subagent run", attributes=attributes)
+    return telemetry_span(
+        "agentic",
+        span_name,
+        "run_agent",
+        attributes={
+            key: value
+            for key, value in attributes.items()
+            if isinstance(value, (bool, str, int, float))
+        },
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +176,6 @@ class SubagentCoordinator:
             f"kedi_subagent_safety_ceiling_{id(self)}",
             default=None,
         )
-        self._tracer = trace.get_tracer("kedi.subagents")
         self.events = SubagentEventLog(max_events=max_retained_runs * 2)
         self._tasks: dict[str, _OwnedSubagentTask] = {}
         self._timeout_handles: dict[str, asyncio.TimerHandle] = {}
@@ -593,7 +598,6 @@ class SubagentCoordinator:
         concurrency_token = self._concurrency.set(concurrency)
         safety_token = None
         with _subagent_run_span(
-            self._tracer,
             {
                 "kedi.subagent.run_id": run_id,
                 "kedi.subagent.root_run_id": root_run_id,
@@ -698,7 +702,7 @@ class SubagentCoordinator:
     def _record_usage(
         self,
         run_id: str,
-        span: trace.Span,
+        span: TelemetrySpan,
         usage: InvocationUsage,
     ) -> None:
         run = self.runs.add_usage(
@@ -717,7 +721,7 @@ class SubagentCoordinator:
     def _record_and_assert_usage(
         self,
         run_id: str,
-        span: trace.Span,
+        span: TelemetrySpan,
         usage: InvocationUsage,
     ) -> None:
         self._record_usage(run_id, span, usage)

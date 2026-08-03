@@ -10,3 +10,6 @@
 [submodule "playground"]
 	path = playground
 	url = https://github.com/kedi-lang/playground
+[submodule "kedi-otel"]
+	path = kedi-otel
+	url = https://github.com/kedi-lang/kedi-otel.git
