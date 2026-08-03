@@ -211,6 +211,17 @@ def test_stream_return_annotation_is_hidden_from_tool_introspection() -> None:
     assert inspect.signature(spec.fn).return_annotation is str
 
 
+def test_python_callable_tool_survives_unresolved_argument_annotations() -> None:
+    def tool(value: str) -> str:
+        return value
+
+    tool.__annotations__["value"] = "MissingType"
+    spec = python_callable_tool_spec("tool", tool)
+
+    assert spec.argument_validator is not None
+    assert spec.argument_validator({"value": "ok"}) == {"value": "ok"}
+
+
 def test_async_stream_return_annotation_keeps_async_callable() -> None:
     async def run() -> None:
         async def tool() -> ArtifactStream[bytes]:

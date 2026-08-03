@@ -15,15 +15,23 @@ from kedi.lang.ast import (
     ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileModelEntry,
+    ProfileOutputEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
     Span,
     TemplateLine,
     TextSegment,
+    TypeRef,
     UseDirectiveStmt,
 )
 from kedi.lsp import features
-from tests.lsp_helpers import decode_semantic_tokens, hover_text_at, position_of
+from tests.lsp_helpers import (
+    decode_semantic_tokens,
+    definition_at,
+    hover_text_at,
+    position_of,
+    references_at,
+)
 
 
 def test_semantic_tokens_cover_agent_profile_directives() -> None:
@@ -761,3 +769,29 @@ def test_profile_artifacts_appear_in_profile_hover_and_document_symbols() -> Non
     symbols = features.compute_document_symbols(source, "artifacts.kedi")
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: compact")
     assert any(child.name == "> artifacts: enabled, threshold" for child in profile.children or ())
+
+
+def test_profile_output_type_supports_navigation_and_document_symbols() -> None:
+    source = "~Result(value: int)\n> profile: worker:\n  > output: Result\n"
+    path = "/tmp/profile-output.kedi"
+    uri = f"file://{path}"
+
+    location = definition_at(source, uri, path, "Result", occurrence=2)
+    assert location is not None
+    assert location.range.start.line == 0
+
+    references = references_at(source, uri, path, "Result", include_declaration=True)
+    assert len(references) == 2
+
+    symbols = features.compute_document_symbols(source, path)
+    profile = next(symbol for symbol in symbols if symbol.name == "> profile: worker")
+    assert any(child.name == "> output: Result" for child in profile.children or ())
+
+
+def test_profile_output_symbol_skips_synthetic_entry_without_location() -> None:
+    profile = ProfileDefStmt(
+        name="synthetic",
+        output_members=[ProfileOutputEntry(type_annotation="str", type_expr=TypeRef("str"))],
+    )
+
+    assert features._profile_def_symbol(profile).children == []

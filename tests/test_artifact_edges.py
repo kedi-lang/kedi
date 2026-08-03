@@ -1436,6 +1436,42 @@ def test_cleanup_service_can_close_between_snapshot_and_wait() -> None:
     assert closed.is_set()
 
 
+class GenerationChangeCleanupTarget:
+    cleanup_interval_seconds_value = 0.01
+
+    def __init__(self, service: ArtifactCleanupService) -> None:
+        self.service = service
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    @property
+    def cleanup_interval_seconds(self) -> float:
+        self.entered.set()
+        assert self.release.wait(timeout=1)
+        return self.cleanup_interval_seconds_value
+
+    def cleanup_expired(self) -> int:
+        with self.service._condition:
+            self.service._closing = True
+            self.service._condition.notify_all()
+        return 0
+
+
+def test_cleanup_service_skips_stale_wait_after_registration_changes() -> None:
+    service = ArtifactCleanupService()
+    target = GenerationChangeCleanupTarget(service)
+    service.register(target)
+    assert target.entered.wait(timeout=1)
+
+    service.unregister(target)
+    service.register(target)
+    target.release.set()
+
+    assert service._thread is not None
+    service._thread.join(timeout=1)
+    assert not service._thread.is_alive()
+
+
 class Holder(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     value: Any

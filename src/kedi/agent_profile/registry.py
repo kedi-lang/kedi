@@ -7,7 +7,7 @@ from .profile import WorkflowMode
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.tool_override import ToolSpec
-    from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine
+    from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine, TypeExpr
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -86,6 +86,13 @@ class ProfileArtifactsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileOutputMember:
+    kind: Literal["output"] = "output"
+    type_annotation: str
+    type_expr: "TypeExpr"
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSubagentMember:
     kind: Literal["subagents"] = "subagents"
     name: str
@@ -125,6 +132,7 @@ class ProfileDefinition:
         | ProfileMcpMember
         | ProfileSettingsMember
         | ProfileArtifactsMember
+        | ProfileOutputMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
         | ProfileWorkflowMember

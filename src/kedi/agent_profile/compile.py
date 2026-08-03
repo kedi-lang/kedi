@@ -13,6 +13,7 @@ from .registry import (
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
+    ProfileOutputMember,
     ProfileSettingsMember,
     ProfileSubagentMember,
     ProfileSystemMember,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
         ProfileEffortEntry,
         ProfileMcpEntry,
         ProfileModelEntry,
+        ProfileOutputEntry,
         ProfileSettingsEntry,
         ProfileSystemEntry,
         Program,
@@ -51,6 +53,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileMcpMember
         | ProfileSettingsMember
         | ProfileArtifactsMember
+        | ProfileOutputMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
         | ProfileWorkflowMember
@@ -74,6 +77,10 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_settings_entry_to_member(entry))
     for entry in stmt.artifacts_members:
         members.append(_artifacts_entry_to_member(entry))
+    if len(stmt.output_members) > 1:
+        raise KediExecutionError("profile can define only one output type")
+    if stmt.output_members:
+        members.append(_output_entry_to_member(stmt.output_members[0]))
     for entry in stmt.subagent_members:
         members.append(ProfileSubagentMember(name=entry.name, loc=entry.loc))
     for entry in stmt.max_agents_members:
@@ -147,6 +154,13 @@ def _settings_entry_to_member(entry: ProfileSettingsEntry) -> ProfileSettingsMem
 
 def _artifacts_entry_to_member(entry: ProfileArtifactsEntry) -> ProfileArtifactsMember:
     return ProfileArtifactsMember(fields=tuple(entry.fields))
+
+
+def _output_entry_to_member(entry: ProfileOutputEntry) -> ProfileOutputMember:
+    return ProfileOutputMember(
+        type_annotation=entry.type_annotation,
+        type_expr=entry.type_expr,
+    )
 
 
 def build_profile_registry(prog: Program) -> dict[str, ProfileDefinition]:

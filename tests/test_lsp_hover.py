@@ -53,6 +53,17 @@ def test_hover_on_profile_workflow_describes_effective_mode() -> None:
     assert "default when `> workflow:` is omitted" in delegated_body
 
 
+def test_hover_on_profile_output_describes_delegation_fallback() -> None:
+    source = "> profile: worker:\n    > adapter: pydantic\n    > output: list[str]\n"
+
+    output_body = hover_text_at(source, "example.kedi", "output")
+    profile_body = hover_text_at(source, "example.kedi", "worker")
+
+    assert "Subagent output" in output_body
+    assert "delegate_task" in output_body
+    assert "Subagent output: `list[str]`" in profile_body
+
+
 def test_hover_on_defaulted_procedure_header_shows_defaults():
     src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
     body = hover_text_at(src, "example.kedi", "translate")

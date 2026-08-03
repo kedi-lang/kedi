@@ -544,6 +544,7 @@ def test_find_all_references_for_procedures_and_types(
         AssignStmt,
         CallSegment,
         ProcedureDef,
+        ProfileDefStmt,
         Program,
         ReturnStmt,
         TemplateLine,
@@ -619,7 +620,7 @@ def test_find_all_references_for_procedures_and_types(
         "_validation_procedure_span",
         lambda prog, suite: suite.loc,
     )
-    ref_prog.profile_defs["profile"] = cast(Any, object())
+    ref_prog.profile_defs["profile"] = ProfileDefStmt(name="profile")
     proc_refs = features._find_all_references(
         ref_prog,
         features.SymbolRef("procedure", "target", duplicate_span, None, duplicate_span),

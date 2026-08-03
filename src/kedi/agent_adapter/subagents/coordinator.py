@@ -21,6 +21,7 @@ from . import (
     SubagentExecutionRequest,
     SubagentTurn,
     SupportsSubagentExecution,
+    effective_final_schema,
     new_subagent_run_id,
     validate_structured_result,
     wrapped_final_schema,
@@ -607,6 +608,11 @@ class SubagentCoordinator:
             try:
                 child_profile = self._deps.evaluate_profile(definition)
                 child_profile, child_ceiling = parent_ceiling.constrain_child(child_profile)
+                final_schema = effective_final_schema(child_profile, final_schema)
+                span.set_attribute(
+                    "kedi.subagent.structured_output",
+                    final_schema is not None,
+                )
                 child_adapter = self._deps.resolve_adapter(child_profile)
                 if not isinstance(child_adapter, SupportsSubagentExecution):
                     raise KediExecutionError(

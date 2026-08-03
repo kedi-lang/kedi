@@ -939,7 +939,7 @@ opt into project-local skills.
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> agent:`,
   `> adapter:`, `> model:`, `> effort:`, `> approval:`, `> system:`,
-  `> settings:`, `> mcp:`, `> subagent:`, `> workflow:`, and/or `> use:`
+  `> settings:`, `> mcp:`, `> output:`, `> subagent:`, `> workflow:`, and/or `> use:`
   members. A profile that delegates may also set `> max_agents: N`.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
@@ -965,6 +965,8 @@ Codex App Server, LangChain, and DSPy adapters. A profile may expose other
 profiles as direct children:
 
 ```kedi
+~ResearchReport(summary: str, sources: list[str])
+
 > profile: researcher:
     ###
     Investigates one focused question and reports its findings.
@@ -972,6 +974,7 @@ profiles as direct children:
     > adapter: pydantic
     > model: openrouter:google/gemini-3-flash-preview
     > system: Inspect the evidence before answering.
+    > output: ResearchReport
     > use: web_search
 
 > profile: coordinator:
@@ -988,6 +991,14 @@ profiles as direct children:
 The parent may delegate only to profiles named directly in its own body.
 Forward references are supported, while unknown profiles and cyclic profile
 graphs are rejected.
+
+A child profile may declare a default structured result type with
+`> output: Type`. Kedi accepts the same native type expressions used by fields
+and procedure signatures, including generic and custom types. When
+`delegate_task` or a dynamic child call omits `final_schema`, Kedi converts the
+profile output type to JSON Schema and returns the validated value in
+`final_result`. An explicit `final_schema` takes precedence. If neither is
+present, the child keeps the text-only `task_summary` behavior.
 
 Subagent orchestration has two profile-level modes. Omitting `> workflow:` is
 equivalent to `> workflow: delegate` and preserves the delegation and lifecycle
@@ -1059,13 +1070,15 @@ The generated tool accepts:
 
 - `subagent`: one of the direct child profile names,
 - `task`: a self-contained instruction,
-- `final_schema`: an optional JSON Schema for a validated structured result.
+- `final_schema`: an optional JSON Schema for a validated structured result;
+  when omitted, the selected child profile's `> output:` type is used.
 - `background`: when supported by the active adapter, start the child without
   blocking and return a run handle.
 
-Without `final_schema`, the child runs through the raw text `invoke` seam.
-With a schema, Kedi asks for a short `task_summary` plus the schema-conforming
-result and validates the response again before returning it. The tool result
+Without an explicit or profile-derived schema, the child runs through the raw
+text `invoke` seam. With either schema source, Kedi asks for a short
+`task_summary` plus the schema-conforming result and validates the response
+again before returning it. The tool result
 always includes `run_id`, `subagent`, `task_summary`, and `final_result`.
 
 In delegate mode, every subagent-capable adapter also exposes

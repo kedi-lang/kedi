@@ -421,6 +421,8 @@ def _python_callable_argument_validator(
                 validated.update(value or {})
                 continue
             annotation = type_hints.get(name, parameter.annotation)
+            if isinstance(annotation, str):
+                annotation = inspect.Parameter.empty
             if annotation is not inspect.Parameter.empty:
                 value = TypeAdapter(annotation).validate_python(value)
             validated[name] = value

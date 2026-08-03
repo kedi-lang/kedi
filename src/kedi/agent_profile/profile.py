@@ -42,6 +42,7 @@ class AgentProfile:
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
     workflow_mode: WorkflowMode | None = None
+    output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
 
     @classmethod
@@ -93,6 +94,8 @@ class AgentProfile:
             updates["max_agents"] = other.max_agents
         if other.workflow_mode is not None:
             updates["workflow_mode"] = other.workflow_mode
+        if other.output_type is not None:
+            updates["output_type"] = other.output_type
         if other.artifacts is not None:
             updates["artifacts"] = (
                 other.artifacts

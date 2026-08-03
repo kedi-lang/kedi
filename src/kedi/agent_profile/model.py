@@ -21,6 +21,7 @@ from .registry import (
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
+    ProfileOutputMember,
     ProfileSettingsMember,
     ProfileSubagentMember,
     ProfileSystemMember,
@@ -374,6 +375,7 @@ def _member_to_patch(
         | ProfileMcpMember
         | ProfileSettingsMember
         | ProfileArtifactsMember
+        | ProfileOutputMember
         | ProfileSubagentMember
         | ProfileMaxAgentsMember
         | ProfileWorkflowMember
@@ -451,6 +453,14 @@ def _member_to_patch(
         return AgentProfile(settings=eval_settings_fields(rt, member.fields, env))
     if member.kind == "artifacts":
         return AgentProfile(artifacts=eval_artifacts_fields(rt, member.fields, env))
+    if member.kind == "output":
+        from ..lang.compiler.type_system import KediType
+
+        output_type = KediType.from_node(
+            member.type_expr,
+            member.type_annotation,
+        ).resolve_required(rt, env)
+        return AgentProfile(output_type=output_type)
     if member.kind == "subagents":
         return AgentProfile(subagents=(member.name,))
     if member.kind == "max_agents":

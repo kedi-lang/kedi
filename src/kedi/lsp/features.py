@@ -108,6 +108,7 @@ from ..lang.ast import (
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
+    ProfileOutputEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
     ProfileWorkflowEntry,
@@ -297,6 +298,9 @@ def _iter_type_exprs(prog: Union[Program, ProgramWithValidation]):
     for typedef in prog.type_defs:
         for field in typedef.fields:
             yield field.type_expr
+    for profile in prog.profile_defs.values():
+        for member in profile.output_members:
+            yield member.type_expr
     for proc in _all_procedures(prog):
         yield proc.return_type_expr
         for expr in (proc.param_type_exprs or {}).values():
@@ -1669,6 +1673,15 @@ def _resolve_symbol_at(
             )
 
     for profile in prog.profile_defs.values():
+        for entry in profile.output_members:
+            resolved = _resolve_in_type_expr(
+                entry.type_expr,
+                pos,
+                type_by_name,
+                imported_surface.values,
+            )
+            if resolved is not None:
+                return resolved
         for entry in profile.subagent_members:
             assert entry.loc is not None
             if not _position_inside(pos, entry.loc):
@@ -2688,6 +2701,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.artifacts_members:
                 visit(member)
+            for member in node.output_members:
+                visit(member)
             for member in node.subagent_members:
                 visit(member)
             for member in node.max_agents_members:
@@ -2907,6 +2922,12 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_settings_entry_markdown(node)
     if isinstance(node, ProfileArtifactsEntry):
         return _profile_artifacts_entry_markdown(node)
+    if isinstance(node, ProfileOutputEntry):
+        return (
+            f"**Subagent output** `> output: {node.type_annotation}`\n\n"
+            "Default structured result type used when `delegate_task` omits `final_schema`. "
+            "An explicit delegation schema takes precedence."
+        )
     if isinstance(node, ProfileMaxAgentsEntry):
         return (
             f"**Subagent budget** `> max_agents: {node.value}`\n\n"
@@ -3338,6 +3359,8 @@ def _profile_signature_markdown(profile: ProfileDefStmt) -> str:
     artifact_field_count = sum(len(member.fields) for member in profile.artifacts_members)
     if artifact_field_count:
         summary.append(f"Artifact settings: {artifact_field_count}")
+    if profile.output_members:
+        summary.append(f"Subagent output: `{profile.output_members[-1].type_annotation}`")
     workflow_mode = profile.workflow_members[-1].mode if profile.workflow_members else "delegate"
     summary.append(f"Subagent workflow: `{workflow_mode}`")
 
@@ -3582,6 +3605,9 @@ def _find_all_references(
         candidates = []
         for td in _all_type_defs(prog):
             _collect_type_refs_in_type_def(td, sym.name, candidates)
+        for profile in prog.profile_defs.values():
+            for member in profile.output_members:
+                _collect_type_refs_in_expr(member.type_expr, sym.name, candidates)
         for stmt in prog.toplevel_body:
             _collect_type_refs_in_stmt(stmt, sym.name, candidates)
         for p in _all_procedures(prog):
@@ -4323,6 +4349,19 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
                 name=f"> artifacts: {fields}",
                 detail="artifact policy",
                 kind=lsp.SymbolKind.Event,
+                range=_span_to_range(member.loc),
+                selection_range=_span_to_range(member.loc),
+                children=[],
+            )
+        )
+    for member in profile.output_members:
+        if member.loc is None:
+            continue
+        children.append(
+            lsp.DocumentSymbol(
+                name=f"> output: {member.type_annotation}",
+                detail="default subagent output type",
+                kind=lsp.SymbolKind.TypeParameter,
                 range=_span_to_range(member.loc),
                 selection_range=_span_to_range(member.loc),
                 children=[],

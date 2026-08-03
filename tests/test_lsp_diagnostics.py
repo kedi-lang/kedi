@@ -53,6 +53,14 @@ def test_diagnostics_warns_when_annotated_description_is_missing():
     assert 'Annotated[type, "description"]' in diags[0].message
 
 
+def test_profile_output_type_participates_in_annotated_diagnostics():
+    src = "> profile: worker:\n  > output: Annotated[str]\n"
+    diags = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diags) == 1
+    assert diags[0].code == "K-ANNOTATED-DESCRIPTION"
+
+
 def test_diagnostics_warns_for_annotated_inside_union_type():
     src = "@p():\n  >> Value: [value: Annotated[str] | int].\n"
     diags = features.compute_diagnostics(src, "example.kedi")

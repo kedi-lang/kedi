@@ -361,6 +361,7 @@ class ProfileDefStmt(Stmt):
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
     artifacts_members: List["ProfileArtifactsEntry"] = field(default_factory=list)
+    output_members: List["ProfileOutputEntry"] = field(default_factory=list)
     subagent_members: List["ProfileSubagentEntry"] = field(default_factory=list)
     max_agents_members: List["ProfileMaxAgentsEntry"] = field(default_factory=list)
     workflow_members: List["ProfileWorkflowEntry"] = field(default_factory=list)
@@ -430,6 +431,13 @@ class ProfileSettingsEntry:
 @dataclass
 class ProfileArtifactsEntry:
     fields: List[ArtifactsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileOutputEntry:
+    type_annotation: str
+    type_expr: TypeExpr
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

@@ -86,6 +86,7 @@ from ..ast import (
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
+    ProfileOutputEntry,
     ProfileSettingsEntry,
     ProfileSubagentEntry,
     ProfileSystemEntry,
@@ -1958,6 +1959,7 @@ class _Walker:
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
         artifacts_members: list[ProfileArtifactsEntry] = []
+        output_members: list[ProfileOutputEntry] = []
         subagent_members: list[ProfileSubagentEntry] = []
         max_agents_members: list[ProfileMaxAgentsEntry] = []
         workflow_members: list[ProfileWorkflowEntry] = []
@@ -2102,6 +2104,18 @@ class _Walker:
                             loc=self._span(child),
                         )
                     )
+                elif child.type == "output_directive":
+                    type_node = _field(child, "type")
+                    assert type_node is not None
+                    type_expr = self._walk_type_expr(type_node)
+                    assert type_expr is not None
+                    output_members.append(
+                        ProfileOutputEntry(
+                            type_annotation=self._type_expr_to_str(type_node),
+                            type_expr=type_expr,
+                            loc=self._span(child),
+                        )
+                    )
                 elif child.type == "subagent_directive":
                     subagent_node = _field(child, "name")
                     assert subagent_node is not None
@@ -2153,6 +2167,17 @@ class _Walker:
                         code="K-WORKFLOW-DUP",
                     )
                 )
+        if len(output_members) > 1:
+            for entry in output_members[1:]:
+                assert entry.loc is not None
+                self.diagnostics.append(
+                    KediDiagnostic(
+                        severity="error",
+                        message="profile can define only one output type",
+                        span=entry.loc,
+                        code="K-PROFILE-OUTPUT-DUP",
+                    )
+                )
         if workflow_members and workflow_members[-1].mode == "dynamic" and not subagent_members:
             entry = workflow_members[-1]
             assert entry.loc is not None
@@ -2174,6 +2199,7 @@ class _Walker:
             and not mcp_members
             and not settings_members
             and not artifacts_members
+            and not output_members
             and not subagent_members
             and not max_agents_members
             and not workflow_members
@@ -2182,7 +2208,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2196,6 +2222,7 @@ class _Walker:
             mcp_members=mcp_members,
             settings_members=settings_members,
             artifacts_members=artifacts_members,
+            output_members=output_members,
             subagent_members=subagent_members,
             max_agents_members=max_agents_members,
             workflow_members=workflow_members,

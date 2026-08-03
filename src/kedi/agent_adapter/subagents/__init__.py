@@ -8,8 +8,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from jsonschema.validators import validator_for
+from pydantic import TypeAdapter
 from typing_extensions import runtime_checkable
 
+from ...errors import KediExecutionError
 from ..tool_override import ToolSpec
 from .attempts import (
     active_delegation_attempt_for_run,
@@ -27,6 +29,26 @@ if TYPE_CHECKING:
 
 MAX_FINAL_SCHEMA_BYTES = 32 * 1024
 MAX_FINAL_SCHEMA_DEPTH = 16
+
+
+def effective_final_schema(
+    profile: AgentProfile,
+    explicit_schema: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Return an explicit delegation schema or the child profile's output schema."""
+    if explicit_schema is not None:
+        return explicit_schema
+    if profile.output_type is None:
+        return None
+    try:
+        schema = TypeAdapter(profile.output_type).json_schema()
+    except Exception as exc:
+        raise KediExecutionError(
+            f"Subagent profile {profile.name!r} output type cannot be represented as JSON Schema: "
+            f"{exc}"
+        ) from exc
+    validate_final_schema(schema)
+    return schema
 
 
 @dataclass(frozen=True, kw_only=True)

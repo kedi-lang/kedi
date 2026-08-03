@@ -39,6 +39,7 @@ from kedi.agent_adapter.subagents import (
     DelegationResult,
     SubagentExecutionRequest,
     SubagentTurn,
+    effective_final_schema,
     subagent_tool_specs,
     validate_final_schema,
     validate_structured_result,
@@ -120,7 +121,7 @@ from kedi.artifacts import artifact_instructions
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
-from kedi.lang.ast import ProfileDefStmt, ProfileWorkflowEntry
+from kedi.lang.ast import ProfileDefStmt, ProfileOutputEntry, ProfileWorkflowEntry, TypeRef
 from kedi.lsp import features
 from tests.mock_adapter import MockAdapter
 
@@ -575,6 +576,70 @@ def test_subagent_workflow_profile_parses_and_compiles() -> None:
     definition = runtime._profile_registry["manager"]
     profile = eval_profile_definition(runtime, definition, build_capture_env(runtime))
     assert profile.workflow_mode == "dynamic"
+
+
+def test_subagent_profile_output_type_is_default_delegation_schema() -> None:
+    source = _profiles_source().replace(
+        "    > system: Work carefully.\n",
+        "    > system: Work carefully.\n    > output: dict[str, int]\n",
+    )
+    adapter = RecordingPydanticAdapter()
+    runtime = compile_program(parse_program(source), adapter=adapter)
+    definition = runtime._profile_registry["worker"]
+    worker = eval_profile_definition(runtime, definition, build_capture_env(runtime))
+    assert worker.output_type == dict[str, int]
+
+    manager_definition = runtime._profile_registry["manager"]
+    manager = eval_profile_definition(
+        runtime,
+        manager_definition,
+        build_capture_env(runtime),
+    )
+    tool = runtime._resolve_agent_tool_specs(manager, adapter)[0]
+    result = asyncio.run(tool.fn(subagent="worker", task="Build a value"))
+
+    assert result["task_summary"] == "Built the requested value."
+    assert result["final_result"] == {"value": 7}
+
+
+def test_explicit_delegation_schema_overrides_profile_output_type() -> None:
+    explicit = {
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    profile = AgentProfile(name="worker", output_type=str)
+
+    assert effective_final_schema(profile, explicit) is explicit
+
+
+def test_profile_output_type_must_have_a_json_schema() -> None:
+    profile = AgentProfile(name="broken", output_type=SimpleNamespace())
+
+    with pytest.raises(
+        KediExecutionError,
+        match="profile 'broken' output type cannot be represented as JSON Schema",
+    ):
+        effective_final_schema(profile, None)
+
+
+def test_profile_rejects_duplicate_output_types() -> None:
+    source = "> profile: worker:\n    > output: str\n    > output: int\n"
+
+    with pytest.raises(KediParseError, match="only one output type"):
+        parse_program(source)
+
+    with pytest.raises(KediExecutionError, match="only one output type"):
+        profile_stmt_to_definition(
+            ProfileDefStmt(
+                name="worker",
+                output_members=[
+                    ProfileOutputEntry(type_annotation="str", type_expr=TypeRef("str")),
+                    ProfileOutputEntry(type_annotation="int", type_expr=TypeRef("int")),
+                ],
+            )
+        )
 
 
 def test_explicit_delegate_workflow_preserves_default_tool_surface() -> None:

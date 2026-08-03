@@ -308,6 +308,34 @@ def test_proc_wrapper_allows_metadata_without_procedure_def() -> None:
     assert not hasattr(wrapper, "__kedi_procedure_def__")
 
 
+def test_proc_wrapper_falls_back_when_generated_source_is_invalid() -> None:
+    from kedi.lang.procedure_introspection import ProcedurePythonMetadata
+
+    rt = KediRuntime()
+
+    def loose() -> str:
+        return "ok"
+
+    setattr(
+        loose,
+        "__kedi_procedure_metadata__",
+        ProcedurePythonMetadata(
+            name="invalid-name",
+            params=(),
+            param_types=(),
+            param_defaults=(),
+            default_values=(),
+            return_type="str",
+            docstring=None,
+        ),
+    )
+    rt._procedures["loose"] = loose
+
+    wrapper = compiler_env._make_proc_wrapper(rt, "loose", loose, {})
+
+    assert wrapper() == "ok"
+
+
 def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     rt = KediRuntime()
 
