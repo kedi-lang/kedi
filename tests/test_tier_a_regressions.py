@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import CancelledError, Future
+from contextvars import ContextVar
 
 import pytest
 
@@ -127,6 +128,93 @@ def test_a4_reentrant_schedule_runs_inline_when_deps_done() -> None:
     assert result.result() == "v"
 
 
+def test_a4_reentrant_continuation_keeps_context_and_kedi_worker_affinity() -> None:
+    marker: ContextVar[str] = ContextVar("marker", default="missing")
+    eng = ThreadEngine(2)
+    eng._local.on_worker = True
+    dep: Future = Future()
+    token = marker.set("request-context")
+    try:
+        result = eng.schedule(
+            [dep],
+            lambda: (marker.get(), threading.current_thread().name),
+        )
+    finally:
+        marker.reset(token)
+
+    completer = threading.Thread(target=lambda: dep.set_result(None), name="foreign-completer")
+    completer.start()
+    completer.join(timeout=1)
+
+    context_value, thread_name = result.result(timeout=2)
+    assert context_value == "request-context"
+    assert thread_name.startswith("kedi-llm")
+
+
+def test_a4_cancelled_queued_continuation_never_runs() -> None:
+    eng = ThreadEngine(1)
+    eng._local.on_worker = True
+    dep: Future = Future()
+    ran = threading.Event()
+    result = eng.schedule([dep], lambda: ran.set())
+
+    assert result.cancel()
+    dep.set_result(None)
+    barrier = eng.schedule([], lambda: None)
+    barrier.result(timeout=2)
+
+    assert result.cancelled()
+    assert not ran.is_set()
+
+
+def test_a4_cancelled_job_already_queued_on_pool_never_runs() -> None:
+    eng = ThreadEngine(1)
+    blocker_started = threading.Event()
+    release_blocker = threading.Event()
+    ran = threading.Event()
+
+    def block_worker() -> None:
+        blocker_started.set()
+        assert release_blocker.wait(timeout=2)
+
+    blocker = eng.schedule([], block_worker)
+    assert blocker_started.wait(timeout=1)
+    result = eng.schedule([], lambda: ran.set())
+    assert result.cancel()
+    release_blocker.set()
+    blocker.result(timeout=2)
+    barrier = eng.schedule([], lambda: None)
+    barrier.result(timeout=2)
+
+    assert result.cancelled()
+    assert not ran.is_set()
+
+
+def test_a4_submit_failure_does_not_overwrite_concurrent_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    eng = ThreadEngine(1)
+    dep: Future = Future()
+    submit_started = threading.Event()
+    allow_failure = threading.Event()
+
+    def fail_submit(_job: object) -> None:
+        submit_started.set()
+        assert allow_failure.wait(timeout=2)
+        raise RuntimeError("submit failed")
+
+    monkeypatch.setattr(eng._pool, "submit", fail_submit)
+    result = eng.schedule([dep], lambda: None)
+    completer = threading.Thread(target=lambda: dep.set_result(None))
+    completer.start()
+    assert submit_started.wait(timeout=1)
+    assert result.cancel()
+    allow_failure.set()
+    completer.join(timeout=1)
+
+    assert result.cancelled()
+
+
 # --- A5: a cancelled Future settles map/drain loudly instead of hanging ----------------------
 
 
@@ -146,6 +234,52 @@ def test_a5_drain_surfaces_cancelled_outstanding_future() -> None:
     rt._register_outstanding(cancelled)
     with pytest.raises(CancelledError):
         rt.drain()  # the cancelled job surfaces as an error rather than blocking forever
+
+
+def test_a5_concurrent_invocations_only_drain_their_own_work() -> None:
+    rt = compile_program(parse_program("= done\n"), adapter=MockAdapter(), engine=ThreadEngine(2))
+    first_future: Future = Future()
+    second_future: Future = Future()
+    first_registered = threading.Event()
+    second_registered = threading.Event()
+    results: dict[str, object] = {}
+    errors: dict[str, BaseException] = {}
+
+    def procedure(future: Future, registered: threading.Event, value: str) -> str:
+        rt._register_outstanding(future)
+        registered.set()
+        return value
+
+    def invoke(name: str, future: Future, registered: threading.Event) -> None:
+        try:
+            results[name] = rt._invoke_procedure(procedure, (future, registered, name))
+        except BaseException as exc:  # noqa: BLE001 - assert invocation-specific propagation
+            errors[name] = exc
+
+    first = threading.Thread(
+        target=invoke,
+        args=("first", first_future, first_registered),
+    )
+    second = threading.Thread(
+        target=invoke,
+        args=("second", second_future, second_registered),
+    )
+    first.start()
+    second.start()
+    assert first_registered.wait(timeout=1)
+    assert second_registered.wait(timeout=1)
+
+    first_future.set_result(None)
+    first.join(timeout=1)
+    assert not first.is_alive()
+    assert second.is_alive()
+    assert results["first"] == "first"
+    assert "first" not in errors
+
+    second_future.set_exception(RuntimeError("second invocation failed"))
+    second.join(timeout=1)
+    assert not second.is_alive()
+    assert isinstance(errors["second"], RuntimeError)
 
 
 # --- A6: a failed pool.submit surfaces on the result Future ----------------------------------

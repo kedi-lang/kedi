@@ -20,7 +20,7 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
-from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
+from ..approval import ApprovalPolicy, ToolRisk
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentExecutionRequest
@@ -31,9 +31,8 @@ from ..telemetry import mcp_initialization_span
 from ..tool_override import (
     ToolScope,
     ToolSpec,
-    approval_request_for_tool,
-    arguments_after_approval,
     arguments_target_secret_file,
+    resolve_tool_arguments_async,
 )
 
 
@@ -454,14 +453,11 @@ def _langchain_approval_middleware(
                 if profile.approval is not None or not policies:
                     policies = (*policies, profile.approval)
                 for policy in policies:
-                    approval = await resolve_tool_approval_async(
-                        policy,
-                        approval_request_for_tool(tool, final_arguments, "langchain"),
-                    )
-                    final_arguments = arguments_after_approval(
+                    final_arguments = await resolve_tool_arguments_async(
                         tool,
                         final_arguments,
-                        approval,
+                        policy=policy,
+                        adapter_shortname="langchain",
                     )
             except Exception as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))

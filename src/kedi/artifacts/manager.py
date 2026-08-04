@@ -63,7 +63,6 @@ class ArtifactManager:
         self._file_stores: dict[Path, FileArtifactStore] = {}
         self._ref_stores: dict[str, ArtifactStore] = {}
         self._ref_policies: dict[str, ArtifactPolicy] = {}
-        self._digest_refs: dict[tuple[str, str], str] = {}
         self._metered_active_refs: dict[str, int] = {}
         self._ref_counters: dict[str, int] = defaultdict(int)
         self._reserved_artifacts = 0
@@ -181,12 +180,6 @@ class ArtifactManager:
                 )
                 self._maybe_cleanup_locked()
                 store = self._store_for_policy(effective)
-                if serialized.digest is not None:
-                    digest_key = (self._store_identity(effective), serialized.digest)
-                    existing_ref = self._digest_refs.get(digest_key)
-                    if existing_ref is not None:
-                        existing = self._record(existing_ref, allow_inactive=False)
-                        return ArtifactHandle(ref=existing.ref, manager=self)
                 try:
                     self._enforce_quota(effective, serialized.size_bytes)
                 except ArtifactQuotaExceededError:
@@ -225,8 +218,6 @@ class ArtifactManager:
                 self._ref_stores[ref_id] = store
                 self._ref_policies[ref_id] = effective
                 self._metered_active_refs[ref_id] = ref.size_bytes
-                if serialized.digest is not None:
-                    self._digest_refs[(self._store_identity(effective), serialized.digest)] = ref_id
                 self.history.append(
                     "artifact_created",
                     ref_id=ref_id,
@@ -317,8 +308,7 @@ class ArtifactManager:
         max_matches = min(max_matches, 100)
         with self._lease(ref_id) as (store, record):
             policy = self._ref_policies[ref_id]
-            chunk_chars = max(65_536, policy.read_max_chars, len(pattern) + context_chars * 2)
-            chunk_chars = min(chunk_chars, 65_536)
+            chunk_chars = min(policy.read_max_chars, 65_536)
             offset = 0
             overlap = ""
             results: list[dict[str, Any]] = []
@@ -581,7 +571,6 @@ class ArtifactManager:
             self._file_stores.clear()
             self._ref_stores.clear()
             self._ref_policies.clear()
-            self._digest_refs.clear()
             self._ref_counters.clear()
             self._reserved_artifacts = 0
             self._reserved_bytes = 0
@@ -650,8 +639,6 @@ class ArtifactManager:
                     telemetry.record_active(size_bytes=record.ref.size_bytes)
                 else:
                     self._delete_payload(record)
-                if record.digest is not None and record.status is ArtifactStatus.ACTIVE:
-                    self._digest_refs[(self._store_identity(policy), record.digest)] = record.ref_id
         return store
 
     def _enforce_quota(
@@ -739,8 +726,6 @@ class ArtifactManager:
         self._ref_stores[ref_id] = store
         self._ref_policies[ref_id] = policy
         self._metered_active_refs[ref_id] = record.ref.size_bytes
-        if record.digest is not None:
-            self._digest_refs[(self._store_identity(policy), record.digest)] = ref_id
         cleanup_service.register(self)
         telemetry.record_created(
             size_bytes=record.ref.size_bytes,
@@ -764,7 +749,6 @@ class ArtifactManager:
         *,
         record: ArtifactRecord,
         store: ArtifactStore,
-        policy: ArtifactPolicy,
     ) -> None:
         ref_id = record.ref_id
         store.discard(self.session_id, ref_id)
@@ -773,8 +757,6 @@ class ArtifactManager:
         size_bytes = self._metered_active_refs.pop(ref_id, None)
         if size_bytes is not None:
             telemetry.record_payload_removed(size_bytes=size_bytes)
-        if record.digest is not None:
-            self._digest_refs.pop((self._store_identity(policy), record.digest), None)
 
     def _all_records(self) -> tuple[ArtifactRecord, ...]:
         stores: tuple[ArtifactStore, ...] = (
@@ -789,15 +771,6 @@ class ArtifactManager:
         size_bytes = self._metered_active_refs.pop(record.ref_id, None)
         if size_bytes is not None:
             telemetry.record_payload_removed(size_bytes=size_bytes)
-        if record.digest is not None:
-            policy = self._ref_policies[record.ref_id]
-            self._digest_refs.pop((self._store_identity(policy), record.digest), None)
-
-    @staticmethod
-    def _store_identity(policy: ArtifactPolicy) -> str:
-        if policy.store == "memory":
-            return "memory"
-        return f"file:{policy.path.expanduser().resolve()}"
 
     def _maybe_cleanup_locked(self) -> None:
         if self._monotonic() - self._last_cleanup >= self._cleanup_interval_seconds:
@@ -938,7 +911,6 @@ class _StreamingWrite:
                     self.manager._discard_streamed(
                         record=record,
                         store=self.store,
-                        policy=self.policy,
                     )
                 raise
             self.finished = True

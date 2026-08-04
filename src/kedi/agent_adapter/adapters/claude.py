@@ -18,7 +18,7 @@ from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
-from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
+from ..approval import ApprovalPolicy, ToolRisk
 from ..conversation import AdapterConversationContext
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
@@ -29,9 +29,8 @@ from ..subagents.runs import safe_subagent_error_message
 from ..tool_override import (
     ToolScope,
     ToolSpec,
-    approval_request_for_tool,
-    arguments_after_approval,
     arguments_target_secret_file,
+    resolve_tool_arguments_async,
 )
 
 OutputDataT = Any
@@ -576,11 +575,12 @@ def _claude_pre_tool_use_hook(
                 policies = (*policies, profile.approval)
             final_arguments = original_arguments
             for policy in policies:
-                request = approval_request_for_tool(tool, final_arguments, "claude")
-                decision = await resolve_tool_approval_async(policy, request)
-                if decision.decision == "deny":
-                    return _claude_hook_deny(decision.reason or f"Kedi denied tool {tool.name!r}.")
-                final_arguments = arguments_after_approval(tool, final_arguments, decision)
+                final_arguments = await resolve_tool_arguments_async(
+                    tool,
+                    final_arguments,
+                    policy=policy,
+                    adapter_shortname="claude",
+                )
         except Exception as exc:
             return _claude_hook_deny(f"Kedi rejected tool {tool.name!r}: {exc}")
 

@@ -87,14 +87,18 @@ def current_required_tool_calls() -> RequiredToolCalls | None:
 
 
 @contextmanager
-def required_tool_call_scope(tools: Sequence[ToolSpec]) -> Iterator[None]:
-    """Isolate required-tool tracking while allowing an adapter's nested scope to reuse it."""
+def required_tool_call_scope(
+    tools: Sequence[ToolSpec],
+    *,
+    inherit: bool = False,
+) -> Iterator[None]:
+    """Track required tools in an isolated frame, optionally reusing an adapter-owned frame."""
 
     names = frozenset(
         tool.name for tool in tools if (tool.metadata or {}).get("required_before_output") is True
     )
     current = _required_tool_calls.get()
-    if current is not None and current.names == names:
+    if inherit and current is not None and current.names == names:
         yield
         return
 
@@ -270,9 +274,12 @@ def with_approval(
         async def approved_async_tool(*args: Any, **kwargs: Any) -> Any:
             if args:
                 raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
-            request = approval_request_for_tool(tool, kwargs, adapter_shortname)
-            decision = await resolve_tool_approval_async(policy, request)
-            final_kwargs = arguments_after_approval(tool, kwargs, decision)
+            final_kwargs = await resolve_tool_arguments_async(
+                tool,
+                kwargs,
+                policy=policy,
+                adapter_shortname=adapter_shortname,
+            )
             result = tool.fn(**final_kwargs)
             if inspect.isawaitable(result):
                 return await result
@@ -284,9 +291,12 @@ def with_approval(
     def approved_tool(*args: Any, **kwargs: Any) -> Any:
         if args:
             raise TypeError(f"Kedi tool {tool.name!r} only accepts keyword arguments")
-        request = approval_request_for_tool(tool, kwargs, adapter_shortname)
-        decision = resolve_tool_approval(policy, request)
-        final_kwargs = arguments_after_approval(tool, kwargs, decision)
+        final_kwargs = resolve_tool_arguments(
+            tool,
+            kwargs,
+            policy=policy,
+            adapter_shortname=adapter_shortname,
+        )
         return tool.fn(**final_kwargs)
 
     return replace(tool, fn=approved_tool)
@@ -457,6 +467,18 @@ def approval_request_for_tool(
     arguments: Mapping[str, Any],
     adapter_shortname: str | None,
 ) -> ApprovalRequest:
+    return _approval_request_for_canonical_arguments(
+        tool,
+        validate_tool_arguments(tool, arguments),
+        adapter_shortname,
+    )
+
+
+def _approval_request_for_canonical_arguments(
+    tool: ToolSpec,
+    arguments: dict[str, Any],
+    adapter_shortname: str | None,
+) -> ApprovalRequest:
     static_risk = _validated_risk(tool.risk, tool.name)
     resolved_risk = (
         _validated_risk(tool.risk_resolver(arguments), tool.name)
@@ -487,9 +509,73 @@ def arguments_after_approval(
         if decision.decision == "allow"
         else dict(decision.edit_arguments or {})
     )
+    return validate_tool_arguments(tool, arguments)
+
+
+def validate_tool_arguments(
+    tool: ToolSpec,
+    arguments: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the canonical validated/defaulted arguments used for approval and execution."""
+
+    values = dict(arguments)
     if tool.argument_validator is not None:
-        return tool.argument_validator(arguments)
-    return arguments
+        return tool.argument_validator(values)
+    return values
+
+
+def resolve_tool_arguments(
+    tool: ToolSpec,
+    arguments: Mapping[str, Any],
+    *,
+    policy: ApprovalPolicy | None,
+    adapter_shortname: str | None,
+) -> dict[str, Any]:
+    """Validate, approve, and reapprove edits that increase a tool call's risk."""
+
+    request = approval_request_for_tool(tool, arguments, adapter_shortname)
+    while True:
+        decision = resolve_tool_approval(policy, request)
+        approved = arguments_after_approval(tool, request.arguments, decision)
+        if decision.decision != "edit":
+            return approved
+        edited_request = _approval_request_for_canonical_arguments(
+            tool,
+            approved,
+            adapter_shortname,
+        )
+        if not _risk_increased(request, edited_request):
+            return approved
+        request = edited_request
+
+
+async def resolve_tool_arguments_async(
+    tool: ToolSpec,
+    arguments: Mapping[str, Any],
+    *,
+    policy: ApprovalPolicy | None,
+    adapter_shortname: str | None,
+) -> dict[str, Any]:
+    """Async counterpart of :func:`resolve_tool_arguments`."""
+
+    request = approval_request_for_tool(tool, arguments, adapter_shortname)
+    while True:
+        decision = await resolve_tool_approval_async(policy, request)
+        approved = arguments_after_approval(tool, request.arguments, decision)
+        if decision.decision != "edit":
+            return approved
+        edited_request = _approval_request_for_canonical_arguments(
+            tool,
+            approved,
+            adapter_shortname,
+        )
+        if not _risk_increased(request, edited_request):
+            return approved
+        request = edited_request
+
+
+def _risk_increased(before: ApprovalRequest, after: ApprovalRequest) -> bool:
+    return _RISK_ORDER[after.risk] > _RISK_ORDER[before.risk]
 
 
 def arguments_target_secret_file(value: object) -> bool:

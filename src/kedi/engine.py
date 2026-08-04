@@ -76,14 +76,6 @@ class SequentialEngine(Engine):
 _ROUTING_CHECKED = False
 
 
-def _settle(fut: Future, job: Job) -> None:
-    """Run ``job`` and mirror its result/exception onto ``fut``."""
-    try:
-        fut.set_result(job())
-    except BaseException as exc:  # noqa: BLE001
-        fut.set_exception(exc)
-
-
 class ThreadEngine(Engine):
     """Run produce jobs concurrently on a bounded pool, gated on their dependency Futures."""
 
@@ -110,22 +102,11 @@ class ThreadEngine(Engine):
     def schedule(self, deps: Sequence[Future], job: Job) -> Future:
         dep_list = list(deps)
         result: Future = Future()
-
-        # Re-entrant (a tool on a worker issued this template). Run inline ONLY when every dep is
-        # already resolved; otherwise schedule it as a continuation so we neither run before deps
-        # are ready nor block this worker waiting on a pool Future (which would risk deadlock).
-        if self._on_worker():
-            if all(d.done() for d in dep_list):
-                _settle(result, job)
-            else:
-                when_all(dep_list, lambda: _settle(result, job))
-            return result
-
-        # Capture the submitting context NOW (carries _current_env, _trace_stack, agent profile,
-        # dspy.context, tool scope) so the worker runs with the right contextvars.
         ctx = contextvars.copy_context()
 
         def _run() -> None:
+            if not result.set_running_or_notify_cancel():
+                return
             prev = getattr(self._local, "on_worker", False)
             self._local.on_worker = True
             try:
@@ -136,10 +117,23 @@ class ThreadEngine(Engine):
                 self._local.on_worker = prev
 
         def _submit() -> None:
+            if result.cancelled():
+                return
             try:
                 self._pool.submit(_run)
             except BaseException as exc:  # noqa: BLE001 - a shut-down pool surfaces, never hangs
-                result.set_exception(exc)
+                if not result.done():
+                    result.set_exception(exc)
+
+        # Re-entrant (a tool on a worker issued this template). Run inline ONLY when every dep is
+        # already resolved; otherwise schedule it as a continuation so we neither run before deps
+        # are ready nor execute on the foreign thread that completed the final dependency.
+        if self._on_worker():
+            if all(d.done() for d in dep_list):
+                _run()
+            else:
+                when_all(dep_list, _submit)
+            return result
 
         # Submit to the pool only once every dependency has completed — a continuation, never a
         # blocking wait inside a worker.
@@ -237,14 +231,19 @@ class AIMDLimiter:
     def __init__(
         self, *, max_concurrency: int = 8, initial: int | None = None, minimum: int = 1
     ) -> None:
-        self.max_concurrency = max(1, max_concurrency)
-        self.minimum = max(1, minimum)
-        self._limit = float(
-            min(
-                self.max_concurrency,
-                initial or max(self.minimum, min(4, self.max_concurrency)),
-            )
-        )
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1")
+        if minimum < 1:
+            raise ValueError("minimum must be at least 1")
+        if minimum > max_concurrency:
+            raise ValueError("minimum must not exceed max_concurrency")
+        if initial is None:
+            initial = max(minimum, min(4, max_concurrency))
+        if not minimum <= initial <= max_concurrency:
+            raise ValueError("initial must be between minimum and max_concurrency")
+        self.max_concurrency = max_concurrency
+        self.minimum = minimum
+        self._limit = float(initial)
         self._inflight = 0
         self._cv = threading.Condition()
 

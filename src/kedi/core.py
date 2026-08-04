@@ -7,7 +7,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from threading import Lock
+from threading import Lock, get_ident
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -186,10 +186,9 @@ class KediRuntime:
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
         self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
-        # Outstanding produce Futures (parallel mode) so the end-of-run drain awaits every
-        # scheduled template — even unconsumed ones — and surfaces their errors. Lock-guarded
-        # because workers add/remove concurrently.
-        self._outstanding: list[Any] = []
+        # Outstanding produce Futures are owned by one outer invocation. Concurrent runs on the
+        # same runtime must never drain or surface one another's work.
+        self._outstanding: dict[object, list[Any]] = {}
         self._outstanding_lock = Lock()
         self._origin_counter_lock = Lock()
         self._procedures: Dict[str, Callable[..., Any]] = {}
@@ -207,6 +206,10 @@ class KediRuntime:
         # Tracks procedure-call nesting so the end-of-run drain fires exactly once, at the
         # outermost invocation, regardless of entry point (run_main / query / direct invoke).
         self._invoke_depth: ContextVar[int] = ContextVar("kedi_invoke_depth", default=0)
+        self._invocation_id: ContextVar[object | None] = ContextVar(
+            "kedi_invocation_id",
+            default=None,
+        )
         from .agent_adapter.request_budget import ModelRequestBudget
 
         self._request_budget: ContextVar[ModelRequestBudget | None] = ContextVar(
@@ -455,10 +458,12 @@ class KediRuntime:
         ) as active:
             depth_token = self._invoke_depth.set(depth + 1)
             request_budget_token = None
+            invocation_token = None
             if depth == 0:
                 from .agent_adapter.request_budget import ModelRequestBudget
 
                 request_budget_token = self._request_budget.set(ModelRequestBudget())
+                invocation_token = self._invocation_id.set(object())
             token = self._current_env.set(local_env)
             primary_exc: BaseException | None = None
             try:
@@ -499,6 +504,8 @@ class KediRuntime:
                     finally:
                         assert request_budget_token is not None
                         self._request_budget.reset(request_budget_token)
+                        assert invocation_token is not None
+                        self._invocation_id.reset(invocation_token)
 
             return final
 
@@ -1408,8 +1415,15 @@ class KediRuntime:
         return policy.is_explicit or has_tools
 
     def _register_outstanding(self, future: Any) -> None:
+        owner = self._outstanding_owner()
         with self._outstanding_lock:
-            self._outstanding.append(future)
+            self._outstanding.setdefault(owner, []).append(future)
+
+    def _outstanding_owner(self) -> object:
+        invocation_id = self._invocation_id.get()
+        if invocation_id is not None:
+            return invocation_id
+        return ("unscoped", id(self), get_ident())
 
     def drain(self) -> None:
         """Await every scheduled produce Future (parallel mode) at end of run.
@@ -1421,12 +1435,12 @@ class KediRuntime:
         """
         import logging
 
+        owner = self._outstanding_owner()
         first_exc: BaseException | None = None
         extra: list[BaseException] = []
         while True:
             with self._outstanding_lock:
-                pending = list(self._outstanding)
-                self._outstanding.clear()
+                pending = self._outstanding.pop(owner, [])
             if not pending:
                 break
             for fut in pending:

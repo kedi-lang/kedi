@@ -75,6 +75,33 @@ def test_aimd_additive_increase_multiplicative_decrease() -> None:
     assert lim.limit == 1  # clamped to minimum
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_concurrency": 0}, "max_concurrency must be at least 1"),
+        ({"max_concurrency": 4, "minimum": 0}, "minimum must be at least 1"),
+        (
+            {"max_concurrency": 2, "minimum": 3},
+            "minimum must not exceed max_concurrency",
+        ),
+        (
+            {"max_concurrency": 4, "minimum": 2, "initial": 1},
+            "initial must be between minimum and max_concurrency",
+        ),
+        (
+            {"max_concurrency": 4, "initial": 5},
+            "initial must be between minimum and max_concurrency",
+        ),
+    ],
+)
+def test_aimd_rejects_invalid_configured_bounds(
+    kwargs: dict[str, int],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        AIMDLimiter(**kwargs)
+
+
 def test_aimd_acquire_release_caps_inflight() -> None:
     lim = AIMDLimiter(max_concurrency=2, initial=2)
     lim.acquire()

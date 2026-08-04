@@ -31,7 +31,7 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
-from ..approval import ApprovalPolicy, ToolRisk, resolve_tool_approval_async
+from ..approval import ApprovalPolicy, ToolApprovalDenied, ToolRisk
 from ..conversation import AdapterConversationContext
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
@@ -46,11 +46,10 @@ from ..telemetry import (
 from ..tool_override import (
     ToolScope,
     ToolSpec,
-    approval_request_for_tool,
-    arguments_after_approval,
     arguments_target_secret_file,
     current_required_tool_calls,
     required_tool_call_scope,
+    resolve_tool_arguments_async,
     with_required_before_output,
 )
 
@@ -397,7 +396,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
     @contextmanager
     def _required_tool_call_scope(self) -> Iterator[None]:
-        with required_tool_call_scope(self.scoped_tool_specs):
+        with required_tool_call_scope(self.scoped_tool_specs, inherit=True):
             yield
 
     def _agent_with_required_output_validator(
@@ -607,23 +606,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
             approved_arguments = arguments
             for policy in policies:
-                request = approval_request_for_tool(
-                    tool,
-                    approved_arguments,
-                    self.shortname,
-                )
-                decision = await resolve_tool_approval_async(policy, request)
-                if decision.decision == "deny":
-                    suffix = f": {decision.reason}" if decision.reason else ""
-                    approvals[call.tool_call_id] = ToolDenied(
-                        f"Tool {tool.name!r} was denied{suffix}"
+                try:
+                    approved_arguments = await resolve_tool_arguments_async(
+                        tool,
+                        approved_arguments,
+                        policy=policy,
+                        adapter_shortname=self.shortname,
                     )
+                except ToolApprovalDenied as exc:
+                    message = str(exc.args[0]) if exc.args else f"Tool {tool.name!r} was denied"
+                    approvals[call.tool_call_id] = ToolDenied(message)
                     break
-                approved_arguments = arguments_after_approval(
-                    tool,
-                    approved_arguments,
-                    decision,
-                )
             else:
                 approvals[call.tool_call_id] = ToolApproved(override_args=approved_arguments)
         return requests.build_results(approvals=approvals)

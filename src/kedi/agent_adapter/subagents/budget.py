@@ -31,9 +31,17 @@ class DelegationBudget:
         profile_name: str | None,
         max_agents: int | None,
     ) -> DelegationBudget:
+        if max_agents is None:
+            limit = MAX_SUBAGENT_INVOCATIONS
+        elif max_agents < 0:
+            raise ValueError("Subagent max agents cannot be negative")
+        elif max_agents > MAX_SUBAGENT_INVOCATIONS:
+            raise ValueError(f"Subagent max agents cannot exceed {MAX_SUBAGENT_INVOCATIONS}")
+        else:
+            limit = max_agents
         return cls(
             owner_profile=profile_name or "<anonymous>",
-            limit=min(max_agents or MAX_SUBAGENT_INVOCATIONS, MAX_SUBAGENT_INVOCATIONS),
+            limit=limit,
         )
 
 

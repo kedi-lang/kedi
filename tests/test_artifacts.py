@@ -656,16 +656,41 @@ def test_manager_artifacts_only_values_at_or_above_threshold(
     assert "read_artifact for a known literal" in artifact.as_ref().usage_hint
 
 
-def test_manager_deduplicates_before_enforcing_quota(manager: ArtifactManager) -> None:
-    policy = artifact_policy(max_artifacts=1, session_quota=5)
-    first = manager.artifactize("12345", policy=policy)
-    second = manager.artifactize("12345", policy=policy)
+def test_manager_keeps_equal_payloads_as_distinct_logical_artifacts(
+    manager: ArtifactManager,
+) -> None:
+    policy = artifact_policy(max_artifacts=2, session_quota=10)
+    first = manager.artifactize(
+        "12345",
+        policy=policy,
+        source="tool:first",
+        sensitive=False,
+        provenance={"owner": "first"},
+    )
+    second = manager.artifactize(
+        "12345",
+        policy=policy,
+        source="tool:second",
+        sensitive=True,
+        provenance={"owner": "second"},
+    )
 
     assert isinstance(first, ArtifactHandle)
     assert isinstance(second, ArtifactHandle)
-    assert first.ref.ref_id == second.ref.ref_id
+    assert first.ref.ref_id != second.ref.ref_id
+    first_metadata = manager.metadata(first.ref.ref_id)
+    second_metadata = manager.metadata(second.ref.ref_id)
+    assert first_metadata["source"] == "tool:first"
+    assert second_metadata["source"] == "tool:second"
+    assert first_metadata["sensitive"] is False
+    assert second_metadata["sensitive"] is True
+    assert first_metadata["provenance"] == {"owner": "first"}
+    assert second_metadata["provenance"] == {"owner": "second"}
+
     with pytest.raises(ArtifactQuotaExceededError, match="count"):
         manager.artifactize("other", policy=policy)
+    manager.release(first.ref.ref_id)
+    assert second.get_value() == "12345"
 
 
 def test_manager_reads_searches_and_releases(manager: ArtifactManager) -> None:
@@ -752,12 +777,14 @@ def test_file_store_restores_session_and_fixed_expiry(
     )
     duplicate = second.artifactize("persisted", policy=policy)
     assert isinstance(duplicate, ArtifactHandle)
-    assert duplicate.ref.ref_id == ref_id
+    assert duplicate.ref.ref_id != ref_id
     assert second.get_value(ref_id) == "persisted"
+    assert duplicate.get_value() == "persisted"
     clock.tick(7)
     assert second.cleanup_expired() == 1
     with pytest.raises(ArtifactExpiredError):
         second.get_value(ref_id)
+    assert duplicate.get_value() == "persisted"
     second.close()
 
 
@@ -822,6 +849,89 @@ def test_tool_result_artifact_wrapper_preserves_approval_order_and_signature(
         )
         is wrapped
     )
+
+
+def test_approval_evaluates_defaulted_arguments_before_risk() -> None:
+    calls: list[str] = []
+
+    def read_file(*, path: str) -> str:
+        calls.append(path)
+        return path
+
+    tool = with_approval(
+        ToolSpec(
+            fn=read_file,
+            name="read_file",
+            risk="mutating",
+            risk_resolver=lambda values: "sensitive" if values["path"] == ".env" else "mutating",
+            argument_validator=lambda values: {"path": values.get("path", ".env")},
+        ),
+        policy=None,
+        adapter_shortname="test",
+    )
+
+    with pytest.raises(ToolApprovalDenied, match="no approval policy configured"):
+        tool.fn()
+    assert calls == []
+
+
+def test_approval_rechecks_handler_edits_that_increase_risk() -> None:
+    requests: list[tuple[str, str]] = []
+    calls: list[str] = []
+
+    def handler(request: Any) -> ApprovalDecision:
+        requests.append((request.arguments["path"], request.risk))
+        if len(requests) == 1:
+            return ApprovalDecision.edit({"path": ".env"})
+        return ApprovalDecision.deny(reason="secret path")
+
+    def write_file(*, path: str) -> None:
+        calls.append(path)
+
+    tool = with_approval(
+        ToolSpec(
+            fn=write_file,
+            name="write_file",
+            risk="mutating",
+            risk_resolver=lambda values: "sensitive" if values["path"] == ".env" else "mutating",
+            argument_validator=lambda values: {"path": str(values["path"])},
+        ),
+        policy=ApprovalPolicy.dynamic(handler),
+        adapter_shortname="test",
+    )
+
+    with pytest.raises(ToolApprovalDenied, match="secret path"):
+        tool.fn(path="notes.txt")
+    assert requests == [("notes.txt", "mutating"), (".env", "sensitive")]
+    assert calls == []
+
+
+def test_async_approval_rechecks_and_executes_canonical_edited_arguments() -> None:
+    requests: list[tuple[str, str]] = []
+
+    async def handler(request: Any) -> ApprovalDecision:
+        requests.append((request.arguments["path"], request.risk))
+        if len(requests) == 1:
+            return ApprovalDecision.edit({"path": ".env"})
+        return ApprovalDecision.allow()
+
+    async def read_file(*, path: str) -> str:
+        return path
+
+    tool = with_approval(
+        ToolSpec(
+            fn=read_file,
+            name="read_file",
+            risk="mutating",
+            risk_resolver=lambda values: "sensitive" if values["path"] == ".env" else "mutating",
+            argument_validator=lambda values: {"path": str(values["path"])},
+        ),
+        policy=ApprovalPolicy.dynamic(handler),
+        adapter_shortname="test",
+    )
+
+    assert asyncio.run(tool.fn(path="notes.txt")) == ".env"
+    assert requests == [("notes.txt", "mutating"), (".env", "sensitive")]
 
 
 def test_tool_result_artifact_wrapper_handles_async_and_awaitable_results(

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Iterator, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -912,7 +912,7 @@ def test_stream_registration_and_discard_without_digest_or_metered_size() -> Non
         handle = manager._register_streamed(record=record, store=store, policy=resolved)
         assert handle.ref.ref_id == "artifact_1"
         manager._metered_active_refs.pop("artifact_1")
-        manager._discard_streamed(record=record, store=store, policy=resolved)
+        manager._discard_streamed(record=record, store=store)
         assert manager.stats()["active_artifacts"] == 0
     finally:
         manager.close()
@@ -939,10 +939,12 @@ def test_manager_find_handles_absent_and_duplicate_overlap_matches(
     artifact = manager.artifactize("alpha", policy=policy(read_max_chars=5))
     assert isinstance(artifact, ArtifactHandle)
     calls = 0
+    requested_sizes: list[int] = []
 
     def repeated_page(*_args: object, **_kwargs: object) -> tuple[str, int | None, bool]:
         nonlocal calls
         calls += 1
+        requested_sizes.append(cast(int, _kwargs["max_chars"]))
         return ("alpha", 0, False) if calls == 1 else ("alpha", None, True)
 
     try:
@@ -950,6 +952,7 @@ def test_manager_find_handles_absent_and_duplicate_overlap_matches(
         monkeypatch.setattr(manager._memory_store, "read_projection", repeated_page)
         matches = manager.find(artifact.ref.ref_id, "alpha", context_chars=0)
         assert matches == [{"offset": 0, "match": "alpha", "context": "alpha"}]
+        assert requested_sizes == [5, 5]
     finally:
         manager.close()
 
@@ -1237,7 +1240,6 @@ def test_manager_restores_expired_file_records_without_deduplication(
     try:
         second._store_for_policy(file_policy)
         assert second.stats()["expired_artifacts"] == 1
-        assert second._digest_refs == {}
         assert not tuple(tmp_path.rglob("art_*.payload"))
         assert not tuple(tmp_path.rglob("art_*.json"))
     finally:

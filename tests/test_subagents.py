@@ -104,6 +104,7 @@ from kedi.agent_adapter.subagents.workflow.executor import (
 )
 from kedi.agent_adapter.telemetry import tool_call_span
 from kedi.agent_adapter.tool_override import (
+    RequiredToolCallError,
     ToolSpec,
     required_tool_call_scope,
     validate_required_tool_calls,
@@ -950,6 +951,38 @@ def test_required_tool_wrapper_handles_sync_and_awaitable_results() -> None:
         validate_required_tool_calls()
 
 
+def test_nested_required_tool_scopes_are_isolated_by_default() -> None:
+    spec = with_required_before_output(
+        ToolSpec(
+            fn=lambda: "done",
+            name="required_nested",
+            metadata={"required_before_output": True},
+        )
+    )
+
+    with required_tool_call_scope((spec,)):
+        with required_tool_call_scope((spec,)):
+            assert spec.fn() == "done"
+            validate_required_tool_calls()
+        with pytest.raises(RequiredToolCallError, match="was not called"):
+            validate_required_tool_calls()
+
+
+def test_adapter_owned_required_tool_scope_can_be_inherited() -> None:
+    spec = with_required_before_output(
+        ToolSpec(
+            fn=lambda: "done",
+            name="required_inherited",
+            metadata={"required_before_output": True},
+        )
+    )
+
+    with required_tool_call_scope((spec,)):
+        with required_tool_call_scope((spec,), inherit=True):
+            assert spec.fn() == "done"
+        validate_required_tool_calls()
+
+
 def test_pydantic_maps_dynamic_workflow_errors_to_model_retry() -> None:
     from pydantic_ai import ModelRetry
 
@@ -1560,13 +1593,20 @@ def test_workflow_executor_snapshot_branches(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_delegation_budget_hard_cap() -> None:
-    budget = DelegationBudget.for_profile(profile_name="manager", max_agents=1000)
+    budget = DelegationBudget.for_profile(profile_name="manager", max_agents=100)
     assert budget.owner_profile == "manager"
     assert budget.limit == MAX_SUBAGENT_INVOCATIONS
 
     anonymous = DelegationBudget.for_profile(profile_name=None, max_agents=None)
     assert anonymous.owner_profile == "<anonymous>"
     assert anonymous.limit == MAX_SUBAGENT_INVOCATIONS
+
+    for invalid in (-1, MAX_SUBAGENT_INVOCATIONS + 1, 1000):
+        with pytest.raises(ValueError):
+            DelegationBudget.for_profile(profile_name="manager", max_agents=invalid)
+
+    disabled = DelegationBudget.for_profile(profile_name="manager", max_agents=0)
+    assert disabled.limit == 0
 
     runtime = compile_program(
         parse_program(_profiles_source()),
@@ -3638,7 +3678,7 @@ def test_parent_approval_edit_is_rechecked_by_child_policy() -> None:
     )
 
     assert result.kind == "tool-denied"
-    assert result.message.endswith(": secret path")
+    assert result.message == "Tool 'write_file' was denied: secret path"
     assert seen == [(".env", "sensitive")]
 
 

@@ -109,6 +109,16 @@ def test_artifact_capabilities_require_structured_tool_adapters() -> None:
         AdapterCapabilities(supports_native_artifacts=True)
 
 
+def test_pydantic_native_telemetry_ownership_follows_operation_and_instrumentation() -> None:
+    enabled = SimpleNamespace(instrument=True)
+    disabled = SimpleNamespace(instrument=False)
+
+    for operation in ("run_agent", "chat", "call_tool"):
+        assert PydanticAdapter.native_telemetry_enabled(enabled, operation)
+        assert not PydanticAdapter.native_telemetry_enabled(disabled, operation)
+    assert not PydanticAdapter.native_telemetry_enabled(enabled, "delegate_task")
+
+
 def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
     setattr(
         adapter,

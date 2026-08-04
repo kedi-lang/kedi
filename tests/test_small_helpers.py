@@ -162,6 +162,12 @@ def test_source_loading_maps_empty_and_missing_lines(tmp_path: Path) -> None:
     second = tmp_path / "second.kedi"
     loaded = merge_source_documents([(first, "one\ntwo"), (second, "three")])
 
+    assert loaded.source_map.documents[0].start_line_in_merged == 1
+    assert loaded.source_map.documents[1].start_line_in_merged == 4
+    resolved = loaded.source_map.resolve_line(4)
+    assert resolved is not None
+    assert resolved.source_path == str(second)
+    assert resolved.source_line == 1
     assert loaded.source_map.resolve_line(0) is None
     assert loaded.source_map.get_line(str(tmp_path / "absent.kedi"), 1) is None
     assert loaded.source_map.get_line(str(first), 99) is None

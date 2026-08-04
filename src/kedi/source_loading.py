@@ -116,21 +116,22 @@ def load_kedi_source_bundle(
 def merge_source_documents(documents: Iterable[tuple[Path, str]]) -> LoadedKediSource:
     text_parts: list[str] = []
     mapped_docs: list[SourceDocument] = []
-    merged_line = 1
+    merged_newlines = 0
 
     for index, (path, text) in enumerate(documents):
         if index > 0:
-            text_parts.append("\n\n")
-            merged_line += 2
+            separator = "\n\n"
+            text_parts.append(separator)
+            merged_newlines += separator.count("\n")
         text_parts.append(text)
         mapped_docs.append(
             SourceDocument(
                 path=str(path),
                 text=text,
-                start_line_in_merged=merged_line,
+                start_line_in_merged=merged_newlines + 1,
             )
         )
-        merged_line += max(1, len(text.splitlines()))
+        merged_newlines += text.count("\n")
 
     return LoadedKediSource(
         text="".join(text_parts),
