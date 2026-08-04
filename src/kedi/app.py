@@ -17,6 +17,8 @@ from .lang import compile_program, parse_program
 from .lang.compiler import environment as compiler_environment
 from .lang.parser.diagnostics import KediParseError
 from .source_loading import load_kedi_source_bundle
+from .telemetry import capture_enabled
+from .telemetry.naming import program_name, qualified_type_name
 from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
@@ -432,27 +434,49 @@ def run_program_cli(
     DEBUG = os.getenv("KEDI_DEBUG_OPTIMIZED", "0") == "1"
 
     source_path = Path(source).resolve()
-    # Load program with optimized prompts injected
-    program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
+    display_name = program_name(str(source_path))
+    attributes: dict[str, str] = {
+        "kedi.program.name": display_name,
+        "kedi.program.source_type": "file",
+        "kedi.runtime.entrypoint": "main",
+        "kedi.adapter.name": adapter,
+    }
+    if capture_enabled("source_path"):
+        attributes["code.file.path"] = str(source_path)
 
-    # Run once with a lazily-built adapter: offline programs never construct one (no
-    # API key needed), and top-level side effects fire exactly once.
-    metadata = adapter_factory(adapter)
-    lazy_adapter = LazyAdapter(
-        lambda: _build_runtime_adapter(adapter, model),
-        kind=metadata.kind,
-        shortname=metadata.shortname,
-        capabilities=adapter_capabilities(adapter),
-    )
-    rt = compile_program(
-        program,
-        adapter=lazy_adapter,
-        runtime_globals=_runtime_globals(runtime_args),
-        default_agent_profile=_cli_default_profile(),
-    )
-    _set_runtime_args(rt, runtime_args)
-    out = rt.run_main()
-    return 0, ("" if out is None else str(out))
+    from .telemetry import runtime_span
+
+    with runtime_span(
+        f"kedi run {display_name}",
+        "run_program",
+        attributes=attributes,
+        metric_attributes={"entrypoint": "main", "source_type": "file"},
+    ) as active:
+        try:
+            # Load program with optimized prompts injected.
+            program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
+
+            # Offline programs never construct the lazy adapter or require an API key.
+            metadata = adapter_factory(adapter)
+            lazy_adapter = LazyAdapter(
+                lambda: _build_runtime_adapter(adapter, model),
+                kind=metadata.kind,
+                shortname=metadata.shortname,
+                capabilities=adapter_capabilities(adapter),
+            )
+            rt = compile_program(
+                program,
+                adapter=lazy_adapter,
+                runtime_globals=_runtime_globals(runtime_args),
+                default_agent_profile=_cli_default_profile(),
+            )
+            _set_runtime_args(rt, runtime_args)
+            out = rt.run_main()
+        except BaseException as exc:
+            active.set_attribute("error.type", type(exc).__name__)
+            raise
+        active.set_attribute("kedi.result.type", qualified_type_name(out))
+        return 0, ("" if out is None else str(out))
 
 
 def run_source_cli(
@@ -463,20 +487,43 @@ def run_source_cli(
     runtime_args: CliArgs | None = None,
     source_path: str = "<command>",
 ) -> Tuple[int, str]:
-    program = parse_program(source_text, source_path=source_path)
-    metadata = adapter_factory(adapter)
-    lazy_adapter = LazyAdapter(
-        lambda: _build_runtime_adapter(adapter, model),
-        kind=metadata.kind,
-        shortname=metadata.shortname,
-        capabilities=adapter_capabilities(adapter),
-    )
-    rt = compile_program(
-        program,
-        adapter=lazy_adapter,
-        runtime_globals=_runtime_globals(runtime_args),
-        default_agent_profile=_cli_default_profile(),
-    )
-    _set_runtime_args(rt, runtime_args)
-    out = rt.run_main()
-    return 0, ("" if out is None else str(out))
+    display_name = program_name(source_path, fallback="<command>")
+    attributes: dict[str, str] = {
+        "kedi.program.name": display_name,
+        "kedi.program.source_type": "command",
+        "kedi.runtime.entrypoint": "main",
+        "kedi.adapter.name": adapter,
+    }
+    if capture_enabled("source_path"):
+        attributes["code.file.path"] = source_path
+
+    from .telemetry import runtime_span
+
+    with runtime_span(
+        f"kedi run {display_name}",
+        "run_program",
+        attributes=attributes,
+        metric_attributes={"entrypoint": "main", "source_type": "command"},
+    ) as active:
+        try:
+            program = parse_program(source_text, source_path=source_path)
+            metadata = adapter_factory(adapter)
+            lazy_adapter = LazyAdapter(
+                lambda: _build_runtime_adapter(adapter, model),
+                kind=metadata.kind,
+                shortname=metadata.shortname,
+                capabilities=adapter_capabilities(adapter),
+            )
+            rt = compile_program(
+                program,
+                adapter=lazy_adapter,
+                runtime_globals=_runtime_globals(runtime_args),
+                default_agent_profile=_cli_default_profile(),
+            )
+            _set_runtime_args(rt, runtime_args)
+            out = rt.run_main()
+        except BaseException as exc:
+            active.set_attribute("error.type", type(exc).__name__)
+            raise
+        active.set_attribute("kedi.result.type", qualified_type_name(out))
+        return 0, ("" if out is None else str(out))

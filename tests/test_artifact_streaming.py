@@ -33,6 +33,7 @@ from kedi.artifacts.streaming import (
 )
 from kedi.errors import KediTypeExecutionError
 from kedi.lang import compile_program, parse_program
+from tests.telemetry_helpers import installed_recording_backend
 
 
 def test_text_stream_is_single_consumption_and_preserves_metadata() -> None:
@@ -309,6 +310,64 @@ def test_manager_streams_above_threshold_and_keeps_small_values_native() -> None
         assert large.ref.ref_id == "tool_call_result_1"
         assert large.get_value() == "12345678"
         assert manager.stats()["active_artifacts"] == 1
+    finally:
+        manager.close()
+
+
+def test_streamed_artifact_records_one_bounded_store_span() -> None:
+    manager = ArtifactManager(session_id="stream-telemetry")
+    try:
+        with installed_recording_backend() as backend:
+            artifact = manager.artifactize_stream(
+                ArtifactStream.text(["12", "345", "678"]),
+                policy=_policy(),
+                source="tool:lookup",
+            )
+
+        assert isinstance(artifact, ArtifactHandle)
+        store_spans = [
+            span for span in backend.finished_spans if span.operation == "store_artifact"
+        ]
+        assert len(store_spans) == 1
+        [store_span] = store_spans
+        assert store_span.name == "store artifact"
+        assert store_span.attributes["kedi.artifact.streamed"] is True
+        assert store_span.attributes["kedi.artifact.size_bytes"] == 8
+        assert store_span.attributes["kedi.artifact.chunk_count"] == 3
+    finally:
+        manager.close()
+
+
+def test_failed_streamed_artifact_closes_store_span_and_stream() -> None:
+    closed = False
+
+    def chunks() -> Iterator[str]:
+        nonlocal closed
+        try:
+            yield "123456"
+            raise RuntimeError("stream failed")
+        finally:
+            closed = True
+
+    manager = ArtifactManager(session_id="stream-telemetry-failure")
+    try:
+        with installed_recording_backend() as backend:
+            with pytest.raises(RuntimeError, match="stream failed"):
+                manager.artifactize_stream(
+                    ArtifactStream.text(chunks()),
+                    policy=_policy(),
+                    source="tool:lookup",
+                )
+
+        assert closed
+        assert manager.stats()["active_artifacts"] == 0
+        store_spans = [
+            span for span in backend.finished_spans if span.operation == "store_artifact"
+        ]
+        assert len(store_spans) == 1
+        [store_span] = store_spans
+        assert store_span.attributes["error.type"] == "RuntimeError"
+        assert [type(exc).__name__ for exc in store_span.exceptions] == ["RuntimeError"]
     finally:
         manager.close()
 

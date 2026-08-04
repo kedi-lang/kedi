@@ -117,7 +117,7 @@ class ModelRequestBudget:
         ) as span:
             with self._lock:
                 if estimated_tokens > self.limits.safe_input_tokens:
-                    span.set_attribute("decision", "context_rejected")
+                    span.set_attribute("kedi.context.decision", "context_rejected")
                     raise ModelRequestBudgetError(
                         "estimated model request is "
                         f"{estimated_tokens} tokens, exceeding the safe context ceiling of "
@@ -125,13 +125,13 @@ class ModelRequestBudget:
                     )
                 next_requests = self._requests + 1
                 if next_requests > self.limits.request_limit:
-                    span.set_attribute("decision", "request_limit_rejected")
+                    span.set_attribute("kedi.context.decision", "request_limit_rejected")
                     raise ModelRequestBudgetError(
                         f"model request limit of {self.limits.request_limit} would be exceeded"
                     )
                 next_input = self._cumulative_input_tokens + estimated_tokens
                 if next_input > self.limits.cumulative_input_tokens:
-                    span.set_attribute("decision", "cumulative_input_rejected")
+                    span.set_attribute("kedi.context.decision", "cumulative_input_rejected")
                     raise ModelRequestBudgetError(
                         "cumulative model input would reach "
                         f"{next_input} tokens, exceeding the run limit of "
@@ -139,9 +139,9 @@ class ModelRequestBudget:
                     )
                 self._requests = next_requests
                 self._cumulative_input_tokens = next_input
-                span.set_attribute("decision", "admitted")
-                span.set_attribute("request_number", next_requests)
-                span.set_attribute("reserved_cumulative_input_tokens", next_input)
+                span.set_attribute("kedi.context.decision", "admitted")
+                span.set_attribute("kedi.context.request_number", next_requests)
+                span.set_attribute("kedi.context.reserved_cumulative_input_tokens", next_input)
         return ModelRequestReservation(self, estimated_tokens=estimated_tokens)
 
     def snapshot(self, *, estimated_request_tokens: int = 0) -> ModelRequestBudgetSnapshot:

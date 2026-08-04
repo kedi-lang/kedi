@@ -12,9 +12,6 @@ from types import SimpleNamespace
 from typing import Any, Iterator, cast
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -105,6 +102,7 @@ from kedi.agent_adapter.subagents.workflow.executor import (
     WorkflowAbortError,
     WorkflowExecutor,
 )
+from kedi.agent_adapter.telemetry import tool_call_span
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
     required_tool_call_scope,
@@ -124,76 +122,56 @@ from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import ProfileDefStmt, ProfileOutputEntry, ProfileWorkflowEntry, TypeRef
 from kedi.lsp import features
 from tests.mock_adapter import MockAdapter
+from tests.telemetry_helpers import installed_recording_backend
 
 
 def test_subagent_run_reuses_delegation_tool_span() -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("kedi-test")
+    with installed_recording_backend() as backend:
+        tool = ToolSpec(fn=lambda: None, name="delegate_task")
+        with tool_call_span(tool, adapter_shortname="test", argument_count=0) as telemetry:
+            assert telemetry.span is not None
+            tool_span = telemetry.span
+            with _subagent_run_span({"kedi.subagent.run_id": "run-1"}) as subagent_span:
+                assert subagent_span is tool_span
 
-    with tracer.start_as_current_span(
-        "execute_tool delegate_task",
-        attributes={
-            "gen_ai.tool.name": "delegate_task",
-            "logfire.msg": "running tool: delegate_task",
-        },
-    ) as tool_span:
-        with _subagent_run_span(
-            tracer,
-            {"kedi.subagent.run_id": "run-1"},
-        ) as subagent_span:
-            assert subagent_span is tool_span
-
-    spans = exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["subagent run"]
-    attributes = spans[0].attributes
-    assert attributes is not None
-    assert attributes["logfire.msg"] == "subagent run"
-    assert attributes["kedi.subagent.run_id"] == "run-1"
+    assert [recorded.name for recorded in backend.finished_spans] == ["subagent run"]
+    assert backend.finished_spans[0].operation == "call_tool"
+    assert backend.finished_spans[0].attributes["kedi.operation.name"] == "run_agent"
+    assert backend.finished_spans[0].attributes["kedi.subagent.run_id"] == "run-1"
 
 
 def test_subagent_run_keeps_unrelated_parent_span() -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("kedi-test")
+    with installed_recording_backend() as backend:
+        with backend.start_span(
+            scope="agent",
+            name="agent kedi",
+            operation="run_agent",
+            kind="internal",
+            level="lifecycle",
+            attributes=None,
+        ) as parent:
+            with _subagent_run_span({"kedi.subagent.run_id": "run-1"}) as child:
+                assert child is not parent
+                assert child.parent is parent
 
-    with tracer.start_as_current_span("self run"):
-        with _subagent_run_span(
-            tracer,
-            {"kedi.subagent.run_id": "run-1"},
-        ):
-            pass
-
-    assert [span.name for span in exporter.get_finished_spans()] == [
+    assert [recorded.name for recorded in backend.finished_spans] == [
         "subagent run",
-        "self run",
+        "agent kedi",
     ]
 
 
 def test_dynamic_workflow_reuses_its_tool_span() -> None:
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("kedi-test")
+    with installed_recording_backend() as backend:
+        tool = ToolSpec(fn=lambda: None, name="run_workflow")
+        with tool_call_span(tool, adapter_shortname="test", argument_count=0) as telemetry:
+            assert telemetry.span is not None
+            tool_span = telemetry.span
+            with _dynamic_workflow_span({"kedi.workflow.id": "workflow-1"}) as workflow_span:
+                assert workflow_span is tool_span
 
-    with tracer.start_as_current_span(
-        "execute_tool run_workflow",
-        attributes={
-            "gen_ai.tool.name": "run_workflow",
-            "logfire.msg": "running tool: run_workflow",
-        },
-    ) as tool_span:
-        with _dynamic_workflow_span({"kedi.workflow.id": "workflow-1"}) as workflow_span:
-            assert workflow_span is tool_span
-
-    spans = exporter.get_finished_spans()
-    assert [span.name for span in spans] == ["dynamic workflow"]
-    attributes = spans[0].attributes
-    assert attributes is not None
-    assert attributes["logfire.msg"] == "dynamic workflow"
-    assert attributes["kedi.workflow.id"] == "workflow-1"
+    assert [recorded.name for recorded in backend.finished_spans] == ["dynamic workflow"]
+    assert backend.finished_spans[0].attributes["kedi.operation.name"] == "run_workflow"
+    assert backend.finished_spans[0].attributes["kedi.workflow.id"] == "workflow-1"
 
 
 class RecordingPydanticAdapter(PydanticAdapter):

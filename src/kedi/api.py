@@ -42,6 +42,8 @@ from .artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from .effort import EffortValue
 from .errors import KediExecutionError
 from .lang import compile_program, parse_program
+from .telemetry import capture_enabled, current_span
+from .telemetry.naming import program_name, qualified_type_name
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -441,7 +443,7 @@ def _decorate_kedi_program(
     cache: bool,
     conversation_override: ConversationState | None | object,
 ) -> Callable[P, R]:
-    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+    def _run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
         active_program = program
         active_source_hash = source_hash
@@ -449,6 +451,7 @@ def _decorate_kedi_program(
             active_program, active_source_hash = reload_program()
         profile = config.profile.merge(profile_override)
         active_adapter = adapter_override or _build_adapter(config)
+        current_span().set_attribute("kedi.adapter.name", active_adapter.shortname)
         conversation = (
             config.conversation
             if conversation_override is _UNSET
@@ -499,7 +502,15 @@ def _decorate_kedi_program(
         if cache:
             cached, cache_flight, owns_flight = _claim_response_cache_key(cache_key)
             if cached is not _CACHE_MISS:
+                current_span().add_event(
+                    "cache hit",
+                    {"kedi.cache.kind": "response"},
+                )
                 return cast(R, _isolate_cached(cached))
+            current_span().add_event(
+                "cache miss",
+                {"kedi.cache.kind": "response"},
+            )
             if not owns_flight:
                 assert cache_flight is not None
                 return cast(R, _isolate_cached(cache_flight.future.result()))
@@ -531,6 +542,34 @@ def _decorate_kedi_program(
         if cache_flight is not None:
             _finish_response_flight(cache_key, cache_flight, result=result)
         return result
+
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        display_name = program_name(source_id, fallback=_callable_name(inner))
+        attributes: dict[str, bool | str] = {
+            "kedi.program.name": display_name,
+            "kedi.program.source_type": "file" if kind == "bind" else "python_api",
+            "kedi.runtime.entrypoint": kind,
+            "kedi.runtime.cached_parse": True,
+            "kedi.runtime.cached_compile": False,
+        }
+        if kind == "bind" and capture_enabled("source_path"):
+            attributes["code.file.path"] = source_id
+        from .telemetry import runtime_span
+
+        source_type = "file" if kind == "bind" else "python_api"
+        with runtime_span(
+            f"kedi run {display_name}",
+            "run_program",
+            attributes=attributes,
+            metric_attributes={"entrypoint": kind, "source_type": source_type},
+        ) as active:
+            try:
+                result = _run(*args, **kwargs)
+            except BaseException as exc:
+                active.set_attribute("error.type", builtins.type(exc).__name__)
+                raise
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
 
     if _is_async_callable(inner):
 

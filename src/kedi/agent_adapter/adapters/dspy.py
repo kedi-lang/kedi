@@ -31,6 +31,7 @@ from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
 from ..subagents.runs import safe_subagent_error_message
+from ..telemetry import mcp_initialization_span, mcp_server_name
 from ..tool_override import ToolScope, ToolSpec, with_approval
 
 
@@ -347,7 +348,7 @@ class DSPyAdapter:
     ) -> dspy.Prediction:
         mcp_tools: list[Any] = []
         async with AsyncExitStack() as stack:
-            for spec in self.active_profile.mcp_servers:
+            for index, spec in enumerate(self.active_profile.mcp_servers):
                 if spec.transport != "stdio":
                     raise NotImplementedError("DSPy MCP support currently requires stdio transport")
                 from mcp import ClientSession, StdioServerParameters
@@ -355,18 +356,28 @@ class DSPyAdapter:
 
                 if spec.command is None:
                     raise ValueError("MCP stdio transport requires a command.")
-                server_params = StdioServerParameters(
-                    command=spec.command,
-                    args=list(spec.args),
-                    env=spec.env,
-                )
-                read, write = await stack.enter_async_context(stdio_client(server_params))
-                session = await stack.enter_async_context(ClientSession(read, write))
-                await session.initialize()
-                listed_tools = await session.list_tools()
-                mcp_tools.extend(
-                    dspy.Tool.from_mcp_tool(session, tool) for tool in listed_tools.tools
-                )
+                with mcp_initialization_span(
+                    adapter_shortname=self.shortname,
+                    server_name=mcp_server_name(command=spec.command, url=None, index=index),
+                    transport="stdio",
+                ) as active:
+                    server_params = StdioServerParameters(
+                        command=spec.command,
+                        args=list(spec.args),
+                        env=spec.env,
+                    )
+                    read, write = await stack.enter_async_context(stdio_client(server_params))
+                    session = await stack.enter_async_context(ClientSession(read, write))
+                    await session.initialize()
+                    listed_tools = await session.list_tools()
+                    mcp_tools.extend(
+                        dspy.Tool.from_mcp_tool(session, tool) for tool in listed_tools.tools
+                    )
+                    active.set_attribute("kedi.mcp.tool_count", len(listed_tools.tools))
+                    active.add_event(
+                        "mcp tools discovered",
+                        {"kedi.mcp.tool_count": len(listed_tools.tools)},
+                    )
             prediction = dspy.ReAct(sig, tools=[*tools, *mcp_tools])
             return await prediction.acall(**kwargs, user_prompt=template)
 

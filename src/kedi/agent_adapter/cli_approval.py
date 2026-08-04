@@ -6,7 +6,7 @@ import inspect
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import ClassVar, Literal
 
 from .approval import ApprovalCancelled, ApprovalDecision, ApprovalRequest, ToolRisk
 
@@ -18,6 +18,8 @@ _Prompt = Callable[[ApprovalRequest], _PromptResult]
 @dataclass
 class CliApprovalHandler:
     """Ask once per risky tool call, with session-local allow-always choices."""
+
+    telemetry_mechanism: ClassVar[Literal["cli"]] = "cli"
 
     prompt: _Prompt | None = None
     is_interactive: Callable[[], bool] = lambda: sys.stdin.isatty() and sys.stdout.isatty()

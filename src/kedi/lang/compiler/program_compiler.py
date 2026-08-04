@@ -31,6 +31,8 @@ from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ...module_registry import resolve_module_path
 from ...source_loading import load_kedi_source_bundle
+from ...telemetry import capture_enabled, runtime_span
+from ...telemetry.naming import program_name
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -46,6 +48,7 @@ from ..ast import (
     ProcedureDef,
     ProfileDefStmt,
     Program,
+    ProgramWithValidation,
     RawInvokeStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -126,13 +129,28 @@ class _ModuleLoader:
 
         self._loading.append(path)
         try:
-            runtime = compile_module(program)
-            # Module initialization follows Python import semantics: top-level
-            # code runs once, then every importer shares the loaded runtime.
-            runtime.run_main()
-            loaded = _LoadedModule(path=path, program=program, runtime=runtime)
-            self._loaded[path] = loaded
-            return loaded
+            attributes: dict[str, bool | str] = {
+                "kedi.module.name": path.stem,
+                "kedi.compile.cache_hit": False,
+            }
+            if capture_enabled("source_path"):
+                attributes["code.file.path"] = str(path)
+            with runtime_span(
+                f"compile module {path.stem}",
+                "compile_module",
+                attributes=attributes,
+            ) as active:
+                try:
+                    runtime = compile_module(program)
+                    # Module initialization follows Python import semantics: top-level
+                    # code runs once, then every importer shares the loaded runtime.
+                    runtime.run_main()
+                except BaseException as exc:
+                    active.set_attribute("error.type", type(exc).__name__)
+                    raise
+                loaded = _LoadedModule(path=path, program=program, runtime=runtime)
+                self._loaded[path] = loaded
+                return loaded
         finally:
             self._loading.pop()
 
@@ -166,6 +184,28 @@ def compile_program(
 
     This is the main entry point for the compiler.
     """
+    source_path = _program_source_path(prog)
+    display_name = program_name(str(source_path) if source_path is not None else None)
+    validation_case_count = 0
+    if isinstance(prog, ProgramWithValidation):
+        validation_case_count = sum(len(suite.cases) for suite in prog.tests) + sum(
+            len(suite.metrics) for suite in prog.evals
+        )
+    attributes: dict[str, bool | str | int] = {
+        "kedi.program.name": display_name,
+        "kedi.compile.type_count": len(prog.type_defs),
+        "kedi.compile.profile_count": len(prog.profile_defs),
+        "kedi.compile.procedure_count": len(prog.procedures),
+        "kedi.compile.import_count": len(prog.imports),
+        "kedi.compile.validation_case_count": validation_case_count,
+        "kedi.compile.cache_hit": False,
+        "kedi.executor.name": type(executor).__name__
+        if executor is not None
+        else "DefaultExecutor",
+    }
+    if source_path is not None and capture_enabled("source_path"):
+        attributes["code.file.path"] = str(source_path)
+
     compiler = ProgramCompiler(
         adapter,
         executor=executor,
@@ -179,7 +219,27 @@ def compile_program(
         subagent_state_path=subagent_state_path,
         conversation_state=conversation_state,
     )
-    return compiler.compile(prog)
+    with runtime_span(
+        f"compile {display_name}",
+        "compile_program",
+        attributes=attributes,
+        metric_attributes={"cache_hit": False},
+    ) as active:
+        try:
+            return compiler.compile(prog)
+        except BaseException as exc:
+            active.set_attribute("error.type", type(exc).__name__)
+            raise
+
+
+def _program_source_path(prog: Program) -> Path | None:
+    loc = prog.loc
+    if loc is not None and loc.source_path:
+        return Path(loc.source_path).resolve()
+    source_map = prog.source_map
+    if source_map is not None and source_map.documents:
+        return Path(source_map.documents[0].path).resolve()
+    return None
 
 
 class ProgramCompiler:
@@ -718,13 +778,7 @@ class ProgramCompiler:
         return wrapper
 
     def _program_path(self, prog: Program) -> Path | None:
-        loc = prog.loc
-        if loc is not None and loc.source_path:
-            return Path(loc.source_path).resolve()
-        source_map = prog.source_map
-        if source_map is not None and source_map.documents:
-            return Path(source_map.documents[0].path).resolve()
-        return None
+        return _program_source_path(prog)
 
     def _setup_prelude(self, prelude_code: str, prelude_loc) -> None:
         """Execute prelude and store environment."""

@@ -64,6 +64,7 @@ from kedi.lang.compiler.environment import (
     native_value,
 )
 from kedi.promise import KediPromise
+from tests.telemetry_helpers import installed_recording_backend
 
 
 def policy(**values: object) -> ArtifactPolicy:
@@ -1315,38 +1316,32 @@ def test_cleanup_service_runs_targets_survives_failures_and_closes() -> None:
     service.close()
 
 
-def test_artifact_spans_never_attach_structured_payloads(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, dict[str, object]]] = []
+def test_artifact_spans_never_attach_structured_payloads() -> None:
+    with installed_recording_backend() as backend:
+        with backend.start_span(
+            scope="agent",
+            name="call read_artifact",
+            operation="call_tool",
+            kind="internal",
+            level="lifecycle",
+            attributes=None,
+        ) as parent:
+            with artifact_telemetry.artifact_span(
+                "read",
+                ref_id="art_safe",
+                size_bytes=12,
+                payload={"secret": "must not be traced"},
+                preview=["must not be traced"],
+            ):
+                pass
 
-    @contextmanager
-    def start_as_current_span(
-        name: str,
-        *,
-        attributes: dict[str, object],
-    ) -> Iterator[SimpleNamespace]:
-        calls.append((name, attributes))
-        yield SimpleNamespace()
-
-    tracer = SimpleNamespace(start_as_current_span=start_as_current_span)
-    monkeypatch.setattr(artifact_telemetry, "_tracer", tracer)
-
-    with artifact_telemetry.artifact_span(
-        "read",
-        ref_id="art_safe",
-        size_bytes=12,
-        payload={"secret": "must not be traced"},
-        preview=["must not be traced"],
-    ):
-        pass
-
-    assert calls == [
+    assert backend.finished_spans == [parent]
+    assert [(event.name, event.attributes) for event in parent.events] == [
         (
             "artifact read",
             {
-                "ref_id": "art_safe",
-                "size_bytes": 12,
+                "kedi.artifact.ref_id": "art_safe",
+                "kedi.artifact.size_bytes": 12,
             },
         )
     ]
@@ -1380,7 +1375,9 @@ def test_noop_cleanup_records_metrics_without_opening_a_span(
     assert len(cleanup_metrics) == 1
 
 
-def test_productive_cleanup_remains_traced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_productive_periodic_cleanup_uses_expiry_events_without_cleanup_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     now = 0.0
     spans: list[str] = []
 
@@ -1399,7 +1396,7 @@ def test_productive_cleanup_remains_traced(monkeypatch: pytest.MonkeyPatch) -> N
     finally:
         manager.close()
 
-    assert spans == ["cleanup", "expire"]
+    assert spans == ["expire"]
 
 
 class BlockingCleanupTarget:

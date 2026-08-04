@@ -152,47 +152,61 @@ def resolve_tool_approval(
 ) -> ApprovalDecision:
     """Resolve one tool invocation according to Kedi's default-safe policy."""
 
-    if request.risk == "read_only":
-        return ApprovalDecision.allow(reason="read-only tool")
     from .approval_telemetry import (
+        approval_mechanism,
         approval_span,
         record_cancelled,
         record_decision,
+        record_immediate_decision,
         record_pending,
     )
 
-    with approval_span(request) as span:
+    if request.risk == "read_only":
+        decision = ApprovalDecision.allow(reason="read-only tool")
+        record_immediate_decision(request, decision, mode="automatic_read_only")
+        return decision
+    if policy is None:
+        decision = ApprovalDecision.deny(reason="no approval policy configured")
+        record_immediate_decision(request, decision, mode="default_deny")
+        return decision
+    if policy.mode is not None:
+        decision = (
+            ApprovalDecision.allow(reason="static allow policy")
+            if policy.mode == "allow"
+            else ApprovalDecision.deny(reason="static deny policy")
+        )
+        immediate_mode = "static_allow" if policy.mode == "allow" else "static_deny"
+        record_immediate_decision(request, decision, mode=immediate_mode)
+        return decision
+
+    assert policy.handler is not None
+    with approval_span(
+        request,
+        mechanism=approval_mechanism(policy.handler),
+    ) as telemetry:
         try:
-            if policy is None:
-                decision = ApprovalDecision.deny(reason="no approval policy configured")
-            elif policy.mode == "allow":
-                decision = ApprovalDecision.allow(reason="static allow policy")
-            elif policy.mode == "deny":
-                decision = ApprovalDecision.deny(reason="static deny policy")
-            else:
-                assert policy.handler is not None
-                record_pending(span)
-                result = policy.handler(request)
-                if inspect.isawaitable(result):
-                    try:
-                        asyncio.get_running_loop()
-                    except RuntimeError:
-                        decision = asyncio.run(
-                            _resolve_awaitable(cast(Awaitable[ApprovalDecision], result))
-                        )
-                    else:
-                        if inspect.iscoroutine(result):
-                            result.close()
-                        raise RuntimeError(
-                            "async approval handlers require an async tool wrapper when called "
-                            "from an event loop"
-                        )
+            record_pending(telemetry)
+            result = policy.handler(request)
+            if inspect.isawaitable(result):
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    decision = asyncio.run(
+                        _resolve_awaitable(cast(Awaitable[ApprovalDecision], result))
+                    )
                 else:
-                    decision = _validated_decision(result)
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise RuntimeError(
+                        "async approval handlers require an async tool wrapper when called "
+                        "from an event loop"
+                    )
+            else:
+                decision = _validated_decision(result)
         except ApprovalCancelled:
-            record_cancelled(span)
+            record_cancelled(telemetry)
             raise
-        record_decision(span, decision)
+        record_decision(telemetry, decision)
         return decision
 
 
@@ -202,38 +216,52 @@ async def resolve_tool_approval_async(
 ) -> ApprovalDecision:
     """Resolve one tool invocation without leaving the caller's event loop."""
 
-    if request.risk == "read_only":
-        return ApprovalDecision.allow(reason="read-only tool")
     from .approval_telemetry import (
+        approval_mechanism,
         approval_span,
         record_cancelled,
         record_decision,
+        record_immediate_decision,
         record_pending,
     )
 
-    with approval_span(request) as span:
+    if request.risk == "read_only":
+        decision = ApprovalDecision.allow(reason="read-only tool")
+        record_immediate_decision(request, decision, mode="automatic_read_only")
+        return decision
+    if policy is None:
+        decision = ApprovalDecision.deny(reason="no approval policy configured")
+        record_immediate_decision(request, decision, mode="default_deny")
+        return decision
+    if policy.mode is not None:
+        decision = (
+            ApprovalDecision.allow(reason="static allow policy")
+            if policy.mode == "allow"
+            else ApprovalDecision.deny(reason="static deny policy")
+        )
+        immediate_mode = "static_allow" if policy.mode == "allow" else "static_deny"
+        record_immediate_decision(request, decision, mode=immediate_mode)
+        return decision
+
+    assert policy.handler is not None
+    with approval_span(
+        request,
+        mechanism=approval_mechanism(policy.handler),
+    ) as telemetry:
         try:
-            if policy is None:
-                decision = ApprovalDecision.deny(reason="no approval policy configured")
-            elif policy.mode == "allow":
-                decision = ApprovalDecision.allow(reason="static allow policy")
-            elif policy.mode == "deny":
-                decision = ApprovalDecision.deny(reason="static deny policy")
+            record_pending(telemetry)
+            handler = policy.handler
+            if isinstance(handler, SupportsAsyncApprovalResolution):
+                result = handler.resolve_async(request)
             else:
-                assert policy.handler is not None
-                record_pending(span)
-                handler = policy.handler
-                if isinstance(handler, SupportsAsyncApprovalResolution):
-                    result = handler.resolve_async(request)
-                else:
-                    result = handler(request)
-                if inspect.isawaitable(result):
-                    result = await result
-                decision = _validated_decision(result)
+                result = handler(request)
+            if inspect.isawaitable(result):
+                result = await result
+            decision = _validated_decision(result)
         except ApprovalCancelled:
-            record_cancelled(span)
+            record_cancelled(telemetry)
             raise
-        record_decision(span, decision)
+        record_decision(telemetry, decision)
         return decision
 
 

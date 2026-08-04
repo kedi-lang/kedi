@@ -27,6 +27,7 @@ from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
 from ..subagents.runs import safe_subagent_error_message
+from ..telemetry import mcp_initialization_span
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -342,7 +343,21 @@ class LangChainAdapter:
                 "Install with: uv add langchain-mcp-adapters"
             ) from exc
         client = MultiServerMCPClient(cast(Any, _langchain_mcp_server_configs(profile)))
-        return list(await client.get_tools())
+        transports = {server.transport for server in profile.mcp_servers}
+        transport = next(iter(transports)) if len(transports) == 1 else "mixed"
+        with mcp_initialization_span(
+            adapter_shortname=self.shortname,
+            server_name="langchain_mcp",
+            transport=transport,
+            server_count=len(profile.mcp_servers),
+        ) as active:
+            tools = list(await client.get_tools())
+            active.set_attribute("kedi.mcp.tool_count", len(tools))
+            active.add_event(
+                "mcp tools discovered",
+                {"kedi.mcp.tool_count": len(tools)},
+            )
+            return tools
 
 
 def _langchain_tool_from_spec(tool: ToolSpec) -> Any:

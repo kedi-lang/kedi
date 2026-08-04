@@ -235,7 +235,7 @@ def test_lazy_adapter_rejects_subagent_execution_when_real_adapter_lacks_it() ->
         RuntimeError,
         match="Adapter 'unsupported' does not implement Kedi child execution",
     ):
-        lazy.telemetry_model_name()
+        lazy.subagent_run_kwargs(SubagentUsageLimits())
 
 
 def test_lazy_adapter_factory_is_called_once_for_concurrent_first_use() -> None:
