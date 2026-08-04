@@ -552,7 +552,7 @@ def _decorate_kedi_program(
             "kedi.runtime.cached_parse": True,
             "kedi.runtime.cached_compile": False,
         }
-        if kind == "bind" and capture_enabled("source"):
+        if kind == "bind" and capture_enabled("source_path"):
             attributes["code.file.path"] = source_id
         from .telemetry import runtime_span
 

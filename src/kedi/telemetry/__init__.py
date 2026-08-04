@@ -21,6 +21,7 @@ from .api import (
     record_histogram,
     reset_backend,
     restore_backend,
+    restore_backend_if_current,
     span,
     telemetry_enabled,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "record_histogram",
     "reset_backend",
     "restore_backend",
+    "restore_backend_if_current",
     "runtime_span",
     "span",
     "telemetry_enabled",

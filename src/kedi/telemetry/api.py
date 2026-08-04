@@ -8,7 +8,7 @@ from typing import Literal, Protocol
 AttributeScalar = bool | str | int | float
 AttributeValue = AttributeScalar | Sequence[AttributeScalar]
 Attributes = Mapping[str, AttributeValue]
-CaptureKind = Literal["content", "source"]
+CaptureKind = Literal["content", "source_path", "source_snippet"]
 SpanKind = Literal["internal", "client"]
 SpanLevel = Literal["lifecycle", "detailed"]
 TelemetryScope = Literal["runtime", "agent", "agentic", "artifacts"]
@@ -203,6 +203,21 @@ def restore_backend(backend: TelemetryBackend) -> None:
     global _backend
     with _backend_lock:
         _backend = backend
+
+
+def restore_backend_if_current(
+    *,
+    expected: TelemetryBackend,
+    replacement: TelemetryBackend,
+) -> bool:
+    """Restore a backend only while the caller still owns the active slot."""
+
+    global _backend
+    with _backend_lock:
+        if _backend is not expected:
+            return False
+        _backend = replacement
+        return True
 
 
 def reset_backend() -> None:

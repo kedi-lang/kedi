@@ -19,7 +19,7 @@ dependencies = [
     "docstring-parser>=0.18",
     "python-dotenv",
     "pydantic-settings",
-    "pydantic-ai>=1.0.17",
+    "pydantic-ai>=1.95.1,<3",
     "pydantic-monty>=0.0.19",
     "jsonschema>=4.26",
     "tree-sitter>=0.25",

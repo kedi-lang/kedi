@@ -439,7 +439,7 @@ class KediRuntime:
         }
         if proc_span is not None:
             attributes["code.line.number"] = proc_span.start_line
-            if proc_span.source_path is not None and capture_enabled("source"):
+            if proc_span.source_path is not None and capture_enabled("source_path"):
                 attributes["code.file.path"] = proc_span.source_path
 
         procedure_kind = "main" if fn is self._main else "procedure"

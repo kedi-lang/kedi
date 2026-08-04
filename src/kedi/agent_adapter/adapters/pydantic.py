@@ -9,10 +9,16 @@ from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai._run_context import AgentDepsT
-from pydantic_ai.capabilities import AbstractCapability, WrapRunHandler
+from pydantic_ai.capabilities import (
+    AbstractCapability,
+    ValidatedToolArgs,
+    WrapRunHandler,
+    WrapToolExecuteHandler,
+)
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.models import Model
 from pydantic_ai.output import OutputDataT
-from pydantic_ai.tools import RunContext
+from pydantic_ai.tools import RunContext, ToolDefinition
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.settings import (
@@ -32,7 +38,11 @@ from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
-from ..telemetry import reclassify_native_agent_span
+from ..telemetry import (
+    native_agent_span_scope,
+    native_tool_span_scope,
+    reclassify_native_agent_span,
+)
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -58,8 +68,23 @@ class _KediTelemetryCapability(AbstractCapability[Any]):
         *,
         handler: WrapRunHandler,
     ) -> AgentRunResult[Any]:
-        reclassify_native_agent_span()
-        return await handler()
+        del ctx
+        with native_agent_span_scope(True):
+            reclassify_native_agent_span()
+            return await handler()
+
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        handler: WrapToolExecuteHandler,
+    ) -> Any:
+        del ctx, tool_def
+        with native_tool_span_scope(call.tool_name):
+            return await handler(args)
 
 
 def _mcp_toolset_from_config(name: str, server_config: dict[str, object]) -> Any:
@@ -95,6 +120,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_history_replay=True,
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
+
+    def native_telemetry_enabled(self, operation: str) -> bool:
+        """Report per-agent native ownership without relying on process-global state."""
+
+        return operation in {"run_agent", "chat", "call_tool"} and self.instrument is not False
 
     def __init__(
         self,
@@ -442,8 +472,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             run_kwargs["capabilities"] = capabilities
         return run_kwargs
 
-    @staticmethod
-    def _with_telemetry_capability(existing: object | None) -> list[Any]:
+    def _with_telemetry_capability(self, existing: object | None) -> list[Any]:
         from ...telemetry import owns_native_spans
 
         if existing is None:
@@ -452,8 +481,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             capabilities = list(existing)
         else:
             raise TypeError("Pydantic AI capabilities must be a list or tuple.")
-        if owns_native_spans("pydantic", "run_agent") and not any(
-            isinstance(capability, _KediTelemetryCapability) for capability in capabilities
+        if (
+            owns_native_spans("pydantic", "run_agent")
+            and self.native_telemetry_enabled("run_agent")
+            and not any(
+                isinstance(capability, _KediTelemetryCapability) for capability in capabilities
+            )
         ):
             capabilities.append(_KediTelemetryCapability())
         return capabilities

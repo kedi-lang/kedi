@@ -15,6 +15,7 @@ from ..telemetry import (
     span,
 )
 from .approval import ApprovalDecision, ApprovalRequest
+from .telemetry import current_tool_call_name
 
 ApprovalMechanism = Literal["cli", "python_handler", "native_adapter"]
 ImmediateApprovalMode = Literal[
@@ -158,7 +159,7 @@ def record_cancelled(telemetry: ApprovalTelemetry) -> None:
 
 
 def _mark_parent_requested(parent: TelemetrySpan, request: ApprovalRequest) -> None:
-    if parent.get_attribute("kedi.operation.name") != "call_tool":
+    if current_tool_call_name() is None:
         return
     parent.set_attribute("kedi.tool.approval.required", True)
     parent.set_attribute("kedi.tool.risk", request.risk)
@@ -169,7 +170,7 @@ def _mark_parent_decision(
     request: ApprovalRequest | None,
     decision: ApprovalDecision,
 ) -> None:
-    if parent.get_attribute("kedi.operation.name") != "call_tool":
+    if current_tool_call_name() is None:
         return
     if request is not None:
         parent.set_attribute("kedi.tool.risk", request.risk)

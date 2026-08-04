@@ -56,7 +56,7 @@ def parse_program(
         "kedi.source.bytes": len(source_bytes),
         "kedi.source.lines": source_text.count("\n") + (1 if source_text else 0),
     }
-    if source_path is not None and capture_enabled("source"):
+    if source_path is not None and capture_enabled("source_path"):
         attributes["code.file.path"] = source_path
 
     source_type = "file" if source_path and not source_path.startswith("<") else "memory"

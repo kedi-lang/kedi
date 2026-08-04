@@ -133,7 +133,7 @@ class _ModuleLoader:
                 "kedi.module.name": path.stem,
                 "kedi.compile.cache_hit": False,
             }
-            if capture_enabled("source"):
+            if capture_enabled("source_path"):
                 attributes["code.file.path"] = str(path)
             with runtime_span(
                 f"compile module {path.stem}",
@@ -203,7 +203,7 @@ def compile_program(
         if executor is not None
         else "DefaultExecutor",
     }
-    if source_path is not None and capture_enabled("source"):
+    if source_path is not None and capture_enabled("source_path"):
         attributes["code.file.path"] = str(source_path)
 
     compiler = ProgramCompiler(

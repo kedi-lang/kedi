@@ -101,6 +101,7 @@ from kedi.agent_adapter.subagents.workflow.executor import (
     WorkflowAbortError,
     WorkflowExecutor,
 )
+from kedi.agent_adapter.telemetry import tool_call_span
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
     required_tool_call_scope,
@@ -125,14 +126,10 @@ from tests.telemetry_helpers import installed_recording_backend
 
 def test_subagent_run_reuses_delegation_tool_span() -> None:
     with installed_recording_backend() as backend:
-        with backend.start_span(
-            scope="agent",
-            name="call delegate_task",
-            operation="call_tool",
-            kind="internal",
-            level="lifecycle",
-            attributes={"gen_ai.tool.name": "delegate_task"},
-        ) as tool_span:
+        tool = ToolSpec(fn=lambda: None, name="delegate_task")
+        with tool_call_span(tool, adapter_shortname="test", argument_count=0) as telemetry:
+            assert telemetry.span is not None
+            tool_span = telemetry.span
             with _subagent_run_span({"kedi.subagent.run_id": "run-1"}) as subagent_span:
                 assert subagent_span is tool_span
 
@@ -164,14 +161,10 @@ def test_subagent_run_keeps_unrelated_parent_span() -> None:
 
 def test_dynamic_workflow_reuses_its_tool_span() -> None:
     with installed_recording_backend() as backend:
-        with backend.start_span(
-            scope="agent",
-            name="call run_workflow",
-            operation="call_tool",
-            kind="internal",
-            level="lifecycle",
-            attributes={"gen_ai.tool.name": "run_workflow"},
-        ) as tool_span:
+        tool = ToolSpec(fn=lambda: None, name="run_workflow")
+        with tool_call_span(tool, adapter_shortname="test", argument_count=0) as telemetry:
+            assert telemetry.span is not None
+            tool_span = telemetry.span
             with _dynamic_workflow_span({"kedi.workflow.id": "workflow-1"}) as workflow_span:
                 assert workflow_span is tool_span
 

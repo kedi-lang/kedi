@@ -345,7 +345,7 @@ class DefaultExecutor:
                 attributes["kedi.procedure.name"] = frame.procedure_name
             if frame.span is not None:
                 attributes["code.line.number"] = frame.span.start_line
-                if frame.span.source_path is not None and capture_enabled("source"):
+                if frame.span.source_path is not None and capture_enabled("source_path"):
                     attributes["code.file.path"] = frame.span.source_path
         with runtime_span(
             "run python",

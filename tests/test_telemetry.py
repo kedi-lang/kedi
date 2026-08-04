@@ -34,11 +34,14 @@ from kedi.agent_adapter.request_budget import ModelRequestBudget
 from kedi.agent_adapter.subagents.coordinator import _subagent_run_span
 from kedi.agent_adapter.subagents.workflow import _dynamic_workflow_span
 from kedi.agent_adapter.telemetry import (
+    adapter_owns_native_span,
     agent_call_span,
     mcp_initialization_span,
     mcp_server_name,
     mcp_transport_name,
     model_call_span,
+    native_agent_span_scope,
+    native_tool_span_scope,
     reclassify_native_agent_span,
     resolved_adapter_model,
     tool_call_span,
@@ -48,10 +51,12 @@ from kedi.agent_adapter.tool_override import ToolSpec, with_approval, with_tool_
 from kedi.app import run_program_cli, run_source_cli
 from kedi.lang import KediDiagnostic, KediParseError, Span
 from kedi.telemetry import (
+    NoOpTelemetryBackend,
     get_backend,
     install_backend,
     reset_backend,
     restore_backend,
+    restore_backend_if_current,
     runtime_span,
 )
 from tests.telemetry_helpers import RecordingTelemetryBackend, installed_recording_backend
@@ -299,10 +304,11 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
             level="lifecycle",
             attributes=None,
         ) as native:
-            with _agent_span(adapter) as state:
-                reclassify_native_agent_span()
-                state.observe(usage)
-                state.complete("native", model="test-model")
+            with native_agent_span_scope(True):
+                with _agent_span(adapter) as state:
+                    reclassify_native_agent_span()
+                    state.observe(usage)
+                    state.complete("native", model="test-model")
 
         with model_call_span(adapter, call_kind="produce", configured_model=None) as model_state:
             model_state.observe(usage)
@@ -410,8 +416,12 @@ def test_tool_telemetry_covers_results_sources_native_spans_and_failures() -> No
             level="lifecycle",
             attributes={"gen_ai.tool.name": "download"},
         ) as native:
-            with tool_call_span(byte_tool, adapter_shortname="test", argument_count=2) as state:
-                state.complete(object())
+            with native_agent_span_scope(True):
+                with native_tool_span_scope("download"):
+                    with tool_call_span(
+                        byte_tool, adapter_shortname="test", argument_count=2
+                    ) as state:
+                        state.complete(object())
         with tool_call_span(byte_tool, adapter_shortname="test", argument_count=0) as state:
             state.complete("not attached")
 
@@ -425,6 +435,22 @@ def test_tool_telemetry_covers_results_sources_native_spans_and_failures() -> No
         tool_source(ToolSpec(fn=lambda: None, name="internal", metadata={"source": "kedi"}))
         == "internal"
     )
+
+
+def test_native_tool_telemetry_without_a_recording_provider_span_is_safe() -> None:
+    tool = ToolSpec(fn=lambda: "ok", name="download", risk="read_only")
+    backend = RecordingTelemetryBackend(native_span_owners={"test": frozenset({"call_tool"})})
+
+    with installed_recording_backend(backend):
+        with native_agent_span_scope(True), native_tool_span_scope("download"):
+            with tool_call_span(tool, adapter_shortname="test", argument_count=0) as state:
+                state.complete("ok")
+        with pytest.raises(RuntimeError, match="failed"):
+            with native_agent_span_scope(True), native_tool_span_scope("download"):
+                with tool_call_span(tool, adapter_shortname="test", argument_count=0):
+                    raise RuntimeError("failed")
+
+    assert backend.finished_spans == []
 
 
 def test_sync_tool_telemetry_handles_awaitables_across_asyncio_contexts() -> None:
@@ -509,14 +535,10 @@ def test_approval_telemetry_covers_native_mechanism_immediate_and_async_cancella
     )
 
     with installed_recording_backend() as backend:
-        with backend.start_span(
-            scope="agent",
-            name="call write_file",
-            operation="call_tool",
-            kind="internal",
-            level="lifecycle",
-            attributes=None,
-        ) as parent:
+        tool = ToolSpec(fn=lambda: None, name="write_file", risk="mutating")
+        with tool_call_span(tool, adapter_shortname="test", argument_count=0) as tool_state:
+            assert tool_state.span is not None
+            parent = tool_state.span
             record_immediate_decision(
                 request,
                 ApprovalDecision.allow(),
@@ -536,25 +558,21 @@ def test_approval_telemetry_covers_native_mechanism_immediate_and_async_cancella
 
 
 def test_subagent_and_workflow_native_tool_spans_skip_non_scalar_attributes() -> None:
-    with installed_recording_backend() as backend:
-        with backend.start_span(
-            scope="agent",
-            name="call delegate_task",
-            operation="call_tool",
-            kind="internal",
-            level="lifecycle",
-            attributes={"gen_ai.tool.name": "delegate_task"},
-        ) as subagent:
+    with installed_recording_backend():
+        delegate_tool = ToolSpec(fn=lambda: None, name="delegate_task")
+        with tool_call_span(
+            delegate_tool, adapter_shortname="test", argument_count=0
+        ) as tool_state:
+            assert tool_state.span is not None
+            subagent = tool_state.span
             with _subagent_run_span({"kedi.subagent.profile": "planner", "ignored": object()}):
                 pass
-        with backend.start_span(
-            scope="agent",
-            name="call run_workflow",
-            operation="call_tool",
-            kind="internal",
-            level="lifecycle",
-            attributes={"gen_ai.tool.name": "run_workflow"},
-        ) as workflow:
+        workflow_tool = ToolSpec(fn=lambda: None, name="run_workflow")
+        with tool_call_span(
+            workflow_tool, adapter_shortname="test", argument_count=0
+        ) as tool_state:
+            assert tool_state.span is not None
+            workflow = tool_state.span
             with _dynamic_workflow_span(
                 {"kedi.workflow.parent_profile": "builder", "ignored": object()}
             ):
@@ -577,7 +595,7 @@ def test_source_capture_covers_cli_modules_procedures_and_python_api_bind(tmp_pa
     bound_source.write_text("= done\n", encoding="utf-8")
 
     with installed_recording_backend(
-        RecordingTelemetryBackend(capture=frozenset({"source"}))
+        RecordingTelemetryBackend(capture=frozenset({"source_path"}))
     ) as backend:
         assert run_program_cli(str(main), adapter="pydantic", model=None) == (0, "ok")
         assert run_source_cli(
@@ -635,7 +653,7 @@ def test_parser_telemetry_handles_bytes_multiple_diagnostics_and_internal_errors
 
     monkeypatch.setattr(parser_module, "cst_to_ast", raise_diagnostics)
     with installed_recording_backend(
-        RecordingTelemetryBackend(capture=frozenset({"source"}))
+        RecordingTelemetryBackend(capture=frozenset({"source_path"}))
     ) as backend:
         with pytest.raises(KediParseError, match="primary"):
             parser_module.parse_program(b"broken", source_path="broken.kedi")  # type: ignore[arg-type]
@@ -682,18 +700,91 @@ def test_runtime_cancellation_and_backend_lifecycle_are_observable() -> None:
     assert span.events[-1].name == "kedi.run.cancelled"
 
 
+def test_noop_backend_span_supports_attribute_reads() -> None:
+    assert NoOpTelemetryBackend().current_span().get_attribute("missing") is None
+
+
+def test_backend_compare_and_restore_preserves_newer_owner() -> None:
+    previous = get_backend()
+    owned = RecordingTelemetryBackend()
+    newer = RecordingTelemetryBackend()
+    try:
+        install_backend(owned)
+        assert restore_backend_if_current(expected=owned, replacement=previous) is True
+        assert get_backend() is previous
+
+        install_backend(owned)
+        install_backend(newer)
+        assert restore_backend_if_current(expected=owned, replacement=previous) is False
+        assert get_backend() is newer
+    finally:
+        restore_backend(previous)
+
+
 def test_pydantic_telemetry_capability_is_owned_once_and_reclassifies() -> None:
     backend = RecordingTelemetryBackend(native_span_owners={"pydantic": frozenset({"run_agent"})})
+    adapter = SimpleNamespace(native_telemetry_enabled=lambda operation: operation == "run_agent")
     with installed_recording_backend(backend):
-        capabilities = PydanticAdapter._with_telemetry_capability(None)
+        capabilities = PydanticAdapter._with_telemetry_capability(cast(Any, adapter), None)
         assert len(capabilities) == 1
-        assert PydanticAdapter._with_telemetry_capability(capabilities) == capabilities
+        assert (
+            PydanticAdapter._with_telemetry_capability(cast(Any, adapter), capabilities)
+            == capabilities
+        )
         with pytest.raises(TypeError, match="list or tuple"):
-            PydanticAdapter._with_telemetry_capability(object())
+            PydanticAdapter._with_telemetry_capability(cast(Any, adapter), object())
+
+        disabled = SimpleNamespace(native_telemetry_enabled=lambda operation: False)
+        assert PydanticAdapter._with_telemetry_capability(cast(Any, disabled), None) == []
 
     async def handler() -> str:
         return "done"
 
     capability = _KediTelemetryCapability()
-    result = asyncio.run(capability.wrap_run(cast(Any, None), handler=cast(Any, handler)))
+    ctx = SimpleNamespace()
+    result = asyncio.run(capability.wrap_run(cast(Any, ctx), handler=cast(Any, handler)))
     assert result == "done"
+
+    async def tool_handler(args: object) -> object:
+        return args
+
+    tool_args = object()
+    result = asyncio.run(
+        capability.wrap_tool_execute(
+            cast(Any, ctx),
+            call=cast(Any, SimpleNamespace(tool_name="lookup")),
+            tool_def=cast(Any, SimpleNamespace()),
+            args=cast(Any, tool_args),
+            handler=cast(Any, tool_handler),
+        )
+    )
+    assert result is tool_args
+
+
+def test_native_agent_ownership_and_reclassification_require_an_active_span() -> None:
+    class NativeAdapter:
+        shortname = "native"
+
+        def native_telemetry_enabled(self, operation: str) -> bool:
+            return operation == "run_agent"
+
+    adapter = NativeAdapter()
+    backend = RecordingTelemetryBackend(native_span_owners={"native": frozenset({"run_agent"})})
+    with installed_recording_backend(backend):
+        assert adapter_owns_native_span(adapter, "run_agent") is True
+        assert adapter_owns_native_span(adapter, "chat") is False
+        with agent_call_span(
+            adapter,
+            profile_name=None,
+            call_kind="invoke",
+            prompt_chars=1,
+            output_field_count=0,
+            tool_count=0,
+            mcp_server_count=0,
+            artifacts_enabled=True,
+            configured_model=None,
+        ):
+            with native_agent_span_scope(True):
+                reclassify_native_agent_span()
+
+    assert backend.finished_spans == []

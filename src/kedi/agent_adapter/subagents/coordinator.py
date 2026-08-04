@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from ...errors import KediExecutionError, KediTraceFrame
 from ...telemetry import TelemetrySpan, current_span, span as telemetry_span
+from ..telemetry import current_tool_call_name
 from ..invocation import InvocationUsage, observe_invocations
 from . import (
     DelegationResult,
@@ -58,13 +59,13 @@ def _subagent_run_span(
     attributes: Mapping[str, Any],
 ) -> AbstractContextManager[TelemetrySpan]:
     current = current_span()
-    tool_name = current.get_attribute("gen_ai.tool.name")
+    tool_name = current_tool_call_name()
     profile = attributes.get("kedi.subagent.profile")
     span_name = f"{profile} run" if isinstance(profile, str) and profile else "subagent run"
     if current.is_recording() and tool_name in _DELEGATION_TOOL_NAMES:
         current.update_name(span_name)
         current.set_attribute("kedi.operation.name", "run_agent")
-        current.set_attribute("gen_ai.operation.name", "run_agent")
+        current.set_attribute("gen_ai.operation.name", "invoke_agent")
         for key, value in attributes.items():
             if isinstance(value, (bool, str, int, float)):
                 current.set_attribute(key, value)

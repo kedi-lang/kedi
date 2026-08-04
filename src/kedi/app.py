@@ -441,7 +441,7 @@ def run_program_cli(
         "kedi.runtime.entrypoint": "main",
         "kedi.adapter.name": adapter,
     }
-    if capture_enabled("source"):
+    if capture_enabled("source_path"):
         attributes["code.file.path"] = str(source_path)
 
     from .telemetry import runtime_span
@@ -494,7 +494,7 @@ def run_source_cli(
         "kedi.runtime.entrypoint": "main",
         "kedi.adapter.name": adapter,
     }
-    if capture_enabled("source"):
+    if capture_enabled("source_path"):
         attributes["code.file.path"] = source_path
 
     from .telemetry import runtime_span

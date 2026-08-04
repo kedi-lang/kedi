@@ -110,8 +110,13 @@ class RecordingTelemetryBackend:
         parent = self._active.get()
         recorded_attributes = dict(attributes or {})
         recorded_attributes["kedi.operation.name"] = operation
-        if operation in {"run_agent", "chat", "call_tool"}:
-            recorded_attributes["gen_ai.operation.name"] = operation
+        semantic_operation = {
+            "run_agent": "invoke_agent",
+            "chat": "chat",
+            "call_tool": "execute_tool",
+        }.get(operation)
+        if semantic_operation is not None:
+            recorded_attributes["gen_ai.operation.name"] = semantic_operation
         recorded = RecordedSpan(
             scope=scope,
             name=name,

@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 from typing_extensions import runtime_checkable
@@ -43,6 +43,18 @@ _native_agent_span_metadata: ContextVar[NativeAgentSpanMetadata | None] = Contex
     "kedi_native_agent_span_metadata",
     default=None,
 )
+_native_agent_span_active: ContextVar[bool] = ContextVar(
+    "kedi_native_agent_span_active",
+    default=False,
+)
+_native_tool_call_name: ContextVar[str | None] = ContextVar(
+    "kedi_native_tool_call_name",
+    default=None,
+)
+_current_tool_call_name: ContextVar[str | None] = ContextVar(
+    "kedi_current_tool_call_name",
+    default=None,
+)
 
 
 @runtime_checkable
@@ -63,6 +75,11 @@ class _AdapterDefaultModel(Protocol):
 @runtime_checkable
 class _AdapterTelemetryModel(Protocol):
     def telemetry_model_name(self) -> str | None: ...
+
+
+@runtime_checkable
+class _AdapterNativeTelemetry(Protocol):
+    def native_telemetry_enabled(self, operation: str) -> bool: ...
 
 
 def adapter_shortname(adapter: object) -> str:
@@ -90,6 +107,49 @@ def adapter_span_kind(adapter: object) -> Literal["internal", "client"]:
     if adapter_kind(adapter) == "agent-harness" or adapter_shortname(adapter) == "webgpu":
         return "client"
     return "internal"
+
+
+def adapter_owns_native_span(adapter: object, operation: str) -> bool:
+    """Return whether this exact adapter invocation is expected to own a native span."""
+
+    adapter_name = adapter_shortname(adapter)
+    if not owns_native_spans(adapter_name, operation):
+        return False
+    if isinstance(adapter, _AdapterNativeTelemetry):
+        return adapter.native_telemetry_enabled(operation)
+    return True
+
+
+@contextmanager
+def native_agent_span_scope(active: bool) -> Iterator[None]:
+    """Mark the concrete adapter invocation as natively instrumented."""
+
+    token = _native_agent_span_active.set(active)
+    try:
+        yield
+    finally:
+        _native_agent_span_active.reset(token)
+
+
+def native_agent_span_active() -> bool:
+    return _native_agent_span_active.get()
+
+
+@contextmanager
+def native_tool_span_scope(tool_name: str) -> Iterator[None]:
+    """Identify the provider-owned tool span for one concrete execution."""
+
+    token = _native_tool_call_name.set(tool_name)
+    try:
+        yield
+    finally:
+        _native_tool_call_name.reset(token)
+
+
+def current_tool_call_name() -> str | None:
+    """Return Kedi's current tool identity without reading provider span internals."""
+
+    return _current_tool_call_name.get()
 
 
 @dataclass(slots=True)
@@ -135,7 +195,7 @@ def agent_call_span(
 
     adapter_name = adapter_shortname(adapter)
     kind_name = adapter_kind_name(adapter_kind(adapter))
-    native_owned = owns_native_spans(adapter_name, "run_agent")
+    native_owned = adapter_owns_native_span(adapter, "run_agent")
     attributes: dict[str, bool | str | int] = {
         "gen_ai.agent.name": profile_name or "kedi",
         "gen_ai.output.type": "json" if call_kind == "produce" else "text",
@@ -230,14 +290,14 @@ def reclassify_native_agent_span() -> None:
     """Apply Kedi semantics to the current adapter-owned agent span."""
 
     metadata = _native_agent_span_metadata.get()
-    if metadata is None:
+    if metadata is None or not native_agent_span_active():
         return
     active = current_span()
     if not active.is_recording():
         return
     active.update_name(metadata.name)
     active.set_attribute("kedi.operation.name", "run_agent")
-    active.set_attribute("gen_ai.operation.name", "run_agent")
+    active.set_attribute("gen_ai.operation.name", "invoke_agent")
     for name, value in metadata.attributes.items():
         active.set_attribute(name, value)
     _add_agent_request_event(
@@ -386,7 +446,7 @@ def model_call_span(
     """Trace one adapter model boundary when no native instrumentor owns it."""
 
     adapter_name = adapter_shortname(adapter)
-    native_owned = owns_native_spans(adapter_name, "chat")
+    native_owned = adapter_owns_native_span(adapter, "chat")
     display_model = configured_model or adapter_name
     span_context = (
         nullcontext(None)
@@ -437,7 +497,7 @@ class ToolCallTelemetry:
     outcome: str = "success"
 
     def complete(self, result: Any) -> None:
-        if self.span is None or self.span.get_attribute("kedi.operation.name") != "call_tool":
+        if self.span is None:
             return
         self.span.set_attribute("kedi.tool.result.type", qualified_type_name(result))
         size = _result_size(result)
@@ -452,22 +512,17 @@ class ToolCallTelemetry:
 
     def fail(self, exc: BaseException) -> None:
         self.outcome = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
-        if self.span is None or self.span.get_attribute("kedi.operation.name") != "call_tool":
+        if self.span is None:
             return
         self.span.set_attribute("error.type", type(exc).__name__)
         if isinstance(exc, asyncio.CancelledError):
             self.span.add_event("kedi.tool.cancelled")
 
     def finish(self) -> None:
-        if self.span is not None and self.span.get_attribute("kedi.operation.name") != "call_tool":
-            return
-        risk = self.risk
-        if self.span is not None:
-            risk = cast(str, self.span.get_attribute("kedi.tool.risk"))
         dimensions = {
             "adapter": self.adapter_name,
             "source": self.source,
-            "risk": risk,
+            "risk": self.risk,
             "outcome": self.outcome,
         }
         add_counter("agent", "kedi.tool.calls", attributes=dimensions)
@@ -488,17 +543,21 @@ def tool_call_span(
     argument_count: int,
 ) -> Iterator[ToolCallTelemetry]:
     source = tool_source(tool)
-    native_owned = owns_native_spans(adapter_shortname, "call_tool")
+    native_owned = (
+        owns_native_spans(adapter_shortname, "call_tool")
+        and native_agent_span_active()
+        and _native_tool_call_name.get() == tool.name
+    )
     active: TelemetrySpan | None = None
     span_context: Any
     if native_owned:
         current = current_span()
-        current_tool = current.get_attribute("gen_ai.tool.name")
-        if current.is_recording() and current_tool == tool.name:
+        if current.is_recording():
             active = current
             current.update_name(f"call {tool.name}")
             current.set_attribute("kedi.operation.name", "call_tool")
-            current.set_attribute("gen_ai.operation.name", "call_tool")
+            current.set_attribute("gen_ai.operation.name", "execute_tool")
+            current.set_attribute("gen_ai.tool.name", tool.name)
         span_context = nullcontext(active)
     else:
         span_context = span(
@@ -514,27 +573,31 @@ def tool_call_span(
             },
         )
 
-    with span_context as active_span:
-        if active_span is not None:
-            active_span.set_attribute("kedi.adapter.name", adapter_shortname)
-            active_span.set_attribute("kedi.tool.source", source)
-            active_span.set_attribute("kedi.tool.risk", tool.risk)
-            active_span.set_attribute("kedi.tool.argument_count", argument_count)
-            active_span.add_event("kedi.tool.execution.started")
-        state = ToolCallTelemetry(
-            span=active_span,
-            source=source,
-            risk=tool.risk,
-            adapter_name=adapter_shortname,
-            started_at=perf_counter(),
-        )
-        try:
-            yield state
-        except BaseException as exc:
-            state.fail(exc)
-            raise
-        finally:
-            state.finish()
+    tool_token = _current_tool_call_name.set(tool.name)
+    try:
+        with span_context as active_span:
+            if active_span is not None:
+                active_span.set_attribute("kedi.adapter.name", adapter_shortname)
+                active_span.set_attribute("kedi.tool.source", source)
+                active_span.set_attribute("kedi.tool.risk", tool.risk)
+                active_span.set_attribute("kedi.tool.argument_count", argument_count)
+                active_span.add_event("kedi.tool.execution.started")
+            state = ToolCallTelemetry(
+                span=active_span,
+                source=source,
+                risk=tool.risk,
+                adapter_name=adapter_shortname,
+                started_at=perf_counter(),
+            )
+            try:
+                yield state
+            except BaseException as exc:
+                state.fail(exc)
+                raise
+            finally:
+                state.finish()
+    finally:
+        _current_tool_call_name.reset(tool_token)
 
 
 def tool_source(tool: ToolSpec) -> str:

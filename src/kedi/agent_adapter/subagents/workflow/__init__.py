@@ -25,6 +25,7 @@ from pydantic_monty import (
 
 from ...tool_override import ToolSpec
 from ....telemetry import TelemetrySpan, current_span, span as telemetry_span
+from ...telemetry import current_tool_call_name
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt
 from ..budget import (
@@ -90,7 +91,7 @@ def _dynamic_workflow_span(
     attributes: Mapping[str, Any],
 ) -> AbstractContextManager[TelemetrySpan]:
     current = current_span()
-    tool_name = current.get_attribute("gen_ai.tool.name")
+    tool_name = current_tool_call_name()
     profile = attributes.get("kedi.workflow.parent_profile")
     workflow_name = (
         f"{profile} workflow" if isinstance(profile, str) and profile else "dynamic workflow"
@@ -98,7 +99,7 @@ def _dynamic_workflow_span(
     if current.is_recording() and tool_name == "run_workflow":
         current.update_name(workflow_name)
         current.set_attribute("kedi.operation.name", "run_workflow")
-        current.set_attribute("gen_ai.operation.name", "run_workflow")
+        current.set_attribute("gen_ai.operation.name", "execute_tool")
         for key, value in attributes.items():
             if isinstance(value, (bool, str, int, float)):
                 current.set_attribute(key, value)
