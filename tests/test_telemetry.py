@@ -12,7 +12,6 @@ import pytest
 
 import kedi
 import kedi.lang.parser as parser_module
-from kedi.artifacts.telemetry import artifact_span
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.adapters.pydantic import (
     PydanticAdapter,
@@ -49,6 +48,7 @@ from kedi.agent_adapter.telemetry import (
 )
 from kedi.agent_adapter.tool_override import ToolSpec, with_approval, with_tool_telemetry
 from kedi.app import run_program_cli, run_source_cli
+from kedi.artifacts.telemetry import artifact_span
 from kedi.lang import KediDiagnostic, KediParseError, Span
 from kedi.telemetry import (
     NoOpTelemetryBackend,

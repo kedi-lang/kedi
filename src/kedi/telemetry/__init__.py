@@ -1,8 +1,8 @@
 """Dependency-free telemetry seam used by the Kedi runtime."""
 
 from .api import (
-    AttributeScalar,
     Attributes,
+    AttributeScalar,
     AttributeValue,
     CaptureKind,
     NoOpTelemetryBackend,

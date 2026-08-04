@@ -12,9 +12,10 @@ from threading import Lock
 from typing import Any, cast
 
 from ...errors import KediExecutionError, KediTraceFrame
-from ...telemetry import TelemetrySpan, current_span, span as telemetry_span
-from ..telemetry import current_tool_call_name
+from ...telemetry import TelemetrySpan, current_span
+from ...telemetry import span as telemetry_span
 from ..invocation import InvocationUsage, observe_invocations
+from ..telemetry import current_tool_call_name
 from . import (
     DelegationResult,
     SubagentConversationContext,

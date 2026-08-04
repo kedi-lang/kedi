@@ -8,8 +8,8 @@ from time import perf_counter
 from typing import Literal
 
 from .api import (
-    AttributeScalar,
     Attributes,
+    AttributeScalar,
     SpanLevel,
     TelemetrySpan,
     add_counter,

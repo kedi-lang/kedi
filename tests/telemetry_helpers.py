@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from kedi.telemetry import (
-    AttributeValue,
     Attributes,
+    AttributeValue,
     CaptureKind,
     SpanKind,
     SpanLevel,

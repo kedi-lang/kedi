@@ -23,9 +23,10 @@ from pydantic_monty import (
     MontyTypingError,
 )
 
-from ...tool_override import ToolSpec
-from ....telemetry import TelemetrySpan, current_span, span as telemetry_span
+from ....telemetry import TelemetrySpan, current_span
+from ....telemetry import span as telemetry_span
 from ...telemetry import current_tool_call_name
+from ...tool_override import ToolSpec
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt
 from ..budget import (
