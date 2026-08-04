@@ -84,7 +84,7 @@ def artifact_span(action: str, **attributes: object) -> Iterator[TelemetrySpan]:
         "release": "released",
         "expire": "expired",
     }.get(action, action)
-    active.add_event(f"kedi.artifact.{event_action}", safe_attributes)
+    active.add_event(f"artifact {event_action}", safe_attributes)
     yield active
 
 
@@ -93,7 +93,7 @@ def model_context_preflight_span(**attributes: object) -> Iterator[TelemetrySpan
     """Attach one payload-free request-admission decision to the active agent span."""
 
     active = current_span()
-    active.add_event("kedi.context.preflight", _context_attributes(attributes))
+    active.add_event("context preflight", _context_attributes(attributes))
     yield active
 
 

@@ -231,7 +231,7 @@ def test_context_preflight_is_an_event_with_namespaced_attributes() -> None:
 
     assert backend.finished_spans == [parent]
     event = parent.events[0]
-    assert event.name == "kedi.context.preflight"
+    assert event.name == "context preflight"
     assert event.attributes["kedi.context.estimated_input_tokens"] > 0
     assert parent.attributes["kedi.context.decision"] == "admitted"
     assert parent.attributes["kedi.context.request_number"] == 1
@@ -320,7 +320,7 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
 
     assert native.name == "agent planner"
     assert native.attributes["kedi.operation.name"] == "run_agent"
-    assert native.events[0].name == "kedi.agent.request.prepared"
+    assert native.events[0].name == "agent request prepared"
 
     with installed_recording_backend() as backend:
         with _agent_span(adapter) as state:
@@ -342,7 +342,7 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
     agent_spans = [span for span in backend.finished_spans if span.operation == "run_agent"]
     assert agent_spans[0].attributes["gen_ai.usage.output_tokens"] == 7
     assert agent_spans[1].attributes["error.type"] == "CancelledError"
-    assert agent_spans[1].events[-1].name == "kedi.agent.cancelled"
+    assert agent_spans[1].events[-1].name == "agent cancelled"
     assert agent_spans[2].attributes["error.type"] == "RuntimeError"
     chat_spans = [span for span in backend.finished_spans if span.operation == "chat"]
     assert chat_spans[0].name == "chat test"
@@ -401,7 +401,7 @@ def test_tool_telemetry_covers_results_sources_native_spans_and_failures() -> No
     assert calls[0].attributes["kedi.tool.result.size_bytes"] == 2
     assert calls[1].attributes["kedi.tool.result.artifactized"] is True
     assert calls[2].attributes["error.type"] == "CancelledError"
-    assert calls[2].events[-1].name == "kedi.tool.cancelled"
+    assert calls[2].events[-1].name == "tool cancelled"
     assert calls[3].attributes["error.type"] == "RuntimeError"
 
     native_backend = RecordingTelemetryBackend(
@@ -697,7 +697,7 @@ def test_runtime_cancellation_and_backend_lifecycle_are_observable() -> None:
 
     span = backend.finished_spans[0]
     assert span.attributes["error.type"] == "CancelledError"
-    assert span.events[-1].name == "kedi.run.cancelled"
+    assert span.events[-1].name == "run cancelled"
 
 
 def test_noop_backend_span_supports_attribute_reads() -> None:

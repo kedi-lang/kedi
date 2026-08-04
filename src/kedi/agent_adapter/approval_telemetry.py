@@ -65,7 +65,7 @@ def approval_span(
         attributes["kedi.adapter.name"] = request.adapter_shortname
     started_at = perf_counter()
     with span(
-        "agentic",
+        "agent",
         f"await approval {request.tool_name}",
         "await_approval",
         attributes=attributes,
@@ -77,7 +77,7 @@ def approval_span(
             risk=request.risk,
             started_at=started_at,
         )
-        active.add_event("kedi.approval.requested")
+        active.add_event("approval requested")
         try:
             yield telemetry
         except BaseException as exc:
@@ -93,9 +93,9 @@ def approval_span(
                 "risk": request.risk,
                 "decision": telemetry.decision,
             }
-            add_counter("agentic", "kedi.approval.requests", attributes=dimensions)
+            add_counter("agent", "kedi.approval.requests", attributes=dimensions)
             record_histogram(
-                "agentic",
+                "agent",
                 "kedi.approval.wait.duration",
                 max(0.0, perf_counter() - started_at),
                 unit="s",
@@ -112,7 +112,7 @@ def record_immediate_decision(
     parent = current_span()
     _mark_parent_decision(parent, request, decision)
     parent.add_event(
-        "kedi.tool.approval",
+        "tool approval",
         {
             "kedi.approval.mode": mode,
             "kedi.approval.decision": decision.decision,
@@ -123,7 +123,7 @@ def record_immediate_decision(
 
 def record_pending(telemetry: ApprovalTelemetry) -> None:
     telemetry.span.set_attribute("kedi.approval.state", "pending")
-    telemetry.span.add_event("kedi.approval.pending")
+    telemetry.span.add_event("approval pending")
 
 
 def record_decision(telemetry: ApprovalTelemetry, decision: ApprovalDecision) -> None:
@@ -139,13 +139,13 @@ def record_decision(telemetry: ApprovalTelemetry, decision: ApprovalDecision) ->
         decision.decision == "edit",
     )
     telemetry.span.add_event(
-        "kedi.approval.decided",
+        "approval decided",
         {"kedi.approval.decision": decision.decision},
     )
     _mark_parent_decision(telemetry.parent_tool_span, None, decision)
     if decision.decision == "edit":
         add_counter(
-            "agentic",
+            "agent",
             "kedi.approval.edits",
             attributes={"mechanism": telemetry.mechanism, "risk": telemetry.risk},
         )
@@ -154,7 +154,7 @@ def record_decision(telemetry: ApprovalTelemetry, decision: ApprovalDecision) ->
 def record_cancelled(telemetry: ApprovalTelemetry) -> None:
     telemetry.decision = "cancelled"
     telemetry.span.set_attribute("kedi.approval.state", "cancelled")
-    telemetry.span.add_event("kedi.approval.cancelled")
+    telemetry.span.add_event("approval cancelled")
     telemetry.parent_tool_span.set_attribute("kedi.tool.approval.decision", "cancelled")
 
 

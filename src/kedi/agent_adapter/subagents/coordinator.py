@@ -71,7 +71,7 @@ def _subagent_run_span(
                 current.set_attribute(key, value)
         return nullcontext(current)
     return telemetry_span(
-        "agentic",
+        "agent",
         span_name,
         "run_agent",
         attributes={

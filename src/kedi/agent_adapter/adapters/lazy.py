@@ -77,7 +77,7 @@ class LazyAdapter:
                             active.set_attribute("error.type", type(exc).__name__)
                             raise
                         else:
-                            active.add_event("kedi.adapter.initialized")
+                            active.add_event("adapter initialized")
                         finally:
                             dimensions = {
                                 "adapter": self.shortname,

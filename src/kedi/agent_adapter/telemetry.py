@@ -263,7 +263,7 @@ def agent_call_span(
                 outcome = "cancelled"
                 if active is not None:
                     active.set_attribute("error.type", type(exc).__name__)
-                    active.add_event("kedi.agent.cancelled")
+                    active.add_event("agent cancelled")
                 raise
             except BaseException as exc:
                 outcome = "error"
@@ -316,7 +316,7 @@ def _add_agent_request_event(
     output_field_count: int,
 ) -> None:
     active.add_event(
-        "kedi.agent.request.prepared",
+        "agent request prepared",
         {
             "kedi.agent.prompt_chars": prompt_chars,
             "kedi.tools.available_count": tool_count,
@@ -506,7 +506,7 @@ class ToolCallTelemetry:
         artifactized = _is_artifact_ref(result)
         self.span.set_attribute("kedi.tool.result.artifactized", artifactized)
         self.span.add_event(
-            "kedi.tool.output.admitted",
+            "tool output admitted",
             {"kedi.tool.output.admission": "artifact" if artifactized else "inline"},
         )
 
@@ -516,7 +516,7 @@ class ToolCallTelemetry:
             return
         self.span.set_attribute("error.type", type(exc).__name__)
         if isinstance(exc, asyncio.CancelledError):
-            self.span.add_event("kedi.tool.cancelled")
+            self.span.add_event("tool cancelled")
 
     def finish(self) -> None:
         dimensions = {
@@ -581,7 +581,7 @@ def tool_call_span(
                 active_span.set_attribute("kedi.tool.source", source)
                 active_span.set_attribute("kedi.tool.risk", tool.risk)
                 active_span.set_attribute("kedi.tool.argument_count", argument_count)
-                active_span.add_event("kedi.tool.execution.started")
+                active_span.add_event("tool execution started")
             state = ToolCallTelemetry(
                 span=active_span,
                 source=source,
@@ -652,7 +652,7 @@ def mcp_initialization_span(
             active.set_attribute("error.type", type(exc).__name__)
             raise
         else:
-            active.add_event("kedi.mcp.connected")
+            active.add_event("mcp connected")
         finally:
             dimensions = {
                 "adapter": adapter_shortname,

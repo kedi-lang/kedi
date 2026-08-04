@@ -572,7 +572,7 @@ async def _mcp_tools(
                 )
             active.set_attribute("kedi.mcp.tool_count", len(discovered))
             active.add_event(
-                "kedi.mcp.tools_discovered",
+                "mcp tools discovered",
                 {"kedi.mcp.tool_count": len(discovered)},
             )
     return tools

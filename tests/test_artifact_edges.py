@@ -1338,7 +1338,7 @@ def test_artifact_spans_never_attach_structured_payloads() -> None:
     assert backend.finished_spans == [parent]
     assert [(event.name, event.attributes) for event in parent.events] == [
         (
-            "kedi.artifact.read",
+            "artifact read",
             {
                 "kedi.artifact.ref_id": "art_safe",
                 "kedi.artifact.size_bytes": 12,

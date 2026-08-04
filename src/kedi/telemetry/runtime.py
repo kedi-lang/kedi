@@ -80,7 +80,7 @@ def runtime_span(
         except asyncio.CancelledError as exc:
             outcome = "cancelled"
             active.set_attribute("error.type", type(exc).__name__)
-            active.add_event("kedi.run.cancelled")
+            active.add_event("run cancelled")
             raise
         except BaseException as exc:
             outcome = "error"

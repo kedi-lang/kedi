@@ -99,7 +99,7 @@ def parse_program(
                     }
                     if diagnostic.code is not None:
                         event_attributes["kedi.diagnostic.code"] = diagnostic.code
-                    active.add_event("kedi.diagnostic", event_attributes)
+                    active.add_event("parse diagnostic", event_attributes)
             raise
         except BaseException as exc:
             active.set_attribute("error.type", type(exc).__name__)

@@ -11,7 +11,7 @@ Attributes = Mapping[str, AttributeValue]
 CaptureKind = Literal["content", "source_path", "source_snippet"]
 SpanKind = Literal["internal", "client"]
 SpanLevel = Literal["lifecycle", "detailed"]
-TelemetryScope = Literal["runtime", "agent", "agentic", "artifacts"]
+TelemetryScope = Literal["runtime", "agent", "artifacts"]
 
 
 class TelemetrySpan(Protocol):

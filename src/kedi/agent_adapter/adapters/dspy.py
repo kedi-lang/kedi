@@ -375,7 +375,7 @@ class DSPyAdapter:
                     )
                     active.set_attribute("kedi.mcp.tool_count", len(listed_tools.tools))
                     active.add_event(
-                        "kedi.mcp.tools_discovered",
+                        "mcp tools discovered",
                         {"kedi.mcp.tool_count": len(listed_tools.tools)},
                     )
             prediction = dspy.ReAct(sig, tools=[*tools, *mcp_tools])

@@ -503,12 +503,12 @@ def _decorate_kedi_program(
             cached, cache_flight, owns_flight = _claim_response_cache_key(cache_key)
             if cached is not _CACHE_MISS:
                 current_span().add_event(
-                    "kedi.cache.hit",
+                    "cache hit",
                     {"kedi.cache.kind": "response"},
                 )
                 return cast(R, _isolate_cached(cached))
             current_span().add_event(
-                "kedi.cache.miss",
+                "cache miss",
                 {"kedi.cache.kind": "response"},
             )
             if not owns_flight:

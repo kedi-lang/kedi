@@ -93,9 +93,9 @@ def test_approval_telemetry_records_states_without_arguments() -> None:
         "kedi.approval.arguments_edited": True,
     }
     assert [event.name for event in recorded.events] == [
-        "kedi.approval.requested",
-        "kedi.approval.pending",
-        "kedi.approval.decided",
+        "approval requested",
+        "approval pending",
+        "approval decided",
     ]
     assert "path" not in recorded.attributes
     assert "content" not in recorded.attributes
@@ -122,9 +122,9 @@ def test_approval_telemetry_records_cancellation() -> None:
     assert recorded.attributes["kedi.approval.state"] == "cancelled"
     assert recorded.attributes["error.type"] == "ApprovalCancelled"
     assert [event.name for event in recorded.events] == [
-        "kedi.approval.requested",
-        "kedi.approval.pending",
-        "kedi.approval.cancelled",
+        "approval requested",
+        "approval pending",
+        "approval cancelled",
     ]
 
 

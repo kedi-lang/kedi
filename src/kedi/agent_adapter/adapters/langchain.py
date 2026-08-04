@@ -354,7 +354,7 @@ class LangChainAdapter:
             tools = list(await client.get_tools())
             active.set_attribute("kedi.mcp.tool_count", len(tools))
             active.add_event(
-                "kedi.mcp.tools_discovered",
+                "mcp tools discovered",
                 {"kedi.mcp.tool_count": len(tools)},
             )
             return tools

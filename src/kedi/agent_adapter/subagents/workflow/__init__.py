@@ -105,7 +105,7 @@ def _dynamic_workflow_span(
                 current.set_attribute(key, value)
         return nullcontext(current)
     return telemetry_span(
-        "agentic",
+        "agent",
         workflow_name,
         "run_workflow",
         attributes={
