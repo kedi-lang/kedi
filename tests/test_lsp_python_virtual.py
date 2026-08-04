@@ -767,6 +767,17 @@ def test_python_virtual_document_imports_runtime_type_aliases():
     assert "file: FileUrl" in virtual["text"]
 
 
+def test_python_virtual_document_imports_approval_types():
+    src = (
+        "@approve(request: ApprovalRequest) -> ApprovalDecision:\n  = `ApprovalDecision.allow()`\n"
+    )
+    virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
+
+    assert "from kedi import ApprovalDecision, ApprovalRequest" in virtual["text"]
+    assert "request: ApprovalRequest" in virtual["text"]
+    assert "-> ApprovalDecision" in virtual["text"]
+
+
 def test_python_virtual_document_models_kedi_proc_stubs_for_metrics():
     src = (
         "@get_country(city):\n"

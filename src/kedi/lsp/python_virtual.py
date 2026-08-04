@@ -1531,6 +1531,9 @@ def _typing_import_lines(
             pydantic_imports.append(name)
     if pydantic_imports:
         lines.append(f"from pydantic import {', '.join(pydantic_imports)}")
+    kedi_names = sorted(imports_by_origin.get("kedi", ()))
+    if kedi_names:
+        lines.append(f"from kedi import {', '.join(kedi_names)}")
     return lines
 
 
@@ -1570,7 +1573,7 @@ def _typing_symbols_in_python_stub(stub: str | None) -> set[tuple[str, str]]:
 def _provided_python_type_imports(codes: Iterable[str]) -> tuple[set[str], set[str]]:
     names: set[str] = set()
     star_origins: set[str] = set()
-    known_origins = {"typing", "typing_extensions", "datetime", "re", "pydantic"}
+    known_origins = {"typing", "typing_extensions", "datetime", "re", "pydantic", "kedi"}
     for code in codes:
         try:
             module = py_ast.parse(code)

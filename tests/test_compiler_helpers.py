@@ -232,6 +232,8 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     assert build_type_env(broken_rt, None)["Email"].__name__ == "EmailStr"
     assert build_type_env(broken_rt, None)["HttpUrl"].__name__ == "HttpUrl"
     assert build_type_env(broken_rt, None)["FileUrl"].__name__ == "FileUrl"
+    assert build_type_env(broken_rt, None)["ApprovalRequest"].__name__ == "ApprovalRequest"
+    assert build_type_env(broken_rt, None)["ApprovalDecision"].__name__ == "ApprovalDecision"
     cast(Any, broken_rt)._type_env_stack = None
     assert "List" in build_type_env(broken_rt, None)
     with pytest.raises(KeyError, match="Unknown variable"):

@@ -19,6 +19,7 @@ from typing import Any
 import typing_extensions
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
+from ...agent_adapter.approval import ApprovalDecision, ApprovalRequest
 from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 
@@ -52,6 +53,8 @@ KEDI_RUNTIME_TYPES = {
     "EmailStr": EmailStr,
     "HttpUrl": HttpUrl,
     "FileUrl": FileUrl,
+    "ApprovalDecision": ApprovalDecision,
+    "ApprovalRequest": ApprovalRequest,
 }
 
 KEDI_RUNTIME_TYPE_ORIGINS = {
@@ -63,6 +66,8 @@ KEDI_RUNTIME_TYPE_ORIGINS = {
     "Email": "pydantic",
     "HttpUrl": "pydantic",
     "FileUrl": "pydantic",
+    "ApprovalDecision": "kedi",
+    "ApprovalRequest": "kedi",
 }
 
 KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS = {

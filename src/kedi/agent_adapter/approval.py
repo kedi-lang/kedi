@@ -4,9 +4,10 @@ import asyncio
 import copy
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from typing import Any, Iterator, Literal, Protocol, TypeAlias, cast, runtime_checkable
 
 from ..errors import KediExecutionError
 
@@ -186,23 +187,24 @@ def resolve_tool_approval(
     ) as telemetry:
         try:
             record_pending(telemetry)
-            result = policy.handler(request)
-            if inspect.isawaitable(result):
-                try:
-                    asyncio.get_running_loop()
-                except RuntimeError:
-                    decision = asyncio.run(
-                        _resolve_awaitable(cast(Awaitable[ApprovalDecision], result))
-                    )
+            with _approval_handler_agent_scope():
+                result = policy.handler(request)
+                if inspect.isawaitable(result):
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        decision = asyncio.run(
+                            _resolve_awaitable(cast(Awaitable[ApprovalDecision], result))
+                        )
+                    else:
+                        if inspect.iscoroutine(result):
+                            result.close()
+                        raise RuntimeError(
+                            "async approval handlers require an async tool wrapper when called "
+                            "from an event loop"
+                        )
                 else:
-                    if inspect.iscoroutine(result):
-                        result.close()
-                    raise RuntimeError(
-                        "async approval handlers require an async tool wrapper when called "
-                        "from an event loop"
-                    )
-            else:
-                decision = _validated_decision(result)
+                    decision = _validated_decision(result)
         except ApprovalCancelled:
             record_cancelled(telemetry)
             raise
@@ -250,14 +252,15 @@ async def resolve_tool_approval_async(
     ) as telemetry:
         try:
             record_pending(telemetry)
-            handler = policy.handler
-            if isinstance(handler, SupportsAsyncApprovalResolution):
-                result = handler.resolve_async(request)
-            else:
-                result = handler(request)
-            if inspect.isawaitable(result):
-                result = await result
-            decision = _validated_decision(result)
+            with _approval_handler_agent_scope():
+                handler = policy.handler
+                if isinstance(handler, SupportsAsyncApprovalResolution):
+                    result = handler.resolve_async(request)
+                else:
+                    result = handler(request)
+                if inspect.isawaitable(result):
+                    result = await result
+                decision = _validated_decision(result)
         except ApprovalCancelled:
             record_cancelled(telemetry)
             raise
@@ -267,6 +270,31 @@ async def resolve_tool_approval_async(
 
 async def _resolve_awaitable(result: Awaitable[ApprovalDecision]) -> ApprovalDecision:
     return _validated_decision(await result)
+
+
+@contextmanager
+def _approval_handler_agent_scope() -> Iterator[None]:
+    """Keep backend selection while isolating a nested approval-model call."""
+
+    from ..agent_profile.profile import AgentProfile
+    from ..agent_profile.stack import (
+        current_block_agent_profile,
+        replace_block_agent_profile_scope,
+    )
+    from ..artifacts import ArtifactPolicy
+
+    current = current_block_agent_profile()
+    isolated = AgentProfile(
+        model=current.model,
+        adapter_kind=current.adapter_kind,
+        adapter_shortname=current.adapter_shortname,
+        agent_command=current.agent_command,
+        effort=current.effort,
+        settings=current.settings,
+        artifacts=ArtifactPolicy.patch({"enabled": False}),
+    )
+    with replace_block_agent_profile_scope(isolated):
+        yield
 
 
 def _validated_decision(result: object) -> ApprovalDecision:

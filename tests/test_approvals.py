@@ -32,7 +32,7 @@ from kedi.agent_adapter.utils import (
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import AgentProfile, block_agent_profile_scope, current_block_agent_profile
 from kedi.agent_profile.model import eval_approval_directive, eval_profile_definition
 from kedi.agent_profile.registry import ProfileApprovalMember, ProfileDefinition
 from kedi.core import KediRuntime
@@ -440,6 +440,45 @@ def test_compiler_default_profile_reaches_top_level_and_procedure_tool_approval(
 
     assert runtime.run_main() == "safe.txt"
     assert calls == ["write_file"]
+
+
+def test_dynamic_approval_handler_keeps_backend_selection_but_isolates_agent_features() -> None:
+    seen: list[AgentProfile] = []
+    outer = AgentProfile(
+        model="judge-model",
+        adapter_shortname="pydantic",
+        system="outer instructions",
+        settings={"temperature": 0.1},
+        tools=("write_file",),
+        approval=ApprovalPolicy.allow(),
+        skills=True,
+        subagents=("planner",),
+    )
+
+    def approve(_request: ApprovalRequest) -> ApprovalDecision:
+        seen.append(current_block_agent_profile())
+        return ApprovalDecision.allow()
+
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={"path": "notes.txt"},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description="Write a file.",
+        metadata=None,
+    )
+    with block_agent_profile_scope(outer):
+        assert resolve_tool_approval(ApprovalPolicy.dynamic(approve), request).decision == "allow"
+
+    isolated = seen[0]
+    assert isolated.model == "judge-model"
+    assert isolated.adapter_shortname == "pydantic"
+    assert isolated.settings == {"temperature": 0.1}
+    assert isolated.system is None
+    assert isolated.tools == ()
+    assert isolated.approval is None
+    assert isolated.skills is None
+    assert isolated.subagents == ()
 
 
 def test_static_allow_and_deny_policies() -> None:

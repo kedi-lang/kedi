@@ -28,3 +28,14 @@ def block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
         yield
     finally:
         _block_agent_profile.reset(token)
+
+
+@contextmanager
+def replace_block_agent_profile_scope(profile: AgentProfile) -> Iterator[None]:
+    """Temporarily replace, rather than merge, the active lexical agent profile."""
+
+    token = _block_agent_profile.set(profile)
+    try:
+        yield
+    finally:
+        _block_agent_profile.reset(token)

@@ -21,7 +21,6 @@ from typing import (
     Sequence,
     Tuple,
     Union,
-    cast,
 )
 
 from pydantic import BaseModel, TypeAdapter
@@ -684,6 +683,7 @@ class KediRuntime:
             prompt = "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_adapter.tool_override import SupportsToolRegistration
             from .agent_profile import current_block_agent_profile
 
             profile = current_block_agent_profile()
@@ -693,8 +693,8 @@ class KediRuntime:
 
             tool_adapter: Any = None
             tool_ctx: Any = nullcontext()
-            if captured_tool_specs:
-                tool_adapter = cast(Any, adapter)
+            if isinstance(adapter, SupportsToolRegistration):
+                tool_adapter = adapter
                 tool_ctx = tool_adapter.tool_scope()
 
             with tool_ctx:
@@ -822,6 +822,7 @@ class KediRuntime:
             question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_adapter.tool_override import SupportsToolRegistration
             from .agent_profile import current_block_agent_profile
 
             # Support was already validated synchronously on the main thread
@@ -831,13 +832,12 @@ class KediRuntime:
             if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
 
-            # Register the pre-resolved (scope-correct) tool specs inside the adapter's per-call
-            # tool scope (ToolScope's ContextVar — isolated per worker by copy_context).
-            # tool_adapter is typed Any: _resolve_tool_specs already verified SupportsToolRegistration.
+            # Every tool-capable model call gets its own scope, including calls with no Kedi
+            # tools. This prevents a nested model call from inheriting its caller's registrations.
             tool_adapter: Any = None
             tool_ctx: Any = nullcontext()
-            if captured_tool_specs:
-                tool_adapter = cast(Any, adapter)  # _resolve_tool_specs verified tool support
+            if isinstance(adapter, SupportsToolRegistration):
+                tool_adapter = adapter
                 tool_ctx = tool_adapter.tool_scope()
 
             def produce_and_validate(active_question: str) -> Dict[str, Any]:
