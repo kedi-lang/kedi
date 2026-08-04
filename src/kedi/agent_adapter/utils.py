@@ -204,19 +204,15 @@ def kedi_procedure_to_pydantic_tool(
     args_validator: Any = None,
 ) -> Tool:
     """Build a ``pydantic_ai.Tool`` from a Kedi procedure."""
+    from dataclasses import replace
+
+    from .adapters.pydantic import pydantic_tool_from_spec
+
     spec = kedi_procedure_tool_spec(rt, proc, local_env=local_env)
-    assert spec.json_schema is not None
-    tool = Tool.from_schema(
-        function=spec.fn,
-        name=spec.name,
-        description=spec.description or "",
-        json_schema=spec.json_schema,
-        takes_ctx=False,
-        sequential=sequential,
+    return pydantic_tool_from_spec(
+        replace(spec, sequential=sequential),
         args_validator=args_validator,
     )
-    tool.metadata = spec.metadata
-    return tool
 
 
 def kedi_program_to_pydantic_tools(
@@ -229,6 +225,8 @@ def kedi_program_to_pydantic_tools(
     args_validator: Any = None,
 ) -> list[Tool]:
     """Build ``pydantic_ai.Tool`` objects for procedures in a parsed program."""
+    from .adapters.pydantic import pydantic_tool_from_spec
+
     schemas = program_procedure_json_schemas(
         rt,
         prog,
@@ -249,22 +247,35 @@ def kedi_program_to_pydantic_tools(
             parsed_docstring.description,
             local_env=local_env,
         )
-        tool = Tool.from_schema(
-            function=_make_tool_function(rt, proc),
+        tool_fn = _make_tool_function(rt, proc)
+        spec = ToolSpec(
+            fn=tool_fn,
             name=proc.name,
             description=tool_description,
             json_schema=json_schema,
-            takes_ctx=False,
+            return_schema=return_schema,
+            metadata=_tool_metadata(
+                proc,
+                json_schema,
+                return_schema,
+                description=tool_description,
+            ),
+            proc=proc,
+            risk=_procedure_tool_risk(proc),
+            risk_resolver=_procedure_tool_risk_resolver(proc),
+            argument_validator=_procedure_tool_argument_validator(
+                rt,
+                proc,
+                tool_fn,
+            ),
             sequential=sequential,
-            args_validator=args_validator,
         )
-        tool.metadata = _tool_metadata(
-            proc,
-            json_schema,
-            return_schema,
-            description=tool_description,
+        tools.append(
+            pydantic_tool_from_spec(
+                spec,
+                args_validator=args_validator,
+            )
         )
-        tools.append(tool)
     return tools
 
 

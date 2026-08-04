@@ -768,7 +768,9 @@ def test_python_callable_for_tool_skips_non_dict_envs() -> None:
 
 
 def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
-    from unittest.mock import AsyncMock, patch
+    import asyncio
+
+    from pydantic_ai.models.test import TestModel
 
     from kedi.agent_adapter.adapters import PydanticAdapter
     from kedi.agent_adapter.utils import kedi_procedure_tool_spec
@@ -777,17 +779,15 @@ def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
     prog = parse_program(src)
     rt = compile_program(prog, adapter=PydanticAdapter(model="test"))
     tool = kedi_procedure_tool_spec(rt, prog.procedures[0])
-    adapter = PydanticAdapter(model="test")
+    model = TestModel()
+    adapter = PydanticAdapter(model=model)
 
-    fake_run = AsyncMock(return_value=type("R", (), {"output": "ok"})())
-    with patch.object(adapter, "run", fake_run):
-        with adapter.tool_scope():
-            adapter.register_tool(tool)
-            import asyncio
+    with adapter.tool_scope():
+        adapter.register_tool(tool)
+        asyncio.run(adapter.produce("go", output_type=str))
 
-            asyncio.run(adapter.produce("go", output_type=str))
-    assert fake_run.await_args is not None
-    assert fake_run.await_args.kwargs.get("toolsets") is not None
+    assert model.last_model_request_parameters is not None
+    assert [tool.name for tool in model.last_model_request_parameters.function_tools] == ["search"]
 
 
 def test_pydantic_adapter_output_schema_uses_annotated_description() -> None:

@@ -15,8 +15,10 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 from pydantic_ai.capabilities import HandleDeferredToolCalls
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
-from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolCallPart, ToolDenied
+from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolDenied
 from pydantic_ai.toolsets import ApprovalRequiredToolset, FunctionToolset
 
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
@@ -2083,85 +2085,57 @@ def test_pydantic_adapter_builds_mcp_toolsets(monkeypatch: pytest.MonkeyPatch) -
         )
 
 
-def test_pydantic_adapter_filters_active_profile_model_settings(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = object.__new__(PydanticAdapter)
-    adapter._tool_scope = ToolScope()
-    adapter._subagent_failure_policy = "fail_closed"
-    _set_profile_stack(
-        adapter,
-        AgentProfile(
-            settings={
-                "temperature": 0.2,
-                "parallel_tool_calls": False,
-                "num_retries": 2,
-            }
-        ),
-    )
-    seen_kwargs: list[dict[str, Any]] = []
+def test_pydantic_adapter_filters_active_profile_model_settings() -> None:
+    seen_settings: list[dict[str, Any]] = []
 
-    async def fake_run(template: str, **kwargs: Any) -> SimpleNamespace:
-        assert template == "template"
-        seen_kwargs.append(kwargs)
-        return SimpleNamespace(output=DirectOutput(value="ok"))
+    async def respond(_messages: list[object], info: AgentInfo) -> ModelResponse:
+        seen_settings.append(dict(info.model_settings or {}))
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"value": "ok"})])
 
-    monkeypatch.setattr(adapter, "run", fake_run)
-
-    assert asyncio.run(adapter.produce("template", output_type=DirectOutput)) == DirectOutput(
-        value="ok"
-    )
-    assert seen_kwargs == [
-        {
-            "output_type": DirectOutput,
-            "model_settings": {
-                "temperature": 0.2,
-                "parallel_tool_calls": False,
-            },
+    adapter = PydanticAdapter(FunctionModel(respond))
+    profile = AgentProfile(
+        settings={
+            "temperature": 0.2,
+            "parallel_tool_calls": False,
+            "num_retries": 2,
         }
-    ]
-
-    seen_kwargs.clear()
-    assert asyncio.run(
-        adapter.produce(
-            "template",
-            output_type=DirectOutput,
-            model_settings={"seed": 1},
+    )
+    with adapter.profile_override(profile):
+        assert asyncio.run(adapter.produce("template", output_type=DirectOutput)) == DirectOutput(
+            value="ok"
         )
-    ) == DirectOutput(value="ok")
-    assert seen_kwargs == [
-        {
-            "output_type": DirectOutput,
-            "model_settings": {
-                "seed": 1,
-                "temperature": 0.2,
-                "parallel_tool_calls": False,
-            },
-        }
+        assert asyncio.run(
+            adapter.produce(
+                "template",
+                output_type=DirectOutput,
+                model_settings={"seed": 1},
+            )
+        ) == DirectOutput(value="ok")
+
+    assert seen_settings == [
+        {"temperature": 0.2, "parallel_tool_calls": False},
+        {"seed": 1, "temperature": 0.2, "parallel_tool_calls": False},
     ]
 
 
-def test_pydantic_adapter_uses_profile_system_as_default_instruction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    adapter = PydanticAdapter("test")
-    captured: dict[str, Any] = {}
+def test_pydantic_adapter_uses_profile_system_as_default_instruction() -> None:
+    captured: list[str | None] = []
 
-    async def fake_run(*_: Any, **kwargs: Any) -> SimpleNamespace:
-        captured.update(kwargs)
-        return SimpleNamespace(output="ok")
+    async def respond(messages: list[object], _info: AgentInfo) -> ModelResponse:
+        request = next(message for message in messages if isinstance(message, ModelRequest))
+        captured.append(request.instructions)
+        return ModelResponse(parts=[TextPart("ok")])
 
-    monkeypatch.setattr(adapter, "run", fake_run)
+    adapter = PydanticAdapter(FunctionModel(respond))
     with adapter.profile_override(AgentProfile(system="Be exact.")):
         result = asyncio.run(adapter.produce("template", output_type=str))
 
     assert result == "ok"
-    assert captured["instructions"] == "Be exact."
+    assert captured == ["Be exact."]
 
-    captured.clear()
     with adapter.profile_override(AgentProfile(system="Raw system.")):
         assert adapter.invoke_sync(prompt="raw") == "ok"
-    assert captured["instructions"] == "Raw system."
+    assert captured == ["Be exact.", "Raw system."]
 
 
 def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(

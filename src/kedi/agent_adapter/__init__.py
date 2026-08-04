@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         LazyAdapter,
         PydanticAdapter,
         WebGPUAdapter,
+        pydantic_tool_from_spec,
     )
 
 
@@ -42,6 +43,7 @@ _ADAPTER_EXPORTS = frozenset(
         "LangChainAdapter",
         "LazyAdapter",
         "PydanticAdapter",
+        "pydantic_tool_from_spec",
         "WebGPUAdapter",
     }
 )
@@ -85,6 +87,7 @@ __all__ = [
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
+    "pydantic_tool_from_spec",
     "SupportsToolRegistration",
     "SupportsConversationState",
     "T",

@@ -186,6 +186,8 @@ def test_artifact_contract_routes_simple_and_complex_inspection() -> None:
 
     assert "read_artifact for a known literal or bounded inspection" in instructions
     assert "filtering, aggregation, joins, or multi-artifact transformations" in instructions
+    assert "use the exact ref_id returned by each tool" in instructions
+    assert "never infer identity or order from its suffix" in instructions
     assert isinstance(usage_hint, str)
     assert "read_artifact for a known literal or bounded inspection" in usage_hint
     assert "filtering, aggregation, joins, or multi-artifact transformations" in usage_hint
