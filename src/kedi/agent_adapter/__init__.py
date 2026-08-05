@@ -29,7 +29,10 @@ if TYPE_CHECKING:
         LazyAdapter,
         PydanticAdapter,
         WebGPUAdapter,
+        pydantic_approval_request_from_deferred,
+        pydantic_deferred_results_from_decisions,
         pydantic_tool_from_spec,
+        pydantic_toolset_from_specs,
     )
 
 
@@ -43,7 +46,10 @@ _ADAPTER_EXPORTS = frozenset(
         "LangChainAdapter",
         "LazyAdapter",
         "PydanticAdapter",
+        "pydantic_approval_request_from_deferred",
+        "pydantic_deferred_results_from_decisions",
         "pydantic_tool_from_spec",
+        "pydantic_toolset_from_specs",
         "WebGPUAdapter",
     }
 )
@@ -87,7 +93,10 @@ __all__ = [
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
+    "pydantic_approval_request_from_deferred",
+    "pydantic_deferred_results_from_decisions",
     "pydantic_tool_from_spec",
+    "pydantic_toolset_from_specs",
     "SupportsToolRegistration",
     "SupportsConversationState",
     "T",

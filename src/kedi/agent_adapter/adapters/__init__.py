@@ -25,7 +25,14 @@ from .langchain import (
     _langchain_tool_from_spec,
 )
 from .lazy import LazyAdapter
-from .pydantic import PydanticAdapter, _mcp_toolset_from_config, pydantic_tool_from_spec
+from .pydantic import (
+    PydanticAdapter,
+    _mcp_toolset_from_config,
+    pydantic_approval_request_from_deferred,
+    pydantic_deferred_results_from_decisions,
+    pydantic_tool_from_spec,
+    pydantic_toolset_from_specs,
+)
 from .webgpu import BrowserModelBridge, WebGPUAdapter
 
 __all__ = [
@@ -38,7 +45,10 @@ __all__ = [
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
+    "pydantic_approval_request_from_deferred",
+    "pydantic_deferred_results_from_decisions",
     "pydantic_tool_from_spec",
+    "pydantic_toolset_from_specs",
     "WebGPUAdapter",
     "_apply_langchain_effort_settings",
     "_claude_external_mcp_servers",

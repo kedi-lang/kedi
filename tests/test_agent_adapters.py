@@ -132,6 +132,12 @@ def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
         "_subagent_conversation_var",
         ContextVar(f"test_subagent_conversation_{id(adapter)}", default=None),
     )
+    setattr(
+        adapter,
+        "_run_tool_specs_var",
+        ContextVar(f"test_run_tool_specs_{id(adapter)}", default=None),
+    )
+    setattr(adapter, "approval_resolution", "kedi")
 
 
 @pytest.mark.parametrize(
@@ -257,6 +263,7 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         return SimpleNamespace(output=output_type(answer=3, note="ok"))
 
     monkeypatch.setattr(adapter, "run", fake_run)
+    monkeypatch.setattr(adapter, "_tool_specs_for_run", lambda _kwargs: ())
 
     assert initialized_models[0] == "openai-chat:gpt-4o-mini"
     assert isinstance(initialized_models[1], TestModel)
@@ -2865,7 +2872,7 @@ def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_to
     _set_profile_stack(adapter)
     adapter.register_tool(ToolSpec(fn=lambda: "ok", name="read_status", risk="read_only"))
 
-    run_kwargs = adapter._run_kwargs({})
+    run_kwargs = adapter._run_kwargs({}, tool_specs=adapter.scoped_tool_specs)
 
     assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
     assert len(run_kwargs["capabilities"]) == 1

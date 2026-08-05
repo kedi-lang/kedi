@@ -1673,11 +1673,15 @@ The native precedence rules are explicit:
 - caller capabilities are retained and each required Kedi capability is
   appended at most once.
 
-Use the public adapter-specific converter when a native Pydantic agent needs a
-Kedi `ToolSpec`:
+Use the public adapter-specific converters when a native Pydantic agent needs
+Kedi `ToolSpec` values:
 
 ```python
-from kedi.agent_adapter import ToolSpec, pydantic_tool_from_spec
+from kedi.agent_adapter import (
+    ToolSpec,
+    pydantic_tool_from_spec,
+    pydantic_toolset_from_specs,
+)
 
 
 def lookup(topic: str) -> str:
@@ -1701,13 +1705,81 @@ spec = ToolSpec(
     metadata={"source": "docs"},
 )
 native_tool = pydantic_tool_from_spec(spec)
+native_toolset = pydantic_toolset_from_specs([spec])
 ```
 
 The conversion preserves the name, descriptions, JSON schema, metadata,
 sequential-execution flag, Kedi argument validation, and sync or async callable
-behavior. Approval remains a run-level concern and is not silently decided by
-the converter. Conversation capture, artifact ownership, skills discovery, and
-subagent coordination still require an explicit `KediRuntime` owner.
+behavior. When the converted tool or toolset is supplied to a
+`PydanticAdapter`, it also preserves Kedi run-level semantics such as dynamic
+risk resolution, approval edits, and `required_before_output` validation.
+
+`PydanticAdapter(..., approval_resolution="kedi")` is the default and resolves
+approval-required calls with the active Kedi policy. Set
+`approval_resolution="external"` when an outer controller owns the permission
+exchange. Tools remain approval-required, but the adapter returns Pydantic AI's
+`DeferredToolRequests` instead of consuming them; the outer controller must add
+that output type and resume the run with `DeferredToolResults`. This is the mode
+used by integrations such as ACP runtimes. Deferred calls carry canonical Kedi
+arguments plus resolved risk, description, and metadata. Use
+`pydantic_approval_request_from_deferred()` to restore the typed
+`ApprovalRequest`, then `pydantic_deferred_results_from_decisions()` to validate
+allow, deny, or edited decisions before resuming the run. Edited arguments pass
+through the original `ToolSpec.argument_validator` again. Conversation capture,
+artifact ownership, skills discovery, and subagent coordination still require
+an explicit `KediRuntime` owner.
+
+An external controller should retain the exact `ToolSpec` values used for the
+run and use the Kedi helpers for the complete permission round trip:
+
+```python
+from typing import cast
+
+from pydantic_ai.tools import DeferredToolRequests
+
+from kedi.agent_adapter import (
+    PydanticAdapter,
+    pydantic_approval_request_from_deferred,
+    pydantic_deferred_results_from_decisions,
+    pydantic_toolset_from_specs,
+)
+from kedi.agent_adapter.approval import ApprovalDecision
+
+tool_specs = [spec]
+toolsets = [pydantic_toolset_from_specs(tool_specs)]
+adapter = PydanticAdapter(model, approval_resolution="external")
+
+first = adapter.run_sync(
+    "Look up the topic.",
+    output_type=[str, DeferredToolRequests],
+    toolsets=toolsets,
+)
+pending = cast(DeferredToolRequests, first.output)
+call = pending.approvals[0]
+request = pydantic_approval_request_from_deferred(pending, call.tool_call_id)
+
+# Present `request` to the permission controller. It contains canonical
+# arguments, resolved risk, description, and metadata.
+decision = ApprovalDecision.edit({"topic": "Kedi language"})
+results = pydantic_deferred_results_from_decisions(
+    pending,
+    {call.tool_call_id: decision},
+    tool_specs=tool_specs,
+)
+
+resumed = adapter.run_sync(
+    None,
+    output_type=[str, DeferredToolRequests],
+    message_history=first.all_messages(),
+    deferred_tool_results=results,
+    toolsets=toolsets,
+)
+```
+
+Do not use `DeferredToolRequests.build_results()` directly for edited Kedi
+tools. That generic Pydantic API cannot run the original Kedi
+`argument_validator`; the helper needs the retained `tool_specs` list to do so
+before constructing `DeferredToolResults`.
 
 ### Configuration and Context
 
