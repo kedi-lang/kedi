@@ -106,16 +106,15 @@ def test_idle_console_handles_keyboard_interrupt_from_execution() -> None:
     console = IdleConsole(InterruptedSession(), stdout=StringIO(), stderr=stderr)  # type: ignore[arg-type]
 
     assert console.push("= interrupted") is False
-    assert stderr.getvalue() == "KeyboardInterrupt\n"
+    assert console.exit_requested is True
+    assert stderr.getvalue() == ""
 
 
-def test_idle_console_interact_handles_prompt_interrupt_eof_and_banner() -> None:
+def test_idle_console_prompt_interrupt_exits_silently_after_banner() -> None:
     prompts: list[str] = []
     inputs: list[str | BaseException] = [
         "@value() -> int:",
         KeyboardInterrupt(),
-        "= `1`",
-        EOFError(),
     ]
 
     def read(prompt: str) -> str:
@@ -128,18 +127,36 @@ def test_idle_console_interact_handles_prompt_interrupt_eof_and_banner() -> None
     stdout = StringIO()
     stderr = StringIO()
     with kedi.interactive() as session:
-        IdleConsole(
+        console = IdleConsole(
             session,
             stdout=stdout,
             stderr=stderr,
             input_reader=read,
-        ).interact()
+        )
+        console.interact()
 
-    assert prompts == ["+++ ", "... ", "+++ ", "+++ "]
+    assert prompts == ["+++ ", "... "]
     assert stdout.getvalue().startswith(" /\\_/\\\n( o.o )\n > ^ <\nKedi ")
     assert 'Type "help"' in stdout.getvalue()
-    assert stdout.getvalue().endswith("1\n\n")
-    assert stderr.getvalue() == "\nKeyboardInterrupt\n"
+    assert console.exit_requested is True
+    assert stderr.getvalue() == ""
+
+
+def test_idle_console_eof_exits_with_terminal_newline() -> None:
+    def read(_prompt: str) -> str:
+        raise EOFError
+
+    stdout = StringIO()
+    console = IdleConsole(
+        object(),  # type: ignore[arg-type]
+        stdout=stdout,
+        stderr=StringIO(),
+        input_reader=read,
+    )
+
+    console.interact(banner=False)
+
+    assert stdout.getvalue() == "\n"
 
 
 def test_idle_console_interact_can_exit_without_banner() -> None:
@@ -147,7 +164,7 @@ def test_idle_console_interact_can_exit_without_banner() -> None:
 
     def read(prompt: str) -> str:
         prompts.append(prompt)
-        return "exit()"
+        return ":exit"
 
     console = IdleConsole(
         object(),  # type: ignore[arg-type]
@@ -162,20 +179,34 @@ def test_idle_console_interact_can_exit_without_banner() -> None:
     assert console.exit_requested is True
 
 
-@pytest.mark.parametrize("command", ["exit()", " quit() "])
-def test_idle_console_exit_commands_stop_interaction(command: str) -> None:
+def test_idle_console_exit_command_stops_interaction() -> None:
     class Session:
         def execute(self, _source: str) -> None:
             raise AssertionError("exit commands must not execute")
 
     console = IdleConsole(Session(), stdout=StringIO(), stderr=StringIO())  # type: ignore[arg-type]
 
-    assert console.push(command) is False
+    assert console.push(" :exit ") is False
     assert console.exit_requested is True
     assert console.push("= ignored") is False
 
 
-def test_idle_console_ignores_blank_primary_input_and_can_clear_buffer() -> None:
+@pytest.mark.parametrize("source", ["exit()", "quit()"])
+def test_idle_console_does_not_special_case_python_exit_calls(source: str) -> None:
+    seen: list[str] = []
+
+    class Session:
+        def execute(self, fragment: str) -> None:
+            seen.append(fragment)
+
+    console = IdleConsole(Session(), stdout=StringIO(), stderr=StringIO())  # type: ignore[arg-type]
+
+    assert console.push(source) is False
+    assert console.exit_requested is False
+    assert seen == [source]
+
+
+def test_idle_console_ignores_blank_primary_input() -> None:
     class Session:
         def execute(self, _source: str) -> None:
             raise AssertionError("no source should execute")
@@ -183,9 +214,6 @@ def test_idle_console_ignores_blank_primary_input_and_can_clear_buffer() -> None
     console = IdleConsole(Session(), stdout=StringIO(), stderr=StringIO())  # type: ignore[arg-type]
 
     assert console.push("  ") is False
-    assert console.push("@pending():") is True
-    console.interrupt()
-    assert console.prompt == "+++ "
 
 
 @pytest.mark.parametrize("command", ["help", " help() "])

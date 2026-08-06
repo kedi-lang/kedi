@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 BEGIN_MARKER = "+++"
 CONTINUATION_MARKER = "..."
 IDLE_BANNER = " /\\_/\\\n( o.o )\n > ^ <"
-_EXIT_COMMANDS = frozenset({"exit()", "quit()"})
+_EXIT_COMMAND = ":exit"
 _HELP_COMMANDS = frozenset({"help", "help()"})
 _SHOW_COMMAND = ":show"
 
@@ -55,7 +55,7 @@ class IdleConsole:
 
     @property
     def exit_requested(self) -> bool:
-        """Whether the user requested termination with exit() or quit()."""
+        """Whether the interactive session should terminate."""
         return self._exit_requested
 
     def push(self, line: str) -> bool:
@@ -75,7 +75,7 @@ class IdleConsole:
         stripped = line.strip()
         if not stripped:
             return False
-        if stripped in _EXIT_COMMANDS:
+        if stripped == _EXIT_COMMAND:
             self._exit_requested = True
             return False
         if stripped in _HELP_COMMANDS:
@@ -95,10 +95,6 @@ class IdleConsole:
         self._execute(line)
         return False
 
-    def interrupt(self) -> None:
-        """Discard the current fragment after Ctrl+C."""
-        self._buffer.clear()
-
     def interact(self, *, banner: bool = True) -> None:
         """Read and execute lines until EOF or an explicit exit command."""
         if banner:
@@ -110,9 +106,8 @@ class IdleConsole:
                 self._stdout.write("\n")
                 break
             except KeyboardInterrupt:
-                self.interrupt()
-                self._stderr.write("\nKeyboardInterrupt\n")
-                continue
+                self._exit_requested = True
+                break
             self.push(line)
 
     def _execute(self, source: str) -> None:
@@ -126,7 +121,7 @@ class IdleConsole:
         except KediExecutionError as exc:
             self._stderr.write(render_execution_error(exc, use_color=self._use_color()))
         except KeyboardInterrupt:
-            self._stderr.write("KeyboardInterrupt\n")
+            self._exit_requested = True
         except Exception as exc:
             wrapped = KediExecutionError(message=str(exc) or type(exc).__name__, original=exc)
             self._stderr.write(render_execution_error(wrapped, use_color=self._use_color()))
@@ -135,7 +130,7 @@ class IdleConsole:
         self._stdout.write(
             f"{IDLE_BANNER}\nKedi {__version__} on {platform.system().lower()}\n"
             'Type "help" for interactive help, ":show" to inspect a value, '
-            'or "exit()" to leave.\n'
+            'or ":exit" to leave.\n'
         )
 
     def _write_help(self) -> None:
@@ -143,7 +138,7 @@ class IdleConsole:
             f"Enter a complete Kedi fragment at {BEGIN_MARKER}. Compound blocks "
             f"continue at {CONTINUATION_MARKER}; press Tab to indent and submit an "
             "empty line to run them. Use :show <expression> to inspect a value. "
-            "Ctrl+C clears the current fragment, and Ctrl+D exits.\n"
+            "Use :exit, Ctrl+C, or Ctrl+D to exit.\n"
         )
 
     def _use_color(self) -> bool:

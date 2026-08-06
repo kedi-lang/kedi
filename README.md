@@ -216,7 +216,8 @@ kedi-lsp   # language server for editors
 
 `kedi --idle` opens the incremental terminal REPL. It uses `+++ ` for complete
 fragments, `... ` for continuation lines, Tab for indentation, and
-`:show <expression>` to inspect values without adding REPL-only syntax to Kedi
+`:show <expression>` to inspect values. Use `:exit`, `Ctrl+C`, or `Ctrl+D` to
+leave the session. These terminal commands do not add REPL-only syntax to Kedi
 source files. See [Incremental Execution](docs/KEDI_DSL.md#incremental-execution)
 for lifecycle, import, traceback, and concurrency semantics.
 
