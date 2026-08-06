@@ -12,3 +12,5 @@ tree-sitter-kedi==0.4.0
 tree-sitter-python>=0.23
 pygls>=1.3
 rich>=13
+
+https://github.com/kedi-lang/kedi/blob/d617c0026b1f3924d66b5ec3467db7bb0d9948af/src/kedi/agent_adapter/adapters/pydantic.py#L468-L469

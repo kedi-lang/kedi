@@ -465,7 +465,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     ) -> AbstractAsyncContextManager[AgentRun[AgentDepsT, OutputDataT]]: ...
 
     @overload
-    def iter(
+    def iter(  # TODO: We should carry ``ìter`` arguments over kwargs instead of hardcoded arguments.
         self,
         user_prompt: str | Sequence[UserContent] | None = None,
         *,
