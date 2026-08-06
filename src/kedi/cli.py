@@ -18,6 +18,7 @@ from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
+from kedi.idle import run_idle
 from kedi.package_registry import add_package, install_package
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
@@ -188,6 +189,12 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
 )
 @click.option("--no-cache", is_flag=True, help="Disable reading/writing codegen cache")
 @click.option(
+    "--idle",
+    "idle_mode",
+    is_flag=True,
+    help="Start an interactive Kedi terminal session",
+)
+@click.option(
     "--quiet",
     is_flag=True,
     help="Suppress progress output from codegen and GEPA optimization",
@@ -223,6 +230,7 @@ def main(
     optimize: bool = False,
     optimizer_fresh: bool = False,
     no_cache: bool = False,
+    idle_mode: bool = False,
     quiet: bool = False,
     parse_only: bool = False,
     show_help: bool = False,
@@ -237,6 +245,12 @@ def main(
         return _run_package_command(source, list(ctx.args))
     if acp_command is not None:
         os.environ["KEDI_ACP_AGENT_COMMAND"] = acp_command
+    if idle_mode:
+        if source is not None or command_source is not None:
+            raise click.UsageError("--idle does not accept SOURCE or -c/--command.")
+        if test or do_eval or optimize or parse_only:
+            raise click.UsageError("--idle cannot be combined with execution modes.")
+        return run_idle(adapter=adapter, model=adapter_model)
     if source == "parse":
         if command_source is not None:
             parse_only = True

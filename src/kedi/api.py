@@ -16,7 +16,17 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock, get_ident
-from typing import Any, Callable, Literal, ParamSpec, TypeAlias, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Literal,
+    ParamSpec,
+    TypeAlias,
+    TypeVar,
+    cast,
+    overload,
+)
 
 import dotenv
 from typing_extensions import Sentinel
@@ -37,13 +47,18 @@ from .agent_adapter.registry import (
     build_adapter,
     known_adapter_shortnames,
 )
+from .agent_adapter.subagents.limits import SubagentUsageLimits
 from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
 from .artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from .effort import EffortValue
 from .errors import KediExecutionError
+from .executors.base import Executor
 from .lang import compile_program, parse_program
 from .telemetry import capture_enabled, current_span
 from .telemetry.naming import program_name, qualified_type_name
+
+if TYPE_CHECKING:
+    from .interactive_session import InteractiveSession
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -933,6 +948,81 @@ class _KediSessionContext:
 def session(state: ConversationState | None = None) -> _KediSessionContext:
     """Continue model history and artifact ownership explicitly within one scope."""
     return _KediSessionContext(state)
+
+
+def interactive(
+    *,
+    model: str | None | object = _UNSET,
+    adapter: FrameworkAdapterName | AdapterLike | object = _UNSET,
+    agent: AgentName | AdapterLike | object = _UNSET,
+    system: str | None = None,
+    effort: EffortValue | None = None,
+    settings: Mapping[str, Any] | None = None,
+    tools: Sequence[Callable[..., Any]] = (),
+    env: Mapping[str, Any] | None = None,
+    mcp_servers: Sequence[McpServerSpec] = (),
+    approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    skills: bool | None = None,
+    artifacts: ArtifactPolicyInput = None,
+    conversation: ConversationState | None | object = _UNSET,
+    parallel: bool | None = None,
+    max_workers: int | None = None,
+    executor: Executor | None = None,
+    engine: Any | None = None,
+    cwd: str | Path | None = None,
+    subagent_max_depth: int = 5,
+    subagent_max_concurrency: int = 4,
+    subagent_timeout_seconds: float | None = 120.0,
+    subagent_usage_limits: SubagentUsageLimits | None = None,
+    subagent_state_path: str | Path | None = None,
+    **adapter_kwargs: Any,
+) -> InteractiveSession:
+    """Create a process-local incremental Kedi execution session."""
+    from .core import shared_thread_engine
+    from .interactive_session import InteractiveSession
+
+    config = _build_config(
+        base=_config_var.get(),
+        load_env=False,
+        model=model,
+        adapter=adapter,
+        agent=agent,
+        system=system,
+        effort=effort,
+        settings=settings,
+        tools=tools,
+        env=env,
+        mcp_servers=mcp_servers,
+        approval=approval,
+        skills=skills,
+        artifacts=artifacts,
+        conversation=conversation,
+        adapter_kwargs=adapter_kwargs,
+        parallel=parallel,
+        max_workers=max_workers,
+    )
+    active_conversation = config.conversation
+    owns_conversation = active_conversation is None
+    if active_conversation is None:
+        active_conversation = ConversationState()
+    active_engine = engine
+    if active_engine is None and config.parallel:
+        active_engine = shared_thread_engine(max_workers=config.max_workers)
+    return InteractiveSession(
+        adapter=_build_adapter(config),
+        executor=executor,
+        runtime_globals={**config.tools, **config.env},
+        engine=active_engine,
+        default_agent_profile=config.profile,
+        cwd=cwd,
+        subagent_max_depth=subagent_max_depth,
+        subagent_max_concurrency=subagent_max_concurrency,
+        subagent_timeout_seconds=subagent_timeout_seconds,
+        subagent_usage_limits=subagent_usage_limits,
+        subagent_state_path=subagent_state_path,
+        conversation_state=active_conversation,
+        close_conversation_state=owns_conversation,
+    )
 
 
 def parallel(*, max_workers: int = 8) -> _KediContext:
