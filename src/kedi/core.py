@@ -37,11 +37,11 @@ from .telemetry import capture_enabled
 from .telemetry.naming import qualified_type_name
 
 if TYPE_CHECKING:
-    from .agent_adapter.tool_override import ToolSpec
-    from .agent_profile import AgentProfile
     from .agent_adapter.conversation import ConversationState
     from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from .agent_adapter.subagents.limits import SubagentUsageLimits
+    from .agent_adapter.tool_override import ToolSpec
+    from .agent_profile import AgentProfile
 
 _SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
