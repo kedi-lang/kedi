@@ -1820,6 +1820,100 @@ If no backend is passed explicitly, `configure()` reads `KEDI_AGENT` or
 temporarily merges the same options and restores the previous configuration
 when the block exits. It supports both sync and async context managers.
 
+### Incremental Execution
+
+`kedi.interactive()` executes complete Kedi fragments in one process-local
+runtime. Values, procedures, types, imports, profiles, directives, conversation
+state, and artifacts remain available to later fragments. Earlier fragments are
+not concatenated or replayed:
+
+```python
+import kedi
+
+
+with kedi.interactive() as session:
+    session.execute("[base: int] = `40`")
+    session.execute(
+        """
+@add_two() -> int:
+    = `base + 2`
+""".strip()
+    )
+    assert session.execute("= `add_two()`") == 42
+```
+
+`execute()` returns the same native-value boundary as `run_main()`: an `int`
+remains an `int`, and an explicit Kedi string-rendering expression remains the
+way to request rendered text. A fragment without a top-level return produces
+`None`.
+
+Every fragment receives a distinct traceback identity such as
+`<interactive:1>`. Pass `source_name=` when an editor or notebook has a better
+identity. A real source path also becomes the base for relative imports;
+otherwise imports resolve from the session's `cwd` (the process working
+directory by default):
+
+```python
+with kedi.interactive(cwd="examples/cells") as session:
+    session.execute(
+        "> import: helpers\n= `answer`",
+        source_name="answer.kedi",
+    )
+```
+
+The initial execution model is synchronous, non-durable, and intentionally
+non-transactional. State and external side effects completed before an error
+remain visible, while the failed fragment is never retried automatically. A
+session rejects concurrent or re-entrant `execute()` calls and cannot execute
+after `close()`.
+
+Interactive fragments do not accept package metadata, export directives, or
+`@test`/`@eval` suites. Those constructs describe whole files or package/test
+surfaces rather than an incremental runtime cell. The existing
+`compile_program(...).run_main()` and normal file-execution paths are unchanged.
+
+#### Terminal REPL
+
+`kedi --idle` exposes the same incremental runtime as a Python-style terminal
+REPL:
+
+```console
+$ kedi --idle
+ /\_/\
+( o.o )
+ > ^ <
+Kedi 0.4.0 on darwin
+Type "help" for interactive help, ":show" to inspect a value, or ":exit" to leave.
++++ [base: int] = `40`
++++ @add_two() -> int:
+...     = `base + 2`
+...
++++ :show `add_two()`
+42
++++
+```
+
+A header ending in `:`, an open delimiter, an open Python fence, or an explicit
+line continuation switches the next prompt to `... `. Tab inserts indentation
+at that prompt. An empty continuation line submits the complete buffered
+fragment; it is then executed exactly once. Simple complete lines execute
+immediately.
+
+`:show <expression>` is a terminal-only meta command, not Kedi syntax. It
+evaluates any expression accepted on the right-hand side of a Kedi return and
+prints its value. For example, `:show <name>` renders a substitution, while
+``:show `value` `` inspects a native Python/Kedi value. This keeps forbidden
+top-level substitutions out of normal `.kedi` files.
+
+Top-level results use `repr()` so native values remain visible without changing
+their runtime semantics. `:exit` is the only textual exit command; Python's
+`exit()` and `quit()` calls have no special meaning. `Ctrl+C` exits silently,
+including during active execution, and `Ctrl+D` also closes the session.
+Readline history is stored in `~/.kedi_history`; set `KEDI_HISTORY` to
+choose another path. Adapter selection remains available through
+`--adapter` and `--adapter-model`. Interactive mode does not accept a source
+file, `-c/--command`, program arguments, or test/eval/optimization modes.
+
 For a dynamic policy, decorate a Python handler and return one explicit
 decision. The decorator registers it as the default policy. Kedi passes an
 immutable request; only `edit` may replace arguments:

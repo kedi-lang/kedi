@@ -17,6 +17,7 @@ from .api import (
     clear_cache,
     configure,
     context,
+    interactive,
     parallel,
     query,
     reset_config,
@@ -24,6 +25,7 @@ from .api import (
     tool,
     type,
 )
+from .interactive_session import InteractiveSession
 from .artifacts import (
     ArtifactChunk,
     ArtifactHandle,
@@ -70,6 +72,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "interactive",
     "parallel",
     "query",
     "reset_config",
@@ -77,6 +80,7 @@ __all__ = [
     "tool",
     "type",
     "KediRuntime",
+    "InteractiveSession",
     "force",
     "KediPromise",
     "KediPromiseLeak",

@@ -121,6 +121,22 @@ call-result caching, `kedi.cache_info()` / `kedi.clear_cache()` for cache
 inspection, and `@kedi.bind(file="program.kedi", reload=True)` when you want a
 Python function backed by an editable Kedi source file.
 
+Use `kedi.interactive()` when an editor, notebook, or terminal needs to execute
+complete fragments incrementally without replaying earlier code. Definitions,
+values, imports, profiles, conversation state, and artifacts persist for the
+session:
+
+```python
+with kedi.interactive() as session:
+    session.execute("[base: int] = `40`")
+    session.execute("@add_two() -> int:\n    = `base + 2`")
+    assert session.execute("= `add_two()`") == 42
+```
+
+Fragments return native values and are executed exactly once. The session is
+process-local and non-transactional; completed state and side effects remain
+visible after a later fragment fails.
+
 Use `adapter=` for framework backends (`pydantic`, `dspy`, `langchain`) and
 `agent=` for harness backends (`claude`, `codex`, `acp`). Both can be selected
 globally with `kedi.configure`, temporarily with `kedi.context`, or for one
@@ -186,6 +202,7 @@ Profiles and tool scopes can be shared across files with `> export:` / `> import
 
 ```bash
 kedi your_program.kedi
+kedi --idle
 kedi -c "= done"
 kedi -p -c "@broken("
 kedi parse your_program.kedi
@@ -196,6 +213,13 @@ kedi your_program.kedi --eval --optimize --optimizer gepa
 kedi your_program.kedi --adapter pydantic --adapter-model groq:qwen/qwen3-32b
 kedi-lsp   # language server for editors
 ```
+
+`kedi --idle` opens the incremental terminal REPL. It uses `+++ ` for complete
+fragments, `... ` for continuation lines, Tab for indentation, and
+`:show <expression>` to inspect values. Use `:exit`, `Ctrl+C`, or `Ctrl+D` to
+leave the session. These terminal commands do not add REPL-only syntax to Kedi
+source files. See [Incremental Execution](docs/KEDI_DSL.md#incremental-execution)
+for lifecycle, import, traceback, and concurrency semantics.
 
 Extra CLI arguments are available inside Python expressions and blocks as `args`:
 

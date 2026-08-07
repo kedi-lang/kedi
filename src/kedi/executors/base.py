@@ -44,6 +44,18 @@ class Executor(Protocol):
     def evaluate_type_expression(self, rt: KediRuntime, code: str, env: dict[str, Any]) -> Any: ...
 
 
+@runtime_checkable
+class SupportsIncrementalPrelude(Protocol):
+    """Executor extension for Python preludes sharing one live global namespace."""
+
+    def execute_prelude_incremental(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env: dict[str, Any] | None,
+    ) -> dict[str, Any]: ...
+
+
 class DefaultExecutor:
     """Default unsandboxed executor backed by Python ``exec`` / ``eval``."""
 
@@ -224,9 +236,31 @@ class DefaultExecutor:
             active.set_attribute("kedi.result.type", qualified_type_name(result))
             return result
 
-    def _execute_prelude(self, rt: KediRuntime, code: str) -> dict[str, Any]:
+    def execute_prelude_incremental(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Execute a prelude in the session's stable Python global namespace."""
+        with self._python_execution_span(rt, "prelude", code) as active:
+            result = self._execute_prelude(rt, code, env=env)
+            active.set_attribute("kedi.result.type", qualified_type_name(result))
+            return result
+
+    def _execute_prelude(
+        self,
+        rt: KediRuntime,
+        code: str,
+        *,
+        env: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._emit_debug("execution_started", "execute_prelude", code=code)
-        env = self._build_python_env(rt, {})
+        current = self._build_python_env(rt, {})
+        if env is None:
+            env = current
+        else:
+            env.update(current)
         filename = self._python_filename(rt, "prelude", code, kedi_line_offset=1)
         compile_source = self._python_source(rt, code, kedi_line_offset=1)
         try:

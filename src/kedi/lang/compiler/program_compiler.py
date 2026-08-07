@@ -29,8 +29,9 @@ from ...agent_profile.registry import ProfileDefinition
 from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
+from ...executors.base import SupportsIncrementalPrelude
 from ...module_registry import resolve_module_path
-from ...source_loading import load_kedi_source_bundle
+from ...source_loading import CompositeSourceMap, load_kedi_source_bundle
 from ...telemetry import capture_enabled, runtime_span
 from ...telemetry.naming import program_name
 from ..ast import (
@@ -90,6 +91,25 @@ class _StaticExportSurface:
 
     names: frozenset[str]
     complete: bool
+
+
+@dataclass(frozen=True)
+class _PreparedProgram:
+    """A program whose imports and declarations are ready for top-level execution."""
+
+    program: Program
+    sequence: tuple[Any, ...]
+    toplevel_return: Any | None
+    local_profiles: dict[str, ProfileDefinition]
+    import_source_path: Path | None = None
+
+
+@dataclass
+class _TopLevelExecutionState:
+    """Directive state that advances as top-level statements execute."""
+
+    active_profile: AgentProfile
+    adapter_selection_kind: str | None
 
 
 class _ModuleLoader:
@@ -290,7 +310,6 @@ class ProgramCompiler:
         self.proc_compiler = ProcedureCompiler(self.rt)
         self.executor = StatementExecutor(self.rt)
         self.stmt_compiler = StatementCompiler(self.rt)
-        self._local_profile_registry: dict[str, ProfileDefinition] = {}
 
     def compile(self, prog: Program) -> KediRuntime:
         """Compile program and return configured runtime."""
@@ -313,40 +332,133 @@ class ProgramCompiler:
 
         self.rt._profile_registry = {}
 
-        self._compile_imports(prog, active_stack)
-
-        # Execute prelude
-        if prog.prelude is not None:
-            self._setup_prelude(prog.prelude, prog.prelude_loc)
-
-        self._local_profile_registry = build_profile_registry(prog)
-        self.rt._profile_registry.update(self._local_profile_registry)
-        validate_subagent_graph(self.rt._profile_registry)
-        capture_procedure_profiles(self.rt, prog)
-
-        # Register top-level types
-        type_env = self.rt._type_env_stack[0]
-        for typedef in prog.type_defs:
-            register_type(self.rt, typedef, type_env)
-
-        # Register procedures (skip AI-prompted placeholders)
-        for proc in prog.procedures:
-            # Skip procedures with auto_spec or legacy ai_prompt
-            if proc.auto_spec or proc.ai_prompt:
-                continue
-            fn = self.proc_compiler.compile_procedure(proc)
-            self.rt.procedure(fn)
+        prepared = self._prepare_program_contents(prog, active_stack=active_stack)
 
         # Setup main entry point when there is executable top-level code.
         if prog.ordered_toplevel or prog.toplevel_body or prog.toplevel_return is not None:
-            self._setup_main(prog)
+            self._setup_main(prepared)
 
         # Attach validation suites
         self._attach_validation(prog)
 
         return self.rt
 
-    def _compile_imports(self, prog: Program, active_stack: tuple[Path, ...]) -> None:
+    def prepare_fragment(
+        self,
+        prog: Program,
+        *,
+        import_source_path: Path,
+    ) -> _PreparedProgram:
+        """Prepare one incremental fragment without resetting existing runtime state."""
+        if prog.package is not None:
+            raise ValueError("package metadata is not supported in interactive fragments")
+        if prog.exports:
+            raise ValueError("export directives are not supported in interactive fragments")
+        if isinstance(prog, ProgramWithValidation) and (prog.tests or prog.evals):
+            raise ValueError("validation suites are not supported in interactive fragments")
+
+        self._merge_fragment_source(prog)
+        root_path = import_source_path.resolve()
+        active_stack = (*self.module_stack, root_path)
+        return self._prepare_program_contents(
+            prog,
+            active_stack=active_stack,
+            import_source_path=root_path,
+            incremental=True,
+        )
+
+    def new_top_level_state(self) -> _TopLevelExecutionState:
+        """Create mutable directive state for one top-level execution stream."""
+        active = self.rt.default_agent_profile
+        return _TopLevelExecutionState(active, active.adapter_kind)
+
+    def initialize_fragments(self) -> dict[str, Any]:
+        """Initialize persistent state for a new incremental execution stream."""
+        self.rt._type_env_stack = [{}]
+        self.rt._profile_registry = {}
+        env = dict(self.rt._initial_globals_env)
+        self.rt._globals_env = env
+        return env
+
+    def execute_fragment(
+        self,
+        prepared: _PreparedProgram,
+        env: dict[str, Any],
+        state: _TopLevelExecutionState,
+    ) -> Any:
+        """Execute one prepared fragment exactly once against ``env``."""
+        from ...promise import force
+        from .environment import native_value
+
+        self.rt._globals_env = env
+
+        def fragment() -> Any:
+            return self._execute_top_level(prepared, env, state)
+
+        return native_value(force(self.rt._invoke_procedure(fragment, [])))
+
+    def _prepare_program_contents(
+        self,
+        prog: Program,
+        *,
+        active_stack: tuple[Path, ...],
+        import_source_path: Path | None = None,
+        incremental: bool = False,
+    ) -> _PreparedProgram:
+        self._compile_imports(
+            prog,
+            active_stack,
+            import_source_path=import_source_path,
+        )
+
+        if prog.prelude is not None:
+            self._setup_prelude(
+                prog.prelude,
+                prog.prelude_loc,
+                incremental=incremental,
+            )
+
+        local_profiles = build_profile_registry(prog)
+        self.rt._profile_registry.update(local_profiles)
+        validate_subagent_graph(self.rt._profile_registry)
+        capture_procedure_profiles(self.rt, prog)
+
+        type_env = self.rt._type_env_stack[0]
+        for typedef in prog.type_defs:
+            register_type(self.rt, typedef, type_env)
+
+        for proc in prog.procedures:
+            if proc.auto_spec or proc.ai_prompt:
+                continue
+            self.rt.procedure(self.proc_compiler.compile_procedure(proc))
+
+        return _PreparedProgram(
+            program=prog,
+            sequence=tuple(prog.ordered_toplevel or prog.toplevel_body),
+            toplevel_return=prog.toplevel_return,
+            local_profiles=local_profiles,
+            import_source_path=import_source_path,
+        )
+
+    def _merge_fragment_source(self, prog: Program) -> None:
+        self.rt._program = prog
+        self.rt._source_text = prog.source_text
+        current = self.rt._source_map
+        incoming = prog.source_map
+        if incoming is None:
+            return
+        if current is None:
+            self.rt._source_map = incoming
+            return
+        self.rt._source_map = CompositeSourceMap((*current.documents, *incoming.documents))
+
+    def _compile_imports(
+        self,
+        prog: Program,
+        active_stack: tuple[Path, ...],
+        *,
+        import_source_path: Path | None = None,
+    ) -> None:
         for module_import in prog.imports:
             with self.rt.trace_frame(
                 KediTraceFrame(
@@ -355,7 +467,11 @@ class ProgramCompiler:
                     span=module_import.loc,
                 )
             ):
-                module_path = self._resolve_import_path(prog, module_import)
+                module_path = self._resolve_import_path(
+                    prog,
+                    module_import,
+                    source_path=import_source_path,
+                )
                 module_path, imported_prog = self.module_loader.program_for(
                     module_path,
                     self._load_imported_program,
@@ -523,11 +639,17 @@ class ProgramCompiler:
             if isinstance(segment, OutputSegment)
         }
 
-    def _resolve_import_path(self, prog: Program, module_import: ModuleImport) -> Path:
+    def _resolve_import_path(
+        self,
+        prog: Program,
+        module_import: ModuleImport,
+        *,
+        source_path: Path | None = None,
+    ) -> Path:
         try:
             return resolve_module_path(
                 module_import.module,
-                source_path=self._program_path(prog),
+                source_path=source_path or self._program_path(prog),
             )
         except (FileNotFoundError, ValueError) as exc:
             raise ModuleNotFoundError(str(exc)) from exc
@@ -780,117 +902,168 @@ class ProgramCompiler:
     def _program_path(self, prog: Program) -> Path | None:
         return _program_source_path(prog)
 
-    def _setup_prelude(self, prelude_code: str, prelude_loc) -> None:
+    def _setup_prelude(
+        self,
+        prelude_code: str,
+        prelude_loc,
+        *,
+        incremental: bool = False,
+    ) -> None:
         """Execute prelude and store environment."""
         with self.rt.trace_frame(KediTraceFrame(kind="prelude", label="prelude", span=prelude_loc)):
-            self.rt._prelude_env = self.rt.executor.execute_prelude(self.rt, prelude_code)
+            executor = self.rt.executor
+            if not incremental:
+                self.rt._prelude_env = executor.execute_prelude(self.rt, prelude_code)
+                return
+            if not isinstance(executor, SupportsIncrementalPrelude):
+                raise TypeError(
+                    f"Executor {type(executor).__name__!r} does not support incremental preludes"
+                )
+            self.rt._prelude_env = executor.execute_prelude_incremental(
+                self.rt,
+                prelude_code,
+                self.rt._prelude_env,
+            )
 
-    def _setup_main(self, prog: Program) -> None:
+    def _setup_main(self, prepared: _PreparedProgram) -> None:
         """Setup main entry point for top-level execution."""
-        toplevel_sequence = prog.ordered_toplevel or list(prog.toplevel_body)
-        toplevel_return = prog.toplevel_return
-        profile_registry = self.rt._profile_registry
 
         @self.rt.main
         def _main() -> Any:
-            # Initialize top-level environment
             kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
             self.rt._globals_env = kwargs
-            active = self.rt.default_agent_profile
-            adapter_selection_kind = active.adapter_kind
+            return self._execute_top_level(prepared, kwargs, self.new_top_level_state())
 
-            # Execute top-level statements
-            with self.rt.trace_frame(
-                KediTraceFrame(
-                    kind="program",
-                    label="top-level program",
-                    span=None,
-                )
-            ):
-                for item in toplevel_sequence:
-                    if isinstance(item, ProcedureDef):
-                        if not item.auto_spec and not item.ai_prompt:
-                            self.rt.procedure(self.proc_compiler.compile_procedure(item))
-                        continue
-                    if isinstance(item, TypeDef):
-                        register_type(self.rt, item, self.rt._type_env_stack[0])
-                        continue
-                    if isinstance(item, ModuleImport):
-                        module_path = self._resolve_import_path(prog, item)
-                        loaded = self.module_loader.loaded_for(module_path)
-                        self._merge_exports(
+    def _execute_top_level(
+        self,
+        prepared: _PreparedProgram,
+        env: dict[str, Any],
+        state: _TopLevelExecutionState,
+    ) -> Any:
+        prog = prepared.program
+        profile_registry = self.rt._profile_registry
+
+        with self.rt.trace_frame(
+            KediTraceFrame(kind="program", label="top-level program", span=None)
+        ):
+            for item in prepared.sequence:
+                if isinstance(item, ProcedureDef):
+                    if not item.auto_spec and not item.ai_prompt:
+                        self.rt.procedure(self.proc_compiler.compile_procedure(item))
+                    continue
+                if isinstance(item, TypeDef):
+                    register_type(self.rt, item, self.rt._type_env_stack[0])
+                    continue
+                if isinstance(item, ModuleImport):
+                    module_path = self._resolve_import_path(
+                        prog,
+                        item,
+                        source_path=prepared.import_source_path,
+                    )
+                    loaded = self.module_loader.loaded_for(module_path)
+                    self._merge_exports(
+                        item,
+                        loaded.path,
+                        loaded.program,
+                        loaded.runtime,
+                        target_env=env,
+                    )
+                    continue
+                if isinstance(item, AgentDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(
+                        state.adapter_selection_kind, "agent-harness"
+                    )
+                    state.adapter_selection_kind = "agent-harness"
+                    state.active_profile = state.active_profile.merge(
+                        eval_agent_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, AdapterDirectiveStmt):
+                    _assert_adapter_selection_not_mixed(
+                        state.adapter_selection_kind, "agent-framework"
+                    )
+                    state.adapter_selection_kind = "agent-framework"
+                    state.active_profile = state.active_profile.merge(
+                        eval_adapter_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, ModelDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_model_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, EffortDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_effort_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, ApprovalDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_approval_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, SystemDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_system_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, McpDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_mcp_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, SettingsDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_settings_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, ArtifactsDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_artifacts_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, UseDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_use_directive(
+                            self.rt,
                             item,
-                            loaded.path,
-                            loaded.program,
-                            loaded.runtime,
-                            target_env=kwargs,
+                            profile_registry,
+                            env,
+                            available_procedures=set(self.rt._procedures.keys()),
                         )
-                        continue
-                    if isinstance(item, AgentDirectiveStmt):
-                        _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
-                        adapter_selection_kind = "agent-harness"
-                        active = active.merge(eval_agent_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, AdapterDirectiveStmt):
-                        _assert_adapter_selection_not_mixed(
-                            adapter_selection_kind, "agent-framework"
-                        )
-                        adapter_selection_kind = "agent-framework"
-                        active = active.merge(eval_adapter_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, ModelDirectiveStmt):
-                        active = active.merge(eval_model_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, EffortDirectiveStmt):
-                        active = active.merge(eval_effort_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, ApprovalDirectiveStmt):
-                        active = active.merge(eval_approval_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, SystemDirectiveStmt):
-                        active = active.merge(eval_system_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, McpDirectiveStmt):
-                        active = active.merge(eval_mcp_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, SettingsDirectiveStmt):
-                        active = active.merge(eval_settings_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, ArtifactsDirectiveStmt):
-                        active = active.merge(eval_artifacts_directive(self.rt, item, kwargs))
-                        continue
-                    if isinstance(item, UseDirectiveStmt):
-                        active = active.merge(
-                            eval_use_directive(
-                                self.rt,
-                                item,
-                                profile_registry,
-                                kwargs,
-                                available_procedures=set(self.rt._procedures.keys()),
-                            )
-                        )
-                        continue
-                    if isinstance(item, ProfileDefStmt):
-                        profile_registry[item.name] = self._local_profile_registry[item.name]
-                        continue
-                    if isinstance(item, TemplateLine):
-                        raise ValueError(
-                            "Top-level TemplateLine is not a valid program node; "
-                            "use '>>' for a top-level template prompt."
-                        )
-                    with block_agent_profile_scope(active):
-                        self.executor.execute_single_statement(item, kwargs, is_toplevel=True)
+                    )
+                    continue
+                if isinstance(item, ProfileDefStmt):
+                    profile_registry[item.name] = prepared.local_profiles[item.name]
+                    continue
+                if isinstance(item, TemplateLine):
+                    raise ValueError(
+                        "Top-level TemplateLine is not a valid program node; "
+                        "use '>>' for a top-level template prompt."
+                    )
+                with block_agent_profile_scope(state.active_profile):
+                    self.executor.execute_single_statement(item, env, is_toplevel=True)
 
-                if toplevel_return is None:
-                    return None
+            if prepared.toplevel_return is None:
+                return None
 
-                with block_agent_profile_scope(active):
-                    if isinstance(toplevel_return, ReturnStmt):
-                        return self.stmt_compiler.compile_return(toplevel_return)(**kwargs)
-                    code = toplevel_return.code
-                    if "\n" in code or code.strip().startswith("return"):
-                        return execute_python_block(code, self.rt, kwargs, span=toplevel_return.loc)
-                    return evaluate_python_inline(self.rt, code, kwargs, span=toplevel_return.loc)
+            with block_agent_profile_scope(state.active_profile):
+                if isinstance(prepared.toplevel_return, ReturnStmt):
+                    return self.stmt_compiler.compile_return(prepared.toplevel_return)(**env)
+                code = prepared.toplevel_return.code
+                if "\n" in code or code.strip().startswith("return"):
+                    return execute_python_block(
+                        code,
+                        self.rt,
+                        env,
+                        span=prepared.toplevel_return.loc,
+                    )
+                return evaluate_python_inline(
+                    self.rt,
+                    code,
+                    env,
+                    span=prepared.toplevel_return.loc,
+                )
 
     def _attach_validation(self, prog: Program) -> None:
         """Attach validation suites if present.
