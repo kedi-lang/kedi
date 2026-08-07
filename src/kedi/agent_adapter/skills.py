@@ -10,6 +10,12 @@ from typing import Any
 from pydantic_ai import format_as_xml
 
 from kedi.artifacts.stream import ArtifactStream
+from kedi.telemetry import (
+    TelemetryAsset,
+    asset_fingerprint,
+    capture_enabled,
+    record_asset,
+)
 
 from .tool_override import ToolSpec
 
@@ -54,14 +60,45 @@ class SkillStore:
     def read_skill(self, *, skill_name: str) -> str:
         """Read a single valid, project-local plain ``SKILL.md`` file."""
         path = self._bounded_skill_file(skill_name)
-        return "".join(self._skill_chunks(path, skill_name=skill_name))
+        content = "".join(self._skill_chunks(path, skill_name=skill_name))
+        self._record_skill_asset(skill_name, path, content)
+        return content
 
     def stream_skill(self, *, skill_name: str) -> ArtifactStream[str]:
         """Return a lazy text transport for one validated skill file."""
 
         path = self._bounded_skill_file(skill_name)
+        self._record_skill_asset(skill_name, path)
 
         return ArtifactStream.text(self._skill_chunks(path, skill_name=skill_name))
+
+    def _record_skill_asset(
+        self,
+        skill_name: str,
+        path: Path,
+        content: str | None = None,
+    ) -> None:
+        active_content = (
+            "".join(self._skill_chunks(path, skill_name=skill_name)) if content is None else content
+        )
+        source_path = str(path) if capture_enabled("source_path") else None
+        snippet = active_content[:2048] if capture_enabled("source_snippet") else None
+        record_asset(
+            TelemetryAsset(
+                kind="skill",
+                local_id=skill_name,
+                name=skill_name,
+                source_locator=f"kedi:skill:{skill_name}",
+                content_fingerprint=asset_fingerprint(active_content),
+                content=active_content if capture_enabled("content") else None,
+                metadata={
+                    "source_path": source_path,
+                    "source_snippet": snippet,
+                    "byte_count": path.stat().st_size,
+                },
+                sensitivity="sensitive",
+            )
+        )
 
     def _skill_chunks(self, path: Path, *, skill_name: str) -> Iterator[str]:
         try:

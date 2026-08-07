@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
+from dataclasses import dataclass, field
 from threading import RLock
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol, runtime_checkable
 
 AttributeScalar = bool | str | int | float
 AttributeValue = AttributeScalar | Sequence[AttributeScalar]
@@ -12,6 +15,33 @@ CaptureKind = Literal["content", "source_path", "source_snippet"]
 SpanKind = Literal["internal", "client"]
 SpanLevel = Literal["lifecycle", "detailed"]
 TelemetryScope = Literal["runtime", "agent", "artifacts"]
+TelemetryAssetKind = Literal[
+    "agent_profile",
+    "prompt",
+    "schema",
+    "skill",
+    "source_identity",
+    "template",
+    "tool",
+]
+TelemetryAssetSensitivity = Literal["public", "internal", "sensitive"]
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryAsset:
+    kind: TelemetryAssetKind
+    local_id: str
+    name: str
+    source_locator: str
+    content_fingerprint: str
+    content: Any | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    sensitivity: TelemetryAssetSensitivity = "internal"
+
+
+@runtime_checkable
+class AssetBackend(Protocol):
+    def record_asset(self, asset: TelemetryAsset) -> None: ...
 
 
 class TelemetrySpan(Protocol):
@@ -312,3 +342,20 @@ def owns_native_spans(adapter_shortname: str, operation: str) -> bool:
 
 def capture_enabled(kind: CaptureKind) -> bool:
     return _backend.capture_enabled(kind)
+
+
+def asset_fingerprint(content: Any) -> str:
+    payload = json.dumps(
+        content,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+        default=repr,
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def record_asset(asset: TelemetryAsset) -> None:
+    backend = _backend
+    if isinstance(backend, AssetBackend):
+        backend.record_asset(asset)

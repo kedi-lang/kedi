@@ -30,6 +30,7 @@ from kedi.agent_adapter.approval_telemetry import (
 from kedi.agent_adapter.invocation import InvocationUsage
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.request_budget import ModelRequestBudget
+from kedi.agent_adapter.skills import SkillStore
 from kedi.agent_adapter.subagents.coordinator import _subagent_run_span
 from kedi.agent_adapter.subagents.workflow import _dynamic_workflow_span
 from kedi.agent_adapter.telemetry import (
@@ -42,11 +43,13 @@ from kedi.agent_adapter.telemetry import (
     native_agent_span_scope,
     native_tool_span_scope,
     reclassify_native_agent_span,
+    record_conversation_assets,
     resolved_adapter_model,
     tool_call_span,
     tool_source,
 )
 from kedi.agent_adapter.tool_override import ToolSpec, with_approval, with_tool_telemetry
+from kedi.agent_profile import AgentProfile
 from kedi.app import run_program_cli, run_source_cli
 from kedi.artifacts.telemetry import artifact_span
 from kedi.lang import KediDiagnostic, KediParseError, Span
@@ -60,6 +63,102 @@ from kedi.telemetry import (
     runtime_span,
 )
 from tests.telemetry_helpers import RecordingTelemetryBackend, installed_recording_backend
+
+
+def test_conversation_assets_cover_template_profile_tools_and_schemas() -> None:
+    tool = ToolSpec(
+        fn=lambda city: city,
+        name="weather",
+        description="Look up weather.",
+        json_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        return_schema={"type": "string"},
+        risk="read_only",
+    )
+    profile = AgentProfile(
+        name="researcher",
+        model="test-model",
+        system="Use evidence.",
+        settings={"temperature": 0},
+        tools=("weather",),
+        skills=True,
+    )
+    backend = RecordingTelemetryBackend(
+        capture=frozenset({"content", "source_path", "source_snippet"})
+    )
+
+    with installed_recording_backend(backend):
+        record_conversation_assets(
+            prompt="Find weather for Istanbul.",
+            instructions="Use evidence.",
+            profile=profile,
+            tools=(tool,),
+            output_schema={"temperature": "<class 'float'>"},
+            call_kind="produce",
+            source_path="weather.kedi",
+            source_line=12,
+            source_snippet="Weather: {{ city }}",
+        )
+
+    kinds = {asset.kind for asset in backend.assets}
+    assert kinds == {
+        "agent_profile",
+        "prompt",
+        "schema",
+        "source_identity",
+        "template",
+        "tool",
+    }
+    assert {asset.source_locator for asset in backend.assets if asset.kind == "schema"} == {
+        "kedi:schema:template:weather.kedi:12:produce:output",
+        "kedi:schema:tool:weather:input",
+        "kedi:schema:tool:weather:return",
+    }
+    assert all(asset.content is not None for asset in backend.assets)
+
+
+def test_conversation_asset_content_is_hashed_when_capture_is_disabled() -> None:
+    backend = RecordingTelemetryBackend()
+    profile = AgentProfile(name="private")
+
+    with installed_recording_backend(backend):
+        for prompt in ("first secret", "second secret"):
+            record_conversation_assets(
+                prompt=prompt,
+                instructions=None,
+                profile=profile,
+                tools=(),
+                output_schema=None,
+                call_kind="invoke",
+                source_path=None,
+                source_line=None,
+                source_snippet=None,
+            )
+
+    templates = [asset for asset in backend.assets if asset.kind == "template"]
+    assert len(templates) == 2
+    assert templates[0].content is None
+    assert templates[1].content is None
+    assert templates[0].content_fingerprint != templates[1].content_fingerprint
+    assert "first secret" not in repr(backend.assets)
+    assert "second secret" not in repr(backend.assets)
+
+
+def test_skill_content_capture_is_explicit_and_versionable(tmp_path: Path) -> None:
+    skill_path = tmp_path / "skills" / "review" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("Review carefully.", encoding="utf-8")
+    backend = RecordingTelemetryBackend(capture=frozenset({"content", "source_path"}))
+
+    with installed_recording_backend(backend):
+        assert SkillStore(tmp_path / "skills").read_skill(skill_name="review") == (
+            "Review carefully."
+        )
+
+    assert len(backend.assets) == 1
+    asset = backend.assets[0]
+    assert asset.kind == "skill"
+    assert asset.content == "Review carefully."
+    assert asset.metadata["source_path"] == str(skill_path)
 
 
 def test_cli_program_trace_has_stable_runtime_topology() -> None:

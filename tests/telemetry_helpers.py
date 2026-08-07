@@ -12,6 +12,7 @@ from kedi.telemetry import (
     CaptureKind,
     SpanKind,
     SpanLevel,
+    TelemetryAsset,
     TelemetryBackend,
     TelemetryScope,
     install_backend,
@@ -89,6 +90,7 @@ class RecordingTelemetryBackend:
         self.started_spans: list[RecordedSpan] = []
         self.finished_spans: list[RecordedSpan] = []
         self.metrics: list[RecordedMetric] = []
+        self.assets: list[TelemetryAsset] = []
         self._native_span_owners = dict(native_span_owners or {})
         self._capture = capture
         self._active: ContextVar[RecordedSpan | None] = ContextVar(
@@ -181,6 +183,9 @@ class RecordingTelemetryBackend:
 
     def capture_enabled(self, kind: CaptureKind) -> bool:
         return kind in self._capture
+
+    def record_asset(self, asset: TelemetryAsset) -> None:
+        self.assets.append(asset)
 
     def _record_metric(
         self,

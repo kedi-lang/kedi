@@ -1,22 +1,26 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 from typing_extensions import runtime_checkable
 
 from ..telemetry import (
+    TelemetryAsset,
     TelemetrySpan,
     add_counter,
+    asset_fingerprint,
+    capture_enabled,
     current_span,
     owns_native_spans,
+    record_asset,
     record_histogram,
     span,
 )
@@ -25,7 +29,171 @@ from .invocation import InvocationUsage
 from .meta import AgentAdapterKind
 from .tool_override import ToolSpec
 
+if TYPE_CHECKING:
+    from ..agent_profile import AgentProfile
+
 AgentCallKind = Literal["produce", "invoke", "subagent"]
+
+
+def record_conversation_assets(
+    *,
+    prompt: str,
+    instructions: str | None,
+    profile: AgentProfile,
+    tools: Sequence[ToolSpec],
+    output_schema: Mapping[str, str] | None,
+    call_kind: AgentCallKind,
+    source_path: str | None,
+    source_line: int | None,
+    source_snippet: str | None,
+) -> None:
+    profile_name = profile.name or "kedi"
+    template_key = (
+        f"{source_path}:{source_line or 0}:{call_kind}"
+        if source_path is not None
+        else f"{profile_name}:{call_kind}"
+    )
+    profile_content = {
+        "name": profile.name,
+        "model": profile.model,
+        "adapter_kind": profile.adapter_kind,
+        "adapter_shortname": profile.adapter_shortname,
+        "agent_command": profile.agent_command,
+        "effort": profile.effort,
+        "system": profile.system,
+        "settings": dict(profile.settings),
+        "tools": list(profile.tools),
+        "tool_bindings": sorted(profile.tool_bindings),
+        "mcp_servers": [repr(server) for server in profile.mcp_servers],
+        "approval": repr(profile.approval),
+        "skills": profile.skills,
+        "subagents": list(profile.subagents),
+        "subagent_bindings": sorted(profile.subagent_bindings),
+        "max_agents": profile.max_agents,
+        "workflow_mode": profile.workflow_mode,
+        "output_type": repr(profile.output_type),
+        "artifacts": repr(profile.artifacts),
+    }
+    _record_behavioral_asset(
+        kind="agent_profile",
+        local_id=profile_name,
+        name=profile_name,
+        source_locator=f"kedi:profile:{profile_name}",
+        content=profile_content,
+        metadata={"call_kind": call_kind},
+    )
+    _record_behavioral_asset(
+        kind="template",
+        local_id=template_key,
+        name=f"{profile_name} {call_kind} template",
+        source_locator=f"kedi:template:{template_key}",
+        content=prompt,
+        metadata={
+            "call_kind": call_kind,
+            "profile": profile_name,
+            "source_path": source_path,
+            "source_line": source_line,
+        },
+        sensitivity="sensitive",
+    )
+    if instructions is not None:
+        _record_behavioral_asset(
+            kind="prompt",
+            local_id=f"{profile_name}:instructions",
+            name=f"{profile_name} instructions",
+            source_locator=f"kedi:prompt:{profile_name}:instructions",
+            content=instructions,
+            metadata={"profile": profile_name},
+            sensitivity="sensitive",
+        )
+    for tool in tools:
+        source = tool_source(tool)
+        _record_behavioral_asset(
+            kind="tool",
+            local_id=tool.name,
+            name=tool.name,
+            source_locator=f"kedi:tool:{tool.name}",
+            content={
+                "name": tool.name,
+                "description": tool.description,
+                "risk": tool.risk,
+                "source": source,
+                "artifact_result": tool.artifact_result,
+                "sequential": tool.sequential,
+                "metadata": dict(tool.metadata or {}),
+            },
+            metadata={"source": source, "risk": tool.risk},
+        )
+        for schema_role, schema in (
+            ("input", tool.json_schema),
+            ("return", tool.return_schema),
+        ):
+            if schema is not None:
+                _record_behavioral_asset(
+                    kind="schema",
+                    local_id=f"tool:{tool.name}:{schema_role}",
+                    name=f"{tool.name} {schema_role} schema",
+                    source_locator=f"kedi:schema:tool:{tool.name}:{schema_role}",
+                    content=schema,
+                    metadata={"owner": tool.name, "role": schema_role},
+                )
+    if output_schema is not None:
+        _record_behavioral_asset(
+            kind="schema",
+            local_id=f"template:{template_key}:output",
+            name=f"{profile_name} output schema",
+            source_locator=f"kedi:schema:template:{template_key}:output",
+            content=dict(output_schema),
+            metadata={"owner": template_key, "role": "output"},
+        )
+    if source_path is not None:
+        source_content = {
+            "path": source_path,
+            "line": source_line,
+            "snippet": source_snippet if capture_enabled("source_snippet") else None,
+        }
+        _record_behavioral_asset(
+            kind="source_identity",
+            local_id=f"{source_path}:{source_line or 0}",
+            name=source_path,
+            source_locator=f"kedi:source:{source_path}:{source_line or 0}",
+            content=source_content,
+            metadata={"path": source_path, "line": source_line},
+            capture_content=source_snippet is not None and capture_enabled("source_snippet"),
+        )
+
+
+def _record_behavioral_asset(
+    *,
+    kind: Literal[
+        "agent_profile",
+        "prompt",
+        "schema",
+        "source_identity",
+        "template",
+        "tool",
+    ],
+    local_id: str,
+    name: str,
+    source_locator: str,
+    content: Any,
+    metadata: Mapping[str, Any],
+    sensitivity: Literal["public", "internal", "sensitive"] = "internal",
+    capture_content: bool | None = None,
+) -> None:
+    retain_content = capture_enabled("content") if capture_content is None else capture_content
+    record_asset(
+        TelemetryAsset(
+            kind=kind,
+            local_id=local_id,
+            name=name,
+            source_locator=source_locator,
+            content_fingerprint=asset_fingerprint(content),
+            content=content if retain_content else None,
+            metadata=dict(metadata),
+            sensitivity=sensitivity,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)

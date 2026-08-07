@@ -37,6 +37,8 @@ from .telemetry import capture_enabled
 from .telemetry.naming import qualified_type_name
 
 if TYPE_CHECKING:
+    from .agent_adapter.tool_override import ToolSpec
+    from .agent_profile import AgentProfile
     from .agent_adapter.conversation import ConversationState
     from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from .agent_adapter.subagents.limits import SubagentUsageLimits
@@ -716,6 +718,7 @@ class KediRuntime:
                             instructions,
                             _tool_request_context(captured_tool_specs),
                         ),
+                        instructions=instructions,
                         tools=captured_tool_specs,
                         profile=profile,
                         call_kind="invoke",
@@ -887,10 +890,12 @@ class KediRuntime:
                             _tool_request_context(captured_tool_specs),
                             {key: repr(value) for key, value in typed_fields.items()},
                         ),
+                        instructions=instructions,
                         tools=captured_tool_specs,
                         profile=profile,
                         call_kind="produce",
                         output_field_count=len(required),
+                        output_schema={key: repr(value) for key, value in typed_fields.items()},
                     )
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
@@ -939,10 +944,12 @@ class KediRuntime:
         call: Callable[[str], Any],
         *,
         context: Sequence[Any] = (),
-        tools: Sequence[Any] = (),
-        profile: Any,
+        instructions: str | None,
+        tools: Sequence[ToolSpec] = (),
+        profile: AgentProfile,
         call_kind: Literal["produce", "invoke"],
         output_field_count: int,
+        output_schema: Mapping[str, str] | None = None,
     ) -> Any:
         """Run one successful adapter turn through explicit continuation state."""
         from .agent_adapter.invocation import observe_invocations
@@ -950,6 +957,7 @@ class KediRuntime:
         from .agent_adapter.telemetry import (
             agent_call_span,
             model_call_span,
+            record_conversation_assets,
             resolved_adapter_model,
         )
         from .agent_adapter.tool_override import (
@@ -959,6 +967,33 @@ class KediRuntime:
 
         budget = self._request_budget.get() or ModelRequestBudget()
         configured_model = profile.model
+        frames = self.current_trace_frames()
+        frame = frames[-1] if frames else None
+        source_span = None if frame is None else frame.span
+        source_path = (
+            source_span.source_path
+            if source_span is not None
+            and source_span.source_path is not None
+            and capture_enabled("source_path")
+            else None
+        )
+        source_line = None if source_span is None else source_span.start_line
+        source_snippet = (
+            frame.source_snippet
+            if frame is not None and capture_enabled("source_snippet")
+            else None
+        )
+        record_conversation_assets(
+            prompt=prompt,
+            instructions=instructions,
+            profile=profile,
+            tools=tools,
+            output_schema=output_schema,
+            call_kind=call_kind,
+            source_path=source_path,
+            source_line=source_line,
+            source_snippet=source_snippet,
+        )
 
         with agent_call_span(
             adapter,
