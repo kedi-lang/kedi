@@ -25,7 +25,6 @@ from .api import (
     tool,
     type,
 )
-from .interactive_session import InteractiveSession
 from .artifacts import (
     ArtifactChunk,
     ArtifactHandle,
@@ -43,6 +42,7 @@ from .executors.debug import (
     MarkdownDebugExporter,
     default_debug_export_path,
 )
+from .interactive_session import InteractiveSession
 from .promise import KediPromise, KediPromiseLeak, force
 
 __all__ = [
