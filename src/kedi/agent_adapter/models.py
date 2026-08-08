@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from importlib.util import find_spec
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -42,16 +42,16 @@ def codex_responses_model(
             "Install Kedi with: uv add 'kedi[codex-model]'"
         )
 
-    from codex_auth_helper import create_codex_chat_openai, create_codex_responses_model
+    helper = cast(Any, __import__("codex_auth_helper"))
 
     try:
         if adapter == "pydantic":
-            return create_codex_responses_model(
+            return helper.create_codex_responses_model(
                 model_name,
                 instructions=CODEX_DEFAULT_INSTRUCTIONS,
             )
         if adapter == "langchain":
-            return create_codex_chat_openai(
+            return helper.create_codex_chat_openai(
                 model_name,
                 instructions=CODEX_DEFAULT_INSTRUCTIONS,
             )
