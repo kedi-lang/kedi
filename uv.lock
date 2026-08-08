@@ -647,6 +647,21 @@ wheels = [
 ]
 
 [[package]]
+name = "codex-auth-helper"
+version = "1.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx", marker = "python_full_version >= '3.11'" },
+    { name = "openai", marker = "python_full_version >= '3.11'" },
+    { name = "pydantic-ai-slim", marker = "python_full_version >= '3.11'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/29/50/06798a8062d528f0ed6b20a0b354ac14b67bd70b084a315eb2c37564156f/codex_auth_helper-1.6.1.tar.gz", hash = "sha256:b12bb10eb5c7d286082c435691e9070fd86d094de8ae4031ed6bd02401933c75", size = 14707, upload-time = "2026-08-05T22:19:06.938Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/50/012138816acebcb0db74b6bebfd6f3360e90c4458afc1e71807f59253d2b/codex_auth_helper-1.6.1-py3-none-any.whl", hash = "sha256:e5e278cfb6ff1fb94388571f9c73364e3e4991270df51f920d765cde498ab1f3", size = 16951, upload-time = "2026-08-05T22:19:02.329Z" },
+]
+
+[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1721,6 +1736,9 @@ dependencies = [
 claude = [
     { name = "claude-agent-sdk" },
 ]
+codex-model = [
+    { name = "codex-auth-helper", marker = "python_full_version >= '3.11'" },
+]
 playground = [
     { name = "basedpyright" },
     { name = "fastapi" },
@@ -1744,6 +1762,7 @@ requires-dist = [
     { name = "basedpyright", marker = "extra == 'playground'", specifier = ">=1.39.6" },
     { name = "claude-agent-sdk", marker = "extra == 'claude'" },
     { name = "click" },
+    { name = "codex-auth-helper", marker = "python_full_version >= '3.11' and extra == 'codex-model'", specifier = "==1.6.1" },
     { name = "docstring-parser", specifier = ">=0.18" },
     { name = "dspy" },
     { name = "fastapi", marker = "extra == 'playground'", specifier = ">=0.138.1" },
@@ -1768,7 +1787,7 @@ requires-dist = [
     { name = "tree-sitter-python", specifier = ">=0.23" },
     { name = "uvicorn", marker = "extra == 'playground'", specifier = ">=0.30" },
 ]
-provides-extras = ["claude", "playground"]
+provides-extras = ["claude", "codex-model", "playground"]
 
 [package.metadata.requires-dev]
 dev = [

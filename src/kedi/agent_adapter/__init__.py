@@ -15,6 +15,7 @@ from .meta import (
     AgentAdapterKind,
     T,
 )
+from .models import CodexModel, CodexModelAdapter, codex_responses_model
 from .tool_override import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
@@ -87,6 +88,8 @@ __all__ = [
     "BrowserModelBridge",
     "ClaudeAdapter",
     "CodexAdapter",
+    "CodexModel",
+    "CodexModelAdapter",
     "ConversationState",
     "ConversationTurn",
     "DSPyAdapter",
@@ -105,4 +108,5 @@ __all__ = [
     "adapters",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
+    "codex_responses_model",
 ]

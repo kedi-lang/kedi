@@ -481,7 +481,7 @@ def _tool_metadata(
     *,
     description: str | None,
 ) -> dict[str, Any]:
-    return {
+    metadata: dict[str, Any] = {
         "kedi_schema": {
             "name": proc.name,
             "parameters": json_schema,
@@ -491,6 +491,15 @@ def _tool_metadata(
         "kedi_input_schema": json_schema,
         "kedi_return_schema": return_schema,
     }
+    filesystem_path = internal_module_path("filesystem")
+    source_path = proc.loc.source_path if proc.loc is not None else None
+    if (
+        filesystem_path is not None
+        and source_path is not None
+        and Path(source_path).resolve() == filesystem_path
+    ):
+        metadata["kedi_tool_kind"] = "filesystem"
+    return metadata
 
 
 def _build_tool_description(

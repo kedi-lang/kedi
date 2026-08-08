@@ -50,6 +50,19 @@ def test_parse_template_block_multiline() -> None:
     assert all(isinstance(line, TemplateLine) for line in block.lines)
 
 
+def test_parse_template_block_preserves_blank_continuation_line() -> None:
+    src = ">> First paragraph [answer].\n\nSecond paragraph adds context.\n= <answer>\n"
+    prog = parse_program(src)
+    block = prog.toplevel_body[0]
+    assert isinstance(block, TemplateBlock)
+    assert len(block.lines) == 3
+    assert block.lines[1].segments == []
+
+    merged = merge_template_block_lines(block.lines)
+    text = "".join(segment.text for segment in merged.segments if isinstance(segment, TextSegment))
+    assert "\n\nSecond paragraph" in text
+
+
 def test_optimize_span_executes_its_lines_as_one_template_block() -> None:
     src = (
         "@summarize(topic: str) -> str:\n"

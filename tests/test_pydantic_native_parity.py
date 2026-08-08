@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic_ai import ModelSettings
+from pydantic_ai import ModelRetry, ModelSettings
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -603,6 +603,38 @@ def test_public_pydantic_tool_conversion_preserves_description_without_schema() 
     tool = pydantic_tool_from_spec(spec)
 
     assert tool.description == "Return the supplied value."
+
+
+def test_bundled_filesystem_path_errors_are_model_retries() -> None:
+    def missing_file(*, file_path: str) -> str:
+        raise FileNotFoundError(file_path)
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=missing_file,
+            name="read_text_file",
+            metadata={"kedi_tool_kind": "filesystem"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="inspect unknown paths with get_file_info"):
+        cast(Any, tool.function)(file_path="missing.kedi")
+
+
+def test_filesystem_permission_errors_are_reported_without_bypassing_the_boundary() -> None:
+    def denied(*, file_path: str) -> str:
+        raise PermissionError(file_path)
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=denied,
+            name="read_text_file",
+            metadata={"kedi_tool_kind": "filesystem"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="Use repository-relative paths only"):
+        cast(Any, tool.function)(file_path="secret.env")
 
 
 @pytest.mark.parametrize("placement", ["constructor", "caller"])

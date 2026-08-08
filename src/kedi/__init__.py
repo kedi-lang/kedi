@@ -1,5 +1,11 @@
 from ._version import __version__
-from .agent_adapter import ApprovalCancelled, ConversationState
+from .agent_adapter import (
+    ApprovalCancelled,
+    CodexModel,
+    CodexModelAdapter,
+    ConversationState,
+    codex_responses_model,
+)
 from .agent_profile import McpServerSpec
 from .api import (
     AdapterLike,
@@ -64,6 +70,8 @@ __all__ = [
     "ArtifactStream",
     "CacheInfo",
     "ConversationState",
+    "CodexModel",
+    "CodexModelAdapter",
     "FrameworkAdapterName",
     "McpServerSpec",
     "bind",
@@ -72,6 +80,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "codex_responses_model",
     "interactive",
     "parallel",
     "query",

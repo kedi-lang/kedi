@@ -1206,11 +1206,11 @@ class _Walker:
 
     def _walk_template_block_stmt(self, node: Node) -> TemplateBlock:
         lines: List[TemplateLine] = []
-        head = _field(node, "head")
-        if head is not None:
-            lines.append(self._template_line_from_expr(head))
-        for cont in node.children_by_field_name("continuation"):
-            lines.append(self._template_line_from_expr(cont))
+        for child in node.children:
+            if child.type == "template_prompt_expr":
+                lines.append(self._template_line_from_expr(child))
+            elif child.type == "template_blank_line":
+                lines.append(TemplateLine(segments=[], loc=self._span(child)))
         return TemplateBlock(lines=lines, loc=self._span(node))
 
     def _walk_template_block_statements(self, node: Node) -> List[Stmt]:

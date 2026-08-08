@@ -66,6 +66,9 @@ kedi-lsp = "kedi.lsp.server:main"
 claude = [
     "claude-agent-sdk",
 ]
+codex-model = [
+    "codex-auth-helper==1.6.1; python_version >= '3.11'",
+]
 playground = [
     "basedpyright>=1.39.6",
     "fastapi>=0.138.1",

@@ -860,7 +860,15 @@ opt into project-local skills.
   The command value may be plain text or an inline Python expression that
   evaluates to a string or string sequence.
 - `> model: name` — set the active model for subsequent procedure captures (plain
-  name or `` `expression` ``).
+  name or `` `expression` ``). With the Pydantic adapter, `codex/<model>` selects
+  a Codex-authenticated Responses model on Python 3.11+ through the optional
+  `kedi[codex-model]` extra. Run `codex login` before using this model family:
+
+  ```kedi
+  > adapter: pydantic
+  > model: codex/gpt-5.6-luna
+  > effort: high
+  ```
 - `> effort: level` — set active reasoning effort. Accepted values are
   `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`; plain values or
   `` `expression` `` are allowed. Pydantic AI maps `max` to `xhigh`.
@@ -1672,6 +1680,22 @@ The native precedence rules are explicit:
   appended;
 - caller capabilities are retained and each required Kedi capability is
   appended at most once.
+
+Codex-authenticated Pydantic models can also be built directly. The returned
+object is a normal Pydantic AI `Model`, so native `PydanticAdapter` tools,
+structured outputs, profiles, and effort settings remain active:
+
+```python
+from kedi import codex_responses_model
+from kedi.agent_adapter import PydanticAdapter
+
+model = codex_responses_model("gpt-5.6-luna", adapter="pydantic")
+adapter = PydanticAdapter(model)
+```
+
+This bridge requires Python 3.11+ and `codex-auth-helper==1.6.1`, installed with
+`uv add 'kedi[codex-model]'`. Authentication comes from the user's Codex login;
+Kedi does not accept or persist a second token for this path.
 
 Use the public adapter-specific converters when a native Pydantic agent needs
 Kedi `ToolSpec` values:

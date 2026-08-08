@@ -57,6 +57,7 @@ from ..approval import (
 from ..conversation import AdapterConversationContext
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..models import codex_responses_model, is_codex_model_id
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -258,10 +259,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             raise ValueError(f"Unknown approval resolution owner: {approval_resolution!r}")
         self.approval_resolution = approval_resolution
         self._subagent_failure_policy = subagent_failure_policy
+        self._model_overrides: dict[str, Model] = {}
+        logical_model = model if isinstance(model, str) else None
         if isinstance(model, str):
-            model = normalize_for_pydantic_ai(model)
+            model = self._resolve_model(model)
         self._agent_model_arg = model
-        self._default_model = model if isinstance(model, str) else None
+        self._default_model = logical_model
         if model_settings:
             filtered_settings = pydantic_model_settings(model_settings)
             if filtered_settings:
@@ -968,7 +971,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if profile.needs_model_override(self.default_model()):
             if profile.model is None:
                 raise RuntimeError("Profile requires a model override but no model is set.")
-            override_kwargs["model"] = normalize_for_pydantic_ai(profile.model)
+            override_kwargs["model"] = self._resolve_model(profile.model)
         if profile.effort is not None:
             override_kwargs["spec"] = {
                 "capabilities": [
@@ -979,6 +982,15 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 ]
             }
         return override_kwargs
+
+    def _resolve_model(self, model: str) -> str | Model:
+        if not is_codex_model_id(model):
+            return normalize_for_pydantic_ai(model)
+        resolved = self._model_overrides.get(model)
+        if resolved is None:
+            resolved = cast(Model, codex_responses_model(model, adapter="pydantic"))
+            self._model_overrides[model] = resolved
+        return resolved
 
 
 def _validated_tool_function(tool: ToolSpec) -> Any:
@@ -1190,7 +1202,20 @@ def _approval_request_payload(request: ApprovalRequest) -> dict[str, Any]:
 
 
 def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | None:
-    kind = (tool.metadata or {}).get("kind")
+    metadata = tool.metadata or {}
+    kind = metadata.get("kedi_tool_kind") or metadata.get("kind")
+    original = exc.original if isinstance(exc, KediExecutionError) else exc
+    if kind == "filesystem" and isinstance(
+        original,
+        (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError),
+    ):
+        from pydantic_ai import ModelRetry
+
+        return ModelRetry(
+            f"Filesystem request rejected: {original}. Use repository-relative paths only, "
+            "inspect unknown paths with get_file_info, use list_directory for directories, "
+            "and read_text_file only for regular files."
+        )
     if kind == "dynamic_workflow":
         from pydantic_ai import ModelRetry
 
