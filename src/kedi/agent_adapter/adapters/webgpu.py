@@ -99,6 +99,7 @@ class WebGPUAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=False,
         supports_history_replay=False,
+        supports_stream_events=False,
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 

@@ -1,10 +1,17 @@
 from ._version import __version__
 from .agent_adapter import (
+    AgentMessageEvent,
+    AgentMessagePhase,
+    AgentRunState,
+    AgentRunStateEvent,
+    AgentStreamEvent,
     ApprovalCancelled,
+    AsyncAgentEventQueue,
     CodexModel,
     CodexModelAdapter,
     ConversationState,
     codex_responses_model,
+    observe_agent_events,
 )
 from .agent_profile import McpServerSpec
 from .api import (
@@ -54,7 +61,12 @@ from .promise import KediPromise, KediPromiseLeak, force
 __all__ = [
     "__version__",
     "AdapterLike",
+    "AgentMessageEvent",
+    "AgentMessagePhase",
     "AgentName",
+    "AgentRunState",
+    "AgentRunStateEvent",
+    "AgentStreamEvent",
     "ApprovalDecision",
     "ApprovalHandler",
     "ApprovalMode",
@@ -68,6 +80,7 @@ __all__ = [
     "ArtifactReleaseResult",
     "ArtifactSearchResult",
     "ArtifactStream",
+    "AsyncAgentEventQueue",
     "CacheInfo",
     "ConversationState",
     "CodexModel",
@@ -82,6 +95,7 @@ __all__ = [
     "context",
     "codex_responses_model",
     "interactive",
+    "observe_agent_events",
     "parallel",
     "query",
     "reset_config",

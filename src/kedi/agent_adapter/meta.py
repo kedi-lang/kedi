@@ -24,6 +24,7 @@ AdapterCapability = Literal[
     "native_artifacts",
     "stateful_history",
     "history_replay",
+    "stream_events",
 ]
 
 
@@ -45,6 +46,7 @@ class AdapterCapabilities:
     supports_native_artifacts: bool | None = None
     supports_stateful_history: bool | None = None
     supports_history_replay: bool | None = None
+    supports_stream_events: bool | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
 
@@ -76,6 +78,7 @@ class AdapterCapabilities:
             "native_artifacts": self.supports_native_artifacts,
             "stateful_history": self.supports_stateful_history,
             "history_replay": self.supports_history_replay,
+            "stream_events": self.supports_stream_events,
         }
         return bool(values[feature])
 

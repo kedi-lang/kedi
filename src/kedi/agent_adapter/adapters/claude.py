@@ -20,6 +20,7 @@ from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
 from ..conversation import AdapterConversationContext
+from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
@@ -69,6 +70,7 @@ class ClaudeAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=True,
         supports_history_replay=False,
+        supports_stream_events=True,
         settings=CLAUDE_AGENT_SETTING_KEYS,
     )
 
@@ -144,6 +146,7 @@ class ClaudeAdapter:
             output_type=resolved_output_type,
             output_schema=None,
             kwargs=kwargs,
+            emit_final=False,
         )
         structured_output = getattr(result, "structured_output", None)
         if structured_output is None:
@@ -162,6 +165,7 @@ class ClaudeAdapter:
             output_type=None,
             output_schema=output_schema,
             kwargs=kwargs,
+            emit_final=False,
         )
         structured_output = getattr(result, "structured_output", None)
         if not isinstance(structured_output, Mapping):
@@ -174,6 +178,7 @@ class ClaudeAdapter:
             output_type=None,
             output_schema=None,
             kwargs=kwargs,
+            emit_final=True,
         )
         return _claude_text_response(result)
 
@@ -184,6 +189,7 @@ class ClaudeAdapter:
         output_type: type[Any] | None,
         output_schema: dict[str, Any] | None,
         kwargs: Mapping[str, Any],
+        emit_final: bool,
     ) -> Any:
         sdk = _claude_sdk()
         run_kwargs = dict(kwargs)
@@ -196,24 +202,39 @@ class ClaudeAdapter:
             run_kwargs=run_kwargs,
         )
         result = None
-        with delegation_scope(self._subagent_failure_policy):
+        message_index = 0
+        with (
+            delegation_scope(self._subagent_failure_policy),
+            agent_event_run(self.shortname) as resolver,
+        ):
             async for message in sdk.query(prompt=prompt, options=options):
                 system_error = _claude_non_retryable_system_error(sdk, message)
                 if system_error is not None:
                     raise RuntimeError(system_error)
+                if resolver is not None:
+                    message_index = _observe_claude_message(
+                        sdk,
+                        message,
+                        resolver,
+                        message_index,
+                    )
                 if _is_result_message(sdk, message):
                     result = message
 
-        if result is None:
-            raise RuntimeError("Claude Agent SDK did not return a result message.")
-        if bool(getattr(result, "is_error", False)):
-            raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
-        if invocation_observer() is not None:
-            report_invocation(_claude_invocation_usage(result))
-        conversation = self._subagent_conversation_var.get()
-        if conversation is not None:
-            conversation.result_state["claude_session_id"] = result.session_id
-        return result
+            if result is None:
+                raise RuntimeError("Claude Agent SDK did not return a result message.")
+            if bool(getattr(result, "is_error", False)):
+                raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
+            if invocation_observer() is not None:
+                report_invocation(_claude_invocation_usage(result))
+            conversation = self._subagent_conversation_var.get()
+            if conversation is not None:
+                conversation.result_state["claude_session_id"] = result.session_id
+            if resolver is not None:
+                resolver.complete_run(
+                    final_text=_claude_text_response(result) if emit_final else None
+                )
+            return result
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -430,6 +451,50 @@ def _claude_text_response(message: Any) -> str:
         if isinstance(text, str):
             return text
     raise ValueError("Claude Agent SDK did not return a text response.")
+
+
+def _observe_claude_message(
+    sdk: Any,
+    message: Any,
+    resolver: AgentMessageResolver,
+    message_index: int,
+) -> int:
+    assistant_cls = getattr(sdk, "AssistantMessage", None)
+    if assistant_cls is not None and isinstance(message, assistant_cls):
+        text = _claude_assistant_text(sdk, message)
+        if text:
+            message_index += 1
+            resolver.complete_message(f"claude:{message_index}", text)
+            resolver.mark_message_boundary()
+        if _claude_has_tool_use(sdk, message):
+            resolver.mark_tool_boundary()
+        return message_index
+
+    user_cls = getattr(sdk, "UserMessage", None)
+    if user_cls is not None and isinstance(message, user_cls):
+        resolver.mark_tool_boundary()
+    return message_index
+
+
+def _claude_assistant_text(sdk: Any, message: Any) -> str:
+    content = message.content
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+        return ""
+    text_cls = getattr(sdk, "TextBlock", None)
+    if text_cls is None:
+        return ""
+    parts = [block.text for block in content if isinstance(block, text_cls) and block.text]
+    return "".join(parts).strip()
+
+
+def _claude_has_tool_use(sdk: Any, message: Any) -> bool:
+    content = message.content
+    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+        return False
+    tool_use_cls = getattr(sdk, "ToolUseBlock", None)
+    return tool_use_cls is not None and any(isinstance(block, tool_use_cls) for block in content)
 
 
 def _is_result_message(sdk: Any, message: Any) -> bool:

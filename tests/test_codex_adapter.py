@@ -28,6 +28,12 @@ from kedi.agent_adapter.adapters._codex_app_server import (
     CodexTurnResult,
 )
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.events import (
+    AgentMessageEvent,
+    AgentRunStateEvent,
+    agent_event_run,
+    observe_agent_events,
+)
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
@@ -179,7 +185,9 @@ def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
 ) -> None:
     adapter, log_path = _adapter(tmp_path, model="gpt-base")
 
-    assert adapter.invoke_sync(prompt="raw prompt") == '{"answer": "raw prompt"}'
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+    with observe_agent_events(streamed.append):
+        assert adapter.invoke_sync(prompt="raw prompt") == '{"answer": "raw prompt"}'
     assert asyncio.run(adapter.invoke(prompt="raw async")) == '{"answer": "raw async"}'
     adapter.close()
 
@@ -188,6 +196,159 @@ def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
     assert "outputSchema" not in turns[0]["params"]
     assert turns[1]["params"]["input"] == [{"type": "text", "text": "raw async"}]
     assert "outputSchema" not in turns[1]["params"]
+    assert any(
+        isinstance(event, AgentMessageEvent) and event.phase == "final" for event in streamed
+    )
+
+
+def test_codex_notification_event_classification() -> None:
+    client = CodexAppServerClient(command=("unused",))
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    try:
+        with observe_agent_events(streamed.append):
+            with agent_event_run("codex") as resolver:
+                assert resolver is not None
+                client._thread_event_resolvers["thread"] = resolver
+                client._handle_notification(
+                    "item/agentMessage/delta",
+                    {"threadId": "thread", "itemId": "message", "delta": "Working"},
+                )
+                client._handle_notification(
+                    "item/agentMessage/delta",
+                    {"threadId": "thread", "itemId": 1, "delta": object()},
+                )
+                client._handle_notification(
+                    "item/started",
+                    {"threadId": "thread", "item": {"type": "commandExecution"}},
+                )
+                client._handle_notification(
+                    "item/started",
+                    {"threadId": "thread", "item": "invalid"},
+                )
+                client._handle_notification(
+                    "item/completed",
+                    {
+                        "threadId": "thread",
+                        "turnId": "turn",
+                        "item": {
+                            "type": "agentMessage",
+                            "id": "message",
+                            "text": "Working",
+                            "phase": "commentary",
+                        },
+                    },
+                )
+                client._handle_notification(
+                    "item/completed",
+                    {
+                        "threadId": "thread",
+                        "turnId": "turn",
+                        "item": {
+                            "type": "agentMessage",
+                            "text": "Finished",
+                            "phase": "final_answer",
+                        },
+                    },
+                )
+                client._handle_notification(
+                    "item/completed",
+                    {
+                        "threadId": "thread",
+                        "turnId": "turn",
+                        "item": {"type": "commandExecution"},
+                    },
+                )
+                assert client._event_resolver(object()) is None
+                resolver.complete_run(final_text="Finished")
+    finally:
+        client.close()
+
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [
+        ("commentary", "Working"),
+        ("final", "Finished"),
+    ]
+
+
+def test_codex_message_phase_and_final_selection() -> None:
+    commentary = codex_server_module._TurnMessage("one", "note", "commentary")
+    unphased = codex_server_module._TurnMessage("two", "answer", None)
+    final = codex_server_module._TurnMessage("three", "final", "final")
+
+    assert codex_server_module._message_phase("commentary") == "commentary"
+    assert codex_server_module._message_phase("final_answer") == "final"
+    assert codex_server_module._message_phase("unknown") is None
+    assert codex_server_module._final_turn_message([commentary, unphased]) is unphased
+    assert codex_server_module._final_turn_message([unphased, final]) is final
+    assert codex_server_module._final_turn_message([commentary]) is None
+
+
+def test_codex_adapter_emits_completed_semantic_messages() -> None:
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            resolver = kwargs["event_resolver"]
+            resolver.append_delta("commentary", "working")
+            assert not any(isinstance(event, AgentMessageEvent) for event in events)
+            resolver.complete_message(
+                "commentary",
+                "working through the request",
+                explicit_phase="commentary",
+            )
+            resolver.complete_message(
+                "final",
+                "finished",
+                explicit_phase="final",
+            )
+            return CodexTurnResult(text="finished", turn={})
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    events: list[AgentMessageEvent | AgentRunStateEvent] = []
+    adapter = CodexAdapter(client=cast(CodexAppServerClient, FakeClient()))
+
+    with observe_agent_events(events.append):
+        assert asyncio.run(adapter.invoke(prompt="test")) == "finished"
+
+    message_events = [event for event in events if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in message_events] == [
+        ("commentary", "working through the request"),
+        ("final", "finished"),
+    ]
+    assert [event.state for event in events if isinstance(event, AgentRunStateEvent)] == [
+        "started",
+        "completed",
+    ]
+
+
+def test_codex_structured_run_does_not_publish_schema_output_as_final() -> None:
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            resolver = kwargs["event_resolver"]
+            resolver.complete_message(
+                "final",
+                '{"answer":"done"}',
+                explicit_phase="final",
+            )
+            return CodexTurnResult(text='{"answer":"done"}', turn={})
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    events: list[AgentMessageEvent | AgentRunStateEvent] = []
+    adapter = CodexAdapter(client=cast(CodexAppServerClient, FakeClient()))
+
+    with observe_agent_events(events.append):
+        assert asyncio.run(adapter.produce("test", output_type=Answer)) == Answer(answer="done")
+
+    assert not any(isinstance(event, AgentMessageEvent) for event in events)
 
 
 def test_codex_subagent_execution_contract() -> None:

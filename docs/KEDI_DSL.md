@@ -1805,6 +1805,77 @@ tools. That generic Pydantic API cannot run the original Kedi
 `argument_validator`; the helper needs the retained `tool_specs` list to do so
 before constructing `DeferredToolResults`.
 
+### Agent Stream Events
+
+Kedi exposes an adapter-neutral event stream for completed semantic agent
+messages. It is deliberately not a token stream: provider deltas, mutable
+snapshots, and hidden reasoning remain private until the adapter identifies a
+complete assistant message. Consumers therefore receive stable commentary and
+final text without reconstructing provider-specific chunks.
+
+Observation is a side channel and does not replace the adapter result:
+
+```python
+import asyncio
+
+from kedi import AgentMessageEvent, AgentRunStateEvent, observe_agent_events
+from kedi.agent_adapter import PydanticAdapter
+
+events = []
+adapter = PydanticAdapter("openai:gpt-4o-mini")
+
+with observe_agent_events(events.append):
+    result = asyncio.run(adapter.invoke(prompt="Inspect the parser."))
+
+for event in events:
+    if isinstance(event, AgentMessageEvent):
+        print(event.phase, event.content)
+    elif isinstance(event, AgentRunStateEvent):
+        print(event.state)
+```
+
+The result remains the authoritative return value. Event delivery does not
+change prompts, tools, schemas, history, usage accounting, or exceptions.
+`AsyncAgentEventQueue` is available when an async UI needs a thread-safe queue
+sink instead of a callback.
+
+For a tool-backed `invoke()`, a typical observable sequence is:
+
+```text
+started
+commentary  Checking the registry.
+final       The requested value is ready.
+completed
+```
+
+The tool executes between the commentary and final messages. This API does not
+publish a separate tool-call event: the tool boundary seals preceding completed
+assistant text as commentary, while text produced after the tool result becomes
+the authoritative final response. Tool execution remains available through the
+adapter's normal tool and telemetry surfaces.
+
+The public event contract is:
+
+- every observed run emits `started` and exactly one terminal state:
+  `completed`, `failed`, or `cancelled`;
+- `AgentMessageEvent.phase` is either `commentary` or `final`;
+- only completed semantic messages are published, never token deltas;
+- `invoke()` may emit one authoritative final message after successful
+  completion;
+- structured `produce()` does not publish its schema payload as natural-
+  language final text;
+- tool boundaries can resolve earlier completed text as commentary;
+- subagent events use the coordinator run ID and carry `parent_run_id`, so
+  concurrent child runs can be rendered independently;
+- sink failures are isolated from model execution, and a slow sink cannot
+  block provider or SDK reader threads indefinitely.
+
+Stream support is capability-driven. Pydantic AI, LangChain, Claude Agent SDK,
+Codex App Server, and ACP currently expose semantic events. DSPy and WebGPU do
+not yet provide trustworthy completed-message boundaries and advertise
+`supports_stream_events=False`. `LazyAdapter` reports the capability of the
+adapter it resolves.
+
 ### Configuration and Context
 
 Configure defaults once:
