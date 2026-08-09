@@ -21,6 +21,8 @@ from pydantic_ai.capabilities import (
 from pydantic_ai.exceptions import ApprovalRequired
 from pydantic_ai.messages import (
     AgentStreamEvent as PydanticAgentStreamEvent,
+)
+from pydantic_ai.messages import (
     FunctionToolCallEvent,
     ModelMessage,
     OutputToolCallEvent,

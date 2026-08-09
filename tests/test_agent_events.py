@@ -5,12 +5,12 @@ from dataclasses import dataclass, field, replace
 from threading import Event
 
 import pytest
-from pydantic_ai.models.test import TestModel
 from pydantic_ai.messages import FunctionToolCallEvent, PartEndEvent, TextPart, ToolCallPart
+from pydantic_ai.models.test import TestModel
 
+from kedi.agent_adapter import events as event_module
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
-from kedi.agent_adapter import events as event_module
 from kedi.agent_adapter.events import (
     AgentEventDispatcher,
     AgentMessageEvent,
