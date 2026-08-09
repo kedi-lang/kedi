@@ -1839,6 +1839,21 @@ change prompts, tools, schemas, history, usage accounting, or exceptions.
 `AsyncAgentEventQueue` is available when an async UI needs a thread-safe queue
 sink instead of a callback.
 
+For a tool-backed `invoke()`, a typical observable sequence is:
+
+```text
+started
+commentary  Checking the registry.
+final       The requested value is ready.
+completed
+```
+
+The tool executes between the commentary and final messages. This API does not
+publish a separate tool-call event: the tool boundary seals preceding completed
+assistant text as commentary, while text produced after the tool result becomes
+the authoritative final response. Tool execution remains available through the
+adapter's normal tool and telemetry surfaces.
+
 The public event contract is:
 
 - every observed run emits `started` and exactly one terminal state:
