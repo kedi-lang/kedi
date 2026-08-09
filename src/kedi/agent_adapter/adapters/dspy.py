@@ -52,6 +52,7 @@ class DSPyAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=False,
         supports_history_replay=False,
+        supports_stream_events=False,
         settings=DSPY_LM_SETTING_KEYS,
     )
 

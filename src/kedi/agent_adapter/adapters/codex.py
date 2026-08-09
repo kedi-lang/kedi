@@ -24,6 +24,7 @@ from ..approval import (
     ToolRisk,
     resolve_tool_approval_async,
 )
+from ..events import agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..subagents import SubagentExecutionRequest
@@ -81,6 +82,7 @@ class CodexAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=False,
         supports_history_replay=False,
+        supports_stream_events=True,
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )
@@ -152,12 +154,12 @@ class CodexAdapter:
         **kwargs: Any,
     ) -> OutputDataT:
         run = self._prepare_run(template, output_schema, output_type, kwargs)
-        result = await self._run_async(run)
+        result = await self._run_async(run, emit_final=False)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run = self._prepare_invoke(prompt, kwargs)
-        result = await self._run_async(run)
+        result = await self._run_async(run, emit_final=True)
         return result.text
 
     async def produce_subagent(
@@ -173,7 +175,7 @@ class CodexAdapter:
             output_schema=_codex_json_schema(output_schema),
             output_type=None,
         )
-        result = await self._run_async(run)
+        result = await self._run_async(run, emit_final=False)
         value = _json_object_result(result)
         return value
 
@@ -185,12 +187,12 @@ class CodexAdapter:
         **kwargs: Any,
     ) -> OutputDataT:
         run = self._prepare_run(template, output_schema, output_type, kwargs)
-        result = self._run_sync(run)
+        result = self._run_sync(run, emit_final=False)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         run = self._prepare_invoke(prompt, kwargs)
-        result = self._run_sync(run)
+        result = self._run_sync(run, emit_final=True)
         return result.text
 
     def close(self) -> None:
@@ -237,8 +239,16 @@ class CodexAdapter:
     def subagent_run_kwargs(_limits: SubagentUsageLimits) -> dict[str, Any]:
         return {}
 
-    async def _run_async(self, run: _CodexRun) -> CodexTurnResult:
-        with delegation_scope(self._subagent_failure_policy):
+    async def _run_async(
+        self,
+        run: _CodexRun,
+        *,
+        emit_final: bool,
+    ) -> CodexTurnResult:
+        with (
+            delegation_scope(self._subagent_failure_policy),
+            agent_event_run(self.shortname) as resolver,
+        ):
             result = await self._client.run_stateless_turn(
                 thread_params=run.thread_params,
                 turn_params=run.turn_params,
@@ -247,13 +257,24 @@ class CodexAdapter:
                 turn_timeout=run.timeout,
                 approval_handler=run.native_approval_handler,
                 approval_context=copy_context(),
+                event_resolver=resolver,
             )
-        if invocation_observer() is not None:
-            report_invocation(_codex_invocation_usage(result))
-        return result
+            if invocation_observer() is not None:
+                report_invocation(_codex_invocation_usage(result))
+            if resolver is not None:
+                resolver.complete_run(final_text=result.text if emit_final else None)
+            return result
 
-    def _run_sync(self, run: _CodexRun) -> CodexTurnResult:
-        with delegation_scope(self._subagent_failure_policy):
+    def _run_sync(
+        self,
+        run: _CodexRun,
+        *,
+        emit_final: bool,
+    ) -> CodexTurnResult:
+        with (
+            delegation_scope(self._subagent_failure_policy),
+            agent_event_run(self.shortname) as resolver,
+        ):
             result = self._client.run_stateless_turn_sync(
                 thread_params=run.thread_params,
                 turn_params=run.turn_params,
@@ -262,10 +283,13 @@ class CodexAdapter:
                 turn_timeout=run.timeout,
                 approval_handler=run.native_approval_handler,
                 approval_context=copy_context(),
+                event_resolver=resolver,
             )
-        if invocation_observer() is not None:
-            report_invocation(_codex_invocation_usage(result))
-        return result
+            if invocation_observer() is not None:
+                report_invocation(_codex_invocation_usage(result))
+            if resolver is not None:
+                resolver.complete_run(final_text=result.text if emit_final else None)
+            return result
 
     def _prepare_run(
         self,
