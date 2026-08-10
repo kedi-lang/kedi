@@ -37,6 +37,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from ...agent_profile import AgentProfile
+from ...agent_profile.compaction import compaction_settings_from_profile
 from ...agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
     pydantic_model_settings,
@@ -47,6 +48,7 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
+from ..native_compaction import with_pydantic_native_compaction
 from ..approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -205,7 +207,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_native_artifacts=False,
         supports_stateful_history=True,
         supports_history_replay=True,
-        settings=PYDANTIC_MODEL_SETTING_KEYS,
+        supports_native_compaction=True,
+        settings=PYDANTIC_MODEL_SETTING_KEYS | {"compaction"},
     )
 
     def native_telemetry_enabled(self, operation: str) -> bool:
@@ -689,6 +692,19 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 capabilities,
                 _KediRequiredToolCapability,
                 _KediRequiredToolCapability,
+            )
+        compaction = compaction_settings_from_profile(self.active_profile.settings)
+        if compaction is not None and compaction.mode == "native":
+            from ._pydantic_compat import effective_model
+
+            selected_model = effective_model(
+                self,
+                cast("Model | str | None", run_kwargs.get("model")),
+            )
+            capabilities = with_pydantic_native_compaction(
+                capabilities,
+                model=selected_model,
+                settings=compaction,
             )
         capabilities = self._with_telemetry_capability(capabilities)
         if capabilities:

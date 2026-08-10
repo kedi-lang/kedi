@@ -1075,8 +1075,24 @@ class KediRuntime:
         only has to enter the override scope, never re-validate (which would defer the error to a
         worker in parallel mode).
         """
+        from .agent_adapter.meta import AdapterCapabilities
         from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile.compaction import (
+            CompactionSettingsError,
+            compaction_settings_from_profile,
+        )
         from .agent_profile import AgentProfileOverrideUnsupported
+
+        compaction = compaction_settings_from_profile(profile.settings)
+        if compaction is not None and compaction.mode == "native":
+            capabilities = getattr(adapter, "capabilities", None)
+            if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
+                "native_compaction"
+            ):
+                shortname = getattr(adapter, "shortname", type(adapter).__name__)
+                raise CompactionSettingsError(
+                    f"native compaction is not supported by adapter {shortname!r}"
+                )
 
         if isinstance(adapter, SupportsProfileOverride):
             return

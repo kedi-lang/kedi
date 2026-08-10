@@ -1832,19 +1832,73 @@ class _Walker:
         body_node = _field(node, "body")
         assert body_node is not None
         fields: list[SettingsField] = []
+        seen: set[str] = set()
         for child in _named_children(body_node):
             if child.type in ("line_comment", "block_comment"):
                 continue
-            fields.append(self._walk_settings_field(child))
+            setting = (
+                self._walk_compaction_settings(child)
+                if child.type == "compaction_settings"
+                else self._walk_settings_field(child)
+            )
+            if setting.name in seen:
+                self._error(
+                    child,
+                    f"Duplicate settings field: {setting.name!r}",
+                    code="K-SETTING-DUP",
+                )
+            seen.add(setting.name)
+            fields.append(setting)
         return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
 
+    def _walk_compaction_settings(self, node: Node) -> SettingsField:
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[SettingsField] = []
+        seen: set[str] = set()
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            field = self._walk_settings_value_field(child)
+            if field.name not in {"mode", "threshold"}:
+                self._error(
+                    child,
+                    "compaction setting must be one of: mode, threshold",
+                    code="K-COMPACTION-KEY",
+                )
+            if field.name in seen:
+                self._error(
+                    child,
+                    f"Duplicate compaction setting: {field.name!r}",
+                    code="K-COMPACTION-DUP",
+                )
+            if (
+                field.name == "mode"
+                and field.plain_value is not None
+                and field.plain_value not in {"native", "disabled"}
+            ):
+                self._error(
+                    child,
+                    "compaction mode must be 'native' or 'disabled'",
+                    code="K-COMPACTION-MODE",
+                )
+            seen.add(field.name)
+            fields.append(field)
+        return SettingsField(name="compaction", fields=fields, loc=self._span(node))
+
     def _walk_settings_field(self, node: Node) -> SettingsField:
+        field = self._walk_settings_value_field(node)
+        name_node = _field(node, "name")
+        assert name_node is not None
+        self._validate_setting_key(name_node, field.name)
+        return field
+
+    def _walk_settings_value_field(self, node: Node) -> SettingsField:
         name_node = _field(node, "name")
         value_node = _field(node, "value")
         assert name_node is not None
         assert value_node is not None
         name = _identifier_name(self.source, name_node)
-        self._validate_setting_key(name_node, name)
         if value_node.type == "inline_python_expr":
             code_node = _field(value_node, "code")
             assert code_node is not None

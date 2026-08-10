@@ -10,6 +10,10 @@ from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
 
 from ...agent_profile import AgentProfile
+from ...agent_profile.compaction import (
+    CompactionSettingsError,
+    compaction_settings_from_profile,
+)
 from ...agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
@@ -23,6 +27,7 @@ from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..native_compaction import langchain_settings_with_native_compaction
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -57,7 +62,8 @@ class LangChainAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=False,
         supports_history_replay=False,
-        settings=LANGCHAIN_MODEL_SETTING_KEYS,
+        supports_native_compaction=True,
+        settings=LANGCHAIN_MODEL_SETTING_KEYS | {"compaction"},
     )
 
     def __init__(
@@ -274,12 +280,30 @@ class LangChainAdapter:
             **langchain_model_settings(self.active_profile.settings),
         }
         _apply_langchain_effort_settings(settings, model, self.active_profile.effort)
+        compaction = compaction_settings_from_profile(self.active_profile.settings)
+        if compaction is not None:
+            settings = langchain_settings_with_native_compaction(
+                settings,
+                model=model,
+                settings=compaction,
+            )
         return settings
 
     def _chat_model_for_run(self) -> Any:
         model = self._model_for_run()
         settings = self._settings_for_run(model)
         if not isinstance(model, str):
+            compaction = compaction_settings_from_profile(self.active_profile.settings)
+            if compaction is not None and compaction.mode == "native":
+                copy_model = getattr(model, "model_copy", None)
+                if not callable(copy_model):
+                    raise CompactionSettingsError(
+                        "native LangChain compaction requires a model that supports model_copy"
+                    )
+                updates = {
+                    key: settings[key] for key in ("context_management", "betas") if key in settings
+                }
+                return copy_model(update=updates)
             return model
         try:
             from langchain.chat_models import init_chat_model

@@ -1003,6 +1003,8 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
+    for member in profile.settings_members:
+        diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1113,6 +1115,9 @@ def _scan_capability_scope(
                 )
             )
             continue
+        if isinstance(stmt, SettingsDirectiveStmt):
+            diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
+            continue
         if isinstance(stmt, UseDirectiveStmt):
             diagnostics.extend(
                 _use_capability_diagnostics(
@@ -1172,6 +1177,28 @@ def _scan_capability_scope(
             )
             continue
     return diagnostics
+
+
+def _compaction_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    fields: Sequence[SettingsField],
+) -> list[lsp.Diagnostic]:
+    compaction = next((field for field in fields if field.name == "compaction"), None)
+    if compaction is None or compaction.loc is None:
+        return []
+    mode = next((field for field in compaction.fields if field.name == "mode"), None)
+    if mode is not None and mode.plain_value == "disabled":
+        return []
+    if mode is not None and mode.backtick_code is not None:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "native_compaction",
+        [compaction.loc],
+        "provider-native conversation compaction",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-COMPACTION",
+    )
 
 
 def _adapter_selection_diagnostics(
@@ -2722,6 +2749,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, SettingsField):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, ArtifactsDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -3105,7 +3136,25 @@ def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
 
 
 def _settings_field_markdown(field: SettingsField) -> str:
+    if field.name == "compaction" and field.fields:
+        fields = ", ".join(f"`{child.name}`" for child in field.fields)
+        return (
+            "**`> compaction:`**\n\nConfigure provider-native context compaction "
+            "for subsequent Pydantic AI or LangChain calls. OpenAI uses the Responses "
+            f"API and Anthropic uses context management. Configured fields: {fields}."
+        )
     value = _settings_field_value_preview(field)
+    if field.name == "mode":
+        return (
+            f'`mode: Literal["native", "disabled"]` = {value}\n\n'
+            "Select provider-native compaction or disable Kedi's compaction policy."
+        )
+    if field.name == "threshold":
+        return (
+            f"`threshold: int | None` = {value}\n\n"
+            "Positive input-token threshold that triggers native compaction. When omitted, "
+            "the provider default is used."
+        )
     adapters = _setting_adapter_label(field.name)
     return f"`{field.name}` = {value}\n\nSupported by: {adapters}."
 

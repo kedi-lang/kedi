@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from .compaction import (
+    CompactionMode,
+    CompactionSettings,
+    CompactionSettingsError,
+    normalize_compaction_settings,
+)
 from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
@@ -56,6 +62,9 @@ __all__ = [
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",
     "AgentSubagentUnsupported",
+    "CompactionMode",
+    "CompactionSettings",
+    "CompactionSettingsError",
     "ProfileApprovalMember",
     "ACP_AGENT_SETTING_KEYS",
     "CLAUDE_AGENT_SETTING_KEYS",
@@ -97,6 +106,7 @@ __all__ = [
     "eval_use_directive",
     "eval_use_profile",
     "is_valid_model_setting_key",
+    "normalize_compaction_settings",
     "parse_plain_setting_value",
     "pydantic_model_settings",
     "procedure_def_for_tool",

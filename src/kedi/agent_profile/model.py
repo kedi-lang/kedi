@@ -307,6 +307,8 @@ def eval_mcp_directive(
 
 
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
+    if field.fields:
+        return eval_settings_fields(rt, field.fields, env)
     if field.backtick_code is not None:
         return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
     if field.plain_value is not None:

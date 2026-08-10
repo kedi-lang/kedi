@@ -241,6 +241,66 @@ def test_tree_sitter_highlights_capture_artifacts_directive_keyword():
         assert "artifacts" in keywords
 
 
+def test_tree_sitter_highlights_capture_workflow_and_compaction_directives() -> None:
+    source = (
+        b"> profile: coordinator:\n"
+        b"  > workflow: dynamic\n"
+        b"  > settings:\n"
+        b"    > compaction:\n"
+        b"      mode: native\n"
+        b"      threshold: `100_000`\n"
+    )
+    root = Path(__file__).resolve().parents[1]
+    language = Language(tree_sitter_kedi.language())
+
+    for query_path in (
+        root / "tree-sitter-kedi/queries/highlights.scm",
+        root / "kedi-zed/languages/kedi/highlights.scm",
+    ):
+        query = Query(language, query_path.read_text(encoding="utf-8"))
+        captures = QueryCursor(query).captures(Parser(language).parse(source).root_node)
+
+        def captured(name: str) -> set[str]:
+            return {
+                source[node.start_byte : node.end_byte].decode("utf-8")
+                for node in captures.get(name, [])
+            }
+
+        assert {"workflow", "compaction"} <= captured("keyword")
+        assert {"mode", "threshold"} <= captured("property")
+        assert "dynamic" in captured("constant")
+        assert "native" in captured("string") | captured("text.literal")
+
+
+def test_lsp_semantic_tokens_cover_workflow_and_compaction_directives() -> None:
+    source = (
+        "> profile: coordinator:\n"
+        "  > workflow: dynamic\n"
+        "  > settings:\n"
+        "    > compaction:\n"
+        "      mode: native\n"
+        "      threshold: `100_000`\n"
+    )
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(source, "/tmp/directives.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+
+    expected = {
+        (1, 4, len("workflow"), keyword_type),
+        (1, 14, len("dynamic"), variable_type),
+        (3, 6, len("compaction"), keyword_type),
+        (4, 6, len("mode"), property_type),
+        (4, 12, len("native"), string_type),
+        (5, 6, len("threshold"), property_type),
+    }
+    actual = {(line, col, length, token_type) for line, col, length, token_type, _ in tokens}
+    assert expected <= actual
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------

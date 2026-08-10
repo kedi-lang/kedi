@@ -944,6 +944,44 @@ opt into project-local skills.
       stop_sequences: `["END", "DONE"]`
       extra_body: `{"mode": "json"}`
   ```
+
+  Provider-native conversation compaction is configured as a nested reserved
+  setting:
+
+  ```kedi
+  > settings:
+      > compaction:
+          mode: native
+          threshold: `100_000`
+  ```
+
+  `mode: native` delegates compaction to the selected provider. `threshold` is
+  an optional positive input-token count; omit it to use that integration's
+  native default. The first native implementation supports these exact paths:
+
+  - Pydantic AI with `OpenAIResponsesModel`, through `OpenAICompaction`;
+  - Pydantic AI with `AnthropicModel`, through `AnthropicCompaction`;
+  - LangChain with an OpenAI chat model, through OpenAI
+    `context_management`;
+  - LangChain with an Anthropic chat model, through Anthropic
+    `context_management` and the required compaction beta.
+
+  Kedi does not silently replace an unsupported native provider with its own
+  summarizer. Selecting `native` with another model or adapter raises a clear
+  runtime error. Disable an inherited compaction policy explicitly when a
+  nested scope must keep the full conversation:
+
+  ```kedi
+  > settings:
+      > compaction:
+          mode: disabled
+  ```
+
+  `threshold` is invalid together with `mode: disabled`. Existing unrelated
+  provider context-management entries and caller-supplied Pydantic
+  capabilities are preserved; Kedi replaces only the native compaction entry
+  it owns.
+
   ACP commands may also come from CLI/env:
 
   ```kedi

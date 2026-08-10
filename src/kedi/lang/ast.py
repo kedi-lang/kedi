@@ -311,6 +311,7 @@ class SettingsField:
     name: str = ""
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    fields: List["SettingsField"] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
