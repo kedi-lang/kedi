@@ -89,6 +89,7 @@ from ..lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    HistoryDirectiveStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
     McpDirectiveStmt,
@@ -103,6 +104,7 @@ from ..lang.ast import (
     ProfileAgentEntry,
     ProfileApprovalEntry,
     ProfileArtifactsEntry,
+    ProfileHistoryEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMaxAgentsEntry,
@@ -840,6 +842,8 @@ class _AdapterDiagnosticState:
     kind: AgentAdapterKind | None = None
     approval_loc: Span | None = None
     approval_plain_value: str | None = None
+    history_loc: Span | None = None
+    history_enabled: bool | None = None
 
 
 def _adapter_capability_diagnostics(
@@ -915,6 +919,17 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         selected = _adapter_state_from_plain_value(shortname, expected_kind)
         if selected is not None:
             state = _merge_adapter_state(state, selected)
+    history_members = [member for member in profile.history_members if member.loc is not None]
+    if history_members:
+        latest = max(
+            history_members,
+            key=lambda member: member.loc.start_byte if member.loc is not None else -1,
+        )
+        state = replace(
+            state,
+            history_loc=latest.loc,
+            history_enabled=latest.enabled,
+        )
     return state
 
 
@@ -939,11 +954,14 @@ def _merge_adapter_state(
 ) -> _AdapterDiagnosticState:
     selected = inner if inner.shortname is not None else outer
     approval_owner = inner if inner.approval_loc is not None else outer
+    history_owner = inner if inner.history_enabled is not None else outer
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
         approval_loc=approval_owner.approval_loc,
         approval_plain_value=approval_owner.approval_plain_value,
+        history_loc=history_owner.history_loc,
+        history_enabled=history_owner.history_enabled,
     )
 
 
@@ -1005,6 +1023,7 @@ def _profile_capability_diagnostics(
         )
     for member in profile.settings_members:
         diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
+    diagnostics.extend(_history_capability_diagnostics(state))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1060,6 +1079,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
             diagnostics.extend(
@@ -1080,6 +1100,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, ApprovalDirectiveStmt):
             active = replace(
@@ -1094,6 +1115,14 @@ def _scan_capability_scope(
                     warned_approval_spans,
                 )
             )
+            continue
+        if isinstance(stmt, HistoryDirectiveStmt):
+            active = replace(
+                active,
+                history_loc=stmt.loc,
+                history_enabled=stmt.enabled,
+            )
+            diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -1141,6 +1170,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
@@ -1198,6 +1228,21 @@ def _compaction_capability_diagnostics(
         "provider-native conversation compaction",
         severity=lsp.DiagnosticSeverity.Error,
         code="K-ADAPTER-COMPACTION",
+    )
+
+
+def _history_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+) -> list[lsp.Diagnostic]:
+    if state.history_enabled is not True or state.history_loc is None:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "stateful_history",
+        [state.history_loc],
+        "stateful conversation history",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-HISTORY",
     )
 
 
@@ -2720,6 +2765,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.approval_members:
                 visit(member)
+            for member in node.history_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             for member in node.mcp_members:
@@ -2921,6 +2968,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _effort_directive_markdown(node)
     if isinstance(node, ApprovalDirectiveStmt):
         return _approval_directive_markdown(node)
+    if isinstance(node, HistoryDirectiveStmt):
+        return _history_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
@@ -2945,6 +2994,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileApprovalEntry):
         return _profile_approval_entry_markdown(node)
+    if isinstance(node, ProfileHistoryEntry):
+        return _profile_history_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
@@ -3085,6 +3136,16 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
         "Controls registered tool calls in the current scope. `allow` permits mutating "
         "tools; `deny` refuses them. An inline Python callable may return an "
         "`ApprovalDecision` to allow, deny, or edit arguments."
+    )
+
+
+def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
+    value = "enabled" if stmt.enabled else "disabled"
+    return (
+        f"`> history: {value}`\n\n"
+        "Controls conversation continuity for subsequent model calls in this lexical scope. "
+        "`enabled` reuses adapter-scoped model history and provider cache identity; `disabled` "
+        "runs stateless calls without mutating the surrounding history. The default is disabled."
     )
 
 
@@ -3261,6 +3322,14 @@ def _profile_approval_entry_markdown(entry: ProfileApprovalEntry) -> str:
     return (
         f"`> approval:` {value}\n\n"
         "Tool-call approval policy stored in this profile. Applied when the profile is used."
+    )
+
+
+def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
+    value = "enabled" if entry.enabled else "disabled"
+    return (
+        f"`> history: {value}`\n\n"
+        "Conversation continuity policy stored in this profile. Applied when the profile is used."
     )
 
 

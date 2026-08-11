@@ -48,6 +48,12 @@ class ProfileApprovalMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileHistoryMember:
+    kind: Literal["history"] = "history"
+    enabled: bool
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -126,6 +132,7 @@ class ProfileDefinition:
         | ProfileModelMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHistoryMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember

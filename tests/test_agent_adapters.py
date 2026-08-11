@@ -669,6 +669,80 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
             ]
         }
     ) == InvocationUsage(requests=1, total_tokens=9)
+    assert langchain_adapter_module._langchain_invocation_usage(
+        {
+            "messages": [
+                SimpleNamespace(
+                    usage_metadata={
+                        "input_tokens": 120,
+                        "input_token_details": {
+                            "cache_read": 90,
+                            "cache_creation": 15,
+                        },
+                        "output_tokens": 8,
+                    },
+                    tool_calls=[],
+                )
+            ]
+        }
+    ) == InvocationUsage(
+        requests=1,
+        input_tokens=120,
+        cache_read_tokens=90,
+        cache_write_tokens=15,
+        output_tokens=8,
+        total_tokens=128,
+    )
+
+    historical = SimpleNamespace(
+        type="ai",
+        content="old answer",
+        usage_metadata={"input_tokens": 100, "output_tokens": 10},
+        tool_calls=[{"name": "old_tool"}],
+    )
+    current = SimpleNamespace(
+        type="ai",
+        content="new answer",
+        usage_metadata={
+            "input_tokens": 125,
+            "input_token_details": {"cache_read": 100},
+            "output_tokens": 5,
+        },
+        tool_calls=[],
+    )
+    assert langchain_adapter_module._langchain_invocation_usage(
+        {
+            "messages": [
+                SimpleNamespace(type="human", content="prompt"),
+                SimpleNamespace(
+                    type="ai",
+                    content="old answer",
+                    usage_metadata=historical.usage_metadata,
+                    tool_calls=historical.tool_calls,
+                ),
+                current,
+            ]
+        },
+        input_messages=[{"role": "user", "content": "prompt"}, historical],
+    ) == InvocationUsage(
+        requests=1,
+        input_tokens=125,
+        cache_read_tokens=100,
+        output_tokens=5,
+        total_tokens=130,
+    )
+
+    assert langchain_adapter_module._langchain_current_messages(
+        [current], [historical, current]
+    ) == [current]
+    assert langchain_adapter_module._langchain_current_messages(
+        [current], [{"role": "assistant", "content": "different"}]
+    ) == [current]
+    assert langchain_adapter_module._same_langchain_message(current, current)
+    assert langchain_adapter_module._same_langchain_message(
+        {"role": "assistant", "content": "same"},
+        {"role": "assistant", "content": "same"},
+    )
     assert langchain_adapter_module._usage_int({"value": False}, "value") == 0
 
 

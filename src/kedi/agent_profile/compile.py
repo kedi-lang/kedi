@@ -7,6 +7,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileHistoryMember,
     ProfileArtifactsMember,
     ProfileDefinition,
     ProfileEffortMember,
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
         ProfileAdapterEntry,
         ProfileAgentEntry,
         ProfileApprovalEntry,
+        ProfileHistoryEntry,
         ProfileArtifactsEntry,
         ProfileDefStmt,
         ProfileEffortEntry,
@@ -47,6 +49,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileModelMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHistoryMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember
@@ -69,6 +72,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_effort_entry_to_member(entry))
     for entry in stmt.approval_members:
         members.append(_approval_entry_to_member(entry))
+    for entry in stmt.history_members:
+        members.append(_history_entry_to_member(entry))
     for entry in stmt.system_members:
         members.append(_system_entry_to_member(entry))
     for entry in stmt.mcp_members:
@@ -134,6 +139,10 @@ def _approval_entry_to_member(entry: ProfileApprovalEntry) -> ProfileApprovalMem
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
     )
+
+
+def _history_entry_to_member(entry: ProfileHistoryEntry) -> ProfileHistoryMember:
+    return ProfileHistoryMember(enabled=entry.enabled)
 
 
 def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
@@ -242,6 +251,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         ApprovalDirectiveStmt,
         ArtifactsDirectiveStmt,
         EffortDirectiveStmt,
+        HistoryDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
@@ -256,6 +266,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_approval_directive,
         eval_artifacts_directive,
         eval_effort_directive,
+        eval_history_directive,
         eval_mcp_directive,
         eval_model_directive,
         eval_settings_directive,
@@ -287,6 +298,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_effort_directive(rt, item, env))
         elif isinstance(item, ApprovalDirectiveStmt):
             active = active.merge(eval_approval_directive(rt, item, env))
+        elif isinstance(item, HistoryDirectiveStmt):
+            active = active.merge(eval_history_directive(item))
         elif isinstance(item, SystemDirectiveStmt):
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, McpDirectiveStmt):

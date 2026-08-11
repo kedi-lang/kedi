@@ -192,6 +192,7 @@ class KediRuntime:
         self._outstanding: dict[object, list[Any]] = {}
         self._outstanding_lock = Lock()
         self._origin_counter_lock = Lock()
+        self._conversation_state_lock = Lock()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
@@ -236,6 +237,7 @@ class KediRuntime:
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
         self.conversation_state = conversation_state
+        self._implicit_conversation_state: ConversationState | None = None
         self.artifacts = (
             conversation_state.artifacts if conversation_state is not None else ArtifactManager()
         )
@@ -1027,7 +1029,7 @@ class KediRuntime:
                     return result
 
             with required_tool_call_scope(tools):
-                state = self.conversation_state
+                state = self._conversation_state_for_profile(profile)
                 if state is None:
                     reservation = budget.reserve(prompt, context=context)
                     try:
@@ -1043,7 +1045,15 @@ class KediRuntime:
                 from .lang.compiler.environment import model_value
 
                 capabilities = adapter.capabilities
-                with state.adapter_turn(adapter.shortname) as conversation:
+                adapter_shortname = adapter.shortname
+                if profile.history is True and not (
+                    capabilities.supports("stateful_history")
+                    and isinstance(adapter, SupportsConversationState)
+                ):
+                    raise RuntimeError(
+                        f"Adapter {adapter_shortname!r} does not support stateful history"
+                    )
+                with state.adapter_turn(adapter_shortname) as conversation:
                     reservation = budget.reserve(
                         prompt,
                         context=context,
@@ -1065,6 +1075,23 @@ class KediRuntime:
                     reservation.finish()
                     state.record_exchange(prompt, model_value(result))
                     return result
+
+    def _conversation_state_for_profile(
+        self,
+        profile: AgentProfile,
+    ) -> ConversationState | None:
+        if profile.history is False:
+            return None
+        if self.conversation_state is not None:
+            return self.conversation_state
+        if profile.history is not True:
+            return None
+        with self._conversation_state_lock:
+            if self._implicit_conversation_state is None:
+                from .agent_adapter.conversation import ConversationState
+
+                self._implicit_conversation_state = ConversationState(artifacts=self.artifacts)
+            return self._implicit_conversation_state
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:

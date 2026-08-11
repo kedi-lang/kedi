@@ -15,6 +15,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileHistoryMember,
     ProfileArtifactsMember,
     ProfileDefinition,
     ProfileEffortMember,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         ApprovalDirectiveStmt,
         ArtifactsDirectiveStmt,
         ArtifactsField,
+        HistoryDirectiveStmt,
         EffortDirectiveStmt,
         McpDirectiveStmt,
         McpField,
@@ -364,6 +366,10 @@ def eval_artifacts_directive(
     return AgentProfile(artifacts=eval_artifacts_fields(rt, stmt.fields, env))
 
 
+def eval_history_directive(stmt: HistoryDirectiveStmt) -> AgentProfile:
+    return AgentProfile(history=stmt.enabled)
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -372,6 +378,7 @@ def _member_to_patch(
         | ProfileAdapterMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHistoryMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -435,6 +442,8 @@ def _member_to_patch(
         if member.plain_value == "deny":
             return AgentProfile(approval=ApprovalPolicy.deny())
         raise ValueError("profile approval must be 'allow' or 'deny'")
+    if member.kind == "history":
+        return AgentProfile(history=member.enabled)
     if member.kind == "system":
         system = eval_system_value(
             rt,

@@ -330,13 +330,7 @@ class AgentCallTelemetry:
     usage: InvocationUsage = InvocationUsage()
 
     def observe(self, usage: InvocationUsage) -> None:
-        self.usage = InvocationUsage(
-            requests=self.usage.requests + usage.requests,
-            tool_calls=self.usage.tool_calls + usage.tool_calls,
-            input_tokens=self.usage.input_tokens + usage.input_tokens,
-            output_tokens=self.usage.output_tokens + usage.output_tokens,
-            total_tokens=self.usage.total_tokens + usage.total_tokens,
-        )
+        self.usage = self.usage + usage
 
     def complete(self, result: Any, *, model: str | None) -> None:
         if self.span is None:
@@ -518,11 +512,18 @@ def _record_agent_usage(
         state.span.set_attribute("kedi.agent.requests", usage.requests)
         state.span.set_attribute("kedi.agent.tool_calls", usage.tool_calls)
         state.span.set_attribute("gen_ai.usage.input_tokens", usage.input_tokens)
+        state.span.set_attribute("gen_ai.usage.cache_read_tokens", usage.cache_read_tokens)
+        state.span.set_attribute("gen_ai.usage.cache_write_tokens", usage.cache_write_tokens)
+        state.span.set_attribute("kedi.usage.uncached_input_tokens", usage.uncached_input_tokens)
         state.span.set_attribute("gen_ai.usage.output_tokens", usage.output_tokens)
+        if usage.cost_usd is not None:
+            state.span.set_attribute("kedi.usage.cost_usd", float(usage.cost_usd))
     if state.native_owned:
         return
     for token_type, value in (
         ("input", usage.input_tokens),
+        ("cache_read", usage.cache_read_tokens),
+        ("cache_write", usage.cache_write_tokens),
         ("output", usage.output_tokens),
     ):
         if value:
@@ -548,13 +549,7 @@ class ModelCallTelemetry:
     model: str | None = None
 
     def observe(self, usage: InvocationUsage) -> None:
-        self.usage = InvocationUsage(
-            requests=self.usage.requests + usage.requests,
-            tool_calls=self.usage.tool_calls + usage.tool_calls,
-            input_tokens=self.usage.input_tokens + usage.input_tokens,
-            output_tokens=self.usage.output_tokens + usage.output_tokens,
-            total_tokens=self.usage.total_tokens + usage.total_tokens,
-        )
+        self.usage = self.usage + usage
 
     def complete(self, result: Any, *, model: str | None) -> None:
         self.model = model
@@ -572,6 +567,18 @@ class ModelCallTelemetry:
             self.span.set_attribute("error.type", self.error_type)
 
     def finish(self, *, model: str | None) -> None:
+        if self.span is not None:
+            self.span.set_attribute("gen_ai.usage.input_tokens", self.usage.input_tokens)
+            self.span.set_attribute("gen_ai.usage.cache_read_tokens", self.usage.cache_read_tokens)
+            self.span.set_attribute(
+                "gen_ai.usage.cache_write_tokens", self.usage.cache_write_tokens
+            )
+            self.span.set_attribute(
+                "kedi.usage.uncached_input_tokens", self.usage.uncached_input_tokens
+            )
+            self.span.set_attribute("gen_ai.usage.output_tokens", self.usage.output_tokens)
+            if self.usage.cost_usd is not None:
+                self.span.set_attribute("kedi.usage.cost_usd", float(self.usage.cost_usd))
         if self.native_owned:
             return
         dimensions: dict[str, str] = {
@@ -592,6 +599,8 @@ class ModelCallTelemetry:
         )
         for token_type, value in (
             ("input", self.usage.input_tokens),
+            ("cache_read", self.usage.cache_read_tokens),
+            ("cache_write", self.usage.cache_write_tokens),
             ("output", self.usage.output_tokens),
         ):
             if value:

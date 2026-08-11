@@ -65,6 +65,7 @@ from ..ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    HistoryDirectiveStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
@@ -80,6 +81,7 @@ from ..ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileHistoryEntry,
     ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
@@ -366,6 +368,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "approval_directive":
                 stmt = self._walk_approval_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "history_directive":
+                stmt = self._walk_history_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
@@ -968,6 +974,8 @@ class _Walker:
             return self._walk_effort_directive(node)
         if t == "approval_directive":
             return self._walk_approval_directive(node)
+        if t == "history_directive":
+            return self._walk_history_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -1758,6 +1766,18 @@ class _Walker:
             self._validate_approval_plain_value(value_node, plain)
         return ApprovalDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
 
+    def _walk_history_directive(self, node: Node) -> HistoryDirectiveStmt:
+        value_node = _field(node, "value")
+        assert value_node is not None
+        value = _src_text(self.source, value_node).strip()
+        if value not in {"enabled", "disabled"}:
+            self._error(
+                value_node,
+                "history directive must be 'enabled' or 'disabled'",
+                code="K-HISTORY-VALUE",
+            )
+        return HistoryDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -2009,6 +2029,7 @@ class _Walker:
         adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         approval_members: list[ProfileApprovalEntry] = []
+        history_members: list[ProfileHistoryEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
@@ -2098,6 +2119,14 @@ class _Walker:
                         ProfileApprovalEntry(
                             plain_value=approval_stmt.plain_value,
                             backtick_code=approval_stmt.backtick_code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "history_directive":
+                    history_stmt = self._walk_history_directive(child)
+                    history_members.append(
+                        ProfileHistoryEntry(
+                            enabled=history_stmt.enabled,
                             loc=self._span(child),
                         )
                     )
@@ -2249,6 +2278,7 @@ class _Walker:
             and not adapter_members
             and not effort_members
             and not approval_members
+            and not history_members
             and not system_members
             and not mcp_members
             and not settings_members
@@ -2262,7 +2292,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2272,6 +2302,7 @@ class _Walker:
             model_members=members,
             effort_members=effort_members,
             approval_members=approval_members,
+            history_members=history_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,
