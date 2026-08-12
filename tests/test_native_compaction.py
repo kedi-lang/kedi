@@ -24,10 +24,11 @@ from kedi.agent_profile.compaction import (
     CompactionSettingsError,
     normalize_compaction_settings,
 )
-from kedi.agent_profile.model import eval_settings_directive
+from kedi.agent_profile.model import eval_history_directive
 from kedi.core import KediRuntime
+from kedi.errors import KediExecutionError
 from kedi.lang import parse_program
-from kedi.lang.ast import ProfileDefStmt, SettingsDirectiveStmt
+from kedi.lang.ast import HistoryDirectiveStmt, ProfileDefStmt
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp.features import compute_diagnostics
 from tests.lsp_helpers import hover_text_at
@@ -77,47 +78,51 @@ def test_compaction_settings_validate_mode_threshold_and_disabled_policy() -> No
 
 def test_nested_compaction_settings_parse_and_evaluate_in_all_profile_scopes() -> None:
     source = """
-> settings:
+> history:
+    enabled: true
     > compaction:
         mode: native
         threshold: `50_000 * 2`
 
 > profile: compact:
-    > settings:
+    > history:
+        enabled: true
         > compaction:
             mode: disabled
 
 @local():
-    > settings:
+    > history:
+        enabled: true
         > compaction:
             mode: native
             threshold: 25_000
     = `None`
 """
     program = parse_program(source)
-    settings = program.ordered_toplevel[0]
-    assert isinstance(settings, SettingsDirectiveStmt)
+    history = program.ordered_toplevel[0]
+    assert isinstance(history, HistoryDirectiveStmt)
     profile = program.ordered_toplevel[1]
     assert isinstance(profile, ProfileDefStmt)
-    assert profile.settings_members[0].fields[0].fields[0].plain_value == "disabled"
+    assert profile.history_members[0].fields[0].fields[0].plain_value == "disabled"
 
-    evaluated = eval_settings_directive(KediRuntime(), settings, {})
-    assert evaluated.settings == {"compaction": {"mode": "native", "threshold": 100_000}}
+    evaluated = eval_history_directive(KediRuntime(), history, {})
+    assert evaluated.history is True
+    assert evaluated.compaction == CompactionSettings(mode="native", threshold=100_000)
 
 
 @pytest.mark.parametrize(
     ("source", "message"),
     [
         (
-            "> settings:\n    > compaction:\n        strategy: native\n",
+            "> history:\n    enabled: true\n    > compaction:\n        strategy: native\n",
             "compaction setting must be one of",
         ),
         (
-            "> settings:\n    > compaction:\n        mode: automatic\n",
+            "> history:\n    enabled: true\n    > compaction:\n        mode: automatic\n",
             "compaction mode must be",
         ),
         (
-            "> settings:\n    > compaction:\n        mode: native\n        mode: disabled\n",
+            "> history:\n    enabled: true\n    > compaction:\n        mode: native\n        mode: disabled\n",
             "Duplicate compaction setting",
         ),
     ],
@@ -129,20 +134,84 @@ def test_nested_compaction_settings_reject_invalid_source(source: str, message: 
 
 def test_nested_compaction_settings_allow_comments_and_reject_duplicate_block() -> None:
     program = parse_program(
-        "> settings:\n    > compaction:\n        # provider policy\n        mode: native\n"
+        "> history:\n"
+        "    enabled: true\n"
+        "    > compaction:\n"
+        "        # provider policy\n"
+        "        mode: native\n"
     )
-    settings = program.ordered_toplevel[0]
-    assert isinstance(settings, SettingsDirectiveStmt)
-    assert settings.fields[0].fields[0].name == "mode"
+    history = program.ordered_toplevel[0]
+    assert isinstance(history, HistoryDirectiveStmt)
+    assert history.fields[0].fields[0].name == "mode"
 
-    with pytest.raises(KediParseError, match="Duplicate settings field"):
+    with pytest.raises(KediParseError, match="Duplicate history setting"):
         parse_program(
-            "> settings:\n"
+            "> history:\n"
+            "    enabled: true\n"
             "    > compaction:\n"
             "        mode: native\n"
             "    > compaction:\n"
             "        mode: native\n"
         )
+
+
+def test_compaction_rejects_legacy_settings_location() -> None:
+    with pytest.raises(KediParseError, match="compaction belongs under '> history:'"):
+        parse_program("> settings:\n    > compaction:\n        mode: native\n")
+
+
+def test_expanded_history_requires_enabled_and_rejects_native_when_disabled() -> None:
+    with pytest.raises(KediParseError, match="history block requires an 'enabled"):
+        parse_program("> history:\n    > compaction:\n        mode: native\n")
+
+    program = parse_program(
+        "> history:\n    enabled: false\n    > compaction:\n        mode: native\n"
+    )
+    history = program.ordered_toplevel[0]
+    assert isinstance(history, HistoryDirectiveStmt)
+    with pytest.raises(KediExecutionError, match="requires history to be enabled"):
+        eval_history_directive(KediRuntime(), history, {})
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        (
+            "> history:\n    unknown: true\n    enabled: true\n",
+            "history setting must be 'enabled'",
+        ),
+        (
+            "> history:\n    enabled: yes\n",
+            "history enabled setting must be 'true' or 'false'",
+        ),
+        (
+            "> settings:\n    temperature: 0.2\n    temperature: 0.3\n",
+            "Duplicate settings field",
+        ),
+    ],
+)
+def test_history_and_settings_blocks_reject_invalid_fields(source: str, message: str) -> None:
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source)
+
+
+def test_history_compaction_profile_merge_and_nested_hover() -> None:
+    compaction = CompactionSettings(threshold=10_000)
+    merged = AgentProfile(history=True).merge(AgentProfile(compaction=compaction))
+    assert merged.compaction is compaction
+
+    source = """> profile: compact:
+    > history:
+        # keep the provider prefix stable
+        enabled: true
+        > compaction:
+            mode: native
+"""
+    assert "provider-native context compaction" in hover_text_at(
+        source,
+        "compaction.kedi",
+        "compaction",
+    )
 
 
 def test_pydantic_native_compaction_maps_openai_and_anthropic_capabilities() -> None:
@@ -171,7 +240,7 @@ def test_pydantic_native_compaction_maps_openai_and_anthropic_capabilities() -> 
 def test_pydantic_adapter_applies_profile_compaction_and_rejects_chat_model() -> None:
     adapter = PydanticAdapter(_openai_responses_model())
     with adapter.profile_override(
-        AgentProfile(settings={"compaction": {"mode": "native", "threshold": 42_000}})
+        AgentProfile(history=True, compaction=CompactionSettings(threshold=42_000))
     ):
         run_kwargs = adapter._run_kwargs({}, tool_specs=())
     capability = next(
@@ -182,7 +251,7 @@ def test_pydantic_adapter_applies_profile_compaction_and_rejects_chat_model() ->
     chat_model = OpenAIChatModel("gpt-5.4", provider=OpenAIProvider(api_key="test"))
     chat_adapter = PydanticAdapter(chat_model)
     with (
-        chat_adapter.profile_override(AgentProfile(settings={"compaction": {"mode": "native"}})),
+        chat_adapter.profile_override(AgentProfile(history=True, compaction=CompactionSettings())),
         pytest.raises(CompactionSettingsError, match="OpenAIResponsesModel"),
     ):
         chat_adapter._run_kwargs({}, tool_specs=())
@@ -191,7 +260,9 @@ def test_pydantic_adapter_applies_profile_compaction_and_rejects_chat_model() ->
 def test_pydantic_disabled_compaction_does_not_remove_caller_capability() -> None:
     caller = OpenAICompaction(token_threshold=12_345)
     adapter = PydanticAdapter(_openai_responses_model())
-    with adapter.profile_override(AgentProfile(settings={"compaction": {"mode": "disabled"}})):
+    with adapter.profile_override(
+        AgentProfile(history=True, compaction=CompactionSettings(mode="disabled"))
+    ):
         run_kwargs = adapter._run_kwargs({"capabilities": [caller]}, tool_specs=())
     assert caller in run_kwargs["capabilities"]
 
@@ -313,14 +384,14 @@ def test_langchain_native_compaction_replaces_owned_entries_without_duplicate_be
 def test_langchain_adapter_applies_profile_compaction_and_rejects_provider() -> None:
     adapter = LangChainAdapter("openai:gpt-5.4")
     with adapter.profile_override(
-        AgentProfile(settings={"compaction": {"mode": "native", "threshold": 80_000}})
+        AgentProfile(history=True, compaction=CompactionSettings(threshold=80_000))
     ):
         settings = adapter._settings_for_run(adapter._model_for_run())
     assert settings["context_management"] == [{"type": "compaction", "compact_threshold": 80_000}]
 
     unsupported = LangChainAdapter("google:gemini-3-flash-preview")
     with (
-        unsupported.profile_override(AgentProfile(settings={"compaction": {"mode": "native"}})),
+        unsupported.profile_override(AgentProfile(history=True, compaction=CompactionSettings())),
         pytest.raises(CompactionSettingsError, match="OpenAI or Anthropic"),
     ):
         unsupported._settings_for_run(unsupported._model_for_run())
@@ -332,7 +403,7 @@ def test_langchain_adapter_copies_object_model_for_native_compaction() -> None:
     model = ChatOpenAI(model="gpt-5.4", api_key="test")
     adapter = LangChainAdapter(model)
     with adapter.profile_override(
-        AgentProfile(settings={"compaction": {"mode": "native", "threshold": 32_000}})
+        AgentProfile(history=True, compaction=CompactionSettings(threshold=32_000))
     ):
         selected = adapter._chat_model_for_run()
     assert selected is not model
@@ -342,7 +413,7 @@ def test_langchain_adapter_copies_object_model_for_native_compaction() -> None:
     fake_type = type("ChatOpenAI", (), {"__module__": "langchain_openai.fake"})
     unsupported = LangChainAdapter(fake_type())
     with (
-        unsupported.profile_override(AgentProfile(settings={"compaction": {"mode": "native"}})),
+        unsupported.profile_override(AgentProfile(history=True, compaction=CompactionSettings())),
         pytest.raises(CompactionSettingsError, match="supports model_copy"),
     ):
         unsupported._chat_model_for_run()
@@ -366,7 +437,8 @@ def test_langchain_provider_detection_accepts_anthropic_model_object() -> None:
 
 
 def test_compaction_settings_lsp_hover_and_diagnostics() -> None:
-    source = """> settings:
+    source = """> history:
+    enabled: true
     > compaction:
         mode: native
         threshold: `100_000`
@@ -377,19 +449,27 @@ def test_compaction_settings_lsp_hover_and_diagnostics() -> None:
     )
     assert "input-token threshold" in hover_text_at(source, "compaction.kedi", "threshold")
     assert 'Literal["native", "disabled"]' in hover_text_at(source, "compaction.kedi", "mode")
-    assert "Configured fields: `compaction`" in hover_text_at(source, "compaction.kedi", "settings")
+    assert "conversation continuity through stateful history" in hover_text_at(
+        source, "compaction.kedi", "history"
+    )
 
 
-def test_compaction_adapter_capabilities_advertise_reserved_setting() -> None:
-    assert "compaction" in PydanticAdapter.capabilities.settings
-    assert "compaction" in LangChainAdapter.capabilities.settings
+def test_compaction_adapter_capabilities_advertise_native_support() -> None:
+    assert "compaction" not in PydanticAdapter.capabilities.settings
+    assert "compaction" not in LangChainAdapter.capabilities.settings
     assert PydanticAdapter.capabilities.supports("native_compaction")
     assert LangChainAdapter.capabilities.supports("native_compaction")
 
     KediRuntime._assert_profile_override_supported(
-        AgentProfile(settings={"compaction": {"mode": "native"}}),
+        AgentProfile(history=True, compaction=CompactionSettings()),
         object.__new__(PydanticAdapter),
     )
+
+    with pytest.raises(CompactionSettingsError, match="requires history to be enabled"):
+        KediRuntime._assert_profile_override_supported(
+            AgentProfile(history=False, compaction=CompactionSettings()),
+            object.__new__(PydanticAdapter),
+        )
 
 
 def test_langchain_disabled_compaction_leaves_settings_unchanged() -> None:
@@ -407,49 +487,63 @@ def test_langchain_disabled_compaction_leaves_settings_unchanged() -> None:
 def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -> None:
     from kedi.agent_adapter.adapters.dspy import DSPyAdapter
 
-    profile = AgentProfile(settings={"compaction": {"mode": "native"}})
+    profile = AgentProfile(history=True, compaction=CompactionSettings())
     adapter = object.__new__(DSPyAdapter)
     with pytest.raises(CompactionSettingsError, match="adapter 'dspy'"):
         KediRuntime._assert_profile_override_supported(profile, adapter)
 
     source = """> adapter: dspy
-> settings:
+> history:
+    enabled: true
     > compaction:
         mode: native
 """
     diagnostics = compute_diagnostics(source, "compaction.kedi")
-    assert [(item.code, item.severity) for item in diagnostics] == [("K-ADAPTER-COMPACTION", 1)]
+    assert [item.code for item in diagnostics] == [
+        "K-ADAPTER-HISTORY",
+        "K-ADAPTER-COMPACTION",
+    ]
 
     profile_source = """> profile: unsupported:
     > adapter: dspy
-    > settings:
+    > history:
+        enabled: true
         > compaction:
             threshold: 1000
 """
     profile_diagnostics = compute_diagnostics(profile_source, "compaction.kedi")
-    assert [item.code for item in profile_diagnostics] == ["K-ADAPTER-COMPACTION"]
+    assert [item.code for item in profile_diagnostics] == [
+        "K-ADAPTER-HISTORY",
+        "K-ADAPTER-COMPACTION",
+    ]
 
 
 def test_disabled_compaction_is_accepted_by_unsupported_adapter() -> None:
     from kedi.agent_adapter.adapters.dspy import DSPyAdapter
 
-    profile = AgentProfile(settings={"compaction": {"mode": "disabled"}})
+    profile = AgentProfile(history=True, compaction=CompactionSettings(mode="disabled"))
     adapter = object.__new__(DSPyAdapter)
     KediRuntime._assert_profile_override_supported(profile, adapter)
 
     source = """> adapter: dspy
-> settings:
+> history:
+    enabled: true
     > compaction:
         mode: disabled
 """
-    assert compute_diagnostics(source, "compaction.kedi") == []
+    assert [item.code for item in compute_diagnostics(source, "compaction.kedi")] == [
+        "K-ADAPTER-HISTORY"
+    ]
 
     dynamic_source = """> adapter: dspy
-> settings:
+> history:
+    enabled: true
     > compaction:
         mode: `selected_mode`
 """
-    assert compute_diagnostics(dynamic_source, "compaction.kedi") == []
+    assert [item.code for item in compute_diagnostics(dynamic_source, "compaction.kedi")] == [
+        "K-ADAPTER-HISTORY",
+    ]
 
 
 def test_native_compaction_rejects_adapter_without_capability_metadata() -> None:
@@ -461,7 +555,7 @@ def test_native_compaction_rejects_adapter_without_capability_metadata() -> None
 
     with pytest.raises(CompactionSettingsError, match="adapter 'custom'"):
         KediRuntime._assert_profile_override_supported(
-            AgentProfile(settings={"compaction": {"mode": "native"}}),
+            AgentProfile(history=True, compaction=CompactionSettings()),
             ProfileAdapter(),
         )
 

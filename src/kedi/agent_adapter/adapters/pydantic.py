@@ -49,7 +49,6 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from ...agent_profile import AgentProfile
-from ...agent_profile.compaction import compaction_settings_from_profile
 from ...agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
     pydantic_model_settings,
@@ -261,7 +260,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
-        settings=PYDANTIC_MODEL_SETTING_KEYS | {"compaction"},
+        settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 
     def native_telemetry_enabled(self, operation: str) -> bool:
@@ -843,8 +842,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 _KediRequiredToolCapability,
                 _KediRequiredToolCapability,
             )
-        compaction = compaction_settings_from_profile(self.active_profile.settings)
-        if compaction is not None and compaction.mode == "native":
+        compaction = self.active_profile.compaction
+        if (
+            self.active_profile.history is True
+            and compaction is not None
+            and compaction.mode == "native"
+        ):
             from ._pydantic_compat import effective_model
 
             selected_model = effective_model(

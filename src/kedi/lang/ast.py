@@ -289,6 +289,7 @@ class ApprovalDirectiveStmt(Stmt):
 @dataclass
 class HistoryDirectiveStmt(Stmt):
     enabled: bool = False
+    fields: List["SettingsField"] = field(default_factory=list)
 
 
 @dataclass
@@ -418,6 +419,7 @@ class ProfileApprovalEntry:
 @dataclass
 class ProfileHistoryEntry:
     enabled: bool
+    fields: List[SettingsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

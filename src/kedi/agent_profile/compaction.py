@@ -59,12 +59,3 @@ def normalize_compaction_settings(
         mode=cast(CompactionMode, mode),
         threshold=cast(int | None, value.get("threshold")),
     )
-
-
-def compaction_settings_from_profile(
-    settings: Mapping[str, object],
-) -> CompactionSettings | None:
-    """Read the reserved compaction entry from an agent settings mapping."""
-
-    value = cast(CompactionSettingsInput, settings.get("compaction"))
-    return normalize_compaction_settings(value)

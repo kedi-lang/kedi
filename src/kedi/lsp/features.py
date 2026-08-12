@@ -1021,9 +1021,9 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
-    for member in profile.settings_members:
-        diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
     diagnostics.extend(_history_capability_diagnostics(state))
+    for member in profile.history_members:
+        diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1123,6 +1123,7 @@ def _scan_capability_scope(
                 history_enabled=stmt.enabled,
             )
             diagnostics.extend(_history_capability_diagnostics(active))
+            diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -1145,7 +1146,6 @@ def _scan_capability_scope(
             )
             continue
         if isinstance(stmt, SettingsDirectiveStmt):
-            diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
             continue
         if isinstance(stmt, UseDirectiveStmt):
             diagnostics.extend(
@@ -2788,6 +2788,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for line in node.template_lines:
                 visit(line)
             return
+        if isinstance(node, HistoryDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, McpDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -2809,6 +2813,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(field)
             return
         if isinstance(node, ProfileSettingsEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileHistoryEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -3141,11 +3149,19 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
 
 def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
     value = "enabled" if stmt.enabled else "disabled"
+    compaction = next((field for field in stmt.fields if field.name == "compaction"), None)
+    configured = (
+        " The expanded form also configures provider-native compaction."
+        if compaction is not None
+        else ""
+    )
     return (
         f"`> history: {value}`\n\n"
-        "Controls conversation continuity for subsequent model calls in this lexical scope. "
+        "Controls conversation continuity through stateful history for subsequent model calls "
+        "in this lexical scope. "
         "`enabled` reuses adapter-scoped model history and provider cache identity; `disabled` "
         "runs stateless calls without mutating the surrounding history. The default is disabled."
+        f"{configured}"
     )
 
 
@@ -3201,6 +3217,7 @@ def _settings_field_markdown(field: SettingsField) -> str:
         fields = ", ".join(f"`{child.name}`" for child in field.fields)
         return (
             "**`> compaction:`**\n\nConfigure provider-native context compaction "
+            "inside the enclosing `> history:` policy "
             "for subsequent Pydantic AI or LangChain calls. OpenAI uses the Responses "
             f"API and Anthropic uses context management. Configured fields: {fields}."
         )
@@ -3327,9 +3344,11 @@ def _profile_approval_entry_markdown(entry: ProfileApprovalEntry) -> str:
 
 def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
     value = "enabled" if entry.enabled else "disabled"
+    configured = " Includes a compaction policy." if entry.fields else ""
     return (
         f"`> history: {value}`\n\n"
         "Conversation continuity policy stored in this profile. Applied when the profile is used."
+        f"{configured}"
     )
 
 

@@ -1005,7 +1005,9 @@ class ProgramCompiler:
                     )
                     continue
                 if isinstance(item, HistoryDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(eval_history_directive(item))
+                    state.active_profile = state.active_profile.merge(
+                        eval_history_directive(self.rt, item, env)
+                    )
                     continue
                 if isinstance(item, SystemDirectiveStmt):
                     state.active_profile = state.active_profile.merge(

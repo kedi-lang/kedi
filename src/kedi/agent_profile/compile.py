@@ -142,7 +142,7 @@ def _approval_entry_to_member(entry: ProfileApprovalEntry) -> ProfileApprovalMem
 
 
 def _history_entry_to_member(entry: ProfileHistoryEntry) -> ProfileHistoryMember:
-    return ProfileHistoryMember(enabled=entry.enabled)
+    return ProfileHistoryMember(enabled=entry.enabled, fields=tuple(entry.fields))
 
 
 def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
@@ -299,7 +299,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         elif isinstance(item, ApprovalDirectiveStmt):
             active = active.merge(eval_approval_directive(rt, item, env))
         elif isinstance(item, HistoryDirectiveStmt):
-            active = active.merge(eval_history_directive(item))
+            active = active.merge(eval_history_directive(rt, item, env))
         elif isinstance(item, SystemDirectiveStmt):
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, McpDirectiveStmt):

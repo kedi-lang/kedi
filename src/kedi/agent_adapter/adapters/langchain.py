@@ -13,7 +13,6 @@ from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddlewa
 from ...agent_profile import AgentProfile
 from ...agent_profile.compaction import (
     CompactionSettingsError,
-    compaction_settings_from_profile,
 )
 from ...agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
@@ -68,7 +67,7 @@ class LangChainAdapter:
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
-        settings=LANGCHAIN_MODEL_SETTING_KEYS | {"compaction"},
+        settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 
     def __init__(
@@ -329,8 +328,8 @@ class LangChainAdapter:
             **langchain_model_settings(self.active_profile.settings),
         }
         _apply_langchain_effort_settings(settings, model, self.active_profile.effort)
-        compaction = compaction_settings_from_profile(self.active_profile.settings)
-        if compaction is not None:
+        compaction = self.active_profile.compaction
+        if self.active_profile.history is True and compaction is not None:
             settings = langchain_settings_with_native_compaction(
                 settings,
                 model=model,
@@ -348,10 +347,14 @@ class LangChainAdapter:
         model = self._model_for_run()
         settings = self._settings_for_run(model)
         if not isinstance(model, str):
-            compaction = compaction_settings_from_profile(self.active_profile.settings)
+            compaction = self.active_profile.compaction
             conversation = self._conversation_var.get()
             if (
-                (compaction is not None and compaction.mode == "native")
+                (
+                    self.active_profile.history is True
+                    and compaction is not None
+                    and compaction.mode == "native"
+                )
                 or conversation is not None
                 or "model_kwargs" in settings
                 or "session_id" in settings

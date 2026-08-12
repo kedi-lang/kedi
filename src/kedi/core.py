@@ -1104,14 +1104,13 @@ class KediRuntime:
         """
         from .agent_adapter.meta import AdapterCapabilities
         from .agent_adapter.profile_override import SupportsProfileOverride
-        from .agent_profile.compaction import (
-            CompactionSettingsError,
-            compaction_settings_from_profile,
-        )
+        from .agent_profile.compaction import CompactionSettingsError
         from .agent_profile import AgentProfileOverrideUnsupported
 
-        compaction = compaction_settings_from_profile(profile.settings)
-        if compaction is not None and compaction.mode == "native":
+        compaction = profile.compaction
+        if compaction is not None and compaction.mode == "native" and profile.history is not True:
+            raise CompactionSettingsError("native compaction requires history to be enabled")
+        if profile.history is True and compaction is not None and compaction.mode == "native":
             capabilities = getattr(adapter, "capabilities", None)
             if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
                 "native_compaction"
@@ -1128,11 +1127,13 @@ class KediRuntime:
             or profile.effort is not None
             or profile.mcp_servers
             or profile.settings
+            or profile.compaction is not None
         ):
             raise AgentProfileOverrideUnsupported(
                 "Active adapter does not support agent profile override "
                 f"(requested model={profile.model!r}, effort={profile.effort!r}, "
-                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
+                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r}, "
+                f"compaction={profile.compaction!r})"
             )
 
     def _resolve_adapter(self, profile: Any) -> AgentAdapter[Any]:

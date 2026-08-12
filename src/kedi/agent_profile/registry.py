@@ -51,6 +51,7 @@ class ProfileApprovalMember:
 class ProfileHistoryMember:
     kind: Literal["history"] = "history"
     enabled: bool
+    fields: tuple["SettingsField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)

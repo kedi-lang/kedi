@@ -71,6 +71,8 @@ def record_conversation_assets(
         "subagent_bindings": sorted(profile.subagent_bindings),
         "max_agents": profile.max_agents,
         "workflow_mode": profile.workflow_mode,
+        "history": profile.history,
+        "compaction": repr(profile.compaction),
         "output_type": repr(profile.output_type),
         "artifacts": repr(profile.artifacts),
     }

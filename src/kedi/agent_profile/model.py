@@ -9,6 +9,7 @@ from ..agent_adapter.registry import validate_adapter_kind
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from .compaction import CompactionSettings, normalize_compaction_settings
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import SKILLS_USE_TARGET, AgentCommand, AgentProfile
 from .registry import (
@@ -366,8 +367,34 @@ def eval_artifacts_directive(
     return AgentProfile(artifacts=eval_artifacts_fields(rt, stmt.fields, env))
 
 
-def eval_history_directive(stmt: HistoryDirectiveStmt) -> AgentProfile:
-    return AgentProfile(history=stmt.enabled)
+def _eval_history_fields(
+    rt: KediRuntime,
+    *,
+    enabled: bool,
+    fields: list[SettingsField] | tuple[SettingsField, ...],
+    env: dict[str, Any],
+) -> CompactionSettings | None:
+    values = eval_settings_fields(rt, fields, env)
+    compaction = normalize_compaction_settings(values.get("compaction"))
+    if not enabled and compaction is not None and compaction.mode == "native":
+        raise KediExecutionError("native compaction requires history to be enabled")
+    return compaction
+
+
+def eval_history_directive(
+    rt: KediRuntime,
+    stmt: HistoryDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return AgentProfile(
+        history=stmt.enabled,
+        compaction=_eval_history_fields(
+            rt,
+            enabled=stmt.enabled,
+            fields=stmt.fields,
+            env=env,
+        ),
+    )
 
 
 def _member_to_patch(
@@ -443,7 +470,15 @@ def _member_to_patch(
             return AgentProfile(approval=ApprovalPolicy.deny())
         raise ValueError("profile approval must be 'allow' or 'deny'")
     if member.kind == "history":
-        return AgentProfile(history=member.enabled)
+        return AgentProfile(
+            history=member.enabled,
+            compaction=_eval_history_fields(
+                rt,
+                enabled=member.enabled,
+                fields=member.fields,
+                env=env,
+            ),
+        )
     if member.kind == "system":
         system = eval_system_value(
             rt,

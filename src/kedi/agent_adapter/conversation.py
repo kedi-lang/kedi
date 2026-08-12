@@ -29,6 +29,15 @@ class AdapterConversationContext:
     cache_prefix_changed: bool = False
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class AdapterStateSnapshot:
+    """Immutable lane coordinates plus a shallow copy of adapter-owned state."""
+
+    adapter_shortname: str
+    cache_epoch: int
+    state: dict[str, Any]
+
+
 @runtime_checkable
 class SupportsConversationState(Protocol):
     def conversation_scope(
@@ -104,6 +113,17 @@ class ConversationState:
             self._cache_epoch += 1
             self._adapter_states.clear()
             return self._cache_epoch
+
+    def adapter_state_snapshot(self, adapter_shortname: str) -> AdapterStateSnapshot:
+        """Read one continuation lane without entering or committing an adapter turn."""
+
+        with self._lock:
+            self._ensure_open()
+            return AdapterStateSnapshot(
+                adapter_shortname=adapter_shortname,
+                cache_epoch=self._cache_epoch,
+                state=dict(self._adapter_states.get(adapter_shortname, {})),
+            )
 
     def record_exchange(self, prompt: str, result: Any) -> None:
         assistant = _portable_content(result)

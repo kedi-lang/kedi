@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 from .approval import ApprovalCancelled
 from .conversation import (
     AdapterConversationContext,
+    AdapterStateSnapshot,
     ConversationState,
     ConversationTurn,
     SupportsConversationState,
@@ -94,6 +95,7 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterCapability",
     "AdapterConversationContext",
+    "AdapterStateSnapshot",
     "AgentEventCallback",
     "AgentEventDispatcher",
     "AgentEventSink",

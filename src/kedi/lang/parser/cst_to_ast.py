@@ -1768,15 +1768,66 @@ class _Walker:
 
     def _walk_history_directive(self, node: Node) -> HistoryDirectiveStmt:
         value_node = _field(node, "value")
-        assert value_node is not None
-        value = _src_text(self.source, value_node).strip()
-        if value not in {"enabled", "disabled"}:
+        if value_node is not None:
+            value = _src_text(self.source, value_node).strip()
+            if value not in {"enabled", "disabled"}:
+                self._error(
+                    value_node,
+                    "history directive must be 'enabled' or 'disabled'",
+                    code="K-HISTORY-VALUE",
+                )
+            return HistoryDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
+        body_node = _field(node, "body")
+        assert body_node is not None
+        enabled: bool | None = None
+        fields: list[SettingsField] = []
+        seen: set[str] = set()
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            if child.type == "compaction_settings":
+                name = "compaction"
+                field = self._walk_compaction_settings(child)
+            else:
+                field = self._walk_settings_value_field(child)
+                name = field.name
+                if name != "enabled":
+                    self._error(
+                        child,
+                        "history setting must be 'enabled' or a compaction block",
+                        code="K-HISTORY-KEY",
+                    )
+                    continue
+                value = (field.plain_value or "").strip()
+                if value not in {"true", "false"}:
+                    self._error(
+                        child,
+                        "history enabled setting must be 'true' or 'false'",
+                        code="K-HISTORY-ENABLED",
+                    )
+                enabled = value == "true"
+            if name in seen:
+                self._error(
+                    child,
+                    f"Duplicate history setting: {name!r}",
+                    code="K-HISTORY-DUP",
+                )
+                continue
+            seen.add(name)
+            if name == "compaction":
+                fields.append(field)
+        if enabled is None:
             self._error(
-                value_node,
-                "history directive must be 'enabled' or 'disabled'",
-                code="K-HISTORY-VALUE",
+                body_node,
+                "history block requires an 'enabled: true' or 'enabled: false' setting",
+                code="K-HISTORY-ENABLED-REQUIRED",
             )
-        return HistoryDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+        return HistoryDirectiveStmt(
+            enabled=enabled is True,
+            fields=fields,
+            loc=self._span(node),
+        )
 
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
@@ -1856,11 +1907,14 @@ class _Walker:
         for child in _named_children(body_node):
             if child.type in ("line_comment", "block_comment"):
                 continue
-            setting = (
-                self._walk_compaction_settings(child)
-                if child.type == "compaction_settings"
-                else self._walk_settings_field(child)
-            )
+            if child.type == "compaction_settings":
+                self._error(
+                    child,
+                    "compaction belongs under '> history:', not '> settings:'",
+                    code="K-COMPACTION-LOCATION",
+                )
+                continue
+            setting = self._walk_settings_field(child)
             if setting.name in seen:
                 self._error(
                     child,
@@ -2127,6 +2181,7 @@ class _Walker:
                     history_members.append(
                         ProfileHistoryEntry(
                             enabled=history_stmt.enabled,
+                            fields=history_stmt.fields,
                             loc=self._span(child),
                         )
                     )

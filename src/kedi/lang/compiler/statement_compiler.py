@@ -293,7 +293,7 @@ class StatementExecutor:
                     active = active.merge(eval_approval_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, HistoryDirectiveStmt):
-                    active = active.merge(eval_history_directive(stmt))
+                    active = active.merge(eval_history_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))
