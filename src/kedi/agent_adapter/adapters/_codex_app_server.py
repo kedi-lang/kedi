@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thread
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
+from ..events import AgentMessagePhase, AgentMessageResolver
+
 JsonObject = dict[str, Any]
 AwaitResult = Callable[[Context, Awaitable[Any]], Any]
 ServerApprovalHandler = Callable[[str, Mapping[str, Any]], Any]
@@ -24,6 +26,15 @@ _NATIVE_APPROVAL_METHODS = frozenset(
         "item/commandExecution/requestApproval",
         "item/fileChange/requestApproval",
         "item/permissions/requestApproval",
+    }
+)
+_TOOL_ITEM_TYPES = frozenset(
+    {
+        "commandExecution",
+        "fileChange",
+        "mcpToolCall",
+        "dynamicToolCall",
+        "collabAgentToolCall",
     }
 )
 
@@ -60,10 +71,17 @@ class _ApprovalBinding:
     await_result: AwaitResult | None = None
 
 
+@dataclass(frozen=True)
+class _TurnMessage:
+    message_id: str
+    text: str
+    phase: AgentMessagePhase | None
+
+
 @dataclass
 class _TurnState:
     done: Event = field(default_factory=Event)
-    messages: list[str] = field(default_factory=list)
+    messages: list[_TurnMessage] = field(default_factory=list)
     turn: JsonObject | None = None
     error: BaseException | None = None
 
@@ -101,6 +119,7 @@ class CodexAppServerClient:
         self._turns: dict[str, _TurnState] = {}
         self._thread_tools: dict[str, dict[str, _ToolBinding]] = {}
         self._thread_approvals: dict[str, _ApprovalBinding] = {}
+        self._thread_event_resolvers: dict[str, AgentMessageResolver] = {}
         self._stderr_tail: deque[str] = deque(maxlen=40)
         self._next_request_id = 1
         self._initialized = False
@@ -122,6 +141,7 @@ class CodexAppServerClient:
         turn_timeout: float,
         approval_handler: ServerApprovalHandler | None = None,
         approval_context: Context | None = None,
+        event_resolver: AgentMessageResolver | None = None,
     ) -> CodexTurnResult:
         loop = asyncio.get_running_loop()
         return await asyncio.to_thread(
@@ -133,6 +153,7 @@ class CodexAppServerClient:
             turn_timeout=turn_timeout,
             approval_handler=approval_handler,
             approval_context=approval_context,
+            event_resolver=event_resolver,
             await_result=_await_result_in_loop(loop),
         )
 
@@ -147,6 +168,7 @@ class CodexAppServerClient:
         approval_handler: ServerApprovalHandler | None = None,
         approval_context: Context | None = None,
         await_result: AwaitResult | None = None,
+        event_resolver: AgentMessageResolver | None = None,
     ) -> CodexTurnResult:
         thread_response = self._start_thread(thread_params)
         thread = _required_object(thread_response, "thread")
@@ -169,6 +191,8 @@ class CodexAppServerClient:
                     ).copy(),
                     await_result=await_result,
                 )
+            if event_resolver is not None:
+                self._thread_event_resolvers[thread_id] = event_resolver
         turn_id: str | None = None
         try:
             turn_response = self.request("turn/start", {**turn_params, "threadId": thread_id})
@@ -191,15 +215,17 @@ class CodexAppServerClient:
                 raise CodexAppServerError(
                     str(message or f"Codex turn finished with status {status!r}.")
                 )
-            if not messages:
+            final_message = _final_turn_message(messages)
+            if final_message is None:
                 raise CodexAppServerProtocolError(
                     "Codex turn completed without a final agent message."
                 )
-            return CodexTurnResult(text=messages[-1], turn=completed_turn)
+            return CodexTurnResult(text=final_message.text, turn=completed_turn)
         finally:
             with self._state_lock:
                 self._thread_tools.pop(thread_id, None)
                 self._thread_approvals.pop(thread_id, None)
+                self._thread_event_resolvers.pop(thread_id, None)
                 if turn_id is not None:
                     self._turns.pop(turn_id, None)
             with suppress(CodexAppServerError, TimeoutError):
@@ -549,12 +575,51 @@ class CodexAppServerClient:
 
     def _handle_notification(self, method: str, params: JsonObject) -> None:
         turn_id = params.get("turnId")
+        thread_id = params.get("threadId")
+        resolver = self._event_resolver(thread_id)
+        if method == "item/agentMessage/delta" and resolver is not None:
+            item_id = params.get("itemId")
+            delta = params.get("delta")
+            if isinstance(item_id, str) and isinstance(delta, str):
+                resolver.append_delta(item_id, delta)
+            return
+        if method == "item/started" and resolver is not None:
+            item = params.get("item")
+            if isinstance(item, Mapping) and item.get("type") in _TOOL_ITEM_TYPES:
+                resolver.mark_tool_boundary()
+            return
         if method == "item/completed" and isinstance(turn_id, str):
             item = params.get("item")
             if isinstance(item, Mapping) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str):
-                    self._append_turn_message(turn_id, text)
+                    message_id = item.get("id")
+                    resolved_message_id = (
+                        message_id
+                        if isinstance(message_id, str)
+                        else f"{turn_id}:message:{len(self._turn_state(turn_id).messages) + 1}"
+                    )
+                    phase = _message_phase(item.get("phase"))
+                    self._append_turn_message(
+                        turn_id,
+                        _TurnMessage(
+                            message_id=resolved_message_id,
+                            text=text,
+                            phase=phase,
+                        ),
+                    )
+                    if resolver is not None:
+                        resolver.complete_message(
+                            resolved_message_id,
+                            text,
+                            explicit_phase=phase,
+                        )
+            elif (
+                resolver is not None
+                and isinstance(item, Mapping)
+                and item.get("type") in _TOOL_ITEM_TYPES
+            ):
+                resolver.mark_tool_boundary()
             return
         if method == "turn/completed":
             turn = params.get("turn")
@@ -569,9 +634,15 @@ class CodexAppServerClient:
                 state.done.set()
             return state
 
-    def _append_turn_message(self, turn_id: str, text: str) -> None:
+    def _event_resolver(self, thread_id: object) -> AgentMessageResolver | None:
+        if not isinstance(thread_id, str):
+            return None
         with self._state_lock:
-            self._turns.setdefault(turn_id, _TurnState()).messages.append(text)
+            return self._thread_event_resolvers.get(thread_id)
+
+    def _append_turn_message(self, turn_id: str, message: _TurnMessage) -> None:
+        with self._state_lock:
+            self._turns.setdefault(turn_id, _TurnState()).messages.append(message)
 
     def _complete_turn(self, turn: JsonObject) -> None:
         turn_id = cast(str, turn["id"])
@@ -583,7 +654,7 @@ class CodexAppServerClient:
     def _turn_snapshot(
         self,
         turn_id: str,
-    ) -> tuple[BaseException | None, JsonObject | None, tuple[str, ...]]:
+    ) -> tuple[BaseException | None, JsonObject | None, tuple[_TurnMessage, ...]]:
         with self._state_lock:
             state = self._turns.setdefault(turn_id, _TurnState())
             return state.error, state.turn, tuple(state.messages)
@@ -731,6 +802,24 @@ def _validated_native_approval_response(method: str, value: Any) -> JsonObject:
             "Codex command/file approval response must use accept, acceptForSession, decline, or cancel."
         )
     return {"decision": decision}
+
+
+def _message_phase(value: object) -> AgentMessagePhase | None:
+    if value == "commentary":
+        return "commentary"
+    if value == "final_answer":
+        return "final"
+    return None
+
+
+def _final_turn_message(messages: Sequence[_TurnMessage]) -> _TurnMessage | None:
+    for message in reversed(messages):
+        if message.phase == "final":
+            return message
+    for message in reversed(messages):
+        if message.phase is None:
+            return message
+    return None
 
 
 def _required_object(value: Mapping[str, Any], key: str) -> JsonObject:

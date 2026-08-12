@@ -11,6 +11,7 @@ from datetime import date, datetime, time, timedelta
 from re import Pattern
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
@@ -43,6 +44,11 @@ from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.events import (
+    AgentMessageEvent,
+    AgentRunStateEvent,
+    observe_agent_events,
+)
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
@@ -199,6 +205,10 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert not DSPyAdapter.capabilities.supports("background_subagents")
     assert LangChainAdapter.capabilities.supports("native_approvals")
     assert LangChainAdapter.capabilities.supports("native_approval_handler")
+    for adapter in (PydanticAdapter, LangChainAdapter, ClaudeAdapter, CodexAdapter, ACPAdapter):
+        assert adapter.capabilities.supports("stream_events")
+    assert not DSPyAdapter.capabilities.supports("stream_events")
+    assert not WebGPUAdapter.capabilities.supports("stream_events")
 
 
 def test_adapter_capabilities_support_boolean_fields() -> None:
@@ -521,6 +531,114 @@ def test_langchain_adapter_invoke_returns_text(monkeypatch: pytest.MonkeyPatch) 
         "messages": [{"role": "user", "content": "say hi"}],
         "run_id": "abc",
     }
+
+
+def test_langchain_adapter_emits_completed_model_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAgent:
+        async def ainvoke(
+            self,
+            _payload: dict[str, Any],
+            *,
+            config: dict[str, Any],
+        ) -> dict[str, Any]:
+            callback = config["callbacks"][0]
+            await callback.on_llm_end(
+                SimpleNamespace(
+                    generations=[
+                        [
+                            SimpleNamespace(
+                                message=SimpleNamespace(
+                                    content="Checking the repository.",
+                                    tool_calls=[{"name": "read_file"}],
+                                )
+                            )
+                        ]
+                    ]
+                ),
+                run_id=uuid4(),
+            )
+            await callback.on_tool_start({}, "README.md", run_id=uuid4())
+            await callback.on_llm_end(
+                SimpleNamespace(
+                    generations=[
+                        [SimpleNamespace(message=SimpleNamespace(content="Done.", tool_calls=[]))]
+                    ]
+                ),
+                run_id=uuid4(),
+            )
+            return {"messages": [SimpleNamespace(content="Done.")]}
+
+    adapter = LangChainAdapter(model={"fake": "model"})
+    monkeypatch.setattr(adapter, "_create_agent", lambda **_kwargs: FakeAgent())
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    with observe_agent_events(streamed.append):
+        assert asyncio.run(adapter.invoke(prompt="inspect")) == "Done."
+
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [
+        ("commentary", "Checking the repository."),
+        ("final", "Done."),
+    ]
+
+
+def test_langchain_stream_handler_accepts_supported_content_shapes() -> None:
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    async def scenario() -> None:
+        with observe_agent_events(streamed.append):
+            with pydantic_adapter_module.agent_event_run("langchain") as resolver:
+                assert resolver is not None
+                callback = langchain_adapter_module._langchain_event_handler(resolver)
+                await callback.on_llm_end(
+                    SimpleNamespace(generations=object()),
+                    run_id="invalid",
+                )
+                await callback.on_llm_end(
+                    SimpleNamespace(
+                        generations=[
+                            object(),
+                            [
+                                SimpleNamespace(
+                                    message=SimpleNamespace(
+                                        content=[
+                                            "First ",
+                                            {"text": "message."},
+                                            {"value": "ignored"},
+                                            object(),
+                                        ],
+                                        tool_calls=[],
+                                    )
+                                ),
+                                SimpleNamespace(
+                                    message=SimpleNamespace(content=object(), tool_calls=[{}])
+                                ),
+                            ],
+                        ]
+                    ),
+                    run_id="shapes",
+                )
+
+    asyncio.run(scenario())
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [
+        ("commentary", "First message.")
+    ]
+
+
+def test_langchain_completed_message_text_handles_scalar_and_empty_content() -> None:
+    assert (
+        langchain_adapter_module._langchain_completed_message_text(
+            SimpleNamespace(content=" done ")
+        )
+        == "done"
+    )
+    assert (
+        langchain_adapter_module._langchain_completed_message_text(SimpleNamespace(content=None))
+        == ""
+    )
 
 
 def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1359,6 +1477,23 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             self.session_id = "claude-session"
 
     @dataclass
+    class FakeTextBlock:
+        text: str
+
+    @dataclass
+    class FakeToolUseBlock:
+        name: str
+        input: dict[str, Any]
+
+    @dataclass
+    class FakeAssistantMessage:
+        content: list[Any]
+
+    @dataclass
+    class FakeUserMessage:
+        content: list[Any]
+
+    @dataclass
     class FakeSystemMessage:
         subtype: str
         data: dict[str, Any]
@@ -1393,10 +1528,18 @@ def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     setattr(sdk, "HookMatcher", FakeHookMatcher)
     setattr(sdk, "ResultMessage", FakeResultMessage)
     setattr(sdk, "SystemMessage", FakeSystemMessage)
+    setattr(sdk, "TextBlock", FakeTextBlock)
+    setattr(sdk, "ToolUseBlock", FakeToolUseBlock)
+    setattr(sdk, "AssistantMessage", FakeAssistantMessage)
+    setattr(sdk, "UserMessage", FakeUserMessage)
     setattr(sdk, "query", fake_query)
     setattr(sdk, "tool", fake_tool)
     setattr(sdk, "create_sdk_mcp_server", fake_create_sdk_mcp_server)
     monkeypatch.setitem(sys.modules, "claude_agent_sdk", sdk)
+    events["TextBlock"] = FakeTextBlock
+    events["ToolUseBlock"] = FakeToolUseBlock
+    events["AssistantMessage"] = FakeAssistantMessage
+    events["UserMessage"] = FakeUserMessage
     return events
 
 
@@ -1509,6 +1652,83 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
         "type": "preset",
         "preset": "claude_code",
     }
+
+
+def test_claude_adapter_emits_completed_assistant_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    events["prefix_message"] = events["AssistantMessage"](
+        [
+            events["TextBlock"]("Inspecting the requested file."),
+            events["ToolUseBlock"]("Read", {"file_path": "README.md"}),
+        ]
+    )
+    events["text_result"] = "Inspection complete."
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    with observe_agent_events(streamed.append):
+        assert (
+            asyncio.run(ClaudeAdapter(model="claude").invoke(prompt="inspect"))
+            == "Inspection complete."
+        )
+
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [
+        ("commentary", "Inspecting the requested file."),
+        ("final", "Inspection complete."),
+    ]
+
+
+def test_claude_stream_helpers_handle_message_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sdk = _install_fake_claude_sdk(monkeypatch)
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    with observe_agent_events(streamed.append):
+        with pydantic_adapter_module.agent_event_run("claude") as resolver:
+            assert resolver is not None
+            assistant = sdk["AssistantMessage"](" direct ")
+            assert (
+                claude_adapter_module._observe_claude_message(
+                    SimpleNamespace(**sdk), assistant, resolver, 0
+                )
+                == 1
+            )
+            tool_only = sdk["AssistantMessage"](
+                [sdk["ToolUseBlock"]("Read", {"file_path": "README.md"})]
+            )
+            assert (
+                claude_adapter_module._observe_claude_message(
+                    SimpleNamespace(**sdk), tool_only, resolver, 1
+                )
+                == 1
+            )
+            user = sdk["UserMessage"](["tool result"])
+            assert (
+                claude_adapter_module._observe_claude_message(
+                    SimpleNamespace(**sdk), user, resolver, 1
+                )
+                == 1
+            )
+            assert (
+                claude_adapter_module._observe_claude_message(
+                    SimpleNamespace(**sdk), object(), resolver, 1
+                )
+                == 1
+            )
+
+    fake_sdk = SimpleNamespace(TextBlock=None, ToolUseBlock=None)
+    assert (
+        claude_adapter_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=object()))
+        == ""
+    )
+    assert claude_adapter_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=[])) == ""
+    assert not claude_adapter_module._claude_has_tool_use(
+        fake_sdk, SimpleNamespace(content=object())
+    )
+    assert not claude_adapter_module._claude_has_tool_use(fake_sdk, SimpleNamespace(content=[]))
 
 
 def test_claude_subagent_continuation_resumes_captured_session(

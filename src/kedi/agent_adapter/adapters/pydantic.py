@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -19,7 +19,19 @@ from pydantic_ai.capabilities import (
     WrapToolExecuteHandler,
 )
 from pydantic_ai.exceptions import ApprovalRequired
-from pydantic_ai.messages import CompactionPart, ModelMessage, ToolCallPart, UserContent
+from pydantic_ai.messages import (
+    AgentStreamEvent as PydanticAgentStreamEvent,
+)
+from pydantic_ai.messages import (
+    CompactionPart,
+    FunctionToolCallEvent,
+    ModelMessage,
+    OutputToolCallEvent,
+    PartEndEvent,
+    TextPart,
+    ToolCallPart,
+    UserContent,
+)
 from pydantic_ai.models import KnownModelName, Model
 from pydantic_ai.output import OutputDataT, OutputSpec
 from pydantic_ai.run import AgentRun
@@ -58,6 +70,7 @@ from ..approval import (
     ToolRisk,
 )
 from ..conversation import AdapterConversationContext
+from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..models import codex_responses_model, is_codex_model_id
@@ -135,6 +148,44 @@ class _KediRequiredToolCapability(AbstractCapability[Any]):
         return PydanticAdapter._validate_required_tool_calls(output)
 
 
+class _KediAgentEventCapability(AbstractCapability[Any]):
+    """Observe completed Pydantic messages without consuming its event stream."""
+
+    def __init__(self, resolver: AgentMessageResolver) -> None:
+        self.resolver = resolver
+        self._message_index = 0
+
+    async def wrap_run_event_stream(
+        self,
+        ctx: RunContext[Any],
+        *,
+        stream: AsyncIterable[PydanticAgentStreamEvent],
+    ) -> AsyncIterator[PydanticAgentStreamEvent]:
+        del ctx
+        text_parts: list[str] = []
+        sealed = False
+
+        def seal_message() -> None:
+            nonlocal sealed
+            if sealed or not text_parts:
+                return
+            sealed = True
+            self._message_index += 1
+            self.resolver.complete_message(
+                f"{self.resolver.run_id}:pydantic:{self._message_index}",
+                "".join(text_parts),
+            )
+
+        async for event in stream:
+            if isinstance(event, PartEndEvent) and isinstance(event.part, TextPart):
+                text_parts.append(event.part.content)
+            elif isinstance(event, (FunctionToolCallEvent, OutputToolCallEvent)):
+                seal_message()
+                self.resolver.mark_tool_boundary()
+            yield event
+        seal_message()
+
+
 class _KediDeferredApprovalCapability(HandleDeferredToolCalls[Any]):
     """Identify Kedi's approval capability so nested preparation can deduplicate it."""
 
@@ -209,6 +260,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_stateful_history=True,
         supports_history_replay=True,
         supports_native_compaction=True,
+        supports_stream_events=True,
         settings=PYDANTIC_MODEL_SETTING_KEYS | {"compaction"},
     )
 
@@ -435,7 +487,15 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return (await self._run_agent(agent, template, run_kwargs, tool_specs=tool_specs)).output
+        return (
+            await self._run_agent(
+                agent,
+                template,
+                run_kwargs,
+                tool_specs=tool_specs,
+                emit_final=False,
+            )
+        ).output
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run_kwargs: dict[str, object] = dict(kwargs)
@@ -445,7 +505,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return str((await self._run_agent(agent, prompt, run_kwargs, tool_specs=tool_specs)).output)
+        return str(
+            (
+                await self._run_agent(
+                    agent,
+                    prompt,
+                    run_kwargs,
+                    tool_specs=tool_specs,
+                    emit_final=True,
+                )
+            ).output
+        )
 
     @overload
     def iter(
@@ -566,41 +636,57 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         run_kwargs: dict[str, object],
         *,
         tool_specs: Sequence[ToolSpec] | None = None,
+        emit_final: bool = False,
     ) -> Any:
         conversation = self._subagent_conversation_var.get()
         self._apply_conversation_history(run_kwargs, conversation)
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
-        with self._run_tool_spec_scope(tool_specs), delegation_scope(self._subagent_failure_policy):
+        with (
+            self._run_tool_spec_scope(tool_specs),
+            delegation_scope(self._subagent_failure_policy),
+            agent_event_run(self.shortname) as event_resolver,
+        ):
+            if event_resolver is not None:
+                capabilities = run_kwargs.get("capabilities")
+                if capabilities is None:
+                    capability_list: list[Any] = []
+                elif isinstance(capabilities, (list, tuple)):
+                    capability_list = list(capabilities)
+                else:
+                    raise TypeError("Pydantic AI capabilities must be a list or tuple.")
+                capability_list.append(_KediAgentEventCapability(event_resolver))
+                run_kwargs["capabilities"] = capability_list
+
             observer = invocation_observer()
-            if observer is None:
-                result = await agent.run(prompt, **cast(Any, run_kwargs))
-                self._capture_conversation_messages(conversation, result)
-                return result
-
-            from pydantic_ai.usage import RunUsage
-
-            usage = run_kwargs.get("usage")
-            if not isinstance(usage, RunUsage):
-                usage = RunUsage()
-                run_kwargs["usage"] = usage
+            usage: RunUsage | None = None
+            if observer is not None:
+                usage_value = run_kwargs.get("usage")
+                if isinstance(usage_value, RunUsage):
+                    usage = usage_value
+                else:
+                    usage = RunUsage()
+                    run_kwargs["usage"] = usage
             try:
                 result = await agent.run(prompt, **cast(Any, run_kwargs))
                 self._capture_conversation_messages(conversation, result)
-                return result
             finally:
-                report_invocation(
-                    InvocationUsage(
-                        requests=usage.requests,
-                        tool_calls=usage.tool_calls,
-                        input_tokens=usage.input_tokens,
-                        cache_read_tokens=usage.cache_read_tokens,
-                        cache_write_tokens=usage.cache_write_tokens,
-                        output_tokens=usage.output_tokens,
-                        total_tokens=usage.total_tokens,
-                        cost_usd=usage.cost,
+                if usage is not None:
+                    report_invocation(
+                        InvocationUsage(
+                            requests=usage.requests,
+                            tool_calls=usage.tool_calls,
+                            input_tokens=usage.input_tokens,
+                            cache_read_tokens=usage.cache_read_tokens,
+                            cache_write_tokens=usage.cache_write_tokens,
+                            output_tokens=usage.output_tokens,
+                            total_tokens=usage.total_tokens,
+                            cost_usd=usage.cost,
+                        )
                     )
-                )
+            if event_resolver is not None:
+                event_resolver.complete_run(final_text=str(result.output) if emit_final else None)
+            return result
 
     @contextmanager
     def _required_tool_call_scope(self) -> Iterator[None]:

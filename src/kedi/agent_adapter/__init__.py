@@ -8,6 +8,18 @@ from .conversation import (
     ConversationTurn,
     SupportsConversationState,
 )
+from .events import (
+    AgentEventCallback,
+    AgentEventDispatcher,
+    AgentEventSink,
+    AgentMessageEvent,
+    AgentMessagePhase,
+    AgentRunState,
+    AgentRunStateEvent,
+    AgentStreamEvent,
+    AsyncAgentEventQueue,
+    observe_agent_events,
+)
 from .meta import (
     AdapterCapabilities,
     AdapterCapability,
@@ -82,8 +94,17 @@ __all__ = [
     "AdapterCapabilities",
     "AdapterCapability",
     "AdapterConversationContext",
+    "AgentEventCallback",
+    "AgentEventDispatcher",
+    "AgentEventSink",
+    "AgentMessageEvent",
+    "AgentMessagePhase",
+    "AgentRunState",
+    "AgentRunStateEvent",
+    "AgentStreamEvent",
     "AgentAdapterKind",
     "ApprovalCancelled",
+    "AsyncAgentEventQueue",
     "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
@@ -108,5 +129,6 @@ __all__ = [
     "adapters",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
+    "observe_agent_events",
     "codex_responses_model",
 ]

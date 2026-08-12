@@ -17,6 +17,7 @@ from typing import Any, Iterator, cast
 from ...agent_profile import AgentProfile
 from ...agent_profile.settings import ACP_AGENT_SETTING_KEYS, acp_agent_settings
 from ...resolved_types import ResolvedKediType
+from ..events import AgentMessageResolver, agent_event_run
 from ..meta import AdapterCapabilities, AgentAdapterKind
 
 JsonObject = dict[str, Any]
@@ -33,6 +34,8 @@ class ACPDisconnected(RuntimeError):
 @dataclass
 class _SessionState:
     messages: list[str] = field(default_factory=list)
+    event_resolver: AgentMessageResolver | None = None
+    message_id: str = ""
 
 
 class ACPClient:
@@ -71,14 +74,29 @@ class ACPClient:
         prompt: str,
         cwd: str,
         timeout: float,
+        event_resolver: AgentMessageResolver | None = None,
     ) -> str:
         return await asyncio.to_thread(
-            self.run_prompt_sync, prompt=prompt, cwd=cwd, timeout=timeout
+            self.run_prompt_sync,
+            prompt=prompt,
+            cwd=cwd,
+            timeout=timeout,
+            event_resolver=event_resolver,
         )
 
-    def run_prompt_sync(self, *, prompt: str, cwd: str, timeout: float) -> str:
+    def run_prompt_sync(
+        self,
+        *,
+        prompt: str,
+        cwd: str,
+        timeout: float,
+        event_resolver: AgentMessageResolver | None = None,
+    ) -> str:
         session_id = self._new_session(cwd)
-        state = _SessionState()
+        state = _SessionState(
+            event_resolver=event_resolver,
+            message_id=f"acp:{session_id}",
+        )
         self._register_session(session_id, state)
         try:
             self.request(
@@ -90,7 +108,10 @@ class ACPClient:
                 timeout=timeout,
             )
             with self._state_lock:
-                return "".join(state.messages)
+                result = "".join(state.messages)
+            if event_resolver is not None:
+                event_resolver.complete_message(state.message_id, result)
+            return result
         finally:
             with self._state_lock:
                 if self._sessions.get(session_id) is state:
@@ -256,10 +277,16 @@ class ACPClient:
         text = content.get("text")
         if not isinstance(text, str):
             return
+        resolver = None
+        message_id = ""
         with self._state_lock:
             state = self._sessions.get(session_id)
             if state is not None:
                 state.messages.append(text)
+                resolver = state.event_resolver
+                message_id = state.message_id
+        if resolver is not None:
+            resolver.append_delta(message_id, text)
 
     def _fail_all(self, exc: BaseException) -> None:
         with self._state_lock:
@@ -293,6 +320,7 @@ class ACPAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=False,
         supports_history_replay=False,
+        supports_stream_events=True,
         settings=ACP_AGENT_SETTING_KEYS,
     )
 
@@ -363,11 +391,31 @@ class ACPAdapter:
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
-        return await client.run_prompt(prompt=prompt, cwd=cwd, timeout=timeout)
+        with agent_event_run(self.shortname) as resolver:
+            call_kwargs = {"event_resolver": resolver} if resolver is not None else {}
+            result = await client.run_prompt(
+                prompt=prompt,
+                cwd=cwd,
+                timeout=timeout,
+                **call_kwargs,
+            )
+            if resolver is not None:
+                resolver.complete_run(final_text=result)
+            return result
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
-        return client.run_prompt_sync(prompt=prompt, cwd=cwd, timeout=timeout)
+        with agent_event_run(self.shortname) as resolver:
+            call_kwargs = {"event_resolver": resolver} if resolver is not None else {}
+            result = client.run_prompt_sync(
+                prompt=prompt,
+                cwd=cwd,
+                timeout=timeout,
+                **call_kwargs,
+            )
+            if resolver is not None:
+                resolver.complete_run(final_text=result)
+            return result
 
     def default_model(self) -> str | None:
         return self._model

@@ -25,6 +25,7 @@ from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
+from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..native_compaction import langchain_settings_with_native_compaction
@@ -65,6 +66,7 @@ class LangChainAdapter:
         supports_stateful_history=True,
         supports_history_replay=True,
         supports_native_compaction=True,
+        supports_stream_events=True,
         settings=LANGCHAIN_MODEL_SETTING_KEYS | {"compaction"},
     )
 
@@ -160,7 +162,7 @@ class LangChainAdapter:
             middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": self._messages_for_prompt(template), **kwargs}
-        result = await self._invoke_agent(agent, payload)
+        result = await self._invoke_agent(agent, payload, emit_final=False)
         return cast(OutputDataT, _langchain_structured_response(result))
 
     async def produce_subagent(
@@ -183,7 +185,9 @@ class LangChainAdapter:
             middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": self._messages_for_prompt(template), **kwargs}
-        result = _langchain_structured_response(await self._invoke_agent(agent, payload))
+        result = _langchain_structured_response(
+            await self._invoke_agent(agent, payload, emit_final=False)
+        )
         if not isinstance(result, Mapping):
             raise TypeError("LangChain subagent structured output must be an object")
         return result
@@ -200,7 +204,7 @@ class LangChainAdapter:
             middleware=self._approval_middleware_for_run(tools),
         )
         payload = {"messages": self._messages_for_prompt(prompt), **kwargs}
-        return _langchain_text_response(await self._invoke_agent(agent, payload))
+        return _langchain_text_response(await self._invoke_agent(agent, payload, emit_final=True))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -275,18 +279,33 @@ class LangChainAdapter:
         self,
         agent: Any,
         payload: Mapping[str, Any],
+        *,
+        emit_final: bool,
     ) -> Any:
-        with delegation_scope(self._subagent_failure_policy):
-            result = await agent.ainvoke(dict(payload))
-        self._capture_conversation_messages(result)
-        if invocation_observer() is not None:
-            report_invocation(
-                _langchain_invocation_usage(
-                    result,
-                    input_messages=payload.get("messages"),
+        with (
+            delegation_scope(self._subagent_failure_policy),
+            agent_event_run(self.shortname) as resolver,
+        ):
+            if resolver is None:
+                result = await agent.ainvoke(dict(payload))
+            else:
+                result = await agent.ainvoke(
+                    dict(payload),
+                    config={"callbacks": [_langchain_event_handler(resolver)]},
                 )
-            )
-        return result
+            self._capture_conversation_messages(result)
+            if invocation_observer() is not None:
+                report_invocation(
+                    _langchain_invocation_usage(
+                        result,
+                        input_messages=payload.get("messages"),
+                    )
+                )
+            if resolver is not None:
+                resolver.complete_run(
+                    final_text=_langchain_text_response(result) if emit_final else None
+                )
+            return result
 
     def _model_for_run(self) -> str | Any:
         profile = self.active_profile
@@ -573,6 +592,67 @@ def _raise_langchain_subagent_error(tool: ToolSpec, exc: KediExecutionError) -> 
     from langchain_core.tools import ToolException
 
     raise ToolException(safe_subagent_error_message(exc) or "Subagent failed") from exc
+
+
+def _langchain_event_handler(resolver: AgentMessageResolver) -> Any:
+    from langchain_core.callbacks import AsyncCallbackHandler
+
+    class KediAgentEventHandler(AsyncCallbackHandler):
+        async def on_llm_end(
+            self,
+            response: Any,
+            *,
+            run_id: Any,
+            **_kwargs: Any,
+        ) -> None:
+            generations = getattr(response, "generations", ())
+            if not isinstance(generations, Sequence):
+                return
+            for group_index, group in enumerate(generations):
+                if not isinstance(group, Sequence):
+                    continue
+                for generation_index, generation in enumerate(group):
+                    message = getattr(generation, "message", None)
+                    text = _langchain_completed_message_text(message)
+                    if text:
+                        resolver.complete_message(
+                            f"langchain:{run_id}:{group_index}:{generation_index}",
+                            text,
+                        )
+                        resolver.mark_message_boundary()
+                    tool_calls = getattr(message, "tool_calls", None)
+                    if isinstance(tool_calls, Sequence) and tool_calls:
+                        resolver.mark_tool_boundary()
+
+        async def on_tool_start(
+            self,
+            serialized: dict[str, Any],
+            input_str: str,
+            *,
+            run_id: Any,
+            **_kwargs: Any,
+        ) -> None:
+            del serialized, input_str, run_id
+            resolver.mark_tool_boundary()
+
+    return KediAgentEventHandler()
+
+
+def _langchain_completed_message_text(message: Any) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, Mapping):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts).strip()
 
 
 def _langchain_invocation_usage(

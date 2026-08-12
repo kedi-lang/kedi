@@ -17,6 +17,7 @@ from kedi.agent_adapter.adapters.acp import (
     ACPProtocolError,
     _SessionState,
 )
+from kedi.agent_adapter.events import AgentMessageEvent, AgentRunStateEvent, observe_agent_events
 from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
 from kedi.agent_adapter.tool_override import ToolSpec
 from kedi.agent_profile import ACP_AGENT_SETTING_KEYS, AgentProfile
@@ -163,6 +164,51 @@ def test_acp_adapter_uses_real_client_from_env_command(
     assert process_cwd == str(tmp_path)
     assert methods.count("initialize") == 1
     assert methods.count("session/prompt") == 2
+
+
+def test_acp_adapter_buffers_chunks_and_emits_one_final_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "KEDI_ACP_AGENT_COMMAND",
+        f"{sys.executable} {FAKE_ACP_AGENT}",
+    )
+    adapter = ACPAdapter()
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    try:
+        with observe_agent_events(streamed.append):
+            assert adapter.invoke_sync(prompt="chunked", cwd=tmp_path) == "echo:chunked"
+    finally:
+        adapter.close()
+
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [("final", "echo:chunked")]
+
+
+def test_acp_adapter_async_invoke_emits_final_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "KEDI_ACP_AGENT_COMMAND",
+        f"{sys.executable} {FAKE_ACP_AGENT}",
+    )
+    adapter = ACPAdapter()
+    streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
+
+    async def scenario() -> str:
+        with observe_agent_events(streamed.append):
+            return await adapter.invoke(prompt="async-event", cwd=tmp_path)
+
+    try:
+        assert asyncio.run(scenario()) == "echo:async-event"
+    finally:
+        adapter.close()
+
+    messages = [event for event in streamed if isinstance(event, AgentMessageEvent)]
+    assert [(event.phase, event.content) for event in messages] == [("final", "echo:async-event")]
 
 
 def test_acp_adapter_uses_profile_command_before_env(
@@ -481,7 +527,7 @@ def test_acp_client_message_routing_edge_paths() -> None:
             },
         }
     )
-    client._sessions["s"] = session_state = cast(Any, type("State", (), {"messages": []})())
+    client._sessions["s"] = session_state = _SessionState()
     client._handle_session_update(
         {
             "sessionId": "s",

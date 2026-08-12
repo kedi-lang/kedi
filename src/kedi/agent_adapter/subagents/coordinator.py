@@ -14,6 +14,7 @@ from typing import Any, cast
 from ...errors import KediExecutionError, KediTraceFrame
 from ...telemetry import TelemetrySpan, current_span
 from ...telemetry import span as telemetry_span
+from ..events import bind_agent_run, current_agent_run_identity
 from ..invocation import InvocationUsage, observe_invocations
 from ..telemetry import current_tool_call_name
 from . import (
@@ -596,6 +597,10 @@ class SubagentCoordinator:
         stack: tuple[tuple[str, str], ...],
         conversation_id: str,
     ) -> DelegationResult:
+        active_agent_run = current_agent_run_identity()
+        event_parent_run_id = parent_run_id or (
+            active_agent_run.run_id if active_agent_run is not None else None
+        )
         token = self._deps.active_stack.set((*stack, (run_id, subagent)))
         budget_token = self._budget_stack.set(budgets)
         concurrency_token = self._concurrency.set(concurrency)
@@ -652,10 +657,11 @@ class SubagentCoordinator:
                     conversation=conversation,
                 )
                 safety_token = self._safety_ceiling.set(child_ceiling)
-                with observe_invocations(
-                    lambda usage: self._record_and_assert_usage(run_id, span, usage)
-                ):
-                    result = await child_call
+                with bind_agent_run(run_id, parent_run_id=event_parent_run_id):
+                    with observe_invocations(
+                        lambda usage: self._record_and_assert_usage(run_id, span, usage)
+                    ):
+                        result = await child_call
                 self._assert_usage_limits(run_id)
                 if self.runs.get(run_id).status != "running":
                     raise asyncio.CancelledError

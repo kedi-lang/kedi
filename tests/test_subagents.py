@@ -25,6 +25,12 @@ from pydantic_ai.models.test import TestModel
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.pydantic import _validated_tool_function
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.events import (
+    AgentRunStateEvent,
+    AgentStreamEvent,
+    agent_event_run,
+    observe_agent_events,
+)
 from kedi.agent_adapter.invocation import (
     InvocationUsage,
     observe_invocations,
@@ -1698,6 +1704,45 @@ def test_delegate_task_runs_text_child_in_isolated_profile() -> None:
     assert run.depth == 1
     assert run.started_at is not None
     assert run.finished_at is not None
+
+
+def test_delegate_task_stream_events_link_child_to_active_agent_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, _, tools = _manager_tools()
+    events: list[AgentStreamEvent] = []
+
+    async def invoke(*, prompt: str, **kwargs: Any) -> str:
+        del kwargs
+        with agent_event_run("pydantic") as resolver:
+            if resolver is not None:
+                resolver.complete_run(final_text=f"child:{prompt}")
+        return f"child:{prompt}"
+
+    monkeypatch.setattr(adapter, "invoke", invoke)
+
+    async def delegate() -> dict[str, Any]:
+        with agent_event_run("manager") as resolver:
+            result = await tools["delegate_task"].fn(
+                subagent="worker",
+                task="Inspect the parser",
+            )
+            if resolver is not None:
+                resolver.complete_run(final_text="Manager complete.")
+            return result
+
+    with observe_agent_events(events.append):
+        result = asyncio.run(delegate())
+
+    started = [
+        event
+        for event in events
+        if isinstance(event, AgentRunStateEvent) and event.state == "started"
+    ]
+    assert len(started) == 2
+    manager, child = started
+    assert child.run_id == result["run_id"]
+    assert child.parent_run_id == manager.run_id
 
 
 def test_delegate_task_runs_structured_child_and_validates_result() -> None:
