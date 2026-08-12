@@ -1786,18 +1786,32 @@ class _Walker:
         for child in _named_children(body_node):
             if child.type in ("line_comment", "block_comment"):
                 continue
-            if child.type == "compaction_settings":
-                name = "compaction"
-                field = self._walk_compaction_settings(child)
-            else:
-                field = self._walk_settings_value_field(child)
-                name = field.name
-                if name != "enabled":
+            field = self._walk_settings_value_field(child)
+            name = field.name
+            if name not in {"enabled", "compaction_mode", "compaction_threshold"}:
+                self._error(
+                    child,
+                    "history setting must be one of: enabled, compaction_mode, "
+                    "compaction_threshold",
+                    code="K-HISTORY-KEY",
+                )
+                continue
+            if name in seen:
+                self._error(
+                    child,
+                    f"Duplicate history setting: {name!r}",
+                    code="K-HISTORY-DUP",
+                )
+                continue
+            seen.add(name)
+            if name == "enabled":
+                if field.backtick_code is not None:
                     self._error(
                         child,
-                        "history setting must be 'enabled' or a compaction block",
-                        code="K-HISTORY-KEY",
+                        "history enabled setting must be the literal 'true' or 'false'",
+                        code="K-HISTORY-ENABLED",
                     )
+                    enabled = False
                     continue
                 value = (field.plain_value or "").strip()
                 if value not in {"true", "false"}:
@@ -1807,16 +1821,18 @@ class _Walker:
                         code="K-HISTORY-ENABLED",
                     )
                 enabled = value == "true"
-            if name in seen:
+                continue
+            if (
+                name == "compaction_mode"
+                and field.plain_value is not None
+                and field.plain_value not in {"native", "disabled"}
+            ):
                 self._error(
                     child,
-                    f"Duplicate history setting: {name!r}",
-                    code="K-HISTORY-DUP",
+                    "history compaction_mode must be 'native' or 'disabled'",
+                    code="K-COMPACTION-MODE",
                 )
-                continue
-            seen.add(name)
-            if name == "compaction":
-                fields.append(field)
+            fields.append(field)
         if enabled is None:
             self._error(
                 body_node,
@@ -1907,13 +1923,6 @@ class _Walker:
         for child in _named_children(body_node):
             if child.type in ("line_comment", "block_comment"):
                 continue
-            if child.type == "compaction_settings":
-                self._error(
-                    child,
-                    "compaction belongs under '> history:', not '> settings:'",
-                    code="K-COMPACTION-LOCATION",
-                )
-                continue
             setting = self._walk_settings_field(child)
             if setting.name in seen:
                 self._error(
@@ -1924,41 +1933,6 @@ class _Walker:
             seen.add(setting.name)
             fields.append(setting)
         return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
-
-    def _walk_compaction_settings(self, node: Node) -> SettingsField:
-        body_node = _field(node, "body")
-        assert body_node is not None
-        fields: list[SettingsField] = []
-        seen: set[str] = set()
-        for child in _named_children(body_node):
-            if child.type in ("line_comment", "block_comment"):
-                continue
-            field = self._walk_settings_value_field(child)
-            if field.name not in {"mode", "threshold"}:
-                self._error(
-                    child,
-                    "compaction setting must be one of: mode, threshold",
-                    code="K-COMPACTION-KEY",
-                )
-            if field.name in seen:
-                self._error(
-                    child,
-                    f"Duplicate compaction setting: {field.name!r}",
-                    code="K-COMPACTION-DUP",
-                )
-            if (
-                field.name == "mode"
-                and field.plain_value is not None
-                and field.plain_value not in {"native", "disabled"}
-            ):
-                self._error(
-                    child,
-                    "compaction mode must be 'native' or 'disabled'",
-                    code="K-COMPACTION-MODE",
-                )
-            seen.add(field.name)
-            fields.append(field)
-        return SettingsField(name="compaction", fields=fields, loc=self._span(node))
 
     def _walk_settings_field(self, node: Node) -> SettingsField:
         field = self._walk_settings_value_field(node)

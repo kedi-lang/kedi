@@ -310,8 +310,6 @@ def eval_mcp_directive(
 
 
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
-    if field.fields:
-        return eval_settings_fields(rt, field.fields, env)
     if field.backtick_code is not None:
         return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
     if field.plain_value is not None:
@@ -375,7 +373,12 @@ def _eval_history_fields(
     env: dict[str, Any],
 ) -> CompactionSettings | None:
     values = eval_settings_fields(rt, fields, env)
-    compaction = normalize_compaction_settings(values.get("compaction"))
+    compaction_values = {
+        name.removeprefix("compaction_"): value
+        for name, value in values.items()
+        if name in {"compaction_mode", "compaction_threshold"}
+    }
+    compaction = normalize_compaction_settings(compaction_values or None)
     if not enabled and compaction is not None and compaction.mode == "native":
         raise KediExecutionError("native compaction requires history to be enabled")
     return compaction

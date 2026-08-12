@@ -241,14 +241,14 @@ def test_tree_sitter_highlights_capture_artifacts_directive_keyword():
         assert "artifacts" in keywords
 
 
-def test_tree_sitter_highlights_capture_workflow_and_compaction_directives() -> None:
+def test_tree_sitter_highlights_capture_workflow_and_compaction_settings() -> None:
     source = (
         b"> profile: coordinator:\n"
         b"  > workflow: dynamic\n"
-        b"  > settings:\n"
-        b"    > compaction:\n"
-        b"      mode: native\n"
-        b"      threshold: `100_000`\n"
+        b"  > history:\n"
+        b"    enabled: true\n"
+        b"    compaction_mode: native\n"
+        b"    compaction_threshold: `100_000`\n"
     )
     root = Path(__file__).resolve().parents[1]
     language = Language(tree_sitter_kedi.language())
@@ -266,20 +266,20 @@ def test_tree_sitter_highlights_capture_workflow_and_compaction_directives() -> 
                 for node in captures.get(name, [])
             }
 
-        assert {"workflow", "compaction"} <= captured("keyword")
-        assert {"mode", "threshold"} <= captured("property")
+        assert {"workflow", "history"} <= captured("keyword")
+        assert {"enabled", "compaction_mode", "compaction_threshold"} <= captured("property")
         assert "dynamic" in captured("constant")
         assert "native" in captured("string") | captured("text.literal")
 
 
-def test_lsp_semantic_tokens_cover_workflow_and_compaction_directives() -> None:
+def test_lsp_semantic_tokens_cover_workflow_and_compaction_settings() -> None:
     source = (
         "> profile: coordinator:\n"
         "  > workflow: dynamic\n"
-        "  > settings:\n"
-        "    > compaction:\n"
-        "      mode: native\n"
-        "      threshold: `100_000`\n"
+        "  > history:\n"
+        "    enabled: true\n"
+        "    compaction_mode: native\n"
+        "    compaction_threshold: `100_000`\n"
     )
     tokens = decode_semantic_tokens(
         features.compute_semantic_tokens_full(source, "/tmp/directives.kedi").data
@@ -292,10 +292,11 @@ def test_lsp_semantic_tokens_cover_workflow_and_compaction_directives() -> None:
     expected = {
         (1, 4, len("workflow"), keyword_type),
         (1, 14, len("dynamic"), variable_type),
-        (3, 6, len("compaction"), keyword_type),
-        (4, 6, len("mode"), property_type),
-        (4, 12, len("native"), string_type),
-        (5, 6, len("threshold"), property_type),
+        (2, 4, len("history"), keyword_type),
+        (3, 4, len("enabled"), property_type),
+        (4, 4, len("compaction_mode"), property_type),
+        (4, 21, len("native"), string_type),
+        (5, 4, len("compaction_threshold"), property_type),
     }
     actual = {(line, col, length, token_type) for line, col, length, token_type, _ in tokens}
     assert expected <= actual

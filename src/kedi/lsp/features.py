@@ -1213,10 +1213,14 @@ def _compaction_capability_diagnostics(
     state: _AdapterDiagnosticState,
     fields: Sequence[SettingsField],
 ) -> list[lsp.Diagnostic]:
-    compaction = next((field for field in fields if field.name == "compaction"), None)
-    if compaction is None or compaction.loc is None:
+    mode = next((field for field in fields if field.name == "compaction_mode"), None)
+    threshold = next(
+        (field for field in fields if field.name == "compaction_threshold"),
+        None,
+    )
+    configured = mode or threshold
+    if configured is None or configured.loc is None:
         return []
-    mode = next((field for field in compaction.fields if field.name == "mode"), None)
     if mode is not None and mode.plain_value == "disabled":
         return []
     if mode is not None and mode.backtick_code is not None:
@@ -1224,7 +1228,7 @@ def _compaction_capability_diagnostics(
     return _unsupported_capability_diagnostics(
         state,
         "native_compaction",
-        [compaction.loc],
+        [configured.loc],
         "provider-native conversation compaction",
         severity=lsp.DiagnosticSeverity.Error,
         code="K-ADAPTER-COMPACTION",
@@ -2800,10 +2804,6 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
-        if isinstance(node, SettingsField):
-            for field in node.fields:
-                visit(field)
-            return
         if isinstance(node, ArtifactsDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -3149,7 +3149,10 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
 
 def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
     value = "enabled" if stmt.enabled else "disabled"
-    compaction = next((field for field in stmt.fields if field.name == "compaction"), None)
+    compaction = next(
+        (field for field in stmt.fields if field.name.startswith("compaction_")),
+        None,
+    )
     configured = (
         " The expanded form also configures provider-native compaction."
         if compaction is not None
@@ -3213,23 +3216,16 @@ def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
 
 
 def _settings_field_markdown(field: SettingsField) -> str:
-    if field.name == "compaction" and field.fields:
-        fields = ", ".join(f"`{child.name}`" for child in field.fields)
-        return (
-            "**`> compaction:`**\n\nConfigure provider-native context compaction "
-            "inside the enclosing `> history:` policy "
-            "for subsequent Pydantic AI or LangChain calls. OpenAI uses the Responses "
-            f"API and Anthropic uses context management. Configured fields: {fields}."
-        )
     value = _settings_field_value_preview(field)
-    if field.name == "mode":
+    if field.name == "compaction_mode":
         return (
-            f'`mode: Literal["native", "disabled"]` = {value}\n\n'
-            "Select provider-native compaction or disable Kedi's compaction policy."
+            f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
+            "Select provider-native conversation compaction or disable the inherited "
+            "compaction policy while retaining stateful history."
         )
-    if field.name == "threshold":
+    if field.name == "compaction_threshold":
         return (
-            f"`threshold: int | None` = {value}\n\n"
+            f"`compaction_threshold: int | None` = {value}\n\n"
             "Positive input-token threshold that triggers native compaction. When omitted, "
             "the provider default is used."
         )

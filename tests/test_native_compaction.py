@@ -76,26 +76,23 @@ def test_compaction_settings_validate_mode_threshold_and_disabled_policy() -> No
         normalize_compaction_settings({"strategy": "native"})
 
 
-def test_nested_compaction_settings_parse_and_evaluate_in_all_profile_scopes() -> None:
+def test_flat_compaction_settings_parse_and_evaluate_in_all_profile_scopes() -> None:
     source = """
 > history:
     enabled: true
-    > compaction:
-        mode: native
-        threshold: `50_000 * 2`
+    compaction_mode: native
+    compaction_threshold: `50_000 * 2`
 
 > profile: compact:
     > history:
         enabled: true
-        > compaction:
-            mode: disabled
+        compaction_mode: disabled
 
 @local():
     > history:
         enabled: true
-        > compaction:
-            mode: native
-            threshold: 25_000
+        compaction_mode: native
+        compaction_threshold: 25_000
     = `None`
 """
     program = parse_program(source)
@@ -103,74 +100,95 @@ def test_nested_compaction_settings_parse_and_evaluate_in_all_profile_scopes() -
     assert isinstance(history, HistoryDirectiveStmt)
     profile = program.ordered_toplevel[1]
     assert isinstance(profile, ProfileDefStmt)
-    assert profile.history_members[0].fields[0].fields[0].plain_value == "disabled"
+    assert profile.history_members[0].fields[0].plain_value == "disabled"
 
     evaluated = eval_history_directive(KediRuntime(), history, {})
     assert evaluated.history is True
     assert evaluated.compaction == CompactionSettings(mode="native", threshold=100_000)
+
+    threshold_only = parse_program(
+        "> history:\n    enabled: true\n    compaction_threshold: 2_000\n"
+    ).ordered_toplevel[0]
+    assert isinstance(threshold_only, HistoryDirectiveStmt)
+    assert eval_history_directive(KediRuntime(), threshold_only, {}).compaction == (
+        CompactionSettings(mode="native", threshold=2_000)
+    )
 
 
 @pytest.mark.parametrize(
     ("source", "message"),
     [
         (
-            "> history:\n    enabled: true\n    > compaction:\n        strategy: native\n",
-            "compaction setting must be one of",
+            "> history:\n    enabled: true\n    compaction_strategy: native\n",
+            "history setting must be one of",
         ),
         (
-            "> history:\n    enabled: true\n    > compaction:\n        mode: automatic\n",
-            "compaction mode must be",
+            "> history:\n    enabled: true\n    compaction_mode: automatic\n",
+            "history compaction_mode must be",
         ),
         (
-            "> history:\n    enabled: true\n    > compaction:\n        mode: native\n        mode: disabled\n",
-            "Duplicate compaction setting",
+            "> history:\n    enabled: true\n    compaction_mode: native\n    compaction_mode: disabled\n",
+            "Duplicate history setting",
+        ),
+        (
+            "> history:\n    enabled: `flag`\n",
+            "history enabled setting must be the literal",
         ),
     ],
 )
-def test_nested_compaction_settings_reject_invalid_source(source: str, message: str) -> None:
+def test_flat_compaction_settings_reject_invalid_source(source: str, message: str) -> None:
     with pytest.raises(KediParseError, match=message):
         parse_program(source)
 
 
-def test_nested_compaction_settings_allow_comments_and_reject_duplicate_block() -> None:
+def test_flat_compaction_settings_allow_comments_and_reject_duplicates() -> None:
     program = parse_program(
-        "> history:\n"
-        "    enabled: true\n"
-        "    > compaction:\n"
-        "        # provider policy\n"
-        "        mode: native\n"
+        "> history:\n    enabled: true\n    # provider policy\n    compaction_mode: native\n"
     )
     history = program.ordered_toplevel[0]
     assert isinstance(history, HistoryDirectiveStmt)
-    assert history.fields[0].fields[0].name == "mode"
+    assert history.fields[0].name == "compaction_mode"
 
     with pytest.raises(KediParseError, match="Duplicate history setting"):
         parse_program(
             "> history:\n"
             "    enabled: true\n"
-            "    > compaction:\n"
-            "        mode: native\n"
-            "    > compaction:\n"
-            "        mode: native\n"
+            "    compaction_threshold: 10_000\n"
+            "    compaction_threshold: 20_000\n"
         )
 
 
-def test_compaction_rejects_legacy_settings_location() -> None:
-    with pytest.raises(KediParseError, match="compaction belongs under '> history:'"):
-        parse_program("> settings:\n    > compaction:\n        mode: native\n")
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> settings:\n    > compaction:\n        mode: native\n",
+        "> history:\n    enabled: true\n    > compaction:\n        mode: native\n",
+    ],
+)
+def test_compaction_rejects_nested_directive_syntax(source: str) -> None:
+    with pytest.raises(KediParseError):
+        parse_program(source)
 
 
 def test_expanded_history_requires_enabled_and_rejects_native_when_disabled() -> None:
     with pytest.raises(KediParseError, match="history block requires an 'enabled"):
-        parse_program("> history:\n    > compaction:\n        mode: native\n")
+        parse_program("> history:\n    compaction_mode: native\n")
 
-    program = parse_program(
-        "> history:\n    enabled: false\n    > compaction:\n        mode: native\n"
-    )
+    program = parse_program("> history:\n    enabled: false\n    compaction_mode: native\n")
     history = program.ordered_toplevel[0]
     assert isinstance(history, HistoryDirectiveStmt)
     with pytest.raises(KediExecutionError, match="requires history to be enabled"):
         eval_history_directive(KediRuntime(), history, {})
+
+    invalid = parse_program(
+        "> history:\n"
+        "    enabled: true\n"
+        "    compaction_mode: disabled\n"
+        "    compaction_threshold: 10_000\n"
+    ).ordered_toplevel[0]
+    assert isinstance(invalid, HistoryDirectiveStmt)
+    with pytest.raises(CompactionSettingsError, match="cannot be set"):
+        eval_history_directive(KediRuntime(), invalid, {})
 
 
 @pytest.mark.parametrize(
@@ -178,7 +196,7 @@ def test_expanded_history_requires_enabled_and_rejects_native_when_disabled() ->
     [
         (
             "> history:\n    unknown: true\n    enabled: true\n",
-            "history setting must be 'enabled'",
+            "history setting must be one of",
         ),
         (
             "> history:\n    enabled: yes\n",
@@ -195,7 +213,7 @@ def test_history_and_settings_blocks_reject_invalid_fields(source: str, message:
         parse_program(source)
 
 
-def test_history_compaction_profile_merge_and_nested_hover() -> None:
+def test_history_compaction_profile_merge_and_field_hover() -> None:
     compaction = CompactionSettings(threshold=10_000)
     merged = AgentProfile(history=True).merge(AgentProfile(compaction=compaction))
     assert merged.compaction is compaction
@@ -204,13 +222,12 @@ def test_history_compaction_profile_merge_and_nested_hover() -> None:
     > history:
         # keep the provider prefix stable
         enabled: true
-        > compaction:
-            mode: native
+        compaction_mode: native
 """
-    assert "provider-native context compaction" in hover_text_at(
+    assert "provider-native conversation compaction" in hover_text_at(
         source,
         "compaction.kedi",
-        "compaction",
+        "compaction_mode",
     )
 
 
@@ -439,16 +456,19 @@ def test_langchain_provider_detection_accepts_anthropic_model_object() -> None:
 def test_compaction_settings_lsp_hover_and_diagnostics() -> None:
     source = """> history:
     enabled: true
-    > compaction:
-        mode: native
-        threshold: `100_000`
+    compaction_mode: native
+    compaction_threshold: `100_000`
 """
     assert compute_diagnostics(source, "compaction.kedi") == []
-    assert "provider-native context compaction" in hover_text_at(
-        source, "compaction.kedi", "compaction"
+    assert "provider-native conversation compaction" in hover_text_at(
+        source, "compaction.kedi", "compaction_mode"
     )
-    assert "input-token threshold" in hover_text_at(source, "compaction.kedi", "threshold")
-    assert 'Literal["native", "disabled"]' in hover_text_at(source, "compaction.kedi", "mode")
+    assert "input-token threshold" in hover_text_at(
+        source, "compaction.kedi", "compaction_threshold"
+    )
+    assert 'Literal["native", "disabled"]' in hover_text_at(
+        source, "compaction.kedi", "compaction_mode"
+    )
     assert "conversation continuity through stateful history" in hover_text_at(
         source, "compaction.kedi", "history"
     )
@@ -495,8 +515,7 @@ def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -
     source = """> adapter: dspy
 > history:
     enabled: true
-    > compaction:
-        mode: native
+    compaction_mode: native
 """
     diagnostics = compute_diagnostics(source, "compaction.kedi")
     assert [item.code for item in diagnostics] == [
@@ -508,8 +527,7 @@ def test_unsupported_adapter_rejects_native_compaction_at_runtime_and_in_lsp() -
     > adapter: dspy
     > history:
         enabled: true
-        > compaction:
-            threshold: 1000
+        compaction_threshold: 1000
 """
     profile_diagnostics = compute_diagnostics(profile_source, "compaction.kedi")
     assert [item.code for item in profile_diagnostics] == [
@@ -528,8 +546,7 @@ def test_disabled_compaction_is_accepted_by_unsupported_adapter() -> None:
     source = """> adapter: dspy
 > history:
     enabled: true
-    > compaction:
-        mode: disabled
+    compaction_mode: disabled
 """
     assert [item.code for item in compute_diagnostics(source, "compaction.kedi")] == [
         "K-ADAPTER-HISTORY"
@@ -538,8 +555,7 @@ def test_disabled_compaction_is_accepted_by_unsupported_adapter() -> None:
     dynamic_source = """> adapter: dspy
 > history:
     enabled: true
-    > compaction:
-        mode: `selected_mode`
+    compaction_mode: `selected_mode`
 """
     assert [item.code for item in compute_diagnostics(dynamic_source, "compaction.kedi")] == [
         "K-ADAPTER-HISTORY",
