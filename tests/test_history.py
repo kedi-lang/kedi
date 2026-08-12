@@ -6,17 +6,25 @@ from contextvars import ContextVar
 from typing import Any, Callable, cast
 
 import pytest
+from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+from pydantic_ai.models.zai import ZaiModel
 from pydantic_ai.messages import CompactionPart, ModelMessage, ModelResponse, TextPart
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.alibaba import AlibabaProvider
+from pydantic_ai.providers.azure import AzureProvider
+from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.providers.moonshotai import MoonshotAIProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
+from pydantic_ai.providers.zai import ZaiProvider
 
+from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
@@ -116,6 +124,23 @@ def _google_model() -> GoogleModel:
         "gemini-3.1-flash-lite-preview",
         provider=GoogleProvider(api_key="test"),
     )
+
+
+def _azure_responses_model() -> OpenAIResponsesModel:
+    return OpenAIResponsesModel(
+        "gpt-5.4",
+        provider=AzureProvider(
+            azure_endpoint="https://test.openai.azure.com",
+            api_version="2025-04-01-preview",
+            api_key="test",
+        ),
+    )
+
+
+class _ProviderModel:
+    def __init__(self, system: str, *, settings: dict[str, Any] | None = None) -> None:
+        self.system = system
+        self.settings = settings
 
 
 def test_history_directive_parses_at_top_level_procedure_and_profile() -> None:
@@ -315,34 +340,29 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
         model=_openrouter_model(),
         conversation=conversation,
     ) == {
-        "openai_prompt_cache_key": "cache-key",
-        "extra_body": {
-            "session_id": "cache-key",
-            "cache_control": {"type": "ephemeral"},
-        },
+        "openrouter_cache_instructions": True,
+        "openrouter_cache_messages": True,
+        "openrouter_cache_tool_definitions": True,
     }
     openrouter_explicit = pydantic_prefix_cache_settings(
-        {"extra_body": {"run_setting": True}},
+        {
+            "extra_body": {"run_setting": True},
+            "openrouter_cache_messages": False,
+        },
         model=_openrouter_model(
             settings=cast(
                 OpenRouterModelSettings,
                 {
-                    "openai_prompt_cache_key": "model-key",
-                    "extra_body": {
-                        "session_id": "model-session",
-                        "model_setting": True,
-                    },
+                    "openrouter_cache_instructions": "1h",
                 },
             )
         ),
         conversation=conversation,
     )
-    assert "openai_prompt_cache_key" not in openrouter_explicit
-    assert openrouter_explicit["extra_body"] == {
-        "session_id": "model-session",
-        "model_setting": True,
-        "run_setting": True,
-        "cache_control": {"type": "ephemeral"},
+    assert openrouter_explicit == {
+        "extra_body": {"run_setting": True},
+        "openrouter_cache_messages": False,
+        "openrouter_cache_tool_definitions": True,
     }
     invalid_extra_body = pydantic_prefix_cache_settings(
         {"extra_body": "provider-validates-this"},
@@ -351,7 +371,9 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
     )
     assert invalid_extra_body == {
         "extra_body": "provider-validates-this",
-        "openai_prompt_cache_key": "cache-key",
+        "openrouter_cache_instructions": True,
+        "openrouter_cache_messages": True,
+        "openrouter_cache_tool_definitions": True,
     }
 
     anthropic = pydantic_prefix_cache_settings(
@@ -371,6 +393,58 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
         conversation=conversation,
     ) == {"temperature": 0.1}
 
+    moonshot = pydantic_prefix_cache_settings(
+        {},
+        model=_ProviderModel("moonshotai"),
+        conversation=conversation,
+    )
+    assert moonshot == {"openai_prompt_cache_key": "cache-key"}
+    azure = pydantic_prefix_cache_settings(
+        {},
+        model=_ProviderModel("azure"),
+        conversation=conversation,
+    )
+    assert azure == {"openai_prompt_cache_key": "cache-key"}
+    assert pydantic_prefix_cache_settings(
+        {},
+        model=_azure_responses_model(),
+        conversation=conversation,
+    ) == {
+        "openai_prompt_cache_key": "cache-key",
+        "openai_previous_response_id": "auto",
+    }
+    bedrock = pydantic_prefix_cache_settings(
+        {},
+        model=_ProviderModel(
+            "bedrock",
+            settings={"bedrock_cache_messages": "1h"},
+        ),
+        conversation=conversation,
+    )
+    assert bedrock == {
+        "bedrock_cache_instructions": True,
+        "bedrock_cache_tool_definitions": True,
+    }
+    for provider in ("alibaba", "zai", "deepseek", "xai"):
+        assert pydantic_prefix_cache_settings(
+            {"temperature": 0.1},
+            model=_ProviderModel(provider),
+            conversation=conversation,
+        ) == {"temperature": 0.1}
+
+    alibaba_model = OpenAIChatModel(
+        "qwen-plus",
+        provider=AlibabaProvider(api_key="test"),
+    )
+    assert (
+        pydantic_prefix_cache_settings(
+            {},
+            model=alibaba_model,
+            conversation=conversation,
+        )
+        == {}
+    )
+
 
 def test_provider_cache_policy_matrix_covers_supported_backends() -> None:
     assert pydantic_provider_cache_policy(_openai_model()) == ProviderCachePolicy(
@@ -385,6 +459,13 @@ def test_provider_cache_policy_matrix_covers_supported_backends() -> None:
         "explicit_breakpoints"
     )
     assert pydantic_provider_cache_policy(_openrouter_model()).exact_response_cache is True
+    assert pydantic_provider_cache_policy(_azure_responses_model()) == ProviderCachePolicy(
+        provider="azure",
+        backend="azure_responses",
+        prefix_cache_mode="automatic",
+        stable_cache_key=True,
+        continuation=True,
+    )
     google = pydantic_provider_cache_policy(_google_model())
     assert google == ProviderCachePolicy(
         provider="google",
@@ -394,11 +475,59 @@ def test_provider_cache_policy_matrix_covers_supported_backends() -> None:
     )
     assert pydantic_provider_cache_policy(object()).prefix_cache_mode == "unsupported"
 
+    expected_backends = {
+        "moonshotai": "moonshot",
+        "alibaba": "alibaba",
+        "zai": "zai",
+        "bedrock": "bedrock",
+        "azure": "azure_chat",
+        "deepseek": "deepseek",
+        "xai": "xai",
+    }
+    for provider, backend in expected_backends.items():
+        assert pydantic_provider_cache_policy(_ProviderModel(provider)).backend == backend
+
+    native_models = [
+        (
+            ZaiModel(
+                "glm-4.7-flash",
+                provider=ZaiProvider(api_key="test"),
+            ),
+            "zai",
+        ),
+        (
+            OpenAIChatModel(
+                "deepseek-chat",
+                provider=DeepSeekProvider(api_key="test"),
+            ),
+            "deepseek",
+        ),
+        (
+            OpenAIChatModel(
+                "kimi-k2.5",
+                provider=MoonshotAIProvider(api_key="test"),
+            ),
+            "moonshot",
+        ),
+    ]
+    for model, backend in native_models:
+        assert pydantic_provider_cache_policy(model).backend == backend
+
     assert langchain_provider_cache_policy("google_genai:gemini-3.5-flash") == google
     assert langchain_provider_cache_policy("google-vertexai:gemini-3.5-flash") == google
     assert langchain_provider_cache_policy("openai:gpt-5.4").continuation is True
     assert langchain_provider_cache_policy("gpt-5.4").backend == "unknown"
     assert langchain_provider_cache_policy(object()).backend == "unknown"
+    for provider, backend in {
+        "moonshot": "moonshot",
+        "alibaba": "alibaba",
+        "zai": "zai",
+        "bedrock_converse": "bedrock",
+        "azure_openai": "azure_chat",
+        "deepseek": "deepseek",
+        "xai": "xai",
+    }.items():
+        assert langchain_provider_cache_policy(f"{provider}:model").backend == backend
 
 
 def test_langchain_prefix_cache_defaults_are_provider_aware_and_non_destructive() -> None:
@@ -433,10 +562,7 @@ def test_langchain_prefix_cache_defaults_are_provider_aware_and_non_destructive(
         {},
         model="openrouter:openai/gpt-5.6-luna",
         conversation=conversation,
-    ) == {
-        "session_id": "cache-key",
-        "model_kwargs": {"cache_control": {"type": "ephemeral"}},
-    }
+    ) == {"session_id": "cache-key"}
 
     chat_openai = type("ChatOpenAI", (), {"__module__": "langchain_openai.chat_models"})()
     chat_anthropic = type(
@@ -472,12 +598,25 @@ def test_langchain_prefix_cache_defaults_are_provider_aware_and_non_destructive(
     )
     assert langchain_prefix_cache_settings(
         {},
+        model="moonshot:kimi-k2.6",
+        conversation=conversation,
+    ) == {"model_kwargs": {"prompt_cache_key": "cache-key"}}
+    assert langchain_prefix_cache_settings(
+        {},
+        model="azure_openai:gpt-5.4",
+        conversation=conversation,
+    ) == {"model_kwargs": {"prompt_cache_key": "cache-key"}}
+    for provider in ("alibaba", "zai", "bedrock", "deepseek", "xai"):
+        assert langchain_prefix_cache_settings(
+            {"temperature": 0.1},
+            model=f"{provider}:model",
+            conversation=conversation,
+        ) == {"temperature": 0.1}
+    assert langchain_prefix_cache_settings(
+        {},
         model=chat_openrouter,
         conversation=conversation,
-    ) == {
-        "session_id": "caller-session",
-        "model_kwargs": {"cache_control": {"type": "ephemeral"}},
-    }
+    ) == {"session_id": "caller-session"}
     assert langchain_prefix_cache_settings(
         {"temperature": 0.1},
         model=chat_google,
@@ -491,6 +630,46 @@ def test_langchain_prefix_cache_defaults_are_provider_aware_and_non_destructive(
         )
         == {}
     )
+
+
+def test_langchain_provider_detection_handles_native_and_openai_compatible_models() -> None:
+    model_classes = {
+        ("langchain_openai.chat_models", "AzureChatOpenAI"): "azure_chat",
+        ("langchain_aws.chat_models", "ChatBedrockConverse"): "bedrock",
+        ("langchain_deepseek.chat_models", "ChatDeepSeek"): "deepseek",
+        ("langchain_xai.chat_models", "ChatXAI"): "xai",
+        ("langchain_community.chat_models", "MoonshotChat"): "moonshot",
+        ("langchain_community.chat_models", "ChatTongyi"): "alibaba",
+        ("langchain_community.chat_models", "ChatZhipuAI"): "zai",
+    }
+    for (module, name), backend in model_classes.items():
+        model = type(name, (), {"__module__": module})()
+        assert langchain_provider_cache_policy(model).backend == backend
+
+    from langchain_openai import ChatOpenAI
+
+    compatible_urls = {
+        "https://api.moonshot.cn/v1": "moonshot",
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1": "alibaba",
+        "https://api.deepseek.com": "deepseek",
+        "https://api.z.ai/api/paas/v4": "zai",
+    }
+    for base_url, backend in compatible_urls.items():
+        model = ChatOpenAI(model="test", api_key="test", base_url=base_url)
+        assert langchain_provider_cache_policy(model).backend == backend
+
+
+def test_langchain_bedrock_uses_native_prompt_cache_middleware() -> None:
+    bedrock = type(
+        "ChatBedrockConverse",
+        (),
+        {"__module__": "langchain_aws.chat_models"},
+    )()
+    assert langchain_adapter_module._langchain_cache_middleware(bedrock, enabled=False) == []
+
+    middleware = langchain_adapter_module._langchain_cache_middleware(bedrock, enabled=True)
+    assert len(middleware) == 1
+    assert isinstance(middleware[0], BedrockPromptCachingMiddleware)
 
 
 def test_openrouter_response_cache_is_explicit_validated_and_provider_specific() -> None:
@@ -763,7 +942,86 @@ def test_langchain_adapter_applies_prefix_defaults_inside_conversation_scope() -
     with openrouter.conversation_scope(conversation):
         openrouter_settings = openrouter._settings_for_run("openrouter:openai/gpt-5.6-luna")
     assert openrouter_settings["session_id"] == "adapter-cache-key"
-    assert openrouter_settings["model_kwargs"]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_langchain_uses_native_cache_blocks_without_accumulating_markers() -> None:
+    from langchain_core.messages import HumanMessage, SystemMessage, message_to_dict
+
+    adapter = LangChainAdapter("openrouter:google/gemini-3.1-flash-lite-preview")
+    model = type(
+        "ChatOpenRouter",
+        (),
+        {"__module__": "langchain_openrouter.chat_models"},
+    )()
+    conversation = AdapterConversationContext(cache_key="adapter-cache-key")
+    old_message = HumanMessage(
+        content=[
+            {
+                "type": "text",
+                "text": "old prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    )
+    conversation.resume_state["langchain_messages"] = [message_to_dict(old_message)]
+
+    with adapter.conversation_scope(conversation):
+        system_prompt = adapter._cache_aware_system_prompt("stable instructions", model=model)
+        messages = adapter._messages_for_prompt("new prompt", model=model)
+
+    assert isinstance(system_prompt, SystemMessage)
+    assert system_prompt.content == [
+        {
+            "type": "text",
+            "text": "stable instructions",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    assert messages[0].content == [{"type": "text", "text": "old prompt"}]
+    assert messages[1].content == [
+        {
+            "type": "text",
+            "text": "new prompt",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+def test_langchain_cache_blocks_cover_native_content_shapes_and_noop_paths() -> None:
+    from types import SimpleNamespace
+
+    from langchain_core.messages import HumanMessage
+
+    adapter = LangChainAdapter("openai:gpt-5.4")
+    conversation = AdapterConversationContext(cache_key="adapter-cache-key")
+    with adapter.conversation_scope(conversation):
+        assert adapter._cache_aware_system_prompt("instructions", model=object()) == (
+            "instructions"
+        )
+
+    assert langchain_adapter_module._langchain_uses_explicit_cache_blocks(None) is False
+
+    content_message = HumanMessage(
+        content=[
+            "raw block",
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+            {"type": "text", "text": "cache this"},
+        ]
+    )
+    marked = langchain_adapter_module._langchain_with_cache_control(content_message)
+    assert marked.content[-1]["cache_control"] == {"type": "ephemeral"}
+
+    image_only = HumanMessage(
+        content=[{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]
+    )
+    assert langchain_adapter_module._langchain_with_cache_control(image_only) is image_only
+
+    unsupported = SimpleNamespace(content=object())
+    assert langchain_adapter_module._langchain_with_cache_control(unsupported) is unsupported
+    assert langchain_adapter_module._langchain_without_cache_control(unsupported) is unsupported
+
+    unmarked = HumanMessage(content=["raw block", {"type": "text", "text": "plain"}])
+    assert langchain_adapter_module._langchain_without_cache_control(unmarked) is unmarked
 
 
 def test_langchain_replays_complete_message_history_including_tool_results(

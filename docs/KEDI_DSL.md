@@ -952,12 +952,14 @@ opt into project-local skills.
 
   Kedi also assigns each adapter lane an opaque, stable cache identity. OpenAI
   integrations use it as the prompt-cache key and may reuse the previous
-  response where supported. OpenRouter integrations use the same identity for
-  sticky session routing so later calls reach a cache-compatible provider
-  endpoint. They also add OpenRouter's automatic ephemeral prompt-cache
-  directive unless the caller supplied one; Kedi does not add multiple moving
-  message breakpoints because they showed no measurable benefit for append-only
-  history. Anthropic integrations enable provider caching without rewriting the
+  response where supported. Pydantic AI's OpenRouter integration receives its
+  native instruction, message, and tool-definition cache settings. LangChain's
+  OpenRouter integration receives its native sticky-session identity plus
+  ephemeral cache-control content blocks on the stable system prompt and latest
+  user message. Replayed LangChain history has prior Kedi-generated markers
+  removed before the latest marker is placed, so marker metadata does not grow
+  on every turn and message order remains unchanged. Anthropic integrations use
+  their framework-native cache settings or content blocks without rewriting the
   ordered message prefix. Google Gemini integrations preserve the same ordered
   prefix but add no cache setting: Gemini 2.5 and newer use provider-managed
   implicit caching and report cache-read tokens in usage metadata. Explicit
@@ -965,6 +967,26 @@ opt into project-local skills.
   automatically. Explicit model settings always override Kedi defaults. History
   and cache identities remain append-only within a cache epoch: ordinary
   artifact release or expiry never deletes or reorders prior messages.
+
+  Direct-provider prefix caching follows each provider's native contract:
+
+  | Provider | Kedi integration |
+  | --- | --- |
+  | Moonshot AI | Reuses the conversation cache identity as `prompt_cache_key`. |
+  | Alibaba Cloud Model Studio | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | Z.AI | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | Amazon Bedrock | Enables Pydantic AI's instruction, message, and tool-definition cache points. LangChain uses `BedrockPromptCachingMiddleware`. |
+  | Azure OpenAI | Reuses the conversation cache identity as `prompt_cache_key`; Responses models may also continue from the previous response. |
+  | DeepSeek | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | xAI | Preserves the ordered prefix and relies on provider-managed automatic prefix caching. |
+
+  These integrations do not emulate a provider cache in Kedi. Alibaba,
+  DeepSeek, Z.AI, and xAI require no request flag for their implicit cache.
+  Moonshot and Azure receive only their supported stable routing key. Bedrock
+  receives explicit framework-native cache points; with LangChain this requires
+  the provider's `langchain-aws` integration package. Preconstructed LangChain
+  `ChatOpenAI` models using the official Moonshot, Alibaba, DeepSeek, or Z.AI
+  base URLs are recognized without changing their configured endpoint.
 - `> settings:` — set active model configuration for subsequent procedure
   captures and prompt calls. Values are `name: value` lines; plain values are
   parsed as simple scalars (`true`, `false`, numbers, `null`) and backtick

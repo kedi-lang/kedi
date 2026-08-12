@@ -17,6 +17,14 @@ CacheBackend = Literal[
     "anthropic",
     "openrouter",
     "google",
+    "moonshot",
+    "alibaba",
+    "zai",
+    "bedrock",
+    "azure_responses",
+    "azure_chat",
+    "deepseek",
+    "xai",
     "unknown",
 ]
 PrefixCacheMode = Literal["automatic", "explicit_breakpoints", "unsupported"]
@@ -72,6 +80,50 @@ _GOOGLE_POLICY = ProviderCachePolicy(
     prefix_cache_mode="automatic",
     explicit_resource_cache=True,
 )
+_MOONSHOT_POLICY = ProviderCachePolicy(
+    provider="moonshot",
+    backend="moonshot",
+    prefix_cache_mode="automatic",
+    stable_cache_key=True,
+)
+_ALIBABA_POLICY = ProviderCachePolicy(
+    provider="alibaba",
+    backend="alibaba",
+    prefix_cache_mode="automatic",
+)
+_ZAI_POLICY = ProviderCachePolicy(
+    provider="zai",
+    backend="zai",
+    prefix_cache_mode="automatic",
+)
+_BEDROCK_POLICY = ProviderCachePolicy(
+    provider="bedrock",
+    backend="bedrock",
+    prefix_cache_mode="explicit_breakpoints",
+)
+_AZURE_RESPONSES_POLICY = ProviderCachePolicy(
+    provider="azure",
+    backend="azure_responses",
+    prefix_cache_mode="automatic",
+    stable_cache_key=True,
+    continuation=True,
+)
+_AZURE_CHAT_POLICY = ProviderCachePolicy(
+    provider="azure",
+    backend="azure_chat",
+    prefix_cache_mode="automatic",
+    stable_cache_key=True,
+)
+_DEEPSEEK_POLICY = ProviderCachePolicy(
+    provider="deepseek",
+    backend="deepseek",
+    prefix_cache_mode="automatic",
+)
+_XAI_POLICY = ProviderCachePolicy(
+    provider="xai",
+    backend="xai",
+    prefix_cache_mode="automatic",
+)
 
 
 def has_response_cache_settings(settings: Mapping[str, Any]) -> bool:
@@ -86,15 +138,32 @@ def pydantic_provider_cache_policy(model: object) -> ProviderCachePolicy:
     from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     from pydantic_ai.models.openrouter import OpenRouterModel
 
-    if isinstance(model, OpenRouterModel):
+    provider = _normalize_provider(getattr(model, "system", None))
+    if isinstance(model, OpenRouterModel) or provider == "openrouter":
         return _OPENROUTER_POLICY
-    if isinstance(model, OpenAIResponsesModel):
+    if provider == "azure":
+        if isinstance(model, OpenAIResponsesModel):
+            return _AZURE_RESPONSES_POLICY
+        return _AZURE_CHAT_POLICY
+    if provider == "moonshot":
+        return _MOONSHOT_POLICY
+    if provider == "alibaba":
+        return _ALIBABA_POLICY
+    if provider == "zai":
+        return _ZAI_POLICY
+    if provider == "bedrock":
+        return _BEDROCK_POLICY
+    if provider == "deepseek":
+        return _DEEPSEEK_POLICY
+    if provider == "xai":
+        return _XAI_POLICY
+    if isinstance(model, OpenAIResponsesModel) or provider == "openai_responses":
         return _OPENAI_RESPONSES_POLICY
-    if isinstance(model, OpenAIChatModel):
+    if isinstance(model, OpenAIChatModel) or provider == "openai":
         return _OPENAI_CHAT_POLICY
-    if isinstance(model, AnthropicModel):
+    if isinstance(model, AnthropicModel) or provider == "anthropic":
         return _ANTHROPIC_POLICY
-    if isinstance(model, GoogleModel):
+    if isinstance(model, GoogleModel) or provider == "google":
         return _GOOGLE_POLICY
     return _UNKNOWN_POLICY
 
@@ -111,6 +180,20 @@ def langchain_provider_cache_policy(model: str | object) -> ProviderCachePolicy:
         return _ANTHROPIC_POLICY
     if provider == "google":
         return _GOOGLE_POLICY
+    if provider == "moonshot":
+        return _MOONSHOT_POLICY
+    if provider == "alibaba":
+        return _ALIBABA_POLICY
+    if provider == "zai":
+        return _ZAI_POLICY
+    if provider == "bedrock":
+        return _BEDROCK_POLICY
+    if provider == "azure":
+        return _AZURE_CHAT_POLICY
+    if provider == "deepseek":
+        return _DEEPSEEK_POLICY
+    if provider == "xai":
+        return _XAI_POLICY
     return _UNKNOWN_POLICY
 
 
@@ -143,7 +226,7 @@ def pydantic_cache_settings(
         policy=policy,
     )
 
-    if policy.backend == "openai_responses" and conversation is not None:
+    if policy.backend in ("openai_responses", "azure_responses") and conversation is not None:
         _setdefault_unconfigured(
             result,
             configured,
@@ -153,30 +236,32 @@ def pydantic_cache_settings(
         _setdefault_unconfigured(result, configured, "openai_previous_response_id", "auto")
     elif policy.backend == "openrouter":
         if conversation is not None:
-            _setdefault_unconfigured(
-                result,
-                configured,
-                "openai_prompt_cache_key",
-                conversation.cache_key,
-            )
-            _set_openrouter_conversation_defaults(
-                result,
-                configured,
-                conversation.cache_key,
-            )
+            for key in (
+                "openrouter_cache_instructions",
+                "openrouter_cache_messages",
+                "openrouter_cache_tool_definitions",
+            ):
+                _setdefault_unconfigured(result, configured, key, True)
         if response_cache:
             _set_openrouter_response_cache_headers(
                 result,
                 configured,
                 ttl=response_cache_ttl,
             )
-    elif policy.backend == "openai_chat" and conversation is not None:
+    elif policy.backend in ("openai_chat", "moonshot", "azure_chat") and conversation is not None:
         _setdefault_unconfigured(
             result,
             configured,
             "openai_prompt_cache_key",
             conversation.cache_key,
         )
+    elif policy.backend == "bedrock" and conversation is not None:
+        for key in (
+            "bedrock_cache_instructions",
+            "bedrock_cache_messages",
+            "bedrock_cache_tool_definitions",
+        ):
+            _setdefault_unconfigured(result, configured, key, True)
     elif (
         policy.backend == "anthropic"
         and conversation is not None
@@ -223,9 +308,6 @@ def langchain_cache_settings(
         if conversation is not None:
             configured_session = getattr(model, "session_id", None)
             result.setdefault("session_id", configured_session or conversation.cache_key)
-            model_kwargs = _mapping_setting(result, "model_kwargs")
-            model_kwargs.setdefault("cache_control", {"type": "ephemeral"})
-            result["model_kwargs"] = model_kwargs
         if response_cache:
             model_kwargs = _mapping_setting(result, "model_kwargs")
             headers = _mapping_value(model_kwargs.get("http_headers"))
@@ -233,7 +315,7 @@ def langchain_cache_settings(
             model_kwargs["http_headers"] = headers
             result["model_kwargs"] = model_kwargs
         return result
-    if policy.backend not in ("openai_responses", "openai_chat") or conversation is None:
+    if not policy.stable_cache_key or conversation is None:
         return result
     configured_model_kwargs = result.get("model_kwargs")
     model_kwargs = (
@@ -241,7 +323,8 @@ def langchain_cache_settings(
     )
     model_kwargs.setdefault("prompt_cache_key", conversation.cache_key)
     result["model_kwargs"] = model_kwargs
-    result.setdefault("use_previous_response_id", True)
+    if policy.continuation:
+        result.setdefault("use_previous_response_id", True)
     return result
 
 
@@ -250,16 +333,15 @@ def _langchain_provider(model: str | object) -> str:
         provider, separator, _ = model.partition(":")
         if not separator:
             return "unknown"
-        normalized = provider.replace("-", "_").lower()
-        if normalized in ("google", "google_genai", "google_vertexai"):
-            return "google"
-        return normalized
+        return _normalize_provider(provider)
     module = type(model).__module__
     name = type(model).__name__
     if module.startswith("langchain_openrouter") and name == "ChatOpenRouter":
         return "openrouter"
     if module.startswith("langchain_openai") and name == "ChatOpenAI":
-        return "openai"
+        return _openai_compatible_provider(model)
+    if module.startswith("langchain_openai") and name == "AzureChatOpenAI":
+        return "azure"
     if module.startswith("langchain_anthropic") and name == "ChatAnthropic":
         return "anthropic"
     if module.startswith(("langchain_google_genai", "langchain_google_vertexai")) and name in (
@@ -267,7 +349,66 @@ def _langchain_provider(model: str | object) -> str:
         "ChatVertexAI",
     ):
         return "google"
+    if module.startswith("langchain_aws") and name in (
+        "ChatBedrock",
+        "ChatBedrockConverse",
+        "ChatAnthropicBedrock",
+    ):
+        return "bedrock"
+    if module.startswith("langchain_deepseek") and name == "ChatDeepSeek":
+        return "deepseek"
+    if module.startswith("langchain_xai") and name == "ChatXAI":
+        return "xai"
+    if name in ("MoonshotChat", "ChatMoonshot"):
+        return "moonshot"
+    if name in ("ChatTongyi", "ChatQwen"):
+        return "alibaba"
+    if name in ("ChatZhipuAI", "ChatZAI"):
+        return "zai"
     return "unknown"
+
+
+def _normalize_provider(provider: object) -> str:
+    if not isinstance(provider, str):
+        return "unknown"
+    normalized = provider.replace("-", "_").lower()
+    aliases = {
+        "google_genai": "google",
+        "google_vertexai": "google",
+        "moonshotai": "moonshot",
+        "moonshot_ai": "moonshot",
+        "kimi": "moonshot",
+        "dashscope": "alibaba",
+        "qwen": "alibaba",
+        "tongyi": "alibaba",
+        "z_ai": "zai",
+        "zhipu": "zai",
+        "zhipuai": "zai",
+        "amazon_bedrock": "bedrock",
+        "bedrock_converse": "bedrock",
+        "anthropic_bedrock": "bedrock",
+        "azure_openai": "azure",
+        "azure_ai": "azure",
+        "grok": "xai",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _openai_compatible_provider(model: object) -> str:
+    base_url = getattr(model, "openai_api_base", None)
+    if base_url is None:
+        client = getattr(model, "root_client", None)
+        base_url = getattr(client, "base_url", None)
+    normalized_url = str(base_url or "").lower()
+    if "moonshot" in normalized_url or "platform.kimi" in normalized_url:
+        return "moonshot"
+    if "dashscope" in normalized_url or "aliyuncs.com" in normalized_url:
+        return "alibaba"
+    if "deepseek" in normalized_url:
+        return "deepseek"
+    if "bigmodel.cn" in normalized_url or "api.z.ai" in normalized_url:
+        return "zai"
+    return "openai"
 
 
 def _setdefault_unconfigured(
@@ -278,23 +419,6 @@ def _setdefault_unconfigured(
 ) -> None:
     if key not in configured:
         result.setdefault(key, value)
-
-
-def _set_openrouter_conversation_defaults(
-    result: dict[str, Any],
-    configured: Mapping[str, Any],
-    cache_key: str,
-) -> None:
-    configured_extra = configured.get("extra_body")
-    run_extra = result.get("extra_body")
-    if run_extra is not None and not isinstance(run_extra, Mapping):
-        return
-    extra_body = dict(configured_extra) if isinstance(configured_extra, Mapping) else {}
-    if isinstance(run_extra, Mapping):
-        extra_body.update(run_extra)
-    extra_body.setdefault("session_id", cache_key)
-    extra_body.setdefault("cache_control", {"type": "ephemeral"})
-    result["extra_body"] = extra_body
 
 
 def _response_cache_policy(
