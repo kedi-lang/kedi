@@ -12,10 +12,14 @@ from kedi.agent_adapter.adapters._pydantic_compat import (
     PydanticAICompatibilityError,
     effective_model,
 )
+from kedi.agent_adapter.adapters.claude import ClaudeAdapter
+from kedi.agent_adapter.adapters.codex import CodexAdapter
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.agent_adapter.native_compaction import (
+    codex_thread_params_with_native_compaction,
     langchain_settings_with_native_compaction,
+    validate_claude_native_compaction,
     with_pydantic_native_compaction,
 )
 from kedi.agent_profile import AgentProfile
@@ -398,6 +402,49 @@ def test_langchain_native_compaction_replaces_owned_entries_without_duplicate_be
     assert settings["context_management"]["edits"][0]["trigger"]["value"] == 20
 
 
+def test_codex_native_compaction_merges_thread_config_without_mutating_caller() -> None:
+    base = {"config": {"features.web_search": True}, "ephemeral": False}
+    configured = codex_thread_params_with_native_compaction(
+        base,
+        settings=CompactionSettings(threshold=64_000),
+    )
+
+    assert configured == {
+        "config": {
+            "features.web_search": True,
+            "model_auto_compact_token_limit": 64_000,
+        },
+        "ephemeral": False,
+    }
+    assert base == {"config": {"features.web_search": True}, "ephemeral": False}
+    assert (
+        codex_thread_params_with_native_compaction(
+            base,
+            settings=CompactionSettings(),
+        )
+        == base
+    )
+    assert (
+        codex_thread_params_with_native_compaction(
+            base,
+            settings=CompactionSettings(mode="disabled"),
+        )
+        == base
+    )
+    with pytest.raises(CompactionSettingsError, match="config must be a mapping"):
+        codex_thread_params_with_native_compaction(
+            {"config": "invalid"},
+            settings=CompactionSettings(threshold=10),
+        )
+
+
+def test_claude_native_compaction_uses_sdk_policy_without_exact_threshold() -> None:
+    validate_claude_native_compaction(CompactionSettings())
+    validate_claude_native_compaction(CompactionSettings(mode="disabled"))
+    with pytest.raises(CompactionSettingsError, match="does not expose an exact"):
+        validate_claude_native_compaction(CompactionSettings(threshold=64_000))
+
+
 def test_langchain_adapter_applies_profile_compaction_and_rejects_provider() -> None:
     adapter = LangChainAdapter("openai:gpt-5.4")
     with adapter.profile_override(
@@ -479,6 +526,8 @@ def test_compaction_adapter_capabilities_advertise_native_support() -> None:
     assert "compaction" not in LangChainAdapter.capabilities.settings
     assert PydanticAdapter.capabilities.supports("native_compaction")
     assert LangChainAdapter.capabilities.supports("native_compaction")
+    assert CodexAdapter.capabilities.supports("native_compaction")
+    assert ClaudeAdapter.capabilities.supports("native_compaction")
 
     KediRuntime._assert_profile_override_supported(
         AgentProfile(history=True, compaction=CompactionSettings()),

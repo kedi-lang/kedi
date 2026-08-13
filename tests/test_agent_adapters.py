@@ -69,6 +69,7 @@ from kedi.agent_adapter.utils import (
     python_callable_tool_spec,
 )
 from kedi.agent_profile import AgentProfile
+from kedi.agent_profile.compaction import CompactionSettings, CompactionSettingsError
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -147,15 +148,18 @@ def _set_profile_stack(adapter: object, *profiles: AgentProfile) -> None:
 
 
 @pytest.mark.parametrize(
-    "adapter",
+    ("adapter", "context_var_name"),
     [
-        PydanticAdapter(model=TestModel()),
-        ClaudeAdapter(model="claude"),
+        (PydanticAdapter(model=TestModel()), "_subagent_conversation_var"),
+        (ClaudeAdapter(model="claude"), "_conversation_var"),
     ],
 )
-def test_stateful_adapters_bind_and_reset_conversation_scope(adapter: Any) -> None:
+def test_stateful_adapters_bind_and_reset_conversation_scope(
+    adapter: Any,
+    context_var_name: str,
+) -> None:
     conversation = AdapterConversationContext()
-    context_var = adapter._subagent_conversation_var
+    context_var = getattr(adapter, context_var_name)
 
     assert context_var.get() is None
     with adapter.conversation_scope(conversation):
@@ -1749,7 +1753,8 @@ def test_claude_subagent_continuation_resumes_captured_session(
         )
     ):
         assert asyncio.run(adapter.invoke(prompt="first")) == "plain claude text"
-    assert conversation.result_state == {"claude_session_id": "claude-session"}
+    assert conversation.result_state["claude_session_id"] == "claude-session"
+    assert isinstance(conversation.result_state["claude_session_fingerprint"], str)
 
     follow_up = SubagentConversationContext(
         conversation_id="conversation",
@@ -1769,6 +1774,84 @@ def test_claude_subagent_continuation_resumes_captured_session(
 
     assert "resume" not in events["options"][0]
     assert events["options"][1]["resume"] == "claude-session"
+
+
+def test_claude_history_restarts_native_session_when_profile_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(model="claude")
+    first = AdapterConversationContext()
+
+    with (
+        adapter.profile_override(
+            AgentProfile(
+                history=True,
+                system="First system",
+                compaction=CompactionSettings(),
+            )
+        ),
+        adapter.conversation_scope(first),
+    ):
+        assert asyncio.run(adapter.invoke(prompt="first")) == "plain claude text"
+
+    second = AdapterConversationContext(resume_state=dict(first.result_state))
+    with (
+        adapter.profile_override(
+            AgentProfile(
+                history=True,
+                system="First system",
+                compaction=CompactionSettings(),
+            )
+        ),
+        adapter.conversation_scope(second),
+    ):
+        assert asyncio.run(adapter.invoke(prompt="second")) == "plain claude text"
+
+    changed = AdapterConversationContext(resume_state=dict(second.result_state))
+    with (
+        adapter.profile_override(AgentProfile(history=True, system="Changed system")),
+        adapter.conversation_scope(changed),
+    ):
+        assert asyncio.run(adapter.invoke(prompt="changed")) == "plain claude text"
+
+    assert "resume" not in events["options"][0]
+    assert events["options"][1]["resume"] == "claude-session"
+    assert "resume" not in events["options"][2]
+    assert changed.cache_prefix_changed is True
+
+
+def test_claude_native_compaction_rejects_unavailable_exact_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(model="claude")
+    conversation = AdapterConversationContext()
+
+    with (
+        adapter.profile_override(
+            AgentProfile(
+                history=True,
+                compaction=CompactionSettings(threshold=42_000),
+            )
+        ),
+        adapter.conversation_scope(conversation),
+        pytest.raises(CompactionSettingsError, match="does not expose an exact"),
+    ):
+        asyncio.run(adapter.invoke(prompt="hello"))
+
+
+def test_claude_session_fingerprint_serializes_dataclasses_and_opaque_values() -> None:
+    @dataclass(frozen=True)
+    class CustomSetting:
+        value: str
+
+    assert claude_adapter_module._claude_fingerprint_default(CustomSetting("value")) == {
+        "value": "value"
+    }
+    assert claude_adapter_module._claude_fingerprint_default(object()) == {
+        "type": "builtins.object"
+    }
 
 
 def test_claude_adapter_fails_fast_on_non_retryable_api_retry(

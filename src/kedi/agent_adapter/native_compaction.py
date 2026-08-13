@@ -76,6 +76,39 @@ def langchain_settings_with_native_compaction(
     return result
 
 
+def codex_thread_params_with_native_compaction(
+    base: Mapping[str, Any],
+    *,
+    settings: CompactionSettings,
+) -> dict[str, Any]:
+    """Apply a Kedi-owned auto-compaction threshold to Codex thread config."""
+
+    result = dict(base)
+    if settings.mode == "disabled" or settings.threshold is None:
+        return result
+    configured = result.get("config")
+    if configured is None:
+        config: dict[str, Any] = {}
+    elif isinstance(configured, Mapping):
+        config = dict(configured)
+    else:
+        raise CompactionSettingsError("Codex config must be a mapping")
+    config["model_auto_compact_token_limit"] = settings.threshold
+    result["config"] = config
+    return result
+
+
+def validate_claude_native_compaction(settings: CompactionSettings) -> None:
+    """Validate the native compaction controls exposed by Claude Agent SDK."""
+
+    if settings.mode == "disabled" or settings.threshold is None:
+        return
+    raise CompactionSettingsError(
+        "Claude Agent SDK owns automatic compaction but does not expose an exact "
+        "input-token threshold; omit compaction_threshold to use Claude's native policy"
+    )
+
+
 def _apply_langchain_openai_compaction(
     target: dict[str, Any],
     settings: CompactionSettings,

@@ -114,6 +114,14 @@ for raw_line in sys.stdin:
         thread_count += 1
         send({"id": request_id, "result": {"thread": {"id": f"thread-{thread_count}"}}})
         continue
+    if method == "thread/resume":
+        send(
+            {
+                "id": request_id,
+                "result": {"thread": {"id": message["params"]["threadId"]}},
+            }
+        )
+        continue
     if method == "turn/start":
         turn_count += 1
         turn_id = f"turn-{turn_count}"
@@ -164,6 +172,18 @@ for raw_line in sys.stdin:
             continue
         if prompt == "invalid-output":
             complete_turn(turn_id, "not json")
+            continue
+        if prompt == "compacted":
+            send(
+                {
+                    "method": "item/completed",
+                    "params": {
+                        "turnId": turn_id,
+                        "item": {"type": "contextCompaction"},
+                    },
+                }
+            )
+            complete_turn(turn_id, json.dumps({"answer": prompt}, ensure_ascii=False))
             continue
         if prompt.startswith("tool:"):
             _, tool_name, arguments = prompt.split(":", 2)

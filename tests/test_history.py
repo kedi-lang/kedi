@@ -292,6 +292,51 @@ def test_compaction_rotates_cache_epoch_and_seeds_it_with_compacted_state() -> N
     state.close()
 
 
+def test_conversation_native_resource_cleanup_tracks_committed_lanes() -> None:
+    state = ConversationState(session_id="native-cleanup")
+    cleaned: list[str] = []
+
+    with state.adapter_turn("codex") as first:
+        first.result_state["thread"] = "one"
+        first.cleanup = lambda: cleaned.append("one")
+    with state.adapter_turn("codex") as replacement:
+        replacement.result_state["thread"] = "two"
+        replacement.cleanup = lambda: cleaned.append("two")
+    assert cleaned == ["one"]
+
+    with pytest.raises(RuntimeError, match="failed turn"):
+        with state.adapter_turn("codex") as failed:
+            failed.cleanup = lambda: cleaned.append("failed")
+            raise RuntimeError("failed turn")
+    assert cleaned == ["one"]
+
+    with state.adapter_turn("codex") as resumed:
+        assert resumed.resume_state == {"thread": "two"}
+        resumed.cleanup = None
+    assert cleaned == ["one", "two"]
+
+    state.close()
+
+
+def test_conversation_epoch_and_close_cleanup_are_best_effort() -> None:
+    state = ConversationState(session_id="native-cleanup-epoch")
+    cleaned: list[str] = []
+
+    with state.adapter_turn("codex") as turn:
+        turn.cleanup = lambda: cleaned.append("epoch")
+    assert state.advance_cache_epoch() == 1
+    assert cleaned == ["epoch"]
+
+    def broken_cleanup() -> None:
+        cleaned.append("close")
+        raise RuntimeError("cleanup failed")
+
+    with state.adapter_turn("claude") as turn:
+        turn.cleanup = broken_cleanup
+    state.close()
+    assert cleaned == ["epoch", "close"]
+
+
 def test_conversation_can_borrow_artifacts_without_owning_their_lifecycle() -> None:
     artifacts = ArtifactManager(session_id="shared-session")
     state = ConversationState(artifacts=artifacts)
@@ -1103,7 +1148,7 @@ async def _empty_async_tools() -> list[Any]:
 
 
 def test_history_lsp_hover_highlighting_and_unsupported_adapter_error() -> None:
-    source = "> agent: codex\n> history: enabled\n"
+    source = "> adapter: dspy\n> history: enabled\n"
     hover = hover_text_at(source, "/tmp/history.kedi", "enabled")
     assert "conversation continuity" in hover
     assert "default is disabled" in hover
@@ -1127,7 +1172,7 @@ def test_history_lsp_hover_highlighting_and_unsupported_adapter_error() -> None:
 
     profile_source = """
 > profile: memory:
-    > agent: codex
+    > adapter: dspy
     > history: enabled
 
 > use: memory
