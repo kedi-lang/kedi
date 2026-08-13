@@ -192,6 +192,7 @@ class KediRuntime:
         self._outstanding: dict[object, list[Any]] = {}
         self._outstanding_lock = Lock()
         self._origin_counter_lock = Lock()
+        self._conversation_state_lock = Lock()
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
@@ -236,6 +237,7 @@ class KediRuntime:
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
         self.conversation_state = conversation_state
+        self._implicit_conversation_state: ConversationState | None = None
         self.artifacts = (
             conversation_state.artifacts if conversation_state is not None else ArtifactManager()
         )
@@ -1027,7 +1029,7 @@ class KediRuntime:
                     return result
 
             with required_tool_call_scope(tools):
-                state = self.conversation_state
+                state = self._conversation_state_for_profile(profile)
                 if state is None:
                     reservation = budget.reserve(prompt, context=context)
                     try:
@@ -1043,7 +1045,15 @@ class KediRuntime:
                 from .lang.compiler.environment import model_value
 
                 capabilities = adapter.capabilities
-                with state.adapter_turn(adapter.shortname) as conversation:
+                adapter_shortname = adapter.shortname
+                if profile.history is True and not (
+                    capabilities.supports("stateful_history")
+                    and isinstance(adapter, SupportsConversationState)
+                ):
+                    raise RuntimeError(
+                        f"Adapter {adapter_shortname!r} does not support stateful history"
+                    )
+                with state.adapter_turn(adapter_shortname) as conversation:
                     reservation = budget.reserve(
                         prompt,
                         context=context,
@@ -1066,6 +1076,23 @@ class KediRuntime:
                     state.record_exchange(prompt, model_value(result))
                     return result
 
+    def _conversation_state_for_profile(
+        self,
+        profile: AgentProfile,
+    ) -> ConversationState | None:
+        if profile.history is False:
+            return None
+        if self.conversation_state is not None:
+            return self.conversation_state
+        if profile.history is not True:
+            return None
+        with self._conversation_state_lock:
+            if self._implicit_conversation_state is None:
+                from .agent_adapter.conversation import ConversationState
+
+                self._implicit_conversation_state = ConversationState(artifacts=self.artifacts)
+            return self._implicit_conversation_state
+
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
         """Raise if the adapter can't honor a requested model/effort/mcp/settings override.
@@ -1075,8 +1102,23 @@ class KediRuntime:
         only has to enter the override scope, never re-validate (which would defer the error to a
         worker in parallel mode).
         """
+        from .agent_adapter.meta import AdapterCapabilities
         from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_profile.compaction import CompactionSettingsError
         from .agent_profile import AgentProfileOverrideUnsupported
+
+        compaction = profile.compaction
+        if compaction is not None and compaction.mode == "native" and profile.history is not True:
+            raise CompactionSettingsError("native compaction requires history to be enabled")
+        if profile.history is True and compaction is not None and compaction.mode == "native":
+            capabilities = getattr(adapter, "capabilities", None)
+            if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
+                "native_compaction"
+            ):
+                shortname = getattr(adapter, "shortname", type(adapter).__name__)
+                raise CompactionSettingsError(
+                    f"native compaction is not supported by adapter {shortname!r}"
+                )
 
         if isinstance(adapter, SupportsProfileOverride):
             return
@@ -1085,11 +1127,13 @@ class KediRuntime:
             or profile.effort is not None
             or profile.mcp_servers
             or profile.settings
+            or profile.compaction is not None
         ):
             raise AgentProfileOverrideUnsupported(
                 "Active adapter does not support agent profile override "
                 f"(requested model={profile.model!r}, effort={profile.effort!r}, "
-                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r})"
+                f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r}, "
+                f"compaction={profile.compaction!r})"
             )
 
     def _resolve_adapter(self, profile: Any) -> AgentAdapter[Any]:

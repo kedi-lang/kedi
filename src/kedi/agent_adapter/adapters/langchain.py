@@ -8,8 +8,12 @@ from typing import Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
 
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
+from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 
 from ...agent_profile import AgentProfile
+from ...agent_profile.compaction import (
+    CompactionSettingsError,
+)
 from ...agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
@@ -24,6 +28,9 @@ from ..approval import ApprovalPolicy, ToolRisk
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..native_compaction import langchain_settings_with_native_compaction
+from ..conversation import AdapterConversationContext
+from ..prefix_cache import langchain_cache_settings, langchain_provider_cache_policy
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -56,8 +63,9 @@ class LangChainAdapter:
         supports_background_subagents=True,
         supports_artifacts=True,
         supports_native_artifacts=False,
-        supports_stateful_history=False,
-        supports_history_replay=False,
+        supports_stateful_history=True,
+        supports_history_replay=True,
+        supports_native_compaction=True,
         supports_stream_events=True,
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
@@ -85,6 +93,10 @@ class LangChainAdapter:
         self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
             f"kedi_langchain_approval_ceiling_{id(self)}",
             default=(),
+        )
+        self._conversation_var: ContextVar[AdapterConversationContext | None] = ContextVar(
+            f"kedi_langchain_conversation_{id(self)}",
+            default=None,
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -142,14 +154,15 @@ class LangChainAdapter:
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
         tools = await self._tools_for_run()
+        system_prompt = self._cache_aware_system_prompt(instructions, model=model)
         agent = self._create_agent(
             model=model,
             tools=tools,
             response_format=resolved_output_type,
-            system_prompt=instructions,
-            middleware=self._approval_middleware_for_run(tools),
+            system_prompt=system_prompt,
+            middleware=self._middleware_for_run(model, tools),
         )
-        payload = {"messages": [{"role": "user", "content": template}], **kwargs}
+        payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
         result = await self._invoke_agent(agent, payload, emit_final=False)
         return cast(OutputDataT, _langchain_structured_response(result))
 
@@ -165,14 +178,15 @@ class LangChainAdapter:
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
         tools = await self._tools_for_run()
+        system_prompt = self._cache_aware_system_prompt(instructions, model=model)
         agent = self._create_agent(
             model=model,
             tools=tools,
             response_format=ToolStrategy(output_schema),
-            system_prompt=instructions,
-            middleware=self._approval_middleware_for_run(tools),
+            system_prompt=system_prompt,
+            middleware=self._middleware_for_run(model, tools),
         )
-        payload = {"messages": [{"role": "user", "content": template}], **kwargs}
+        payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
         result = _langchain_structured_response(
             await self._invoke_agent(agent, payload, emit_final=False)
         )
@@ -184,14 +198,18 @@ class LangChainAdapter:
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
         tools = await self._tools_for_run()
+        system_prompt = self._cache_aware_system_prompt(
+            instructions or self.active_profile.system,
+            model=model,
+        )
         agent = self._create_agent(
             model=model,
             tools=tools,
             response_format=None,
-            system_prompt=instructions or self.active_profile.system,
-            middleware=self._approval_middleware_for_run(tools),
+            system_prompt=system_prompt,
+            middleware=self._middleware_for_run(model, tools),
         )
-        payload = {"messages": [{"role": "user", "content": prompt}], **kwargs}
+        payload = {"messages": self._messages_for_prompt(prompt, model=model), **kwargs}
         return _langchain_text_response(await self._invoke_agent(agent, payload, emit_final=True))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
@@ -227,6 +245,17 @@ class LangChainAdapter:
             yield
         finally:
             stack_var.reset(token)
+
+    @contextmanager
+    def conversation_scope(
+        self,
+        conversation: AdapterConversationContext,
+    ) -> Iterator[None]:
+        token = self._conversation_var.set(conversation)
+        try:
+            yield
+        finally:
+            self._conversation_var.reset(token)
 
     @contextmanager
     def approval_ceiling(
@@ -270,8 +299,14 @@ class LangChainAdapter:
                     dict(payload),
                     config={"callbacks": [_langchain_event_handler(resolver)]},
                 )
+            self._capture_conversation_messages(result)
             if invocation_observer() is not None:
-                report_invocation(_langchain_invocation_usage(result))
+                report_invocation(
+                    _langchain_invocation_usage(
+                        result,
+                        input_messages=payload.get("messages"),
+                    )
+                )
             if resolver is not None:
                 resolver.complete_run(
                     final_text=_langchain_text_response(result) if emit_final else None
@@ -293,12 +328,54 @@ class LangChainAdapter:
             **langchain_model_settings(self.active_profile.settings),
         }
         _apply_langchain_effort_settings(settings, model, self.active_profile.effort)
+        compaction = self.active_profile.compaction
+        if self.active_profile.history is True and compaction is not None:
+            settings = langchain_settings_with_native_compaction(
+                settings,
+                model=model,
+                settings=compaction,
+            )
+        conversation = self._conversation_var.get()
+        settings = langchain_cache_settings(
+            settings,
+            model=model,
+            conversation=conversation,
+        )
         return settings
 
     def _chat_model_for_run(self) -> Any:
         model = self._model_for_run()
         settings = self._settings_for_run(model)
         if not isinstance(model, str):
+            compaction = self.active_profile.compaction
+            conversation = self._conversation_var.get()
+            if (
+                (
+                    self.active_profile.history is True
+                    and compaction is not None
+                    and compaction.mode == "native"
+                )
+                or conversation is not None
+                or "model_kwargs" in settings
+                or "session_id" in settings
+            ):
+                copy_model = getattr(model, "model_copy", None)
+                if not callable(copy_model):
+                    raise CompactionSettingsError(
+                        "stateful LangChain model settings require a model that supports model_copy"
+                    )
+                updates = {
+                    key: settings[key]
+                    for key in (
+                        "context_management",
+                        "betas",
+                        "model_kwargs",
+                        "session_id",
+                        "use_previous_response_id",
+                    )
+                    if key in settings
+                }
+                return copy_model(update=updates)
             return model
         try:
             from langchain.chat_models import init_chat_model
@@ -308,13 +385,52 @@ class LangChainAdapter:
             ) from exc
         return init_chat_model(model, **settings)
 
+    def _messages_for_prompt(self, prompt: str, *, model: Any | None = None) -> list[Any]:
+        conversation = self._conversation_var.get()
+        if conversation is None:
+            return [{"role": "user", "content": prompt}]
+        from langchain_core.messages import HumanMessage, messages_from_dict
+
+        history: list[Any] = []
+        serialized = conversation.resume_state.get("langchain_messages")
+        if isinstance(serialized, list):
+            history = list(messages_from_dict(serialized))
+        history = [_langchain_without_cache_control(message) for message in history]
+        current = HumanMessage(content=prompt)
+        if _langchain_uses_explicit_cache_blocks(model):
+            current = cast(HumanMessage, _langchain_with_cache_control(current))
+        return [*history, current]
+
+    def _cache_aware_system_prompt(self, prompt: str | None, *, model: Any) -> Any | None:
+        if prompt is None or self._conversation_var.get() is None:
+            return prompt
+        if not _langchain_uses_explicit_cache_blocks(model):
+            return prompt
+        from langchain_core.messages import SystemMessage
+
+        return _langchain_with_cache_control(SystemMessage(content=prompt))
+
+    def _capture_conversation_messages(self, result: Any) -> None:
+        conversation = self._conversation_var.get()
+        if conversation is None or not isinstance(result, Mapping):
+            return
+        messages = result.get("messages")
+        if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+            return
+        from langchain_core.messages import BaseMessage, message_to_dict
+
+        if all(isinstance(message, BaseMessage) for message in messages):
+            conversation.result_state["langchain_messages"] = [
+                message_to_dict(message) for message in messages
+            ]
+
     def _create_agent(
         self,
         *,
         model: Any,
         tools: Sequence[Any],
         response_format: Any | None,
-        system_prompt: str | None,
+        system_prompt: Any | None,
         middleware: Sequence[Any] = (),
     ) -> Any:
         try:
@@ -350,6 +466,15 @@ class LangChainAdapter:
             )
         ]
 
+    def _middleware_for_run(self, model: Any, tools: Sequence[Any]) -> list[Any]:
+        return [
+            *_langchain_cache_middleware(
+                model,
+                enabled=self._conversation_var.get() is not None,
+            ),
+            *self._approval_middleware_for_run(tools),
+        ]
+
     async def _mcp_tools_for_profile(self, profile: AgentProfile) -> list[Any]:
         if not profile.mcp_servers:
             return []
@@ -376,6 +501,61 @@ class LangChainAdapter:
                 {"kedi.mcp.tool_count": len(tools)},
             )
             return tools
+
+
+def _langchain_uses_explicit_cache_blocks(model: Any | None) -> bool:
+    if model is None:
+        return False
+    return langchain_provider_cache_policy(model).backend in {"anthropic", "openrouter"}
+
+
+def _langchain_cache_middleware(model: Any, *, enabled: bool) -> list[Any]:
+    if not enabled or langchain_provider_cache_policy(model).backend != "bedrock":
+        return []
+    return [BedrockPromptCachingMiddleware()]
+
+
+def _langchain_with_cache_control(message: Any) -> Any:
+    content = message.content
+    if isinstance(content, str):
+        blocks: list[Any] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    elif isinstance(content, list):
+        blocks = [dict(block) if isinstance(block, Mapping) else block for block in content]
+        for index in range(len(blocks) - 1, -1, -1):
+            block = blocks[index]
+            if isinstance(block, dict) and block.get("type") == "text":
+                block.setdefault("cache_control", {"type": "ephemeral"})
+                break
+        else:
+            return message
+    else:
+        return message
+    return message.model_copy(update={"content": blocks})
+
+
+def _langchain_without_cache_control(message: Any) -> Any:
+    content = message.content
+    if not isinstance(content, list):
+        return message
+    changed = False
+    blocks: list[Any] = []
+    for block in content:
+        if isinstance(block, Mapping) and "cache_control" in block:
+            normalized = dict(block)
+            normalized.pop("cache_control", None)
+            blocks.append(normalized)
+            changed = True
+        else:
+            blocks.append(block)
+    if not changed:
+        return message
+    return message.model_copy(update={"content": blocks})
 
 
 def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
@@ -562,18 +742,36 @@ def _langchain_completed_message_text(message: Any) -> str:
     return "".join(parts).strip()
 
 
-def _langchain_invocation_usage(result: Any) -> InvocationUsage:
+def _langchain_invocation_usage(
+    result: Any,
+    *,
+    input_messages: object = None,
+) -> InvocationUsage:
     if not isinstance(result, Mapping):
         return InvocationUsage(requests=1)
     messages = result.get("messages")
     if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
         return InvocationUsage(requests=1)
+    messages = _langchain_current_messages(messages, input_messages)
 
-    input_tokens = output_tokens = total_tokens = tool_calls = requests = 0
+    input_tokens = cache_read_tokens = cache_write_tokens = 0
+    output_tokens = total_tokens = tool_calls = requests = 0
     for message in messages:
         usage = getattr(message, "usage_metadata", None)
         if isinstance(usage, Mapping):
             input_tokens += _usage_int(usage, "input_tokens", "inputTokens")
+            input_details = usage.get("input_token_details")
+            if isinstance(input_details, Mapping):
+                cache_read_tokens += _usage_int(
+                    input_details,
+                    "cache_read",
+                    "cached_tokens",
+                )
+                cache_write_tokens += _usage_int(
+                    input_details,
+                    "cache_creation",
+                    "cache_write_tokens",
+                )
             output_tokens += _usage_int(usage, "output_tokens", "outputTokens")
             total_tokens += _usage_int(usage, "total_tokens", "totalTokens")
             requests += 1
@@ -586,9 +784,47 @@ def _langchain_invocation_usage(result: Any) -> InvocationUsage:
         requests=max(requests, 1),
         tool_calls=tool_calls,
         input_tokens=input_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )
+
+
+def _langchain_current_messages(
+    messages: Sequence[Any],
+    input_messages: object,
+) -> Sequence[Any]:
+    if not isinstance(input_messages, Sequence) or isinstance(input_messages, (str, bytes)):
+        return messages
+    if len(messages) < len(input_messages):
+        return messages
+    if all(
+        _same_langchain_message(actual, expected)
+        for actual, expected in zip(messages, input_messages, strict=False)
+    ):
+        return messages[len(input_messages) :]
+    return messages
+
+
+def _same_langchain_message(actual: Any, expected: Any) -> bool:
+    if actual is expected or actual == expected:
+        return True
+    return _langchain_message_identity(actual) == _langchain_message_identity(expected)
+
+
+def _langchain_message_identity(message: Any) -> tuple[object, object]:
+    if isinstance(message, Mapping):
+        role = message.get("role", message.get("type"))
+        content = message.get("content")
+    else:
+        role = getattr(message, "type", getattr(message, "role", None))
+        content = getattr(message, "content", None)
+    if role == "human":
+        role = "user"
+    elif role == "ai":
+        role = "assistant"
+    return role, content
 
 
 def _usage_int(values: Mapping[str, Any], *names: str) -> int:

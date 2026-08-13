@@ -3,11 +3,12 @@ from __future__ import annotations
 import inspect
 import json
 import os
+from hashlib import sha256
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar, copy_context
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Iterator, Mapping, Sequence, cast, get_type_hints
+from typing import Any, Callable, Iterator, Mapping, Sequence, cast, get_type_hints
 
 from pydantic import BaseModel, create_model
 
@@ -24,9 +25,11 @@ from ..approval import (
     ToolRisk,
     resolve_tool_approval_async,
 )
+from ..conversation import AdapterConversationContext
 from ..events import agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..native_compaction import codex_thread_params_with_native_compaction
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -58,11 +61,12 @@ class _CodexRun:
     tools: dict[str, Any]
     native_approval_handler: ServerApprovalHandler
     timeout: float
+    thread_fingerprint: str
     output_type: type[Any] | None = None
 
 
 class CodexAdapter:
-    """Stateless Kedi adapter backed directly by Codex App Server JSON-RPC."""
+    """Kedi adapter backed directly by Codex App Server JSON-RPC."""
 
     kind: AgentAdapterKind = "agent-harness"
     shortname = "codex"
@@ -80,8 +84,9 @@ class CodexAdapter:
         supports_background_subagents=True,
         supports_artifacts=True,
         supports_native_artifacts=False,
-        supports_stateful_history=False,
+        supports_stateful_history=True,
         supports_history_replay=False,
+        supports_native_compaction=True,
         supports_stream_events=True,
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
@@ -122,6 +127,10 @@ class CodexAdapter:
         self._approval_ceiling_var: ContextVar[tuple[ApprovalPolicy | None, ...]] = ContextVar(
             f"kedi_codex_approval_ceiling_{id(self)}",
             default=(),
+        )
+        self._conversation_var: ContextVar[AdapterConversationContext | None] = ContextVar(
+            f"kedi_codex_conversation_{id(self)}",
+            default=None,
         )
 
     def tool_scope(self, tools: Sequence[Any] = ()) -> AbstractContextManager[None]:
@@ -227,6 +236,17 @@ class CodexAdapter:
             self._approval_ceiling_var.reset(token)
 
     @contextmanager
+    def conversation_scope(
+        self,
+        conversation: AdapterConversationContext,
+    ) -> Iterator[None]:
+        token = self._conversation_var.set(conversation)
+        try:
+            yield
+        finally:
+            self._conversation_var.reset(token)
+
+    @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
         with (
             self.tool_scope(request.tools),
@@ -249,16 +269,34 @@ class CodexAdapter:
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
         ):
-            result = await self._client.run_stateless_turn(
-                thread_params=run.thread_params,
-                turn_params=run.turn_params,
-                tools=run.tools,
-                tool_context=copy_context(),
-                turn_timeout=run.timeout,
-                approval_handler=run.native_approval_handler,
-                approval_context=copy_context(),
-                event_resolver=resolver,
-            )
+            conversation = self._conversation_var.get()
+            tool_context = copy_context()
+            approval_context = copy_context()
+            if conversation is None:
+                result = await self._client.run_stateless_turn(
+                    thread_params=run.thread_params,
+                    turn_params=run.turn_params,
+                    tools=run.tools,
+                    tool_context=tool_context,
+                    turn_timeout=run.timeout,
+                    approval_handler=run.native_approval_handler,
+                    approval_context=approval_context,
+                    event_resolver=resolver,
+                )
+            else:
+                thread_id = self._conversation_thread_id(conversation, run)
+                result = await self._client.run_conversation_turn(
+                    thread_id=thread_id,
+                    thread_params=run.thread_params,
+                    turn_params=run.turn_params,
+                    tools=run.tools,
+                    tool_context=tool_context,
+                    turn_timeout=run.timeout,
+                    approval_handler=run.native_approval_handler,
+                    approval_context=approval_context,
+                    event_resolver=resolver,
+                )
+                self._commit_conversation_turn(conversation, run, result, thread_id)
             if invocation_observer() is not None:
                 report_invocation(_codex_invocation_usage(result))
             if resolver is not None:
@@ -275,16 +313,34 @@ class CodexAdapter:
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
         ):
-            result = self._client.run_stateless_turn_sync(
-                thread_params=run.thread_params,
-                turn_params=run.turn_params,
-                tools=run.tools,
-                tool_context=copy_context(),
-                turn_timeout=run.timeout,
-                approval_handler=run.native_approval_handler,
-                approval_context=copy_context(),
-                event_resolver=resolver,
-            )
+            conversation = self._conversation_var.get()
+            tool_context = copy_context()
+            approval_context = copy_context()
+            if conversation is None:
+                result = self._client.run_stateless_turn_sync(
+                    thread_params=run.thread_params,
+                    turn_params=run.turn_params,
+                    tools=run.tools,
+                    tool_context=tool_context,
+                    turn_timeout=run.timeout,
+                    approval_handler=run.native_approval_handler,
+                    approval_context=approval_context,
+                    event_resolver=resolver,
+                )
+            else:
+                thread_id = self._conversation_thread_id(conversation, run)
+                result = self._client.run_conversation_turn_sync(
+                    thread_id=thread_id,
+                    thread_params=run.thread_params,
+                    turn_params=run.turn_params,
+                    tools=run.tools,
+                    tool_context=tool_context,
+                    turn_timeout=run.timeout,
+                    approval_handler=run.native_approval_handler,
+                    approval_context=approval_context,
+                    event_resolver=resolver,
+                )
+                self._commit_conversation_turn(conversation, run, result, thread_id)
             if invocation_observer() is not None:
                 report_invocation(_codex_invocation_usage(result))
             if resolver is not None:
@@ -351,7 +407,7 @@ class CodexAdapter:
         dynamic_tools = [_dynamic_tool_spec(tool) for tool in approved_tools]
 
         thread_params: dict[str, Any] = {
-            "ephemeral": True,
+            "ephemeral": self._conversation_var.get() is None,
             "approvalPolicy": (
                 "untrusted"
                 if profile.approval is not None
@@ -375,6 +431,11 @@ class CodexAdapter:
         _copy_setting(settings, "personality", thread_params, "personality")
         _copy_setting(settings, "service_tier", thread_params, "serviceTier")
         _copy_setting(settings, "config", thread_params, "config")
+        if profile.history is True and profile.compaction is not None:
+            thread_params = codex_thread_params_with_native_compaction(
+                thread_params,
+                settings=profile.compaction,
+            )
 
         turn_params: dict[str, Any] = {
             "input": [{"type": "text", "text": prompt}],
@@ -393,8 +454,47 @@ class CodexAdapter:
             tools=tools,
             native_approval_handler=_codex_native_approval_handler(policies),
             timeout=float(timeout),
+            thread_fingerprint=_codex_thread_fingerprint(thread_params),
             output_type=output_type,
         )
+
+    def _conversation_thread_id(
+        self,
+        conversation: AdapterConversationContext,
+        run: _CodexRun,
+    ) -> str | None:
+        thread_id = conversation.resume_state.get("codex_thread_id")
+        fingerprint = conversation.resume_state.get("codex_thread_fingerprint")
+        if isinstance(thread_id, str) and fingerprint == run.thread_fingerprint:
+            return thread_id
+        if isinstance(thread_id, str):
+            conversation.cache_prefix_changed = True
+        return None
+
+    def _commit_conversation_turn(
+        self,
+        conversation: AdapterConversationContext,
+        run: _CodexRun,
+        result: CodexTurnResult,
+        resumed_thread_id: str | None,
+    ) -> None:
+        if not result.thread_id:
+            raise CodexAppServerProtocolError(
+                "Codex conversation turn completed without a thread ID."
+            )
+        conversation.result_state.update(
+            {
+                "codex_thread_id": result.thread_id,
+                "codex_thread_fingerprint": run.thread_fingerprint,
+            }
+        )
+        if resumed_thread_id != result.thread_id:
+            conversation.cache_prefix_changed = resumed_thread_id is not None or bool(
+                conversation.resume_state
+            )
+            conversation.cleanup = _codex_thread_cleanup(self._client, result.thread_id)
+        if result.compacted:
+            conversation.cache_prefix_changed = True
 
     def _approval_policies(
         self,
@@ -649,6 +749,28 @@ def _copy_setting(
 ) -> None:
     if source in settings:
         target[destination] = settings[source]
+
+
+def _codex_thread_fingerprint(thread_params: Mapping[str, Any]) -> str:
+    payload = {key: value for key, value in thread_params.items() if key != "ephemeral"}
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _codex_thread_cleanup(
+    client: CodexAppServerClient,
+    thread_id: str,
+) -> Callable[[], None]:
+    def cleanup() -> None:
+        client.delete_thread(thread_id)
+
+    return cleanup
 
 
 def _codex_json_schema(schema: Mapping[str, Any]) -> dict[str, Any]:

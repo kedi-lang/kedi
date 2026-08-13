@@ -19,6 +19,7 @@ from ...agent_profile.model import (
     eval_approval_directive,
     eval_artifacts_directive,
     eval_effort_directive,
+    eval_history_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -42,6 +43,7 @@ from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     EffortDirectiveStmt,
+    HistoryDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
@@ -1000,6 +1002,11 @@ class ProgramCompiler:
                 if isinstance(item, ApprovalDirectiveStmt):
                     state.active_profile = state.active_profile.merge(
                         eval_approval_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, HistoryDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_history_directive(self.rt, item, env)
                     )
                     continue
                 if isinstance(item, SystemDirectiveStmt):

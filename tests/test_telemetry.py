@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
@@ -382,8 +383,11 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
         requests=1,
         tool_calls=2,
         input_tokens=11,
+        cache_read_tokens=7,
+        cache_write_tokens=3,
         output_tokens=7,
         total_tokens=18,
+        cost_usd=Decimal("0.0015"),
     )
     native_backend = RecordingTelemetryBackend(
         native_span_owners={"test": frozenset({"run_agent", "chat"})}
@@ -439,12 +443,20 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
                 raise RuntimeError("model failed")
 
     agent_spans = [span for span in backend.finished_spans if span.operation == "run_agent"]
+    assert agent_spans[0].attributes["gen_ai.usage.cache_read_tokens"] == 7
+    assert agent_spans[0].attributes["gen_ai.usage.cache_write_tokens"] == 3
+    assert agent_spans[0].attributes["kedi.usage.uncached_input_tokens"] == 4
+    assert agent_spans[0].attributes["kedi.usage.cost_usd"] == 0.0015
     assert agent_spans[0].attributes["gen_ai.usage.output_tokens"] == 7
     assert agent_spans[1].attributes["error.type"] == "CancelledError"
     assert agent_spans[1].events[-1].name == "agent cancelled"
     assert agent_spans[2].attributes["error.type"] == "RuntimeError"
     chat_spans = [span for span in backend.finished_spans if span.operation == "chat"]
     assert chat_spans[0].name == "chat test"
+    assert chat_spans[0].attributes["gen_ai.usage.cache_read_tokens"] == 7
+    assert chat_spans[0].attributes["gen_ai.usage.cache_write_tokens"] == 3
+    assert chat_spans[0].attributes["kedi.usage.uncached_input_tokens"] == 4
+    assert chat_spans[0].attributes["kedi.usage.cost_usd"] == 0.0015
     assert chat_spans[1].attributes["error.type"] == "RuntimeError"
 
     native_backend = RecordingTelemetryBackend(

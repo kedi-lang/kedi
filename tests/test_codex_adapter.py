@@ -28,6 +28,7 @@ from kedi.agent_adapter.adapters._codex_app_server import (
     CodexTurnResult,
 )
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
     AgentRunStateEvent,
@@ -39,6 +40,7 @@ from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import ToolSpec, arguments_target_secret_file
 from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
+from kedi.agent_profile.compaction import CompactionSettings
 from kedi.agent_profile.mcp import McpServerSpec
 
 FAKE_APP_SERVER = Path(__file__).parent / "files" / "fake_codex_app_server.py"
@@ -199,6 +201,103 @@ def test_codex_adapter_invoke_returns_raw_text_without_output_schema(
     assert any(
         isinstance(event, AgentMessageEvent) and event.phase == "final" for event in streamed
     )
+
+
+def test_codex_history_resumes_persistent_thread_until_conversation_closes(
+    tmp_path: Path,
+) -> None:
+    adapter, log_path = _adapter(tmp_path, model="gpt-base")
+    conversation = ConversationState(session_id="codex-history")
+
+    async def first_turn() -> str:
+        with conversation.adapter_turn("codex") as first:
+            with adapter.conversation_scope(first):
+                return await adapter.invoke(prompt="first")
+
+    assert asyncio.run(first_turn()) == '{"answer": "first"}'
+    with conversation.adapter_turn("codex") as second:
+        with adapter.conversation_scope(second):
+            assert adapter.invoke_sync(prompt="second") == '{"answer": "second"}'
+
+    messages = _messages(log_path)
+    assert len(_method(messages, "thread/start")) == 1
+    assert len(_method(messages, "thread/resume")) == 1
+    assert _method(messages, "thread/start")[0]["params"]["ephemeral"] is False
+    assert _method(messages, "thread/resume")[0]["params"] == {
+        "threadId": "thread-1",
+        "excludeTurns": True,
+    }
+    assert _method(messages, "thread/delete") == []
+
+    adapter.close()
+    assert len(_method(_messages(log_path), "thread/delete")) == 1
+    conversation.close()
+    assert len(_method(_messages(log_path), "thread/delete")) == 1
+
+
+def test_codex_conversation_rejects_turn_without_thread_id() -> None:
+    class MissingThreadClient:
+        async def run_conversation_turn(self, **_kwargs: Any) -> CodexTurnResult:
+            return CodexTurnResult(text="finished", turn={})
+
+    adapter = CodexAdapter(client=cast(CodexAppServerClient, MissingThreadClient()))
+    conversation = AdapterConversationContext()
+
+    with (
+        adapter.conversation_scope(conversation),
+        pytest.raises(CodexAppServerProtocolError, match="without a thread ID"),
+    ):
+        asyncio.run(adapter.invoke(prompt="hello"))
+
+
+def test_codex_native_compaction_keeps_thread_and_rotates_cache_epoch(
+    tmp_path: Path,
+) -> None:
+    adapter, log_path = _adapter(tmp_path, model="gpt-base")
+    conversation = ConversationState(session_id="codex-compaction")
+    profile = AgentProfile(
+        history=True,
+        compaction=CompactionSettings(threshold=42_000),
+    )
+
+    with adapter.profile_override(profile):
+        for prompt in ("first", "compacted", "after"):
+            with conversation.adapter_turn("codex") as turn:
+                with adapter.conversation_scope(turn):
+                    adapter.invoke_sync(prompt=prompt)
+
+    messages = _messages(log_path)
+    starts = _method(messages, "thread/start")
+    assert len(starts) == 1
+    assert starts[0]["params"]["config"]["model_auto_compact_token_limit"] == 42_000
+    assert len(_method(messages, "thread/resume")) == 2
+    assert conversation.cache_epoch == 1
+
+    conversation.close()
+    adapter.close()
+
+
+def test_codex_history_restarts_thread_after_profile_configuration_changes(
+    tmp_path: Path,
+) -> None:
+    adapter, log_path = _adapter(tmp_path, model="gpt-base")
+    conversation = ConversationState(session_id="codex-profile-change")
+
+    for system in ("First system", "Second system"):
+        with adapter.profile_override(AgentProfile(history=True, system=system)):
+            with conversation.adapter_turn("codex") as turn:
+                with adapter.conversation_scope(turn):
+                    adapter.invoke_sync(prompt="hello")
+
+    messages = _messages(log_path)
+    assert len(_method(messages, "thread/start")) == 2
+    assert _method(messages, "thread/resume") == []
+    assert len(_method(messages, "thread/delete")) == 1
+    assert conversation.cache_epoch == 1
+
+    conversation.close()
+    assert len(_method(_messages(log_path), "thread/delete")) == 2
+    adapter.close()
 
 
 def test_codex_notification_event_classification() -> None:
@@ -621,6 +720,30 @@ def test_codex_adapter_reconnects_only_before_thread_creation(tmp_path: Path) ->
     messages = _messages(log_path)
     assert len(_method(messages, "initialize")) == 2
     assert len(_method(messages, "thread/start")) == 2
+
+
+def test_codex_client_reconnects_before_resuming_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = CodexAppServerClient((sys.executable,))
+    requests: list[tuple[str, dict[str, Any]]] = []
+    stops: list[None] = []
+
+    def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        requests.append((method, params))
+        if len(requests) == 1:
+            raise CodexAppServerDisconnected("connection lost")
+        return {"thread": {"id": "thread"}}
+
+    monkeypatch.setattr(client, "request", request)
+    monkeypatch.setattr(client, "_stop_process", lambda: stops.append(None))
+
+    assert client._resume_thread("thread") == {"thread": {"id": "thread"}}
+    assert requests == [
+        ("thread/resume", {"threadId": "thread", "excludeTurns": True}),
+        ("thread/resume", {"threadId": "thread", "excludeTurns": True}),
+    ]
+    assert stops == [None]
 
 
 @pytest.mark.parametrize(

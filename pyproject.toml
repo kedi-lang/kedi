@@ -27,6 +27,7 @@ dependencies = [
     "pygls>=1.3",
     "rich>=13",
     "langchain",
+    "langchain-aws",
     "langchain-openai",
     "langchain-openrouter",
     "langchain-mcp-adapters",

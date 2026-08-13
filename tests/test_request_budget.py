@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from decimal import Decimal
 
 import pytest
 
@@ -72,6 +73,38 @@ def test_model_request_budget_tracks_estimates_and_actual_usage() -> None:
     assert snapshot.estimated_request_tokens == estimated
     with pytest.raises(RuntimeError, match="already closed"):
         reservation.finish()
+
+
+def test_invocation_usage_aggregates_cache_and_cost_without_negative_uncached_tokens() -> None:
+    usage = InvocationUsage(
+        requests=1,
+        input_tokens=100,
+        cache_read_tokens=80,
+        cache_write_tokens=10,
+        cost_usd=Decimal("0.01"),
+    ) + InvocationUsage(
+        requests=2,
+        input_tokens=20,
+        cache_read_tokens=50,
+        cache_write_tokens=5,
+        cost_usd=Decimal("0.02"),
+    )
+
+    assert usage == InvocationUsage(
+        requests=3,
+        input_tokens=120,
+        cache_read_tokens=130,
+        cache_write_tokens=15,
+        cost_usd=Decimal("0.03"),
+    )
+    assert usage.uncached_input_tokens == 0
+    assert usage + InvocationUsage(requests=1) == InvocationUsage(
+        requests=4,
+        input_tokens=120,
+        cache_read_tokens=130,
+        cache_write_tokens=15,
+        cost_usd=Decimal("0.03"),
+    )
 
 
 def test_model_request_budget_keeps_estimate_without_reported_usage() -> None:

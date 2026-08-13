@@ -65,6 +65,7 @@ from ..ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    HistoryDirectiveStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
@@ -80,6 +81,7 @@ from ..ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileHistoryEntry,
     ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
@@ -366,6 +368,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "approval_directive":
                 stmt = self._walk_approval_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "history_directive":
+                stmt = self._walk_history_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
@@ -968,6 +974,8 @@ class _Walker:
             return self._walk_effort_directive(node)
         if t == "approval_directive":
             return self._walk_approval_directive(node)
+        if t == "history_directive":
+            return self._walk_history_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -1758,6 +1766,85 @@ class _Walker:
             self._validate_approval_plain_value(value_node, plain)
         return ApprovalDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
 
+    def _walk_history_directive(self, node: Node) -> HistoryDirectiveStmt:
+        value_node = _field(node, "value")
+        if value_node is not None:
+            value = _src_text(self.source, value_node).strip()
+            if value not in {"enabled", "disabled"}:
+                self._error(
+                    value_node,
+                    "history directive must be 'enabled' or 'disabled'",
+                    code="K-HISTORY-VALUE",
+                )
+            return HistoryDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
+        body_node = _field(node, "body")
+        assert body_node is not None
+        enabled: bool | None = None
+        fields: list[SettingsField] = []
+        seen: set[str] = set()
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            field = self._walk_settings_value_field(child)
+            name = field.name
+            if name not in {"enabled", "compaction_mode", "compaction_threshold"}:
+                self._error(
+                    child,
+                    "history setting must be one of: enabled, compaction_mode, "
+                    "compaction_threshold",
+                    code="K-HISTORY-KEY",
+                )
+                continue
+            if name in seen:
+                self._error(
+                    child,
+                    f"Duplicate history setting: {name!r}",
+                    code="K-HISTORY-DUP",
+                )
+                continue
+            seen.add(name)
+            if name == "enabled":
+                if field.backtick_code is not None:
+                    self._error(
+                        child,
+                        "history enabled setting must be the literal 'true' or 'false'",
+                        code="K-HISTORY-ENABLED",
+                    )
+                    enabled = False
+                    continue
+                value = (field.plain_value or "").strip()
+                if value not in {"true", "false"}:
+                    self._error(
+                        child,
+                        "history enabled setting must be 'true' or 'false'",
+                        code="K-HISTORY-ENABLED",
+                    )
+                enabled = value == "true"
+                continue
+            if (
+                name == "compaction_mode"
+                and field.plain_value is not None
+                and field.plain_value not in {"native", "disabled"}
+            ):
+                self._error(
+                    child,
+                    "history compaction_mode must be 'native' or 'disabled'",
+                    code="K-COMPACTION-MODE",
+                )
+            fields.append(field)
+        if enabled is None:
+            self._error(
+                body_node,
+                "history block requires an 'enabled: true' or 'enabled: false' setting",
+                code="K-HISTORY-ENABLED-REQUIRED",
+            )
+        return HistoryDirectiveStmt(
+            enabled=enabled is True,
+            fields=fields,
+            loc=self._span(node),
+        )
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -1832,19 +1919,34 @@ class _Walker:
         body_node = _field(node, "body")
         assert body_node is not None
         fields: list[SettingsField] = []
+        seen: set[str] = set()
         for child in _named_children(body_node):
             if child.type in ("line_comment", "block_comment"):
                 continue
-            fields.append(self._walk_settings_field(child))
+            setting = self._walk_settings_field(child)
+            if setting.name in seen:
+                self._error(
+                    child,
+                    f"Duplicate settings field: {setting.name!r}",
+                    code="K-SETTING-DUP",
+                )
+            seen.add(setting.name)
+            fields.append(setting)
         return SettingsDirectiveStmt(fields=fields, loc=self._span(node))
 
     def _walk_settings_field(self, node: Node) -> SettingsField:
+        field = self._walk_settings_value_field(node)
+        name_node = _field(node, "name")
+        assert name_node is not None
+        self._validate_setting_key(name_node, field.name)
+        return field
+
+    def _walk_settings_value_field(self, node: Node) -> SettingsField:
         name_node = _field(node, "name")
         value_node = _field(node, "value")
         assert name_node is not None
         assert value_node is not None
         name = _identifier_name(self.source, name_node)
-        self._validate_setting_key(name_node, name)
         if value_node.type == "inline_python_expr":
             code_node = _field(value_node, "code")
             assert code_node is not None
@@ -1955,6 +2057,7 @@ class _Walker:
         adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         approval_members: list[ProfileApprovalEntry] = []
+        history_members: list[ProfileHistoryEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
@@ -2044,6 +2147,15 @@ class _Walker:
                         ProfileApprovalEntry(
                             plain_value=approval_stmt.plain_value,
                             backtick_code=approval_stmt.backtick_code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "history_directive":
+                    history_stmt = self._walk_history_directive(child)
+                    history_members.append(
+                        ProfileHistoryEntry(
+                            enabled=history_stmt.enabled,
+                            fields=history_stmt.fields,
                             loc=self._span(child),
                         )
                     )
@@ -2195,6 +2307,7 @@ class _Walker:
             and not adapter_members
             and not effort_members
             and not approval_members
+            and not history_members
             and not system_members
             and not mcp_members
             and not settings_members
@@ -2208,7 +2321,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2218,6 +2331,7 @@ class _Walker:
             model_members=members,
             effort_members=effort_members,
             approval_members=approval_members,
+            history_members=history_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,

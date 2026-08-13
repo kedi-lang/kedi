@@ -55,6 +55,8 @@ class CodexAppServerProtocolError(CodexAppServerError):
 class CodexTurnResult:
     text: str
     turn: JsonObject
+    thread_id: str = ""
+    compacted: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,7 @@ class _TurnState:
     messages: list[_TurnMessage] = field(default_factory=list)
     turn: JsonObject | None = None
     error: BaseException | None = None
+    compacted: bool = False
 
 
 class CodexAppServerClient:
@@ -120,6 +123,7 @@ class CodexAppServerClient:
         self._thread_tools: dict[str, dict[str, _ToolBinding]] = {}
         self._thread_approvals: dict[str, _ApprovalBinding] = {}
         self._thread_event_resolvers: dict[str, AgentMessageResolver] = {}
+        self._retained_threads: set[str] = set()
         self._stderr_tail: deque[str] = deque(maxlen=40)
         self._next_request_id = 1
         self._initialized = False
@@ -157,6 +161,34 @@ class CodexAppServerClient:
             await_result=_await_result_in_loop(loop),
         )
 
+    async def run_conversation_turn(
+        self,
+        *,
+        thread_id: str | None,
+        thread_params: JsonObject,
+        turn_params: JsonObject,
+        tools: Mapping[str, Callable[..., Any]],
+        tool_context: Context,
+        turn_timeout: float,
+        approval_handler: ServerApprovalHandler | None = None,
+        approval_context: Context | None = None,
+        event_resolver: AgentMessageResolver | None = None,
+    ) -> CodexTurnResult:
+        loop = asyncio.get_running_loop()
+        return await asyncio.to_thread(
+            self.run_conversation_turn_sync,
+            thread_id=thread_id,
+            thread_params=thread_params,
+            turn_params=turn_params,
+            tools=tools,
+            tool_context=tool_context,
+            turn_timeout=turn_timeout,
+            approval_handler=approval_handler,
+            approval_context=approval_context,
+            event_resolver=event_resolver,
+            await_result=_await_result_in_loop(loop),
+        )
+
     def run_stateless_turn_sync(
         self,
         *,
@@ -170,9 +202,71 @@ class CodexAppServerClient:
         await_result: AwaitResult | None = None,
         event_resolver: AgentMessageResolver | None = None,
     ) -> CodexTurnResult:
-        thread_response = self._start_thread(thread_params)
+        return self._run_turn_sync(
+            thread_id=None,
+            retain_thread=False,
+            thread_params=thread_params,
+            turn_params=turn_params,
+            tools=tools,
+            tool_context=tool_context,
+            turn_timeout=turn_timeout,
+            approval_handler=approval_handler,
+            approval_context=approval_context,
+            await_result=await_result,
+            event_resolver=event_resolver,
+        )
+
+    def run_conversation_turn_sync(
+        self,
+        *,
+        thread_id: str | None,
+        thread_params: JsonObject,
+        turn_params: JsonObject,
+        tools: Mapping[str, Callable[..., Any]],
+        tool_context: Context,
+        turn_timeout: float,
+        approval_handler: ServerApprovalHandler | None = None,
+        approval_context: Context | None = None,
+        await_result: AwaitResult | None = None,
+        event_resolver: AgentMessageResolver | None = None,
+    ) -> CodexTurnResult:
+        return self._run_turn_sync(
+            thread_id=thread_id,
+            retain_thread=True,
+            thread_params=thread_params,
+            turn_params=turn_params,
+            tools=tools,
+            tool_context=tool_context,
+            turn_timeout=turn_timeout,
+            approval_handler=approval_handler,
+            approval_context=approval_context,
+            await_result=await_result,
+            event_resolver=event_resolver,
+        )
+
+    def _run_turn_sync(
+        self,
+        *,
+        thread_id: str | None,
+        retain_thread: bool,
+        thread_params: JsonObject,
+        turn_params: JsonObject,
+        tools: Mapping[str, Callable[..., Any]],
+        tool_context: Context,
+        turn_timeout: float,
+        approval_handler: ServerApprovalHandler | None,
+        approval_context: Context | None,
+        await_result: AwaitResult | None,
+        event_resolver: AgentMessageResolver | None,
+    ) -> CodexTurnResult:
+        created_thread = thread_id is None
+        thread_response = (
+            self._start_thread(thread_params)
+            if thread_id is None
+            else self._resume_thread(thread_id)
+        )
         thread = _required_object(thread_response, "thread")
-        thread_id = _required_string(thread, "id")
+        resolved_thread_id = _required_string(thread, "id")
         bindings = {
             name: _ToolBinding(
                 fn=fn,
@@ -182,9 +276,9 @@ class CodexAppServerClient:
             for name, fn in tools.items()
         }
         with self._state_lock:
-            self._thread_tools[thread_id] = bindings
+            self._thread_tools[resolved_thread_id] = bindings
             if approval_handler is not None:
-                self._thread_approvals[thread_id] = _ApprovalBinding(
+                self._thread_approvals[resolved_thread_id] = _ApprovalBinding(
                     handler=approval_handler,
                     context=(
                         approval_context if approval_context is not None else tool_context
@@ -192,18 +286,21 @@ class CodexAppServerClient:
                     await_result=await_result,
                 )
             if event_resolver is not None:
-                self._thread_event_resolvers[thread_id] = event_resolver
+                self._thread_event_resolvers[resolved_thread_id] = event_resolver
         turn_id: str | None = None
+        completed = False
         try:
-            turn_response = self.request("turn/start", {**turn_params, "threadId": thread_id})
+            turn_response = self.request(
+                "turn/start", {**turn_params, "threadId": resolved_thread_id}
+            )
             turn_id = _required_string(_required_object(turn_response, "turn"), "id")
             state = self._turn_state(turn_id)
             if not state.done.wait(timeout=turn_timeout):
-                self._interrupt_turn(thread_id, turn_id)
+                self._interrupt_turn(resolved_thread_id, turn_id)
                 raise TimeoutError(
                     f"Codex turn {turn_id!r} did not complete within {turn_timeout:g}s."
                 )
-            error, completed_turn, messages = self._turn_snapshot(turn_id)
+            error, completed_turn, messages, compacted = self._turn_snapshot(turn_id)
             if error is not None:
                 raise error
             if completed_turn is None:
@@ -220,16 +317,31 @@ class CodexAppServerClient:
                 raise CodexAppServerProtocolError(
                     "Codex turn completed without a final agent message."
                 )
-            return CodexTurnResult(text=final_message.text, turn=completed_turn)
+            completed = True
+            if retain_thread:
+                with self._state_lock:
+                    self._retained_threads.add(resolved_thread_id)
+            return CodexTurnResult(
+                text=final_message.text,
+                turn=completed_turn,
+                thread_id=resolved_thread_id,
+                compacted=compacted,
+            )
         finally:
             with self._state_lock:
-                self._thread_tools.pop(thread_id, None)
-                self._thread_approvals.pop(thread_id, None)
-                self._thread_event_resolvers.pop(thread_id, None)
+                self._thread_tools.pop(resolved_thread_id, None)
+                self._thread_approvals.pop(resolved_thread_id, None)
+                self._thread_event_resolvers.pop(resolved_thread_id, None)
                 if turn_id is not None:
                     self._turns.pop(turn_id, None)
-            with suppress(CodexAppServerError, TimeoutError):
-                self.request("thread/delete", {"threadId": thread_id})
+            if not retain_thread or (created_thread and not completed):
+                with suppress(CodexAppServerError, TimeoutError):
+                    self.delete_thread(resolved_thread_id)
+
+    def delete_thread(self, thread_id: str) -> None:
+        self.request("thread/delete", {"threadId": thread_id})
+        with self._state_lock:
+            self._retained_threads.discard(thread_id)
 
     def request(
         self,
@@ -245,6 +357,11 @@ class CodexAppServerClient:
         with self._start_lock:
             if self._closed:
                 return
+            with self._state_lock:
+                retained_threads = tuple(self._retained_threads)
+            for thread_id in retained_threads:
+                with suppress(CodexAppServerError, TimeoutError):
+                    self.delete_thread(thread_id)
             self._closed = True
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
@@ -261,6 +378,15 @@ class CodexAppServerClient:
             with self._start_lock:
                 self._stop_process()
             return self.request("thread/start", params)
+
+    def _resume_thread(self, thread_id: str) -> JsonObject:
+        params = {"threadId": thread_id, "excludeTurns": True}
+        try:
+            return self.request("thread/resume", params)
+        except CodexAppServerDisconnected:
+            with self._start_lock:
+                self._stop_process()
+            return self.request("thread/resume", params)
 
     def _ensure_started(self) -> None:
         if self._closed:
@@ -577,6 +703,15 @@ class CodexAppServerClient:
         turn_id = params.get("turnId")
         thread_id = params.get("threadId")
         resolver = self._event_resolver(thread_id)
+        item = params.get("item")
+        if (
+            method in {"item/started", "item/completed"}
+            and isinstance(turn_id, str)
+            and isinstance(item, Mapping)
+            and item.get("type") == "contextCompaction"
+        ):
+            with self._state_lock:
+                self._turns.setdefault(turn_id, _TurnState()).compacted = True
         if method == "item/agentMessage/delta" and resolver is not None:
             item_id = params.get("itemId")
             delta = params.get("delta")
@@ -584,12 +719,10 @@ class CodexAppServerClient:
                 resolver.append_delta(item_id, delta)
             return
         if method == "item/started" and resolver is not None:
-            item = params.get("item")
             if isinstance(item, Mapping) and item.get("type") in _TOOL_ITEM_TYPES:
                 resolver.mark_tool_boundary()
             return
         if method == "item/completed" and isinstance(turn_id, str):
-            item = params.get("item")
             if isinstance(item, Mapping) and item.get("type") == "agentMessage":
                 text = item.get("text")
                 if isinstance(text, str):
@@ -654,10 +787,10 @@ class CodexAppServerClient:
     def _turn_snapshot(
         self,
         turn_id: str,
-    ) -> tuple[BaseException | None, JsonObject | None, tuple[_TurnMessage, ...]]:
+    ) -> tuple[BaseException | None, JsonObject | None, tuple[_TurnMessage, ...], bool]:
         with self._state_lock:
             state = self._turns.setdefault(turn_id, _TurnState())
-            return state.error, state.turn, tuple(state.messages)
+            return state.error, state.turn, tuple(state.messages), state.compacted
 
     def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
         with suppress(CodexAppServerError, TimeoutError):

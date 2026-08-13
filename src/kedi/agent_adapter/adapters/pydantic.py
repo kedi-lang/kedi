@@ -23,6 +23,7 @@ from pydantic_ai.messages import (
     AgentStreamEvent as PydanticAgentStreamEvent,
 )
 from pydantic_ai.messages import (
+    CompactionPart,
     FunctionToolCallEvent,
     ModelMessage,
     OutputToolCallEvent,
@@ -58,6 +59,8 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
+from ..native_compaction import with_pydantic_native_compaction
+from ..prefix_cache import has_response_cache_settings, pydantic_cache_settings
 from ..approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -255,6 +258,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_native_artifacts=False,
         supports_stateful_history=True,
         supports_history_replay=True,
+        supports_native_compaction=True,
         supports_stream_events=True,
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
@@ -617,9 +621,12 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     ) -> AsyncGenerator[AgentRun[AgentDepsT, Any]]:
         tool_specs = self._tool_specs_for_run(kwargs)
         run_kwargs = self._run_kwargs(kwargs, tool_specs=tool_specs)
+        conversation = self._subagent_conversation_var.get()
         with self._run_tool_spec_scope(tool_specs):
             async with super().iter(user_prompt, **cast(Any, run_kwargs)) as agent_run:
                 yield agent_run
+                if agent_run.result is not None:
+                    self._capture_conversation_messages(conversation, agent_run)
 
     async def _run_agent(
         self,
@@ -631,15 +638,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         emit_final: bool = False,
     ) -> Any:
         conversation = self._subagent_conversation_var.get()
-        if conversation is not None and "pydantic_messages" in conversation.resume_state:
-            from pydantic_ai.messages import ModelMessagesTypeAdapter
-
-            run_kwargs.setdefault(
-                "message_history",
-                ModelMessagesTypeAdapter.validate_python(
-                    conversation.resume_state["pydantic_messages"]
-                ),
-            )
+        self._apply_conversation_history(run_kwargs, conversation)
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
@@ -669,7 +668,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                     run_kwargs["usage"] = usage
             try:
                 result = await agent.run(prompt, **cast(Any, run_kwargs))
-                self._capture_subagent_messages(conversation, result)
+                self._capture_conversation_messages(conversation, result)
             finally:
                 if usage is not None:
                     report_invocation(
@@ -677,8 +676,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                             requests=usage.requests,
                             tool_calls=usage.tool_calls,
                             input_tokens=usage.input_tokens,
+                            cache_read_tokens=usage.cache_read_tokens,
+                            cache_write_tokens=usage.cache_write_tokens,
                             output_tokens=usage.output_tokens,
                             total_tokens=usage.total_tokens,
+                            cost_usd=usage.cost,
                         )
                     )
             if event_resolver is not None:
@@ -704,7 +706,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             self._run_tool_specs_var.reset(token)
 
     @staticmethod
-    def _capture_subagent_messages(
+    def _capture_conversation_messages(
         conversation: AdapterConversationContext | SubagentConversationContext | None,
         result: Any,
     ) -> None:
@@ -715,6 +717,29 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         conversation.result_state["pydantic_messages"] = ModelMessagesTypeAdapter.dump_python(
             result.all_messages(),
             mode="json",
+        )
+        if isinstance(conversation, AdapterConversationContext) and any(
+            isinstance(part, CompactionPart)
+            for message in result.new_messages()
+            for part in message.parts
+        ):
+            conversation.cache_prefix_changed = True
+
+    @staticmethod
+    def _apply_conversation_history(
+        run_kwargs: dict[str, object],
+        conversation: AdapterConversationContext | SubagentConversationContext | None,
+    ) -> None:
+        if (
+            conversation is None
+            or run_kwargs.get("message_history") is not None
+            or "pydantic_messages" not in conversation.resume_state
+        ):
+            return
+        from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+        run_kwargs["message_history"] = ModelMessagesTypeAdapter.validate_python(
+            conversation.resume_state["pydantic_messages"]
         )
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
@@ -746,6 +771,48 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["model_settings"] = {**existing_settings, **model_settings}
             else:
                 run_kwargs["model_settings"] = model_settings
+        conversation = self._subagent_conversation_var.get()
+        self._apply_conversation_history(run_kwargs, conversation)
+        from ._pydantic_compat import effective_model
+
+        existing_settings = run_kwargs.get("model_settings")
+        adapter_conversation = (
+            conversation if isinstance(conversation, AdapterConversationContext) else None
+        )
+        needs_cache_settings = (
+            adapter_conversation is not None
+            or callable(existing_settings)
+            or (
+                isinstance(existing_settings, Mapping)
+                and has_response_cache_settings(cast("Mapping[str, Any]", existing_settings))
+            )
+        )
+        if not needs_cache_settings:
+            selected_model = None
+        else:
+            selected_model = effective_model(
+                self,
+                cast("Model | str | None", run_kwargs.get("model")),
+            )
+        if callable(existing_settings) and selected_model is not None:
+            run_kwargs["model_settings"] = _cached_model_settings(
+                cast(
+                    "Callable[[RunContext[Any]], Mapping[str, Any]]",
+                    existing_settings,
+                ),
+                model=selected_model,
+                conversation=adapter_conversation,
+            )
+        elif selected_model is not None:
+            cache_settings = pydantic_cache_settings(
+                cast("Mapping[str, Any]", existing_settings)
+                if isinstance(existing_settings, Mapping)
+                else {},
+                model=selected_model,
+                conversation=adapter_conversation,
+            )
+            if cache_settings:
+                run_kwargs["model_settings"] = cache_settings
         from ...tool_context import inside_kedi_tool_call
 
         toolsets = self._toolsets_for_run(
@@ -774,6 +841,23 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 capabilities,
                 _KediRequiredToolCapability,
                 _KediRequiredToolCapability,
+            )
+        compaction = self.active_profile.compaction
+        if (
+            self.active_profile.history is True
+            and compaction is not None
+            and compaction.mode == "native"
+        ):
+            from ._pydantic_compat import effective_model
+
+            selected_model = effective_model(
+                self,
+                cast("Model | str | None", run_kwargs.get("model")),
+            )
+            capabilities = with_pydantic_native_compaction(
+                capabilities,
+                model=selected_model,
+                settings=compaction,
             )
         capabilities = self._with_telemetry_capability(capabilities)
         if capabilities:
@@ -1271,6 +1355,22 @@ def _profile_model_settings(
 ) -> Callable[[RunContext[Any]], dict[str, Any]]:
     def merged(ctx: RunContext[Any]) -> dict[str, Any]:
         return {**settings_factory(ctx), **profile_settings}
+
+    return merged
+
+
+def _cached_model_settings(
+    settings_factory: Callable[[RunContext[Any]], Mapping[str, Any]],
+    *,
+    model: object,
+    conversation: AdapterConversationContext | None,
+) -> Callable[[RunContext[Any]], dict[str, Any]]:
+    def merged(ctx: RunContext[Any]) -> dict[str, Any]:
+        return pydantic_cache_settings(
+            settings_factory(ctx),
+            model=model,
+            conversation=conversation,
+        )
 
     return merged
 

@@ -89,6 +89,7 @@ from ..lang.ast import (
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    HistoryDirectiveStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
     McpDirectiveStmt,
@@ -103,6 +104,7 @@ from ..lang.ast import (
     ProfileAgentEntry,
     ProfileApprovalEntry,
     ProfileArtifactsEntry,
+    ProfileHistoryEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileMaxAgentsEntry,
@@ -840,6 +842,8 @@ class _AdapterDiagnosticState:
     kind: AgentAdapterKind | None = None
     approval_loc: Span | None = None
     approval_plain_value: str | None = None
+    history_loc: Span | None = None
+    history_enabled: bool | None = None
 
 
 def _adapter_capability_diagnostics(
@@ -915,6 +919,17 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         selected = _adapter_state_from_plain_value(shortname, expected_kind)
         if selected is not None:
             state = _merge_adapter_state(state, selected)
+    history_members = [member for member in profile.history_members if member.loc is not None]
+    if history_members:
+        latest = max(
+            history_members,
+            key=lambda member: member.loc.start_byte if member.loc is not None else -1,
+        )
+        state = replace(
+            state,
+            history_loc=latest.loc,
+            history_enabled=latest.enabled,
+        )
     return state
 
 
@@ -939,11 +954,14 @@ def _merge_adapter_state(
 ) -> _AdapterDiagnosticState:
     selected = inner if inner.shortname is not None else outer
     approval_owner = inner if inner.approval_loc is not None else outer
+    history_owner = inner if inner.history_enabled is not None else outer
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
         approval_loc=approval_owner.approval_loc,
         approval_plain_value=approval_owner.approval_plain_value,
+        history_loc=history_owner.history_loc,
+        history_enabled=history_owner.history_enabled,
     )
 
 
@@ -1003,6 +1021,9 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
+    diagnostics.extend(_history_capability_diagnostics(state))
+    for member in profile.history_members:
+        diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -1058,6 +1079,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
             diagnostics.extend(
@@ -1078,6 +1100,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, ApprovalDirectiveStmt):
             active = replace(
@@ -1092,6 +1115,15 @@ def _scan_capability_scope(
                     warned_approval_spans,
                 )
             )
+            continue
+        if isinstance(stmt, HistoryDirectiveStmt):
+            active = replace(
+                active,
+                history_loc=stmt.loc,
+                history_enabled=stmt.enabled,
+            )
+            diagnostics.extend(_history_capability_diagnostics(active))
+            diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -1112,6 +1144,8 @@ def _scan_capability_scope(
                     "model-facing artifact tools",
                 )
             )
+            continue
+        if isinstance(stmt, SettingsDirectiveStmt):
             continue
         if isinstance(stmt, UseDirectiveStmt):
             diagnostics.extend(
@@ -1136,6 +1170,7 @@ def _scan_capability_scope(
                         warned_approval_spans,
                     )
                 )
+                diagnostics.extend(_history_capability_diagnostics(active))
             continue
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
@@ -1172,6 +1207,47 @@ def _scan_capability_scope(
             )
             continue
     return diagnostics
+
+
+def _compaction_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    fields: Sequence[SettingsField],
+) -> list[lsp.Diagnostic]:
+    mode = next((field for field in fields if field.name == "compaction_mode"), None)
+    threshold = next(
+        (field for field in fields if field.name == "compaction_threshold"),
+        None,
+    )
+    configured = mode or threshold
+    if configured is None or configured.loc is None:
+        return []
+    if mode is not None and mode.plain_value == "disabled":
+        return []
+    if mode is not None and mode.backtick_code is not None:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "native_compaction",
+        [configured.loc],
+        "provider-native conversation compaction",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-COMPACTION",
+    )
+
+
+def _history_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+) -> list[lsp.Diagnostic]:
+    if state.history_enabled is not True or state.history_loc is None:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "stateful_history",
+        [state.history_loc],
+        "stateful conversation history",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-HISTORY",
+    )
 
 
 def _adapter_selection_diagnostics(
@@ -2693,6 +2769,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.approval_members:
                 visit(member)
+            for member in node.history_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             for member in node.mcp_members:
@@ -2714,6 +2792,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for line in node.template_lines:
                 visit(line)
             return
+        if isinstance(node, HistoryDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, McpDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -2731,6 +2813,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(field)
             return
         if isinstance(node, ProfileSettingsEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileHistoryEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -2890,6 +2976,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _effort_directive_markdown(node)
     if isinstance(node, ApprovalDirectiveStmt):
         return _approval_directive_markdown(node)
+    if isinstance(node, HistoryDirectiveStmt):
+        return _history_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
@@ -2914,6 +3002,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileApprovalEntry):
         return _profile_approval_entry_markdown(node)
+    if isinstance(node, ProfileHistoryEntry):
+        return _profile_history_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
@@ -3057,6 +3147,27 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
     )
 
 
+def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
+    value = "enabled" if stmt.enabled else "disabled"
+    compaction = next(
+        (field for field in stmt.fields if field.name.startswith("compaction_")),
+        None,
+    )
+    configured = (
+        " The expanded form also configures provider-native compaction."
+        if compaction is not None
+        else ""
+    )
+    return (
+        f"`> history: {value}`\n\n"
+        "Controls conversation continuity through stateful history for subsequent model calls "
+        "in this lexical scope. "
+        "`enabled` reuses adapter-scoped model history and provider cache identity; `disabled` "
+        "runs stateless calls without mutating the surrounding history. The default is disabled."
+        f"{configured}"
+    )
+
+
 def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     value = _system_value_preview(stmt)
     return (
@@ -3106,6 +3217,18 @@ def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
 
 def _settings_field_markdown(field: SettingsField) -> str:
     value = _settings_field_value_preview(field)
+    if field.name == "compaction_mode":
+        return (
+            f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
+            "Select provider-native conversation compaction or disable the inherited "
+            "compaction policy while retaining stateful history."
+        )
+    if field.name == "compaction_threshold":
+        return (
+            f"`compaction_threshold: int | None` = {value}\n\n"
+            "Positive input-token threshold that triggers native compaction. When omitted, "
+            "the provider default is used."
+        )
     adapters = _setting_adapter_label(field.name)
     return f"`{field.name}` = {value}\n\nSupported by: {adapters}."
 
@@ -3212,6 +3335,16 @@ def _profile_approval_entry_markdown(entry: ProfileApprovalEntry) -> str:
     return (
         f"`> approval:` {value}\n\n"
         "Tool-call approval policy stored in this profile. Applied when the profile is used."
+    )
+
+
+def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
+    value = "enabled" if entry.enabled else "disabled"
+    configured = " Includes a compaction policy." if entry.fields else ""
+    return (
+        f"`> history: {value}`\n\n"
+        "Conversation continuity policy stored in this profile. Applied when the profile is used."
+        f"{configured}"
     )
 
 

@@ -4,6 +4,7 @@ from types import FrameType
 from typing import Any, Sequence, cast
 
 from pydantic_ai import Agent
+from pydantic_ai.models import Model
 from pydantic_ai.toolsets import AbstractToolset
 
 
@@ -67,6 +68,18 @@ def infer_agent_name(agent: Agent[Any, Any], frame: FrameType | None) -> None:
 
     try:
         agent._infer_name(frame)
+    except AttributeError as exc:
+        raise _unsupported_layout(exc) from exc
+
+
+def effective_model(
+    agent: Agent[Any, Any],
+    model: Model | str | None = None,
+) -> Model:
+    """Resolve the model selected by run arguments, overrides, capabilities, or defaults."""
+
+    try:
+        return agent._get_model_outside_run(model)
     except AttributeError as exc:
         raise _unsupported_layout(exc) from exc
 

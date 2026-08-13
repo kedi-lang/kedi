@@ -287,6 +287,12 @@ class ApprovalDirectiveStmt(Stmt):
 
 
 @dataclass
+class HistoryDirectiveStmt(Stmt):
+    enabled: bool = False
+    fields: List["SettingsField"] = field(default_factory=list)
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -357,6 +363,7 @@ class ProfileDefStmt(Stmt):
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
+    history_members: List["ProfileHistoryEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
@@ -405,6 +412,13 @@ class ProfileEffortEntry:
 class ProfileApprovalEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileHistoryEntry:
+    enabled: bool
+    fields: List[SettingsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

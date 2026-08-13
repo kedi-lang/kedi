@@ -60,6 +60,10 @@ A Kedi program consists of:
 - Indentation defines block scope (like Python)
 - Tabs count as width 4 for comparison
 - The preprocessor inserts virtual BEGIN/END tokens on indentation changes
+- A directive block has one body shape: configuration directives contain
+  unprefixed `name: value` subsettings, while composite directives such as
+  `> profile:` contain `>`-prefixed subdirectives. The two forms are not mixed
+  in one body.
 
 ## Basic Syntax Elements
 
@@ -916,6 +920,139 @@ opt into project-local skills.
   not a stable feature.
 - `> system: text` — set active agent instructions for subsequent procedure
   captures and prompt calls.
+- `> history: enabled|disabled` — control whether model calls in the current
+  lexical scope share conversation history. History is disabled by default.
+  `enabled` creates one runtime-owned conversation whose complete successful
+  turns are visible to later template and raw-invoke blocks. `disabled`
+  creates a stateless nested scope: calls in that scope neither read nor mutate
+  an enabled outer conversation.
+
+  ```kedi
+  > history: enabled
+
+  >> Remember [project_name].
+  >> Using the project name from the previous call, write [tagline].
+
+  @isolated_check():
+      > history: disabled
+      >> Produce an unrelated [answer].
+      = <answer>
+
+  = <project_name>: <tagline>
+  ```
+
+  The policy is valid at top level, inside procedures, and in profiles. It is
+  lexical like the other profile directives, and a nested `disabled` policy
+  overrides an inherited `enabled` policy. Failed or cancelled calls do not
+  commit a partial turn.
+
+  History is partitioned by adapter. Switching adapters in one Kedi session
+  starts or resumes that adapter's own lane rather than translating private
+  provider messages across frameworks. Pydantic AI and LangChain replay their
+  complete portable message sequences, including tool calls and tool results.
+  Claude uses its native resumable session. Codex starts a non-ephemeral App
+  Server thread, resumes that thread for later calls, and deletes it when the
+  Kedi conversation closes or its configuration lane is replaced. Selecting
+  `enabled` with an adapter that does not advertise stateful-history support is
+  an LSP error and a runtime error.
+
+  Kedi also assigns each adapter lane an opaque, stable cache identity. OpenAI
+  integrations use it as the prompt-cache key and may reuse the previous
+  response where supported. Pydantic AI's OpenRouter integration receives its
+  native instruction, message, and tool-definition cache settings. LangChain's
+  OpenRouter integration receives its native sticky-session identity plus
+  ephemeral cache-control content blocks on the stable system prompt and latest
+  user message. Replayed LangChain history has prior Kedi-generated markers
+  removed before the latest marker is placed, so marker metadata does not grow
+  on every turn and message order remains unchanged. Anthropic integrations use
+  their framework-native cache settings or content blocks without rewriting the
+  ordered message prefix. Google Gemini integrations preserve the same ordered
+  prefix but add no cache setting: Gemini 2.5 and newer use provider-managed
+  implicit caching and report cache-read tokens in usage metadata. Explicit
+  Google cached-content resources have a separate lifecycle and are not created
+  automatically. Explicit model settings always override Kedi defaults. History
+  and cache identities remain append-only within a cache epoch: ordinary
+  artifact release or expiry never deletes or reorders prior messages.
+
+  Direct-provider prefix caching follows each provider's native contract:
+
+  | Provider | Kedi integration |
+  | --- | --- |
+  | Moonshot AI | Reuses the conversation cache identity as `prompt_cache_key`. |
+  | Alibaba Cloud Model Studio | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | Z.AI | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | Amazon Bedrock | Enables Pydantic AI's instruction, message, and tool-definition cache points. LangChain uses `BedrockPromptCachingMiddleware`. |
+  | Azure OpenAI | Reuses the conversation cache identity as `prompt_cache_key`; Responses models may also continue from the previous response. |
+  | DeepSeek | Preserves the ordered prefix and relies on provider-managed implicit caching. |
+  | xAI | Preserves the ordered prefix and relies on provider-managed automatic prefix caching. |
+
+  These integrations do not emulate a provider cache in Kedi. Alibaba,
+  DeepSeek, Z.AI, and xAI require no request flag for their implicit cache.
+  Moonshot and Azure receive only their supported stable routing key. Bedrock
+  receives explicit framework-native cache points; with LangChain this requires
+  the provider's `langchain-aws` integration package. Preconstructed LangChain
+  `ChatOpenAI` models using the official Moonshot, Alibaba, DeepSeek, or Z.AI
+  base URLs are recognized without changing their configured endpoint.
+
+  Use the expanded history form to configure conversation compaction alongside
+  history ownership:
+
+  ```kedi
+  > history:
+      enabled: true
+      compaction_mode: native
+      compaction_threshold: `100_000`
+  ```
+
+  `enabled` is required in the expanded form. `compaction_mode: native`
+  delegates compaction to the selected provider. `compaction_threshold` is an
+  optional positive input-token count; omit it to use that integration's native
+  default. Native compaction requires history to be enabled. The supported paths are:
+
+  - Pydantic AI with `OpenAIResponsesModel`, through `OpenAICompaction`;
+  - Pydantic AI with `AnthropicModel`, through `AnthropicCompaction`;
+  - LangChain with an OpenAI chat model, through OpenAI
+    `context_management`;
+  - LangChain with an Anthropic chat model, through Anthropic
+    `context_management` and the required compaction beta;
+  - Codex App Server, through its persistent thread and
+    `model_auto_compact_token_limit` configuration;
+  - Claude Agent SDK, through its native automatic session compaction.
+
+  Codex accepts `compaction_threshold` as an explicit thread token limit.
+  Claude Agent SDK does not expose an exact compaction threshold: omit
+  `compaction_threshold` to use its native policy. Supplying a threshold in a
+  Claude scope fails before the model call. `compaction_mode: disabled` stops
+  Kedi from adding a compaction policy; it does not override compaction already
+  owned internally by an agent harness.
+
+  Kedi does not silently replace an unsupported native provider with a
+  summarizer. Selecting `native` with another model or adapter raises a clear
+  runtime error. Disable an inherited compaction policy while retaining
+  stateful history with:
+
+  ```kedi
+  > history:
+      enabled: true
+      compaction_mode: disabled
+  ```
+
+  `compaction_threshold` is invalid together with `compaction_mode: disabled`.
+  Existing unrelated provider context-management entries and caller-supplied Pydantic
+  capabilities are preserved; Kedi replaces only the native compaction entry
+  it owns. With stateful Pydantic history, a newly emitted provider compaction
+  checkpoint seals the current cache epoch. Kedi rotates the opaque cache key,
+  drops stale continuation state from other adapter lanes, and retains the
+  provider's compacted messages as the first state of the new epoch. Replayed
+  checkpoints do not rotate the epoch again. LangChain currently owns its
+  provider continuation internally because its public message result does not
+  expose a stable cross-provider compaction marker.
+
+  Kedi also contains an adapter-neutral, deterministic history processor and
+  transactional checkpoint foundation for future Kedi-owned compaction. The
+  semantic summarizer that will produce those checkpoints is tracked in
+  [issue #80](https://github.com/kedi-lang/kedi/issues/80); `kedi` is not yet a
+  public `compaction_mode` value.
 - `> settings:` — set active model configuration for subsequent procedure
   captures and prompt calls. Values are `name: value` lines; plain values are
   parsed as simple scalars (`true`, `false`, numbers, `null`) and backtick
@@ -944,6 +1081,31 @@ opt into project-local skills.
       stop_sequences: `["END", "DONE"]`
       extra_body: `{"mode": "json"}`
   ```
+
+  OpenRouter's gateway-owned exact response cache is available as an explicit
+  opt-in and is separate from prompt caching:
+
+  ```kedi
+  > settings:
+      response_cache: true
+      response_cache_ttl: 3600
+  ```
+
+  The settings are provider-neutral Kedi API names. The current implementation
+  supports OpenRouter and translates them to `X-OpenRouter-Cache` and
+  `X-OpenRouter-Cache-TTL`. The TTL is optional and must be between 1 and 86400
+  seconds. The setting is rejected for non-OpenRouter models. It is disabled by
+  default because replaying a cached assistant response that contains a tool
+  call can cause the local tool to execute again; Kedi does not yet journal
+  side-effecting tool results. This cache is owned by OpenRouter and should not
+  be confused with the opt-in `cache=True` Python API cache.
+
+  Cache efficiency must be evaluated from provider usage rather than hit ratio
+  alone. Kedi telemetry records logical input, cache-read, cache-write,
+  uncached-input and output tokens, plus provider-reported USD cost when the
+  adapter exposes it. Cache-write tokens describe the cached portion of the
+  logical input and are not an additional input-token category.
+
   ACP commands may also come from CLI/env:
 
   ```kedi
@@ -1457,11 +1619,15 @@ raw artifact payloads. History is append-only within a cache epoch: releasing
 or expiring a ref removes its payload and quota usage, but does not delete,
 rewrite, or reorder earlier messages and does not invalidate provider-native
 checkpoints. The store retains lightweight metadata so stale refs still produce
-precise released or expired errors. A future explicit conversation-compaction
-operation may start a new cache epoch; artifact lifecycle operations never do.
+precise released or expired errors. A newly emitted Pydantic provider-compaction
+checkpoint starts a new cache epoch while preserving the compacted state;
+artifact lifecycle operations never do. Kedi-owned summarizing compaction is a
+separate future feature.
 
-Kedi remains stateless by default. Use an explicit Python session when calls
-must share model history and artifact ownership:
+Kedi remains stateless by default. DSL programs can opt into runtime-owned
+history with `> history: enabled`. Python callers can instead use an explicit
+session when they need direct lifecycle control over model history and artifact
+ownership:
 
 ```python
 import kedi
@@ -1477,8 +1643,9 @@ with kedi.session() as conversation:
 ```
 
 The same `ConversationState` can be supplied to another `kedi.session(state)`
-scope while it remains open. Exiting the session closes its artifact manager;
-the CLI never persists a conversation implicitly.
+scope while it remains open. Exiting the session closes its owned artifact
+manager. A DSL `> history: enabled` conversation is bounded by its
+`KediRuntime`; it is not persisted between separate CLI processes.
 
 #### Adapter support
 
@@ -1489,8 +1656,8 @@ schemas. Stateful replay is a separate capability:
 | --- | --- | --- |
 | Pydantic AI | Yes | Yes |
 | Claude Agent SDK | Yes | Yes |
-| Codex App Server | Yes | No |
-| LangChain | Yes | No |
+| Codex App Server | Yes | Yes |
+| LangChain | Yes | Yes |
 | DSPy | Yes | No |
 | WebGPU | Yes | No |
 | ACP | No | No |

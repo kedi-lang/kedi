@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from .compaction import (
+    CompactionMode,
+    CompactionSettings,
+    CompactionSettingsError,
+    normalize_compaction_settings,
+)
 from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
@@ -9,6 +15,7 @@ from .model import (
     eval_agent_directive,
     eval_approval_directive,
     eval_effort_directive,
+    eval_history_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -20,6 +27,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileHistoryMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileMaxAgentsMember,
@@ -56,7 +64,11 @@ __all__ = [
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",
     "AgentSubagentUnsupported",
+    "CompactionMode",
+    "CompactionSettings",
+    "CompactionSettingsError",
     "ProfileApprovalMember",
+    "ProfileHistoryMember",
     "ACP_AGENT_SETTING_KEYS",
     "CLAUDE_AGENT_SETTING_KEYS",
     "CODEX_AGENT_SETTING_KEYS",
@@ -90,6 +102,7 @@ __all__ = [
     "eval_approval_directive",
     "eval_agent_directive",
     "eval_effort_directive",
+    "eval_history_directive",
     "eval_mcp_directive",
     "eval_model_directive",
     "eval_settings_directive",
@@ -97,6 +110,7 @@ __all__ = [
     "eval_use_directive",
     "eval_use_profile",
     "is_valid_model_setting_key",
+    "normalize_compaction_settings",
     "parse_plain_setting_value",
     "pydantic_model_settings",
     "procedure_def_for_tool",

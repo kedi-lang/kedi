@@ -67,13 +67,7 @@ class ModelRequestReservation:
         self._closed = False
 
     def observe(self, usage: InvocationUsage) -> None:
-        self._usage = InvocationUsage(
-            requests=self._usage.requests + usage.requests,
-            tool_calls=self._usage.tool_calls + usage.tool_calls,
-            input_tokens=self._usage.input_tokens + usage.input_tokens,
-            output_tokens=self._usage.output_tokens + usage.output_tokens,
-            total_tokens=self._usage.total_tokens + usage.total_tokens,
-        )
+        self._usage = self._usage + usage
 
     def finish(self, *, raise_on_exceeded: bool = True) -> ModelRequestBudgetSnapshot:
         if self._closed:

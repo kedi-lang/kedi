@@ -24,6 +24,8 @@ PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
         "thinking",
         "service_tier",
         "extra_body",
+        "response_cache",
+        "response_cache_ttl",
     }
 )
 
@@ -54,6 +56,8 @@ LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
         "disable_streaming",
         "extra_body",
         "extra_headers",
+        "response_cache",
+        "response_cache_ttl",
         "frequency_penalty",
         "logit_bias",
         "max_retries",

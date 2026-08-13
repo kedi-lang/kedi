@@ -8,6 +8,7 @@ from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
+from .compaction import CompactionSettings
 from .mcp import McpServerSpec
 
 if TYPE_CHECKING:
@@ -42,6 +43,8 @@ class AgentProfile:
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
     workflow_mode: WorkflowMode | None = None
+    history: bool | None = None
+    compaction: CompactionSettings | None = None
     output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
 
@@ -94,6 +97,10 @@ class AgentProfile:
             updates["max_agents"] = other.max_agents
         if other.workflow_mode is not None:
             updates["workflow_mode"] = other.workflow_mode
+        if other.history is not None:
+            updates["history"] = other.history
+        if other.compaction is not None:
+            updates["compaction"] = other.compaction
         if other.output_type is not None:
             updates["output_type"] = other.output_type
         if other.artifacts is not None:
@@ -132,6 +139,7 @@ class AgentProfile:
             or self.agent_command is not None
             or bool(self.mcp_servers)
             or bool(self.settings)
+            or self.compaction is not None
             or self.needs_model_override(adapter_default)
         )
 

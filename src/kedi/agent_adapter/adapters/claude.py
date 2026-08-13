@@ -6,6 +6,7 @@ import sys
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
+from hashlib import sha256
 from importlib.util import find_spec
 from typing import Any, Coroutine, Iterator, Mapping, Sequence, cast
 
@@ -23,6 +24,7 @@ from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..native_compaction import validate_claude_native_compaction
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -70,6 +72,7 @@ class ClaudeAdapter:
         supports_native_artifacts=False,
         supports_stateful_history=True,
         supports_history_replay=False,
+        supports_native_compaction=True,
         supports_stream_events=True,
         settings=CLAUDE_AGENT_SETTING_KEYS,
     )
@@ -97,10 +100,10 @@ class ClaudeAdapter:
             f"kedi_claude_approval_ceiling_{id(self)}",
             default=(),
         )
-        self._subagent_conversation_var: ContextVar[
+        self._conversation_var: ContextVar[
             AdapterConversationContext | SubagentConversationContext | None
         ] = ContextVar(
-            f"kedi_claude_subagent_conversation_{id(self)}",
+            f"kedi_claude_conversation_{id(self)}",
             default=None,
         )
 
@@ -194,7 +197,7 @@ class ClaudeAdapter:
         sdk = _claude_sdk()
         run_kwargs = dict(kwargs)
         instructions = cast(str | None, run_kwargs.pop("instructions", None))
-        options = self._options_for_run(
+        options, session_fingerprint = self._options_for_run(
             sdk,
             output_type=output_type,
             output_schema=output_schema,
@@ -227,9 +230,14 @@ class ClaudeAdapter:
                 raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
             if invocation_observer() is not None:
                 report_invocation(_claude_invocation_usage(result))
-            conversation = self._subagent_conversation_var.get()
+            conversation = self._conversation_var.get()
             if conversation is not None:
-                conversation.result_state["claude_session_id"] = result.session_id
+                conversation.result_state.update(
+                    {
+                        "claude_session_id": result.session_id,
+                        "claude_session_fingerprint": session_fingerprint,
+                    }
+                )
             if resolver is not None:
                 resolver.complete_run(
                     final_text=_claude_text_response(result) if emit_final else None
@@ -282,7 +290,7 @@ class ClaudeAdapter:
 
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
-        token = self._subagent_conversation_var.set(request.conversation)
+        token = self._conversation_var.set(request.conversation)
         try:
             with (
                 self.tool_scope(request.tools),
@@ -291,18 +299,18 @@ class ClaudeAdapter:
             ):
                 yield
         finally:
-            self._subagent_conversation_var.reset(token)
+            self._conversation_var.reset(token)
 
     @contextmanager
     def conversation_scope(
         self,
         conversation: AdapterConversationContext,
     ) -> Iterator[None]:
-        token = self._subagent_conversation_var.set(conversation)
+        token = self._conversation_var.set(conversation)
         try:
             yield
         finally:
-            self._subagent_conversation_var.reset(token)
+            self._conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -329,28 +337,16 @@ class ClaudeAdapter:
         output_schema: dict[str, Any] | None,
         instructions: str | None,
         run_kwargs: Mapping[str, Any],
-    ) -> Any:
+    ) -> tuple[Any, str]:
         options_kwargs = {
             **self._settings_for_run(),
             **dict(run_kwargs),
         }
-        conversation = self._subagent_conversation_var.get()
-        if conversation is not None:
-            session_id = conversation.resume_state.get("claude_session_id")
-            if isinstance(session_id, str):
-                options_kwargs.setdefault("resume", session_id)
+        compaction = self.active_profile.compaction
+        if self.active_profile.history is True and compaction is not None:
+            validate_claude_native_compaction(compaction)
         options_kwargs.setdefault("tools", dict(CLAUDE_CODE_TOOLS_PRESET))
         options_kwargs.setdefault("permission_mode", CLAUDE_CODE_PERMISSION_MODE)
-        if output_schema is not None:
-            options_kwargs["output_format"] = {
-                "type": "json_schema",
-                "schema": output_schema,
-            }
-        elif output_type is not None:
-            options_kwargs["output_format"] = {
-                "type": "json_schema",
-                "schema": _output_json_schema(output_type),
-            }
         model = self._model_for_run()
         if model is not None:
             options_kwargs["model"] = model
@@ -382,6 +378,33 @@ class ClaudeAdapter:
                 options_kwargs["allowed_tools"] = [*existing_allowed, *allowed_tools]
             else:
                 options_kwargs["allowed_tools"] = allowed_tools
+        session_fingerprint = _claude_session_fingerprint(
+            options_kwargs,
+            tools=self.scoped_tools,
+        )
+        conversation = self._conversation_var.get()
+        if conversation is not None:
+            session_id = conversation.resume_state.get("claude_session_id")
+            previous_fingerprint = conversation.resume_state.get("claude_session_fingerprint")
+            if isinstance(session_id, str) and previous_fingerprint in {
+                None,
+                session_fingerprint,
+            }:
+                options_kwargs.setdefault("resume", session_id)
+            elif isinstance(session_id, str) and isinstance(
+                conversation, AdapterConversationContext
+            ):
+                conversation.cache_prefix_changed = True
+        if output_schema is not None:
+            options_kwargs["output_format"] = {
+                "type": "json_schema",
+                "schema": output_schema,
+            }
+        elif output_type is not None:
+            options_kwargs["output_format"] = {
+                "type": "json_schema",
+                "schema": _output_json_schema(output_type),
+            }
         options_kwargs["hooks"] = _with_kedi_approval_hook(
             sdk,
             options_kwargs.get("hooks"),
@@ -390,7 +413,7 @@ class ClaudeAdapter:
             approval_ceiling=self._approval_ceiling_var.get(),
         )
         options_cls = getattr(sdk, "ClaudeAgentOptions")
-        return options_cls(**options_kwargs)
+        return options_cls(**options_kwargs), session_fingerprint
 
     def _mcp_servers_for_run(self, sdk: Any) -> tuple[dict[str, Any], list[str]]:
         mcp_servers = _claude_external_mcp_servers(self.active_profile)
@@ -399,6 +422,48 @@ class ClaudeAdapter:
             mcp_servers["kedi"] = _claude_sdk_mcp_server(sdk, self.scoped_tools)
             allowed_tools.extend(f"mcp__kedi__{tool.name}" for tool in self.scoped_tools)
         return mcp_servers, allowed_tools
+
+
+def _claude_session_fingerprint(
+    options: Mapping[str, Any],
+    *,
+    tools: Sequence[ToolSpec],
+) -> str:
+    payload = {
+        "options": dict(options),
+        "tools": [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "json_schema": tool.json_schema,
+                "return_schema": tool.return_schema,
+                "metadata": tool.metadata,
+                "risk": tool.risk,
+                "artifact_result": tool.artifact_result,
+                "sequential": tool.sequential,
+            }
+            for tool in tools
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=_claude_fingerprint_default,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _claude_fingerprint_default(value: Any) -> Any:
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if callable(value):
+        return {
+            "callable": f"{getattr(value, '__module__', '')}."
+            f"{getattr(value, '__qualname__', type(value).__qualname__)}"
+        }
+    return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
 
 
 def _claude_sdk() -> Any:
