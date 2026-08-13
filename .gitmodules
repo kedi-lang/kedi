@@ -13,3 +13,6 @@
 [submodule "kedi-otel"]
 	path = kedi-otel
 	url = https://github.com/kedi-lang/kedi-otel.git
+[submodule "kedi-docs"]
+	path = kedi-docs
+	url = https://github.com/kedi-lang/kedi-docs
