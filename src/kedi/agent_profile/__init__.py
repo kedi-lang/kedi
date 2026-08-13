@@ -16,10 +16,10 @@ from .model import (
     eval_approval_directive,
     eval_effort_directive,
     eval_history_directive,
-    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
+    eval_skills_directive,
     eval_system_directive,
     eval_use_profile,
 )
@@ -31,12 +31,12 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
-    ProfileSkillsMember,
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
     ProfileSettingsMember,
+    ProfileSkillsMember,
     ProfileSubagentMember,
     ProfileSystemMember,
     ProfileToolMember,
@@ -58,8 +58,8 @@ from .settings import (
     parse_plain_setting_value,
     pydantic_model_settings,
 )
-from .stack import block_agent_profile_scope, current_block_agent_profile
 from .skills import SkillsSettings
+from .stack import block_agent_profile_scope, current_block_agent_profile
 from .tools import eval_use_directive, procedure_def_for_tool
 
 __all__ = [

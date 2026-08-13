@@ -20,10 +20,10 @@ from ...agent_profile.model import (
     eval_artifacts_directive,
     eval_effort_directive,
     eval_history_directive,
-    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
+    eval_skills_directive,
     eval_system_directive,
 )
 from ...agent_profile.registry import ProfileDefinition
@@ -44,7 +44,6 @@ from ..ast import (
     AssignStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
-    SkillsDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
@@ -56,6 +55,7 @@ from ..ast import (
     RawInvokeStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
+    SkillsDirectiveStmt,
     SystemDirectiveStmt,
     TemplateBlock,
     TemplateLine,

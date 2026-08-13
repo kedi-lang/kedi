@@ -12,10 +12,10 @@ from ...agent_profile.model import (
     eval_artifacts_directive,
     eval_effort_directive,
     eval_history_directive,
-    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
+    eval_skills_directive,
     eval_system_directive,
 )
 from ...agent_profile.tools import eval_use_directive
@@ -31,7 +31,6 @@ from ..ast import (
     BacktickLineStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
-    SkillsDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
@@ -40,6 +39,7 @@ from ..ast import (
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
+    SkillsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
     TemplateBlock,

@@ -8,7 +8,6 @@ from typing import Any
 
 from pydantic_ai import format_as_xml
 
-from kedi.artifacts.stream import ArtifactStream
 from kedi.agent_profile.skills import (
     DEFAULT_MAX_SKILLS,
     MAX_SKILL_BYTES,
@@ -16,6 +15,7 @@ from kedi.agent_profile.skills import (
     SKILL_NAME_RE,
     SkillsSettings,
 )
+from kedi.artifacts.stream import ArtifactStream
 from kedi.package_registry import kedi_home
 from kedi.telemetry import (
     TelemetryAsset,
