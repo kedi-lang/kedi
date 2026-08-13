@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from .models import CompactionCapabilities, CompactionOutcome
+from .telemetry import compact_history_span
 
 NativeCompact = Callable[[object, object], Awaitable[CompactionOutcome]]
 
@@ -23,7 +24,9 @@ class NativeCompactionBackend:
         self._compact = compact
 
     async def compact(self, state: object, policy: object) -> CompactionOutcome:
-        outcome = await self._compact(state, policy)
-        if outcome.backend != "native":
-            raise ValueError("native compaction callback returned a non-native outcome")
-        return outcome
+        with compact_history_span(mode="native", trigger="provider") as telemetry:
+            outcome = await self._compact(state, policy)
+            if outcome.backend != "native":
+                raise ValueError("native compaction callback returned a non-native outcome")
+            telemetry.complete(outcome)
+            return outcome

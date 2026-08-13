@@ -93,6 +93,7 @@ class CompactionCoordinator:
             outcome=CompactionOutcome(
                 backend="kedi",
                 applied=True,
+                trigger="threshold",
                 checkpoint_id=checkpoint.checkpoint_id,
                 source_tokens=window.source_tokens,
                 result_tokens=(

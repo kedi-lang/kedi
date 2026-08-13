@@ -15,6 +15,7 @@ from .models import (
     HistorySnapshot,
 )
 from .processor import HistoryProcessor
+from .telemetry import compact_history_span
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -63,32 +64,41 @@ class KediCompactionTransaction:
 
         if snapshot.adapter_shortname != self.codec.adapter_shortname:
             raise ValueError("history snapshot belongs to a different adapter codec")
-        with span(
-            "agent",
-            "process history",
-            "process_history",
-            level="detailed",
-            attributes={
-                "gen_ai.operation.name": "process_history",
-                "kedi.compaction.adapter": self.codec.adapter_shortname,
-            },
-        ) as current:
+        if not snapshot.entries or snapshot.total_tokens < policy.threshold_tokens:
             plan = self.processor.plan(snapshot, policy)
-            current.set_attribute("kedi.compaction.source_entries", len(snapshot.entries))
-            current.set_attribute("kedi.compaction.source_tokens", snapshot.total_tokens)
-            current.set_attribute("kedi.compaction.group_count", len(snapshot.groups))
-            current.set_attribute(
-                "kedi.compaction.protected_group_count",
-                sum(group.protected for group in plan.groups),
-            )
-            current.set_attribute("kedi.compaction.applicable", plan.applicable)
-            if plan.no_op_reason is not None:
-                current.set_attribute("kedi.compaction.no_op_reason", plan.no_op_reason)
-            return PreparedCompaction(
-                snapshot=snapshot,
-                plan=plan,
-                acceptance_policy=acceptance_policy or CheckpointAcceptancePolicy(),
-            )
+        else:
+            with span(
+                "agent",
+                "process history",
+                "process_history",
+                level="detailed",
+                attributes={
+                    "kedi.adapter.name": self.codec.adapter_shortname,
+                    "kedi.history.compaction.mode": "kedi",
+                    "kedi.history.compaction.input_messages": len(snapshot.entries),
+                    "kedi.history.compaction.input_tokens": snapshot.total_tokens,
+                },
+            ) as current:
+                plan = self.processor.plan(snapshot, policy)
+                current.set_attribute(
+                    "kedi.history.compaction.group_count",
+                    len(snapshot.groups),
+                )
+                current.set_attribute(
+                    "kedi.history.compaction.protected_group_count",
+                    sum(group.protected for group in plan.groups),
+                )
+                current.set_attribute("kedi.history.compaction.applicable", plan.applicable)
+                if plan.no_op_reason is not None:
+                    current.set_attribute(
+                        "kedi.history.compaction.no_op_reason",
+                        plan.no_op_reason,
+                    )
+        return PreparedCompaction(
+            snapshot=snapshot,
+            plan=plan,
+            acceptance_policy=acceptance_policy or CheckpointAcceptancePolicy(),
+        )
 
     def commit(
         self,
@@ -96,39 +106,44 @@ class KediCompactionTransaction:
         *,
         prepared: PreparedCompaction,
         checkpoint: CompactionCheckpoint,
+        cache_epoch_changed: bool | None = None,
     ) -> CompactionResult:
-        with span(
-            "agent",
-            "compact history",
-            "compact_history",
-            level="detailed",
-            attributes={
-                "gen_ai.operation.name": "compact_history",
-                "kedi.compaction.adapter": self.codec.adapter_shortname,
-                "kedi.compaction.source_digest": prepared.snapshot.source_digest,
-            },
-        ) as current:
-            try:
-                result = self.coordinator.apply_checkpoint(
-                    state,
-                    snapshot=prepared.snapshot,
-                    plan=prepared.plan,
-                    checkpoint=checkpoint,
-                    codec=self.codec,
-                    acceptance_policy=prepared.acceptance_policy,
+        with compact_history_span(
+            mode="kedi",
+            trigger="threshold",
+            adapter_name=self.codec.adapter_shortname,
+            input_messages=len(prepared.snapshot.entries),
+            input_tokens=prepared.snapshot.total_tokens,
+        ) as telemetry:
+            result = self.coordinator.apply_checkpoint(
+                state,
+                snapshot=prepared.snapshot,
+                plan=prepared.plan,
+                checkpoint=checkpoint,
+                codec=self.codec,
+                acceptance_policy=prepared.acceptance_policy,
+            )
+            output_messages = None
+            if result.processed is not None:
+                replaced = result.processed.replaced_range
+                output_messages = (
+                    len(prepared.snapshot.entries) - (replaced.end - replaced.start) + 1
                 )
-            except BaseException as exc:
-                current.record_exception(exc)
-                raise
-            current.set_attribute("kedi.compaction.applied", result.outcome.applied)
-            if result.outcome.source_tokens is not None:
-                current.set_attribute(
-                    "kedi.compaction.source_tokens",
-                    result.outcome.source_tokens,
-                )
-            if result.outcome.result_tokens is not None:
-                current.set_attribute(
-                    "kedi.compaction.result_tokens",
-                    result.outcome.result_tokens,
-                )
+            checkpoint_valid = result.outcome.applied and result.processed is not None
+            telemetry.complete(
+                result.outcome,
+                input_messages=len(prepared.snapshot.entries),
+                output_messages=output_messages,
+                input_tokens=prepared.snapshot.total_tokens,
+                output_tokens=result.outcome.result_tokens,
+                selected_tokens=result.outcome.source_tokens,
+                prefix_preserved=checkpoint_valid,
+                cache_epoch_changed=(cache_epoch_changed if checkpoint_valid else False),
+                checkpoint_valid=checkpoint_valid,
+            )
+            if checkpoint_valid:
+                telemetry.checkpoint_validated()
+                telemetry.checkpoint_committed()
+                if cache_epoch_changed:
+                    telemetry.cache_epoch_advanced()
             return result

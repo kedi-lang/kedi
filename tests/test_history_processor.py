@@ -47,6 +47,7 @@ from kedi.agent_adapter.compaction import (
     CompactionOutcome,
     CompactionPreflightError,
     CompactionResult,
+    CompactionUsage,
     CompactionValidationError,
     ConversationCompactionTransaction,
     HistoryCodecRegistry,
@@ -716,11 +717,17 @@ def test_native_backend_propagates_cancellation_without_fabricating_outcome() ->
             CompactionCapabilities(native_managed=True),
             compact,
         )
-        task = asyncio.create_task(backend.compact({}, {}))
-        await started.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        with installed_recording_backend() as telemetry:
+            task = asyncio.create_task(backend.compact({}, {}))
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert telemetry.metrics[0].attributes["result"] == "cancelled"
+        assert "kedi.history.compaction.failures" not in {
+            metric.name for metric in telemetry.metrics
+        }
 
     asyncio.run(run())
 
@@ -750,8 +757,80 @@ def test_track_a_telemetry_contains_structure_but_not_history_content() -> None:
     assert "signed-reasoning-1" not in serialized_attributes
     assert "tool_call_result_1" not in serialized_attributes
     process = telemetry.started_spans[0]
-    assert process.attributes["kedi.compaction.source_entries"] == len(_pydantic_history())
-    assert process.attributes["kedi.compaction.applicable"] is True
+    compact = telemetry.started_spans[1]
+    assert process.attributes["kedi.history.compaction.input_messages"] == len(_pydantic_history())
+    assert process.attributes["kedi.history.compaction.applicable"] is True
+    assert compact.attributes["kedi.history.compaction.mode"] == "kedi"
+    assert compact.attributes["kedi.history.compaction.trigger"] == "threshold"
+    assert compact.attributes["kedi.history.compaction.prefix_preserved"] is True
+    assert compact.attributes["kedi.history.compaction.checkpoint_valid"] is True
+    reduction_ratio = cast(
+        "float",
+        compact.attributes["kedi.history.compaction.reduction_ratio"],
+    )
+    assert 0 < reduction_ratio < 1
+    assert [event.name for event in compact.events] == [
+        "compaction triggered",
+        "checkpoint validated",
+        "checkpoint committed",
+    ]
+    metric_names = [metric.name for metric in telemetry.metrics]
+    assert metric_names == [
+        "kedi.history.compactions",
+        "kedi.history.compaction.duration",
+        "kedi.history.compaction.input_tokens",
+        "kedi.history.compaction.output_tokens",
+        "kedi.history.compaction.reduction_ratio",
+    ]
+    assert all(
+        set(metric.attributes) <= {"mode", "trigger", "result"} for metric in telemetry.metrics
+    )
+
+
+def test_below_threshold_history_does_not_emit_compaction_telemetry() -> None:
+    state: dict[str, object] = {"pydantic_messages": _pydantic_history()}
+    transaction = KediCompactionTransaction(PydanticHistoryCodec())
+    snapshot = transaction.processor.inspect(state, codec=transaction.codec)
+
+    with installed_recording_backend() as telemetry:
+        prepared = transaction.prepare(
+            state,
+            HistoryReductionPolicy(
+                threshold_tokens=snapshot.total_tokens + 1,
+                target_tokens=snapshot.total_tokens,
+                preserve_recent_tokens=1,
+                checkpoint_budget_tokens=1,
+            ),
+        )
+
+    assert prepared.plan.no_op_reason == "below-threshold"
+    assert telemetry.started_spans == []
+    assert telemetry.metrics == []
+
+
+def test_no_safe_window_records_history_processing_reason() -> None:
+    state: dict[str, object] = {"pydantic_messages": _pydantic_history()}
+    transaction = KediCompactionTransaction(PydanticHistoryCodec())
+    snapshot = transaction.processor.inspect(state, codec=transaction.codec)
+
+    with installed_recording_backend() as telemetry:
+        prepared = transaction.prepare(
+            state,
+            HistoryReductionPolicy(
+                threshold_tokens=snapshot.total_tokens,
+                target_tokens=max(1, snapshot.total_tokens // 2),
+                preserve_recent_tokens=0,
+                checkpoint_budget_tokens=1,
+                minimum_reduction_tokens=snapshot.total_tokens + 1,
+            ),
+        )
+
+    assert prepared.plan.no_op_reason == "no-safe-window"
+    assert len(telemetry.started_spans) == 1
+    assert (
+        telemetry.started_spans[0].attributes["kedi.history.compaction.no_op_reason"]
+        == "no-safe-window"
+    )
 
 
 def _seed_conversation(
@@ -788,11 +867,12 @@ def test_conversation_commit_rotates_epoch_once_and_invalidates_stale_lanes() ->
     prepared = transaction.prepare(conversation, _policy(snapshot.total_tokens))
     epoch_before = conversation.cache_epoch
 
-    result = transaction.commit(
-        conversation,
-        prepared=prepared,
-        checkpoint=_checkpoint(prepared.prepared),
-    )
+    with installed_recording_backend() as telemetry:
+        result = transaction.commit(
+            conversation,
+            prepared=prepared,
+            checkpoint=_checkpoint(prepared.prepared),
+        )
 
     assert result.outcome.applied is True
     assert conversation.cache_epoch == epoch_before + 1
@@ -800,6 +880,9 @@ def test_conversation_commit_rotates_epoch_once_and_invalidates_stale_lanes() ->
     assert compacted.cache_epoch == epoch_before + 1
     assert len(cast("list[object]", compacted.state["pydantic_messages"])) < len(history)
     assert conversation.adapter_state_snapshot("langchain").state == {}
+    compact_span = telemetry.started_spans[0]
+    assert compact_span.attributes["kedi.history.compaction.cache_epoch_changed"] is True
+    assert "cache epoch advanced" in {event.name for event in compact_span.events}
     conversation.close()
 
 
@@ -1792,7 +1875,19 @@ def test_native_backend_validates_capabilities_and_callback_outcome() -> None:
 
 
 def test_native_backend_returns_a_valid_native_outcome_unchanged() -> None:
-    expected = CompactionOutcome(backend="native", applied=True, trigger="manual")
+    expected = CompactionOutcome(
+        backend="native",
+        applied=True,
+        trigger="manual",
+        source_tokens=1_000,
+        result_tokens=250,
+        usage=CompactionUsage(
+            input_tokens=120,
+            output_tokens=30,
+            cache_read_tokens=80,
+            cache_write_tokens=10,
+        ),
+    )
 
     async def compact(_state: object, _policy: object) -> CompactionOutcome:
         return expected
@@ -1802,7 +1897,52 @@ def test_native_backend_returns_a_valid_native_outcome_unchanged() -> None:
             CompactionCapabilities(native_managed=True),
             compact,
         )
-        assert await backend.compact({}, {}) is expected
+        with installed_recording_backend() as telemetry:
+            assert await backend.compact({}, {}) is expected
+
+        compact_span = telemetry.started_spans[0]
+        assert compact_span.name == "compact history"
+        assert compact_span.attributes["kedi.history.compaction.mode"] == "native"
+        assert compact_span.attributes["kedi.history.compaction.trigger"] == "manual"
+        assert compact_span.attributes["kedi.history.compaction.reduction_ratio"] == 0.75
+        assert compact_span.attributes["gen_ai.usage.input_tokens"] == 120
+        assert compact_span.attributes["gen_ai.usage.output_tokens"] == 30
+        assert compact_span.attributes["gen_ai.usage.cache_read_tokens"] == 80
+        assert compact_span.attributes["gen_ai.usage.cache_write_tokens"] == 10
+        assert telemetry.metrics[0].attributes == {
+            "mode": "native",
+            "trigger": "manual",
+            "result": "applied",
+        }
+
+    asyncio.run(run())
+
+
+def test_native_backend_records_failure_without_history_content() -> None:
+    async def compact(_state: object, _policy: object) -> CompactionOutcome:
+        raise RuntimeError("sensitive history payload")
+
+    async def run() -> None:
+        backend = NativeCompactionBackend(
+            CompactionCapabilities(native_managed=True),
+            compact,
+        )
+        with installed_recording_backend() as telemetry:
+            with pytest.raises(RuntimeError, match="sensitive history payload"):
+                await backend.compact({}, {})
+
+        compact_span = telemetry.started_spans[0]
+        assert compact_span.attributes["error.type"] == "RuntimeError"
+        assert "sensitive history payload" not in json.dumps(compact_span.attributes)
+        assert [event.name for event in compact_span.events] == [
+            "compaction triggered",
+            "compaction rejected",
+        ]
+        assert telemetry.metrics[-1].name == "kedi.history.compaction.failures"
+        assert telemetry.metrics[-1].attributes == {
+            "mode": "native",
+            "trigger": "provider",
+        }
 
     asyncio.run(run())
 

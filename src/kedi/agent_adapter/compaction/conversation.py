@@ -85,6 +85,7 @@ class ConversationCompactionTransaction:
                 lane.resume_state,
                 prepared=prepared.prepared,
                 checkpoint=checkpoint,
+                cache_epoch_changed=True,
             )
             if result.processed is None:
                 raise CompactionValidationError("compaction produced no replacement state")
