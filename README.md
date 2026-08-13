@@ -187,9 +187,9 @@ change earlier procedures.
 - `> mcp:` — load MCP tools; string fields can be plain strings or inline Python like `` `os.getenv("STDIO_COMMAND")` ``
 - `> profile: name:` — define a reusable profile with nested `> model:`, `> effort:`, `> system:`, `> settings:`, `> mcp:`, and/or `> use:` members
 - `> use: name` or `> use: \`name\`` — register a **procedure** as an agent tool when the name matches a procedure; otherwise merge a profile by **profile name** (not the importing module name)
-- `> use: skills` — opt into explicit project-local skill discovery through
-  `list_skills` and `read_skill`. Skills live in `.agents/skills/<name>/SKILL.md`;
-  their contents are read on demand rather than injected into every prompt.
+- `> skills: enabled` — expose on-demand `list_skills` and `read_skill` tools.
+  Discovery prefers the user Kedi registry, then project-local skills, then
+  user-global skills; the expanded directive controls source merging and limits.
 - Multiline `> use:` lists procedure tools explicitly:
 
 ````kedi
@@ -213,6 +213,8 @@ kedi your_program.kedi --test
 kedi your_program.kedi --eval
 kedi your_program.kedi --eval --optimize --optimizer gepa
 kedi your_program.kedi --adapter pydantic --adapter-model groq:qwen/qwen3-32b
+kedi skills add --path ~/my-skill
+kedi skills add --repo owner/skill-repository
 kedi-lsp   # language server for editors
 ```
 

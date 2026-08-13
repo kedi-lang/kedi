@@ -16,6 +16,7 @@ from .model import (
     eval_approval_directive,
     eval_effort_directive,
     eval_history_directive,
+    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -30,6 +31,7 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
+    ProfileSkillsMember,
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
@@ -57,6 +59,7 @@ from .settings import (
     pydantic_model_settings,
 )
 from .stack import block_agent_profile_scope, current_block_agent_profile
+from .skills import SkillsSettings
 from .tools import eval_use_directive, procedure_def_for_tool
 
 __all__ = [
@@ -69,6 +72,8 @@ __all__ = [
     "CompactionSettingsError",
     "ProfileApprovalMember",
     "ProfileHistoryMember",
+    "ProfileSkillsMember",
+    "SkillsSettings",
     "ACP_AGENT_SETTING_KEYS",
     "CLAUDE_AGENT_SETTING_KEYS",
     "CODEX_AGENT_SETTING_KEYS",
@@ -103,6 +108,7 @@ __all__ = [
     "eval_agent_directive",
     "eval_effort_directive",
     "eval_history_directive",
+    "eval_skills_directive",
     "eval_mcp_directive",
     "eval_model_directive",
     "eval_settings_directive",

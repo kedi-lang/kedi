@@ -55,6 +55,13 @@ class ProfileHistoryMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileSkillsMember:
+    kind: Literal["skills"] = "skills"
+    enabled: bool
+    fields: tuple["SettingsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -134,6 +141,7 @@ class ProfileDefinition:
         | ProfileEffortMember
         | ProfileApprovalMember
         | ProfileHistoryMember
+        | ProfileSkillsMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember

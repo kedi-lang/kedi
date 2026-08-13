@@ -10,6 +10,7 @@ from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .compaction import CompactionSettings
 from .mcp import McpServerSpec
+from .skills import SkillsSettings, skills_settings
 
 if TYPE_CHECKING:
     from ..agent_adapter.tool_override import ToolSpec
@@ -17,7 +18,6 @@ if TYPE_CHECKING:
 
 AgentCommand = str | tuple[str, ...]
 WorkflowMode = Literal["delegate", "dynamic"]
-SKILLS_USE_TARGET = "skills"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -38,7 +38,7 @@ class AgentProfile:
     tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
     mcp_servers: tuple[McpServerSpec, ...] = ()
     approval: ApprovalPolicy | None = None
-    skills: bool | None = None
+    skills: SkillsSettings | bool | None = None
     subagents: tuple[str, ...] = ()
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
     max_agents: int | None = None
@@ -47,6 +47,9 @@ class AgentProfile:
     compaction: CompactionSettings | None = None
     output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "skills", skills_settings(self.skills))
 
     @classmethod
     def empty(cls) -> AgentProfile:

@@ -1,15 +1,22 @@
-"""Project-local, one-file skill discovery for agent tool calls."""
+"""Scoped one-file skill discovery for agent tool calls."""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import format_as_xml
 
 from kedi.artifacts.stream import ArtifactStream
+from kedi.agent_profile.skills import (
+    DEFAULT_MAX_SKILLS,
+    MAX_SKILL_BYTES,
+    MAX_SKILLS,
+    SKILL_NAME_RE,
+    SkillsSettings,
+)
+from kedi.package_registry import kedi_home
 from kedi.telemetry import (
     TelemetryAsset,
     asset_fingerprint,
@@ -19,18 +26,36 @@ from kedi.telemetry import (
 
 from .tool_override import ToolSpec
 
-_SKILL_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _SKILL_FILE_NAME = "SKILL.md"
 MAX_SKILL_LIST_LIMIT = 100
-MAX_SKILL_BYTES = 256 * 1024
 _SKILL_READ_CHARS = 64 * 1024
 
 
 class SkillStore:
-    """Read plain ``SKILL.md`` files rooted at one project-local directory."""
+    """Read plain ``SKILL.md`` files from ordered, bounded roots."""
 
-    def __init__(self, root: Path) -> None:
-        self.root = root.resolve()
+    def __init__(
+        self,
+        root: Path | Sequence[Path],
+        *,
+        include_all: bool = True,
+        exclude_paths: Sequence[Path] = (),
+        max_skills: int = DEFAULT_MAX_SKILLS,
+    ) -> None:
+        roots = (root,) if isinstance(root, Path) else tuple(root)
+        if (
+            not isinstance(max_skills, int)
+            or isinstance(max_skills, bool)
+            or not 1 <= max_skills <= MAX_SKILLS
+        ):
+            raise ValueError(f"max_skills must be an integer from 1 through {MAX_SKILLS}")
+        self.roots = tuple(dict.fromkeys(item.expanduser().resolve() for item in roots))
+        self.root = self.roots[0] if self.roots else Path.cwd().resolve()
+        self.include_all = include_all
+        self.exclude_paths = tuple(
+            dict.fromkeys(item.expanduser().resolve() for item in exclude_paths)
+        )
+        self.max_skills = max_skills
 
     @classmethod
     def for_current_project(cls) -> SkillStore:
@@ -38,27 +63,22 @@ class SkillStore:
 
     def list_skills(self, *, all: bool = False, limit: int = 20) -> list[str]:
         """Return deterministic skill identifiers without exposing paths or contents."""
-        del all  # Reserved for future source/scope selection.
         if not isinstance(limit, int) or isinstance(limit, bool) or limit <= 0:
             raise ValueError("skill list limit must be a positive integer")
         if limit > MAX_SKILL_LIST_LIMIT:
             raise ValueError(f"skill list limit cannot exceed {MAX_SKILL_LIST_LIMIT}")
-        if not self.root.is_dir():
-            return []
-
-        names: list[str] = []
-        for entry in self.root.iterdir():
-            if not entry.is_dir() or _SKILL_NAME_RE.fullmatch(entry.name) is None:
-                continue
-            try:
-                self._validate_skill_text(self._bounded_skill_file(entry.name))
-            except (FileNotFoundError, PermissionError, ValueError):
-                continue
-            names.append(entry.name)
-        return sorted(names)[:limit]
+        del all  # Source merging is configured by the scoped skills policy.
+        effective_limit = min(self.max_skills, limit)
+        names: dict[str, None] = {}
+        for root in self._active_roots():
+            for name in self._valid_names(root):
+                names.setdefault(name, None)
+            if names and not self.include_all:
+                break
+        return sorted(names)[:effective_limit]
 
     def read_skill(self, *, skill_name: str) -> str:
-        """Read a single valid, project-local plain ``SKILL.md`` file."""
+        """Read one valid plain ``SKILL.md`` from the configured sources."""
         path = self._bounded_skill_file(skill_name)
         content = "".join(self._skill_chunks(path, skill_name=skill_name))
         self._record_skill_asset(skill_name, path, content)
@@ -121,36 +141,117 @@ class SkillStore:
         return path
 
     def _skill_file(self, skill_name: str) -> Path:
-        if not isinstance(skill_name, str) or _SKILL_NAME_RE.fullmatch(skill_name) is None:
+        if not isinstance(skill_name, str) or SKILL_NAME_RE.fullmatch(skill_name) is None:
             raise ValueError(f"Invalid skill name: {skill_name!r}")
-        path = self.root / skill_name / _SKILL_FILE_NAME
-        try:
-            resolved = path.resolve(strict=True)
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(f"Skill {skill_name!r} was not found") from exc
-        if not resolved.is_relative_to(self.root):
-            raise ValueError(f"Skill {skill_name!r} resolves outside the project skill root")
-        if not resolved.is_file():
+        for root in self._active_roots():
+            path = root / skill_name / _SKILL_FILE_NAME
+            if self._is_excluded(path):
+                continue
+            try:
+                resolved = path.resolve(strict=True)
+            except FileNotFoundError:
+                continue
+            if not resolved.is_relative_to(root):
+                raise ValueError(f"Skill {skill_name!r} resolves outside its skill root")
+            if resolved.is_file():
+                return resolved
+        raise FileNotFoundError(f"Skill {skill_name!r} was not found")
+
+    def _active_roots(self) -> tuple[Path, ...]:
+        roots = tuple(root for root in self.roots if root.is_dir() and not self._is_excluded(root))
+        if self.include_all:
+            return roots
+        for root in roots:
+            if self._valid_names(root):
+                return (root,)
+        return roots[:1]
+
+    def _valid_names(self, root: Path) -> list[str]:
+        names: list[str] = []
+        for entry in root.iterdir():
+            if (
+                not entry.is_dir()
+                or SKILL_NAME_RE.fullmatch(entry.name) is None
+                or self._is_excluded(entry)
+            ):
+                continue
+            try:
+                path = self._skill_file_in_root(root, entry.name)
+                self._validate_skill_text(path)
+            except (FileNotFoundError, PermissionError, ValueError):
+                continue
+            names.append(entry.name)
+        return names
+
+    def _skill_file_in_root(self, root: Path, skill_name: str) -> Path:
+        path = root / skill_name / _SKILL_FILE_NAME
+        resolved = path.resolve(strict=True)
+        if self._is_excluded(resolved) or not resolved.is_relative_to(root):
+            raise ValueError(f"Skill {skill_name!r} resolves outside its skill root")
+        if not resolved.is_file() or resolved.stat().st_size > MAX_SKILL_BYTES:
             raise FileNotFoundError(f"Skill {skill_name!r} was not found")
         return resolved
 
+    def _is_excluded(self, path: Path) -> bool:
+        resolved = path.expanduser().resolve()
+        return any(
+            resolved == excluded or excluded in resolved.parents for excluded in self.exclude_paths
+        )
 
-def skill_tool_specs(root: Path | None = None) -> tuple[ToolSpec, ToolSpec]:
+
+def resolve_skill_store(
+    settings: SkillsSettings,
+    *,
+    base_dir: Path | None = None,
+) -> SkillStore:
+    """Resolve registry, project, and user skill roots in precedence order."""
+
+    base = (base_dir or Path.cwd()).expanduser().resolve()
+    configured_cwd = settings.cwd
+    if configured_cwd is not None:
+        base = (
+            configured_cwd.resolve()
+            if configured_cwd.is_absolute()
+            else (base / configured_cwd).resolve()
+        )
+    roots: list[Path] = []
+    if settings.include_registry:
+        roots.append(kedi_home() / "registry" / "skills")
+    roots.extend((base / ".agents" / "skills", Path.home() / ".agents" / "skills"))
+    excludes = tuple(
+        path.resolve() if path.is_absolute() else (base / path).resolve()
+        for path in settings.exclude_paths
+    )
+    return SkillStore(
+        roots,
+        include_all=settings.include_all,
+        exclude_paths=excludes,
+        max_skills=settings.max_skills,
+    )
+
+
+def skill_tool_specs(
+    root: Path | None = None,
+    *,
+    store: SkillStore | None = None,
+) -> tuple[ToolSpec, ToolSpec]:
     """Build the two read-only tool specs for one agent call scope."""
-    store = SkillStore(root) if root is not None else SkillStore.for_current_project()
+    active_store = store or (
+        SkillStore(root) if root is not None else SkillStore.for_current_project()
+    )
 
     def list_skills(*, all: bool = False, limit: int = 20) -> list[str]:
-        return store.list_skills(all=all, limit=limit)
+        return active_store.list_skills(all=all, limit=limit)
 
     def read_skill(*, skill_name: str) -> ArtifactStream[str]:
-        return store.stream_skill(skill_name=skill_name)
+        return active_store.stream_skill(skill_name=skill_name)
 
     metadata: dict[str, Any] = {"kedi_tool_kind": "skill"}
     return (
         ToolSpec(
             fn=list_skills,
             name="list_skills",
-            description="List available project-local SKILL.md instruction names.",
+            description="List available scoped SKILL.md instruction names.",
             json_schema={
                 "type": "object",
                 "properties": {

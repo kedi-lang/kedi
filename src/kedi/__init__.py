@@ -13,7 +13,7 @@ from .agent_adapter import (
     codex_responses_model,
     observe_agent_events,
 )
-from .agent_profile import McpServerSpec
+from .agent_profile import McpServerSpec, SkillsSettings
 from .api import (
     AdapterLike,
     AgentName,
@@ -87,6 +87,7 @@ __all__ = [
     "CodexModelAdapter",
     "FrameworkAdapterName",
     "McpServerSpec",
+    "SkillsSettings",
     "bind",
     "approval",
     "cache_info",

@@ -66,6 +66,7 @@ from ..ast import (
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    SkillsDirectiveStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
@@ -85,6 +86,7 @@ from ..ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
+    ProfileSkillsEntry,
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
@@ -372,6 +374,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "history_directive":
                 stmt = self._walk_history_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "skills_directive":
+                stmt = self._walk_skills_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
@@ -976,6 +982,8 @@ class _Walker:
             return self._walk_approval_directive(node)
         if t == "history_directive":
             return self._walk_history_directive(node)
+        if t == "skills_directive":
+            return self._walk_skills_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -1845,6 +1853,84 @@ class _Walker:
             loc=self._span(node),
         )
 
+    def _walk_skills_directive(self, node: Node) -> SkillsDirectiveStmt:
+        value_node = _field(node, "value")
+        if value_node is not None:
+            value = _src_text(self.source, value_node).strip()
+            if value not in {"enabled", "disabled"}:
+                self._error(
+                    value_node,
+                    "skills directive must be 'enabled' or 'disabled'",
+                    code="K-SKILLS-VALUE",
+                )
+            return SkillsDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
+        body_node = _field(node, "body")
+        assert body_node is not None
+        enabled: bool | None = None
+        fields: list[SettingsField] = []
+        seen: set[str] = set()
+        allowed = {
+            "enabled",
+            "cwd",
+            "max_skills",
+            "include_registry",
+            "include_all",
+            "exclude_paths",
+        }
+        boolean_fields = {"enabled", "include_registry", "include_all"}
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            field = self._walk_settings_value_field(child)
+            name = field.name
+            if name not in allowed:
+                self._error(
+                    child,
+                    "skills setting must be one of: " + ", ".join(sorted(allowed)),
+                    code="K-SKILLS-KEY",
+                )
+                continue
+            if name in seen:
+                self._error(
+                    child,
+                    f"Duplicate skills setting: {name!r}",
+                    code="K-SKILLS-DUP",
+                )
+                continue
+            seen.add(name)
+            if name in boolean_fields and field.backtick_code is None:
+                value = (field.plain_value or "").strip()
+                if value not in {"true", "false"}:
+                    self._error(
+                        child,
+                        f"skills {name} setting must be 'true' or 'false'",
+                        code="K-SKILLS-BOOL",
+                    )
+            if name == "enabled":
+                if field.backtick_code is not None:
+                    self._error(
+                        child,
+                        "skills enabled setting must be the literal 'true' or 'false'",
+                        code="K-SKILLS-ENABLED",
+                    )
+                    enabled = False
+                else:
+                    enabled = (field.plain_value or "").strip() == "true"
+                continue
+            fields.append(field)
+        if enabled is None:
+            self._error(
+                body_node,
+                "skills block requires an 'enabled: true' or 'enabled: false' setting",
+                code="K-SKILLS-ENABLED-REQUIRED",
+            )
+        return SkillsDirectiveStmt(
+            enabled=enabled is True,
+            fields=fields,
+            loc=self._span(node),
+        )
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -2058,6 +2144,7 @@ class _Walker:
         effort_members: list[ProfileEffortEntry] = []
         approval_members: list[ProfileApprovalEntry] = []
         history_members: list[ProfileHistoryEntry] = []
+        skills_members: list[ProfileSkillsEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
@@ -2156,6 +2243,15 @@ class _Walker:
                         ProfileHistoryEntry(
                             enabled=history_stmt.enabled,
                             fields=history_stmt.fields,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "skills_directive":
+                    skills_stmt = self._walk_skills_directive(child)
+                    skills_members.append(
+                        ProfileSkillsEntry(
+                            enabled=skills_stmt.enabled,
+                            fields=skills_stmt.fields,
                             loc=self._span(child),
                         )
                     )
@@ -2308,6 +2404,7 @@ class _Walker:
             and not effort_members
             and not approval_members
             and not history_members
+            and not skills_members
             and not system_members
             and not mcp_members
             and not settings_members
@@ -2321,7 +2418,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> skills:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2332,6 +2429,7 @@ class _Walker:
             effort_members=effort_members,
             approval_members=approval_members,
             history_members=history_members,
+            skills_members=skills_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,

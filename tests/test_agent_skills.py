@@ -10,16 +10,27 @@ import kedi
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.skills import (
-    MAX_SKILL_BYTES,
     MAX_SKILL_LIST_LIMIT,
     SkillStore,
+    resolve_skill_store,
     skill_tool_specs,
 )
 from kedi.agent_adapter.tool_override import with_approval, with_artifact_result
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import AgentProfile, eval_skills_directive
+from kedi.agent_profile.skills import (
+    MAX_SKILL_BYTES,
+    MAX_SKILLS,
+    SkillsSettings,
+    SkillsSettingsError,
+    normalize_skills_settings,
+    skills_settings,
+)
 from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
+from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import ProfileDefStmt, SkillsDirectiveStmt
+from kedi.lang.parser.diagnostics import KediParseError
 from tests.mock_adapter import MockAdapter
 
 
@@ -29,6 +40,14 @@ def _write_skill(root: Path, name: str, text: str = "Use concise steps.\n") -> P
     skill_file = path / "SKILL.md"
     skill_file.write_text(text, encoding="utf-8")
     return skill_file
+
+
+@pytest.fixture(autouse=True)
+def _isolated_skill_homes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("KEDI_HOME", str(home / ".kedi"))
 
 
 def test_skill_store_lists_and_reads_plain_project_local_skills(tmp_path: Path) -> None:
@@ -52,6 +71,12 @@ def test_skill_store_for_current_project_uses_the_current_working_directory(
     monkeypatch.chdir(tmp_path)
 
     assert SkillStore.for_current_project().list_skills() == ["local"]
+
+
+@pytest.mark.parametrize("max_skills", [0, True, MAX_SKILLS + 1])
+def test_skill_store_rejects_invalid_maximum(tmp_path: Path, max_skills: object) -> None:
+    with pytest.raises(ValueError, match="max_skills"):
+        SkillStore(tmp_path, max_skills=max_skills)  # type: ignore[arg-type]
 
 
 def test_skill_store_handles_missing_root_and_non_utf8_content(tmp_path: Path) -> None:
@@ -185,7 +210,7 @@ def test_native_approval_adapters_receive_skill_tools_without_approval_wrappers(
     tmp_path: Path,
 ) -> None:
     source_path = tmp_path / "app.kedi"
-    source_path.write_text("> use: skills\n>> Return [answer].\n", encoding="utf-8")
+    source_path.write_text("> skills: enabled\n>> Return [answer].\n", encoding="utf-8")
     runtime = compile_program(
         parse_program(source_path.read_text(encoding="utf-8"), source_path=str(source_path)),
         adapter=MockAdapter(),
@@ -201,14 +226,16 @@ def test_native_approval_adapters_receive_skill_tools_without_approval_wrappers(
     assert all((tool.metadata or {}).get("kedi_telemetry_wrapped") is True for tool in tools)
 
 
-def test_single_line_use_skills_registers_skill_tools_and_instructions(
+def test_skills_directive_registers_skill_tools_and_instructions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _write_skill(tmp_path / ".agents" / "skills", "research")
     monkeypatch.chdir(tmp_path)
     adapter = MockAdapter()
     runtime = compile_program(
-        parse_program("> system: Be concise.\n> use: skills\n>> Return [answer].\n= <answer>\n"),
+        parse_program(
+            "> system: Be concise.\n> skills: enabled\n>> Return [answer].\n= <answer>\n"
+        ),
         adapter=adapter,
     )
 
@@ -228,6 +255,28 @@ def test_single_line_use_skills_registers_skill_tools_and_instructions(
     assert "<SKILL_INSTRUCTIONS>" in adapter.instruction_calls[0]
 
 
+def test_skills_disabled_removes_an_inherited_skill_policy(tmp_path: Path) -> None:
+    _write_skill(tmp_path / ".agents" / "skills", "research")
+    adapter = MockAdapter()
+    runtime = compile_program(
+        parse_program(
+            "> skills: enabled\n"
+            "@without_skills():\n"
+            "    > skills: disabled\n"
+            "    >> Return [answer].\n"
+            "    = <answer>\n\n"
+            "= `without_skills()`\n",
+            source_path=str(tmp_path / "main.kedi"),
+        ),
+        adapter=adapter,
+    )
+
+    assert runtime.run_main() == "answer-value"
+    assert adapter.tool_calls == [
+        ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
+    ]
+
+
 def test_file_local_skills_do_not_depend_on_process_current_directory(tmp_path: Path) -> None:
     class SkillReadingAdapter(MockAdapter):
         captured_tools: dict[str, Any]
@@ -239,7 +288,7 @@ def test_file_local_skills_do_not_depend_on_process_current_directory(tmp_path: 
     project = tmp_path / "project"
     source_path = project / "app.kedi"
     source_path.parent.mkdir()
-    source_path.write_text("> use: skills\n>> Return [answer].\n= <answer>\n", encoding="utf-8")
+    source_path.write_text("> skills: enabled\n>> Return [answer].\n= <answer>\n", encoding="utf-8")
     _write_skill(project / ".agents" / "skills", "local")
 
     adapter = SkillReadingAdapter()
@@ -266,7 +315,7 @@ def test_python_bind_uses_the_bound_file_skill_root(tmp_path: Path) -> None:
             return super().produce_sync(**kwargs)
 
     source_path = tmp_path / "bound.kedi"
-    source_path.write_text("> use: skills\n>> Return [answer].\n= <answer>\n", encoding="utf-8")
+    source_path.write_text("> skills: enabled\n>> Return [answer].\n= <answer>\n", encoding="utf-8")
     _write_skill(tmp_path / ".agents" / "skills", "bound-local")
     adapter = SkillReadingAdapter()
     kedi.configure(adapter=adapter)
@@ -283,7 +332,7 @@ def test_python_bind_uses_the_bound_file_skill_root(tmp_path: Path) -> None:
     assert adapter.captured_tools["list_skills"].fn() == ["bound-local"]
 
 
-def test_profile_use_skills_enables_skill_tools(
+def test_profile_skills_directive_enables_skill_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _write_skill(tmp_path / ".agents" / "skills", "research")
@@ -292,7 +341,7 @@ def test_profile_use_skills_enables_skill_tools(
     runtime = compile_program(
         parse_program(
             "> profile: researcher:\n"
-            "    > use: skills\n\n"
+            "    > skills: enabled\n\n"
             "> use: researcher\n"
             ">> Return [answer].\n"
             "= <answer>\n"
@@ -325,7 +374,7 @@ def test_profile_can_combine_skills_with_named_procedure_tools(
             "    = ok\n\n"
             "> profile: researcher:\n"
             "    > use: lookup\n"
-            "    > use: skills\n\n"
+            "    > skills: enabled\n\n"
             "> use: researcher\n"
             ">> Return [answer].\n"
             "= <answer>\n"
@@ -366,7 +415,7 @@ def test_procedure_named_skills_keeps_procedure_precedence() -> None:
     ]
 
 
-def test_use_skills_requires_adapter_tool_registration() -> None:
+def test_skills_directive_requires_adapter_tool_registration() -> None:
     class NoToolAdapter:
         async def produce(self, **_kwargs: Any) -> object:
             raise AssertionError("tool validation must run before adapter production")
@@ -375,7 +424,7 @@ def test_use_skills_requires_adapter_tool_registration() -> None:
             raise AssertionError("tool validation must run before adapter production")
 
     runtime = compile_program(
-        parse_program("> use: skills\n>> Return [answer].\n"),
+        parse_program("> skills: enabled\n>> Return [answer].\n"),
         adapter=NoToolAdapter(),
     )
 
@@ -413,3 +462,211 @@ def test_python_api_skills_option_registers_skill_tools(
         assert "<SKILL_INSTRUCTIONS>" in (adapter.instruction_calls[0] or "")
     finally:
         kedi.reset_config()
+
+
+def test_python_api_accepts_expanded_skills_settings(tmp_path: Path) -> None:
+    custom_root = tmp_path / "custom" / ".agents" / "skills"
+    _write_skill(custom_root, "research")
+    adapter = MockAdapter()
+    kedi.configure(
+        adapter=adapter,
+        skills=SkillsSettings(
+            enabled=True,
+            cwd=tmp_path / "custom",
+            include_registry=False,
+        ),
+    )
+    try:
+
+        @kedi.query
+        def answer() -> str:
+            """kedi
+            >> Return [answer].
+            = <answer>
+            """
+
+        assert answer() == "answer-value"
+    finally:
+        kedi.reset_config()
+
+    assert adapter.tool_calls[0][0:2] == ("list_skills", "read_skill")
+
+
+def test_skill_sources_follow_registry_local_global_priority_and_include_all(
+    tmp_path: Path,
+) -> None:
+    registry = tmp_path / "home" / ".kedi" / "registry" / "skills"
+    local = tmp_path / "project" / ".agents" / "skills"
+    global_root = tmp_path / "home" / ".agents" / "skills"
+    _write_skill(registry, "registry")
+    _write_skill(registry, "shared", "registry copy\n")
+    _write_skill(local, "local")
+    _write_skill(local, "shared", "local copy\n")
+    _write_skill(global_root, "global")
+
+    first = resolve_skill_store(SkillsSettings(enabled=True), base_dir=tmp_path / "project")
+    merged = resolve_skill_store(
+        SkillsSettings(enabled=True, include_all=True, max_skills=100),
+        base_dir=tmp_path / "project",
+    )
+
+    assert first.list_skills() == ["registry", "shared"]
+    assert merged.list_skills(limit=100) == ["global", "local", "registry", "shared"]
+    assert merged.read_skill(skill_name="shared") == "registry copy\n"
+
+
+def test_skills_settings_support_cwd_exclusions_and_maximum(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    selected = project / "nested" / ".agents" / "skills"
+    _write_skill(selected, "alpha")
+    _write_skill(selected, "beta")
+    store = resolve_skill_store(
+        SkillsSettings(
+            enabled=True,
+            cwd=Path("nested"),
+            include_registry=False,
+            include_all=True,
+            exclude_paths=(Path("nested/.agents/skills/beta"),),
+            max_skills=1,
+        ),
+        base_dir=project,
+    )
+
+    assert store.list_skills(limit=100) == ["alpha"]
+
+
+def test_skills_source_fallback_skips_an_empty_registry(tmp_path: Path) -> None:
+    registry = tmp_path / "home" / ".kedi" / "registry" / "skills"
+    registry.mkdir(parents=True)
+    local = tmp_path / "project" / ".agents" / "skills"
+    _write_skill(local, "local")
+
+    store = resolve_skill_store(SkillsSettings(enabled=True), base_dir=tmp_path / "project")
+
+    assert store.list_skills() == ["local"]
+
+
+def test_skill_store_exclusion_applies_to_direct_reads(tmp_path: Path) -> None:
+    root = tmp_path / ".agents" / "skills"
+    skill = _write_skill(root, "private")
+    store = SkillStore(root, exclude_paths=(skill.parent,))
+
+    with pytest.raises(FileNotFoundError, match="not found"):
+        store.read_skill(skill_name="private")
+
+
+def test_skills_directive_parses_in_all_agent_scopes() -> None:
+    program = parse_program(
+        "> skills: enabled\n\n"
+        "> profile: researcher:\n"
+        "    > skills: disabled\n\n"
+        "@ask():\n"
+        "    > skills: enabled\n"
+        "    = done\n"
+    )
+
+    assert isinstance(program.ordered_toplevel[0], SkillsDirectiveStmt)
+    assert program.ordered_toplevel[0].enabled is True
+    profile = program.ordered_toplevel[1]
+    assert isinstance(profile, ProfileDefStmt)
+    assert profile.skills_members[0].enabled is False
+
+
+def test_expanded_skills_directive_evaluates_settings() -> None:
+    program = parse_program(
+        "> skills:\n"
+        "    enabled: true\n"
+        "    cwd: workspace\n"
+        "    max_skills: 7\n"
+        "    include_registry: false\n"
+        "    include_all: true\n"
+        '    exclude_paths: `["ignored", "~/.agents/skills"]`\n'
+    )
+    directive = program.ordered_toplevel[0]
+    assert isinstance(directive, SkillsDirectiveStmt)
+    settings = eval_skills_directive(KediRuntime(), directive, {}).skills
+
+    assert settings == SkillsSettings(
+        enabled=True,
+        cwd=Path("workspace"),
+        max_skills=7,
+        include_registry=False,
+        include_all=True,
+        exclude_paths=(Path("ignored"), Path.home() / ".agents" / "skills"),
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "enabled",
+        1,
+    ],
+)
+def test_skills_settings_rejects_non_public_values(value: object) -> None:
+    with pytest.raises(SkillsSettingsError, match="SkillsSettings"):
+        skills_settings(value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("max_skills", [0, True])
+def test_skills_settings_rejects_invalid_maximum(max_skills: object) -> None:
+    with pytest.raises(SkillsSettingsError, match="positive integer"):
+        normalize_skills_settings({"max_skills": max_skills}, enabled=True)
+
+
+def test_skills_settings_rejects_excessive_maximum() -> None:
+    with pytest.raises(SkillsSettingsError, match=f"exceed {MAX_SKILLS}"):
+        normalize_skills_settings({"max_skills": MAX_SKILLS + 1}, enabled=True)
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"include_registry": "yes"}, "include_registry must be true or false"),
+        ({"cwd": 42}, "cwd must be a path string"),
+        ({"exclude_paths": "private"}, "exclude_paths must be a list"),
+        ({"exclude_paths": [None]}, "exclude_paths entries must be path strings"),
+    ],
+)
+def test_skills_settings_rejects_invalid_field_types(
+    values: dict[str, object], message: str
+) -> None:
+    with pytest.raises(SkillsSettingsError, match=message):
+        normalize_skills_settings(values, enabled=True)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ("active", "must be 'enabled' or 'disabled'"),
+        ("enabled: maybe", "must be 'true' or 'false'"),
+        ("include_all: maybe", "must be 'true' or 'false'"),
+        ("unknown: true", "skills setting must be one of"),
+        ("max_skills: 1\n    max_skills: 2", "Duplicate skills setting"),
+        ("enabled: `True`", "must be the literal"),
+        ("max_skills: 1", "requires an 'enabled"),
+    ],
+)
+def test_expanded_skills_directive_rejects_invalid_fields(body: str, message: str) -> None:
+    if "\n" not in body and ":" not in body:
+        source = f"> skills: {body}\n"
+    else:
+        indented = "\n".join(f"    {line}" for line in body.splitlines())
+        source = f"> skills:\n{indented}\n"
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source)
+
+
+def test_expanded_skills_directive_ignores_comments() -> None:
+    program = parse_program("> skills:\n    # source policy\n    enabled: true\n")
+
+    directive = program.ordered_toplevel[0]
+    assert isinstance(directive, SkillsDirectiveStmt)
+    assert directive.enabled is True
+
+
+def test_legacy_use_skills_is_not_a_compatibility_alias() -> None:
+    runtime = compile_program(parse_program("> use: skills\n= done\n"), adapter=MockAdapter())
+
+    with pytest.raises(KediExecutionError, match="Unknown use target: 'skills'"):
+        runtime.run_main()

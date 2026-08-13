@@ -13,6 +13,7 @@ from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
     OutputSegment,
     ProfileDefStmt,
+    ProfileSkillsEntry,
     Program,
     Span,
     TemplateLine,
@@ -24,6 +25,7 @@ from kedi.lang.ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    UseDirectiveStmt,
 )
 from kedi.lang.parser.diagnostics import KediDiagnostic
 from kedi.lsp import features
@@ -487,7 +489,7 @@ def test_diagnostics_warn_when_adapter_lacks_skill_tool_registration(
         "adapter_capabilities",
         lambda _name: AdapterCapabilities(supports_tool_registration=False),
     )
-    src = "> agent: codex\n\n> use: skills\n"
+    src = "> agent: codex\n\n> skills: enabled\n"
 
     diags = features.compute_diagnostics(src, "example.kedi")
 
@@ -497,7 +499,78 @@ def test_diagnostics_warn_when_adapter_lacks_skill_tool_registration(
     assert diag.severity == lsp.DiagnosticSeverity.Warning
     assert "skill tool registration" in diag.message
     assert diag.range.start.line == 2
-    assert diag.range.start.character == len("> use: ")
+    assert diag.range.start.character == len("> ")
+
+
+def test_diagnostics_reject_legacy_use_skills_alias() -> None:
+    diagnostics = features.compute_diagnostics("> use: skills\n", "example.kedi")
+
+    diagnostic = next(item for item in diagnostics if item.code == "K-SKILLS-USE")
+    assert diagnostic.severity == lsp.DiagnosticSeverity.Error
+    assert "> skills: enabled" in diagnostic.message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "@skills():\n    = done\n\n> use: skills\n",
+        "> profile: skills:\n    > model: test\n\n> use: skills\n",
+    ],
+)
+def test_diagnostics_preserve_user_defined_skills_use_targets(source: str) -> None:
+    diagnostics = features.compute_diagnostics(source, "example.kedi")
+
+    assert all(item.code != "K-SKILLS-USE" for item in diagnostics)
+
+
+def test_legacy_skills_diagnostic_handles_ast_without_source_location() -> None:
+    diagnostics = features._use_capability_diagnostics(
+        Program(),
+        UseDirectiveStmt(target="skills"),
+        features._AdapterDiagnosticState(),
+        {},
+        {},
+        set(),
+    )
+
+    assert diagnostics == []
+
+
+def test_disabled_skills_do_not_require_tool_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_tool_registration=False),
+    )
+
+    assert features.compute_diagnostics("> agent: codex\n> skills: disabled\n", "main.kedi") == []
+
+
+def test_profile_skills_participate_in_capability_analysis() -> None:
+    enabled = ProfileDefStmt(
+        name="enabled",
+        skills_members=[ProfileSkillsEntry(enabled=True)],
+    )
+    disabled = ProfileDefStmt(
+        name="disabled",
+        skills_members=[ProfileSkillsEntry(enabled=False)],
+    )
+
+    assert features._profile_capability_usage(
+        enabled,
+        profile_defs={},
+        proc_names=set(),
+    ) == {"tool_registration"}
+    assert (
+        features._profile_capability_usage(
+            disabled,
+            profile_defs={},
+            proc_names=set(),
+        )
+        == set()
+    )
 
 
 def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:

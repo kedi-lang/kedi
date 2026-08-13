@@ -12,6 +12,7 @@ from ...agent_profile.model import (
     eval_artifacts_directive,
     eval_effort_directive,
     eval_history_directive,
+    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -30,6 +31,7 @@ from ..ast import (
     BacktickLineStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    SkillsDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
@@ -294,6 +296,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, HistoryDirectiveStmt):
                     active = active.merge(eval_history_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, SkillsDirectiveStmt):
+                    active = active.merge(eval_skills_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))

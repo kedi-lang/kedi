@@ -561,19 +561,37 @@ def test_hover_on_single_line_use_explains_tools_and_profiles() -> None:
     assert "profile target" in body
 
 
-def test_hover_on_use_skills_explains_explicit_skill_discovery() -> None:
-    body = hover_text_at("> use: skills\n", "main.kedi", "skills")
+def test_hover_on_skills_explains_explicit_skill_discovery() -> None:
+    body = hover_text_at("> skills: enabled\n", "main.kedi", "skills")
 
-    assert "project-local skills" in body
+    assert "skill discovery" in body
     assert "list_skills" in body
     assert "read_skill" in body
 
 
-def test_hover_on_procedure_local_use_skills_explains_explicit_skill_discovery() -> None:
-    source = "@ask():\n    > use: skills\n    >> Return [answer].\n"
+def test_hover_on_procedure_local_skills_explains_explicit_skill_discovery() -> None:
+    source = "@ask():\n    > skills: enabled\n    >> Return [answer].\n"
     body = hover_text_at(source, "main.kedi", "skills")
 
-    assert "project-local skills" in body
+    assert "skill discovery" in body
+
+
+def test_hover_covers_expanded_top_level_and_profile_skill_settings() -> None:
+    source = (
+        "> skills:\n"
+        "    enabled: true\n"
+        "    include_registry: false\n\n"
+        "> profile: researcher:\n"
+        "    > skills:\n"
+        "        enabled: true\n"
+        "        max_skills: 5\n"
+    )
+
+    assert "Kedi skill registry" in hover_text_at(source, "main.kedi", "include_registry")
+    assert "Skill discovery policy stored in this profile" in hover_text_at(
+        source, "main.kedi", "skills", occurrence=2
+    )
+    assert "Maximum number of skill names" in hover_text_at(source, "main.kedi", "max_skills")
 
 
 def test_hover_on_procedure_used_as_single_line_tool() -> None:

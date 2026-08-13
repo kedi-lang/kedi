@@ -1219,7 +1219,8 @@ class KediRuntime:
         adapter_name = adapter_shortname(adapter)
         specs = list(self._resolve_tool_specs(profile, adapter))
 
-        if getattr(profile, "skills", False):
+        skills = self._skills_settings(profile)
+        if skills is not None and skills.enabled:
             from .agent_adapter.tool_override import SupportsToolRegistration
             from .agent_profile import AgentToolOverrideUnsupported
 
@@ -1227,10 +1228,12 @@ class KediRuntime:
                 raise AgentToolOverrideUnsupported(
                     "Active adapter does not support skill tool registration"
                 )
-            from .agent_adapter.skills import skill_tool_specs
+            from .agent_adapter.skills import resolve_skill_store, skill_tool_specs
             from .agent_adapter.tool_override import with_approval
 
-            skill_specs = skill_tool_specs(self._skill_root())
+            skill_specs = skill_tool_specs(
+                store=resolve_skill_store(skills, base_dir=self._skill_base_dir())
+            )
             if not self._adapter_uses_native_approvals(adapter):
                 skill_specs = tuple(
                     with_approval(
@@ -1444,19 +1447,26 @@ class KediRuntime:
             "native_approvals"
         )
 
-    def _skill_root(self) -> Path:
-        """Resolve skills beside the executed Kedi source, else from the process CWD."""
+    def _skill_base_dir(self) -> Path:
+        """Resolve the project base beside the executed Kedi source."""
         program_loc = getattr(self._program, "loc", None)
         source_path = getattr(program_loc, "source_path", None)
         if isinstance(source_path, str) and not source_path.startswith("<"):
-            return Path(source_path).resolve().parent / ".agents" / "skills"
-        return Path.cwd() / ".agents" / "skills"
+            return Path(source_path).resolve().parent
+        return Path.cwd()
+
+    @staticmethod
+    def _skills_settings(profile: Any) -> Any:
+        from .agent_profile.skills import skills_settings
+
+        return skills_settings(getattr(profile, "skills", None))
 
     def _agent_instructions(self, profile: Any, adapter: Any) -> str | None:
         """Append enabled runtime contracts without replacing user instructions."""
 
         parts = [getattr(profile, "system", None)]
-        if getattr(profile, "skills", False):
+        skills = self._skills_settings(profile)
+        if skills is not None and skills.enabled:
             from .agent_adapter.skills import skill_instructions
 
             parts.append(skill_instructions())
@@ -1465,7 +1475,7 @@ class KediRuntime:
             adapter,
             has_tools=bool(
                 getattr(profile, "tools", ())
-                or getattr(profile, "skills", False)
+                or (skills is not None and skills.enabled)
                 or getattr(profile, "subagents", ())
             ),
         ):

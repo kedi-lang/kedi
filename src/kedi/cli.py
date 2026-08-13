@@ -20,6 +20,7 @@ from kedi.idle import run_idle
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_registry import add_package, install_package
+from kedi.skill_registry import install_skill_path, install_skill_repo
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
 
@@ -71,6 +72,47 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
         message += f" ({installed.source_revision})"
     click.secho(message, fg="green")
     return 0
+
+
+def _run_skills_command(arguments: list[str]) -> int:
+    if not arguments or arguments[0] != "add":
+        raise click.UsageError("Usage: kedi skills add (--repo OWNER/REPOSITORY | --path PATH)")
+    repo: str | None = None
+    path: str | None = None
+    rest = arguments[1:]
+    while rest:
+        option = rest.pop(0)
+        if option not in {"--repo", "--path"} or not rest:
+            raise click.UsageError("Usage: kedi skills add (--repo OWNER/REPOSITORY | --path PATH)")
+        value = rest.pop(0)
+        if option == "--repo":
+            if repo is not None:
+                raise click.UsageError("--repo may be provided only once.")
+            repo = value
+        else:
+            if path is not None:
+                raise click.UsageError("--path may be provided only once.")
+            path = value
+    if (repo is None) == (path is None):
+        raise click.UsageError("Choose exactly one of --repo or --path.")
+    try:
+        installed = (
+            install_skill_repo(repo) if repo is not None else install_skill_path(Path(path or ""))
+        )
+    except (FileNotFoundError, ModuleNotFoundError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    message = f"Installed skill {installed.name} at {installed.root}"
+    if installed.source_revision is not None:
+        message += f" ({installed.source_revision})"
+    click.secho(message, fg="green")
+    return 0
+
+
+def _skills_command_help() -> str:
+    return (
+        "Usage: kedi skills add (--repo OWNER/REPOSITORY | --path PATH)\n\n"
+        "Install one root SKILL.md into ~/.kedi/registry/skills."
+    )
 
 
 @click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
@@ -236,11 +278,15 @@ def main(
     show_help: bool = False,
 ):
     if show_help:
-        if source in _PACKAGE_COMMANDS and command_source is None:
+        if source == "skills" and command_source is None:
+            click.echo(_skills_command_help())
+        elif source in _PACKAGE_COMMANDS and command_source is None:
             click.echo(_package_command_help(source))
         else:
             click.echo(ctx.get_help())
         return 0
+    if source == "skills" and command_source is None:
+        return _run_skills_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:
         return _run_package_command(source, list(ctx.args))
     if acp_command is not None:

@@ -302,6 +302,45 @@ def test_lsp_semantic_tokens_cover_workflow_and_compaction_settings() -> None:
     assert expected <= actual
 
 
+def test_tree_sitter_and_lsp_highlight_expanded_skills_policy() -> None:
+    source = (
+        b"> skills:\n"
+        b"  enabled: true\n"
+        b"  include_registry: false\n"
+        b"  include_all: true\n"
+        b'  exclude_paths: `["~/.agents/skills"]`\n'
+    )
+    root = Path(__file__).resolve().parents[1]
+    language = Language(tree_sitter_kedi.language())
+
+    for query_path in (
+        root / "tree-sitter-kedi/queries/highlights.scm",
+        root / "kedi-zed/languages/kedi/highlights.scm",
+    ):
+        query = Query(language, query_path.read_text(encoding="utf-8"))
+        captures = QueryCursor(query).captures(Parser(language).parse(source).root_node)
+
+        def captured(name: str) -> set[str]:
+            return {
+                source[node.start_byte : node.end_byte].decode("utf-8")
+                for node in captures.get(name, [])
+            }
+
+        assert "skills" in captured("keyword")
+        assert {"enabled", "include_registry", "include_all", "exclude_paths"} <= captured(
+            "property"
+        )
+
+    decoded = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(source.decode(), "/tmp/skills.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    actual = {(line, col, length, token_type) for line, col, length, token_type, _ in decoded}
+    assert (0, 2, len("skills"), keyword_type) in actual
+    assert (1, 2, len("enabled"), property_type) in actual
+
+
 # ---------------------------------------------------------------------
 # Python ranges (custom)
 # ---------------------------------------------------------------------

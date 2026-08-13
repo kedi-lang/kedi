@@ -90,6 +90,7 @@ from ..lang.ast import (
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    SkillsDirectiveStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
     McpDirectiveStmt,
@@ -107,6 +108,7 @@ from ..lang.ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
+    ProfileSkillsEntry,
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
@@ -1125,6 +1127,17 @@ def _scan_capability_scope(
             diagnostics.extend(_history_capability_diagnostics(active))
             diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
             continue
+        if isinstance(stmt, SkillsDirectiveStmt):
+            if stmt.enabled:
+                diagnostics.extend(
+                    _unsupported_capability_diagnostics(
+                        active,
+                        "tool_registration",
+                        [_directive_keyword_span(prog, stmt.loc, "skills") or stmt.loc],
+                        "skill tool registration",
+                    )
+                )
+            continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
                 _unsupported_capability_diagnostics(
@@ -1322,14 +1335,21 @@ def _use_capability_diagnostics(
     if not stmt.name:
         return []
 
-    target_span = _use_single_target_span(prog, stmt) or stmt.loc
-    if stmt.name == "skills":
-        return _unsupported_capability_diagnostics(
-            state,
-            "tool_registration",
-            [target_span],
-            "skill tool registration",
-        )
+    target_span = _use_single_target_span(prog, stmt)
+    if target_span is None:
+        target_span = stmt.loc
+    if target_span is None:
+        return []
+    if stmt.name == "skills" and stmt.name not in proc_names and stmt.name not in profile_defs:
+        return [
+            lsp.Diagnostic(
+                range=_span_to_range(target_span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-SKILLS-USE",
+                source="kedi",
+                message="Skills use a standalone directive; replace '> use: skills' with '> skills: enabled'.",
+            )
+        ]
     if stmt.name in proc_names:
         return _unsupported_capability_diagnostics(
             state,
@@ -1398,10 +1418,12 @@ def _profile_capability_usage(
         capabilities.add("mcp")
     if profile.subagent_members:
         capabilities.add("subagents")
+    if any(member.enabled for member in profile.skills_members):
+        capabilities.add("tool_registration")
 
     nested_active = active | {profile.name}
     for target in profile.use_targets:
-        if target == "skills" or target in proc_names:
+        if target in proc_names:
             capabilities.add("tool_registration")
             continue
         nested = profile_defs.get(target)
@@ -1824,14 +1846,6 @@ def _resolve_symbol_at(
             elif item.name:
                 name_span = _use_single_target_span(prog, item)
                 if name_span is not None and _position_inside(pos, name_span):
-                    if item.name == "skills":
-                        return SymbolRef(
-                            kind="agent_skills",
-                            name="skills",
-                            declaration_span=None,
-                            scope_proc=None,
-                            cursor_span=name_span,
-                        )
                     if item.name in proc_by_name:
                         target = proc_by_name[item.name]
                         return SymbolRef(
@@ -2173,14 +2187,6 @@ def _resolve_in_stmt(
         elif stmt.name:
             name_span = _use_single_target_span(prog, stmt)
             if name_span is not None and _position_inside(pos, name_span):
-                if stmt.name == "skills":
-                    return SymbolRef(
-                        kind="agent_skills",
-                        name="skills",
-                        declaration_span=None,
-                        scope_proc=proc,
-                        cursor_span=name_span,
-                    )
                 if stmt.name in proc_by_name:
                     target = proc_by_name[stmt.name]
                     return SymbolRef(
@@ -2629,8 +2635,6 @@ def compute_hover(
             text = _profile_signature_markdown(profile_def)
         else:
             text = _missing_agent_profile_hover(sym.name, imported_surface)
-    elif sym.kind == "agent_skills":
-        text = _use_directive_markdown(UseDirectiveStmt(target="skills"))
     else:
         text = f"**{sym.kind}** `{sym.name}`"
     return lsp.Hover(
@@ -2771,6 +2775,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.history_members:
                 visit(member)
+            for member in node.skills_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             for member in node.mcp_members:
@@ -2796,6 +2802,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, SkillsDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, McpDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -2817,6 +2827,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(field)
             return
         if isinstance(node, ProfileHistoryEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileSkillsEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -2978,6 +2992,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _approval_directive_markdown(node)
     if isinstance(node, HistoryDirectiveStmt):
         return _history_directive_markdown(node)
+    if isinstance(node, SkillsDirectiveStmt):
+        return _skills_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
@@ -3004,6 +3020,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_approval_entry_markdown(node)
     if isinstance(node, ProfileHistoryEntry):
         return _profile_history_entry_markdown(node)
+    if isinstance(node, ProfileSkillsEntry):
+        return _profile_skills_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
@@ -3085,14 +3103,6 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
             f"`> use:`\n\nRegisters Kedi procedures as agent tools: {tools}.\n\n"
             "Inner `> use:` directives override outer tools in the current scope."
         )
-    if stmt.name == "skills":
-        return (
-            "`> use: skills`\n\n"
-            "Enables project-local skills for subsequent agent calls. The agent can use "
-            "`list_skills` to discover `.agents/skills/<name>/SKILL.md` files, then "
-            "`read_skill` to load one skill's instructions on demand. Skill contents are "
-            "never injected automatically."
-        )
     return (
         f"`> use: {stmt.name}`\n\n"
         "Configures the current scope for subsequent agent calls. A procedure target is "
@@ -3168,6 +3178,17 @@ def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
     )
 
 
+def _skills_directive_markdown(stmt: SkillsDirectiveStmt) -> str:
+    value = "enabled" if stmt.enabled else "disabled"
+    return (
+        f"`> skills: {value}`\n\n"
+        "Controls on-demand skill discovery for subsequent agent calls in this lexical scope. "
+        "Enabled scopes expose `list_skills` and `read_skill`. Sources are checked in order: "
+        "the Kedi registry, project `.agents/skills`, then user `.agents/skills`. The expanded "
+        "form configures `cwd`, `max_skills`, source merging, and excluded paths."
+    )
+
+
 def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     value = _system_value_preview(stmt)
     return (
@@ -3217,6 +3238,14 @@ def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
 
 def _settings_field_markdown(field: SettingsField) -> str:
     value = _settings_field_value_preview(field)
+    skill_descriptions = {
+        "max_skills": "Maximum number of skill names exposed by `list_skills` in this scope.",
+        "include_registry": "Include the user Kedi skill registry as the highest-priority source.",
+        "include_all": "Merge all configured skill sources instead of using the first non-empty source.",
+        "exclude_paths": "Paths excluded from skill discovery and direct skill reads.",
+    }
+    if field.name in skill_descriptions:
+        return f"`{field.name}` = {value}\n\n{skill_descriptions[field.name]}"
     if field.name == "compaction_mode":
         return (
             f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
@@ -3345,6 +3374,14 @@ def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
         f"`> history: {value}`\n\n"
         "Conversation continuity policy stored in this profile. Applied when the profile is used."
         f"{configured}"
+    )
+
+
+def _profile_skills_entry_markdown(entry: ProfileSkillsEntry) -> str:
+    value = "enabled" if entry.enabled else "disabled"
+    return (
+        f"`> skills: {value}`\n\n"
+        "Skill discovery policy stored in this profile. Applied when the profile is used."
     )
 
 

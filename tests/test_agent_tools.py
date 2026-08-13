@@ -209,10 +209,10 @@ def test_profile_body_use_rejects_cycles_and_unknown_targets() -> None:
         compile_program(parse_program(unknown), adapter=_adapter())
 
 
-def test_profile_body_single_line_use_enables_skills() -> None:
+def test_profile_body_skills_directive_enables_skills() -> None:
     src = """
 > profile: agent:
-    > use: skills
+    > skills: enabled
 
 > use: agent
 @main():
@@ -220,7 +220,8 @@ def test_profile_body_single_line_use_enables_skills() -> None:
 """
     rt = compile_program(parse_program(src), adapter=_adapter())
     main = _procedure_def(rt._procedures["main"])
-    assert main.captured_agent_profile.skills is True
+    assert main.captured_agent_profile.skills is not None
+    assert main.captured_agent_profile.skills.enabled is True
 
 
 def test_use_procedure_over_profile_when_both_exist() -> None:

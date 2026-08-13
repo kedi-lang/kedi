@@ -48,7 +48,7 @@ from .agent_adapter.registry import (
     known_adapter_shortnames,
 )
 from .agent_adapter.subagents.limits import SubagentUsageLimits
-from .agent_profile import AgentProfile, McpServerSpec, block_agent_profile_scope
+from .agent_profile import AgentProfile, McpServerSpec, SkillsSettings, block_agent_profile_scope
 from .artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from .effort import EffortValue
 from .errors import KediExecutionError
@@ -316,7 +316,7 @@ def _agent_profile_overrides(
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
     approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
-    skills: bool | None,
+    skills: SkillsSettings | bool | None,
     artifacts: ArtifactPolicyInput,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
@@ -682,7 +682,7 @@ def _build_config(
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
-    skills: bool | None,
+    skills: SkillsSettings | bool | None,
     artifacts: ArtifactPolicyInput,
     conversation: ConversationState | None | object,
     adapter_kwargs: Mapping[str, Any],
@@ -797,7 +797,7 @@ def configure(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
@@ -889,7 +889,7 @@ def context(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
@@ -962,7 +962,7 @@ def interactive(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
@@ -1154,7 +1154,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,
@@ -1174,7 +1174,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,
@@ -1235,7 +1235,7 @@ def bind(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
-    skills: bool | None = None,
+    skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
     cache: bool = False,

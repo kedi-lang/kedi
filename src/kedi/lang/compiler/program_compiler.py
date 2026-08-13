@@ -20,12 +20,12 @@ from ...agent_profile.model import (
     eval_artifacts_directive,
     eval_effort_directive,
     eval_history_directive,
+    eval_skills_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
     eval_system_directive,
 )
-from ...agent_profile.profile import SKILLS_USE_TARGET
 from ...agent_profile.registry import ProfileDefinition
 from ...agent_profile.tools import eval_use_directive
 from ...core import KediRuntime
@@ -44,6 +44,7 @@ from ..ast import (
     AssignStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    SkillsDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
@@ -799,7 +800,7 @@ class ProgramCompiler:
         names: list[str] = []
         for member in profile.members:
             if member.kind == "tools":
-                names.extend(name for name in member.tool_names if name != SKILLS_USE_TARGET)
+                names.extend(member.tool_names)
             elif member.kind == "use":
                 names.append(member.name)
         return tuple(names)
@@ -1007,6 +1008,11 @@ class ProgramCompiler:
                 if isinstance(item, HistoryDirectiveStmt):
                     state.active_profile = state.active_profile.merge(
                         eval_history_directive(self.rt, item, env)
+                    )
+                    continue
+                if isinstance(item, SkillsDirectiveStmt):
+                    state.active_profile = state.active_profile.merge(
+                        eval_skills_directive(self.rt, item, env)
                     )
                     continue
                 if isinstance(item, SystemDirectiveStmt):

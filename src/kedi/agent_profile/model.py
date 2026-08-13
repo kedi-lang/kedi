@@ -11,7 +11,7 @@ from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .compaction import CompactionSettings, normalize_compaction_settings
 from .mcp import McpServerSpec, mcp_spec_from_mapping
-from .profile import SKILLS_USE_TARGET, AgentCommand, AgentProfile
+from .profile import AgentCommand, AgentProfile
 from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -20,6 +20,7 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
+    ProfileSkillsMember,
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
         ArtifactsField,
         EffortDirectiveStmt,
         HistoryDirectiveStmt,
+        SkillsDirectiveStmt,
         McpDirectiveStmt,
         McpField,
         ModelDirectiveStmt,
@@ -400,6 +402,19 @@ def eval_history_directive(
     )
 
 
+def eval_skills_directive(
+    rt: KediRuntime,
+    stmt: SkillsDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    from .skills import normalize_skills_settings
+
+    values = eval_settings_fields(rt, stmt.fields, env)
+    return AgentProfile(
+        skills=normalize_skills_settings(values, enabled=stmt.enabled),
+    )
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -409,6 +424,7 @@ def _member_to_patch(
         | ProfileEffortMember
         | ProfileApprovalMember
         | ProfileHistoryMember
+        | ProfileSkillsMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -482,6 +498,13 @@ def _member_to_patch(
                 env=env,
             ),
         )
+    if member.kind == "skills":
+        from .skills import normalize_skills_settings
+
+        values = eval_settings_fields(rt, member.fields, env)
+        return AgentProfile(
+            skills=normalize_skills_settings(values, enabled=member.enabled),
+        )
     if member.kind == "system":
         system = eval_system_value(
             rt,
@@ -492,10 +515,7 @@ def _member_to_patch(
         )
         return AgentProfile(system=system)
     if member.kind == "tools":
-        tool_names = tuple(name for name in member.tool_names if name != SKILLS_USE_TARGET)
-        return AgentProfile(
-            tools=tool_names, skills=True if SKILLS_USE_TARGET in member.tool_names else None
-        )
+        return AgentProfile(tools=member.tool_names)
     if member.kind == "mcp":
         return AgentProfile(mcp_servers=(eval_mcp_fields(rt, member.fields, env),))
     if member.kind == "settings":
@@ -597,8 +617,6 @@ def _eval_profile_use_member(
             available_procedures=available_procedures,
             _active_definitions=active_definitions,
         )
-    if name == SKILLS_USE_TARGET:
-        return AgentProfile(skills=True)
     raise KediExecutionError(f"Unknown use target {name!r} in profile {owner.name!r}")
 
 
