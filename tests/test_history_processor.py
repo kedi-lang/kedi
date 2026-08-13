@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic_ai import BinaryContent
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -21,6 +20,7 @@ from langchain_core.messages import (
     message_to_dict,
     messages_from_dict,
 )
+from pydantic_ai import BinaryContent
 from pydantic_ai.messages import (
     CompactionPart,
     FilePart,
@@ -66,15 +66,19 @@ from kedi.agent_adapter.compaction.langchain_codec import (
     _langchain_content_is_known,
     _langchain_content_kinds,
     _langchain_content_lifecycle,
+    _langchain_entry_kind,
     _langchain_has_interrupt_metadata,
     _langchain_has_reasoning,
     _langchain_has_signed_reasoning,
     _langchain_has_text,
-    _langchain_entry_kind,
+)
+from kedi.agent_adapter.compaction.langchain_codec import (
     _storage_format as _langchain_storage_format,
 )
 from kedi.agent_adapter.compaction.pydantic_codec import (
     _pydantic_entry_kind,
+)
+from kedi.agent_adapter.compaction.pydantic_codec import (
     _storage_format as _pydantic_storage_format,
 )
 from kedi.agent_adapter.compaction.selection import (

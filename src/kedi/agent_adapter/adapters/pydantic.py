@@ -59,8 +59,6 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
-from ..native_compaction import with_pydantic_native_compaction
-from ..prefix_cache import has_response_cache_settings, pydantic_cache_settings
 from ..approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -73,6 +71,8 @@ from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..models import codex_responses_model, is_codex_model_id
+from ..native_compaction import with_pydantic_native_compaction
+from ..prefix_cache import has_response_cache_settings, pydantic_cache_settings
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits

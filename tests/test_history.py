@@ -7,15 +7,15 @@ from typing import Any, Callable, cast
 
 import pytest
 from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
+from pydantic_ai.messages import CompactionPart, ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.models.zai import ZaiModel
-from pydantic_ai.messages import CompactionPart, ModelMessage, ModelResponse, TextPart
-from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.alibaba import AlibabaProvider
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.azure import AzureProvider
 from pydantic_ai.providers.deepseek import DeepSeekProvider
 from pydantic_ai.providers.google import GoogleProvider
@@ -39,11 +39,11 @@ from kedi.agent_adapter.prefix_cache import (
     pydantic_provider_cache_policy,
 )
 from kedi.agent_profile import AgentProfile
+from kedi.artifacts import ArtifactHandle, ArtifactManager, ArtifactPolicy
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import HistoryDirectiveStmt, ProfileDefStmt
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.lsp.features import compute_diagnostics, compute_semantic_tokens_full
-from kedi.artifacts import ArtifactHandle, ArtifactManager, ArtifactPolicy
 from tests.lsp_helpers import decode_semantic_tokens, hover_text_at
 from tests.mock_adapter import MockAdapter
 

@@ -2,11 +2,11 @@
 
 from .backends import CompactionBackend, resolve_compaction_backend
 from .codecs import AdapterHistoryCodec, HistoryCodecRegistry
-from .coordinator import CompactionCoordinator
 from .conversation import (
     ConversationCompactionTransaction,
     PreparedConversationCompaction,
 )
+from .coordinator import CompactionCoordinator
 from .kedi_backend import KediCompactionTransaction, PreparedCompaction
 from .langchain_codec import LangChainHistoryCodec
 from .models import (

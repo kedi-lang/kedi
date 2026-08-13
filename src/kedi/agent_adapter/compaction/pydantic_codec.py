@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
+from .checkpoint import render_checkpoint
 from .codecs import (
     ESTIMATOR_VERSION,
     canonical_json_bytes,
@@ -12,7 +13,6 @@ from .codecs import (
     fingerprint_sequence,
     fingerprint_value,
 )
-from .checkpoint import render_checkpoint
 from .models import (
     CompactionCheckpoint,
     HistoryEntryKind,
@@ -87,8 +87,8 @@ class PydanticHistoryCodec:
             BaseToolReturnPart,
             CompactionPart,
             FilePart,
-            ModelRequest,
             ModelMessagesTypeAdapter,
+            ModelRequest,
             RetryPromptPart,
             SystemPromptPart,
             TextPart,

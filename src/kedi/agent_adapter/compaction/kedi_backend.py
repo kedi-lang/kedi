@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from ...telemetry import span
 from .codecs import AdapterHistoryCodec
 from .coordinator import CompactionCoordinator
 from .models import (
@@ -14,7 +15,6 @@ from .models import (
     HistorySnapshot,
 )
 from .processor import HistoryProcessor
-from ...telemetry import span
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

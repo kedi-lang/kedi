@@ -6,9 +6,9 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
 
+from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
-from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.compaction import (
@@ -25,11 +25,11 @@ from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..native_compaction import langchain_settings_with_native_compaction
-from ..conversation import AdapterConversationContext
 from ..prefix_cache import langchain_cache_settings, langchain_provider_cache_policy
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope

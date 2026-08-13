@@ -1104,8 +1104,8 @@ class KediRuntime:
         """
         from .agent_adapter.meta import AdapterCapabilities
         from .agent_adapter.profile_override import SupportsProfileOverride
-        from .agent_profile.compaction import CompactionSettingsError
         from .agent_profile import AgentProfileOverrideUnsupported
+        from .agent_profile.compaction import CompactionSettingsError
 
         compaction = profile.compaction
         if compaction is not None and compaction.mode == "native" and profile.history is not True:

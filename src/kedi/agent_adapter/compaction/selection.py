@@ -4,8 +4,8 @@ from dataclasses import replace
 
 from .models import (
     CompactionWindow,
-    HistoryRange,
     HistoryNoOpReason,
+    HistoryRange,
     HistoryReductionPlan,
     HistoryReductionPolicy,
     HistorySnapshot,

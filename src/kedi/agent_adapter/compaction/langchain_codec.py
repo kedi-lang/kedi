@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from .checkpoint import render_checkpoint
 from .codecs import (
     ESTIMATOR_VERSION,
     canonical_json_bytes,
@@ -11,7 +12,6 @@ from .codecs import (
     fingerprint_sequence,
     fingerprint_value,
 )
-from .checkpoint import render_checkpoint
 from .models import (
     CompactionCheckpoint,
     HistoryEntryKind,
