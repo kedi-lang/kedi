@@ -85,6 +85,7 @@ from ..lang.ast import (
     BacktickLineStmt,
     CallArg,
     CallSegment,
+    CodeModeDirectiveStmt,
     EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
@@ -104,6 +105,7 @@ from ..lang.ast import (
     ProfileAgentEntry,
     ProfileApprovalEntry,
     ProfileArtifactsEntry,
+    ProfileCodeModeEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
@@ -846,6 +848,8 @@ class _AdapterDiagnosticState:
     approval_plain_value: str | None = None
     history_loc: Span | None = None
     history_enabled: bool | None = None
+    codemode_loc: Span | None = None
+    codemode_enabled: bool | None = None
 
 
 def _adapter_capability_diagnostics(
@@ -932,6 +936,17 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
             history_loc=latest.loc,
             history_enabled=latest.enabled,
         )
+    codemode_members = [member for member in profile.codemode_members if member.loc is not None]
+    if codemode_members:
+        latest = max(
+            codemode_members,
+            key=lambda member: member.loc.start_byte if member.loc is not None else -1,
+        )
+        state = replace(
+            state,
+            codemode_loc=latest.loc,
+            codemode_enabled=latest.enabled,
+        )
     return state
 
 
@@ -957,6 +972,7 @@ def _merge_adapter_state(
     selected = inner if inner.shortname is not None else outer
     approval_owner = inner if inner.approval_loc is not None else outer
     history_owner = inner if inner.history_enabled is not None else outer
+    codemode_owner = inner if inner.codemode_enabled is not None else outer
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
         kind=selected.kind,
@@ -964,6 +980,8 @@ def _merge_adapter_state(
         approval_plain_value=approval_owner.approval_plain_value,
         history_loc=history_owner.history_loc,
         history_enabled=history_owner.history_enabled,
+        codemode_loc=codemode_owner.codemode_loc,
+        codemode_enabled=codemode_owner.codemode_enabled,
     )
 
 
@@ -1023,6 +1041,18 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
+    for member in profile.codemode_members:
+        if member.enabled:
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    state,
+                    "codemode",
+                    [_directive_keyword_span(prog, member.loc, "codemode") or member.loc],
+                    "CodeMode tool execution",
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-ADAPTER-CODEMODE",
+                )
+            )
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
         diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
@@ -1082,6 +1112,7 @@ def _scan_capability_scope(
                     )
                 )
                 diagnostics.extend(_history_capability_diagnostics(active))
+                diagnostics.extend(_codemode_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
             diagnostics.extend(
@@ -1103,6 +1134,7 @@ def _scan_capability_scope(
                     )
                 )
                 diagnostics.extend(_history_capability_diagnostics(active))
+                diagnostics.extend(_codemode_capability_diagnostics(active))
             continue
         if isinstance(stmt, ApprovalDirectiveStmt):
             active = replace(
@@ -1137,6 +1169,14 @@ def _scan_capability_scope(
                         "skill tool registration",
                     )
                 )
+            continue
+        if isinstance(stmt, CodeModeDirectiveStmt):
+            active = replace(
+                active,
+                codemode_loc=stmt.loc,
+                codemode_enabled=stmt.enabled,
+            )
+            diagnostics.extend(_codemode_capability_diagnostics(active))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -1260,6 +1300,21 @@ def _history_capability_diagnostics(
         "stateful conversation history",
         severity=lsp.DiagnosticSeverity.Error,
         code="K-ADAPTER-HISTORY",
+    )
+
+
+def _codemode_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+) -> list[lsp.Diagnostic]:
+    if state.codemode_enabled is not True or state.codemode_loc is None:
+        return []
+    return _unsupported_capability_diagnostics(
+        state,
+        "codemode",
+        [state.codemode_loc],
+        "CodeMode tool execution",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-CODEMODE",
     )
 
 
@@ -1397,6 +1452,17 @@ def _use_capability_diagnostics(
                 code="K-ADAPTER-SUBAGENTS",
             )
         )
+    if "codemode" in capabilities:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                merged,
+                "codemode",
+                [target_span],
+                "CodeMode tool execution from this profile",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-CODEMODE",
+            )
+        )
     return diagnostics
 
 
@@ -1420,6 +1486,8 @@ def _profile_capability_usage(
         capabilities.add("subagents")
     if any(member.enabled for member in profile.skills_members):
         capabilities.add("tool_registration")
+    if any(member.enabled for member in profile.codemode_members):
+        capabilities.add("codemode")
 
     nested_active = active | {profile.name}
     for target in profile.use_targets:
@@ -2777,6 +2845,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.skills_members:
                 visit(member)
+            for member in node.codemode_members:
+                visit(member)
             for member in node.system_members:
                 visit(member)
             for member in node.mcp_members:
@@ -2806,6 +2876,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for field in node.fields:
                 visit(field)
             return
+        if isinstance(node, CodeModeDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, McpDirectiveStmt):
             for field in node.fields:
                 visit(field)
@@ -2831,6 +2905,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(field)
             return
         if isinstance(node, ProfileSkillsEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileCodeModeEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -2994,6 +3072,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _history_directive_markdown(node)
     if isinstance(node, SkillsDirectiveStmt):
         return _skills_directive_markdown(node)
+    if isinstance(node, CodeModeDirectiveStmt):
+        return _codemode_directive_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
@@ -3022,6 +3102,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_history_entry_markdown(node)
     if isinstance(node, ProfileSkillsEntry):
         return _profile_skills_entry_markdown(node)
+    if isinstance(node, ProfileCodeModeEntry):
+        return _profile_codemode_entry_markdown(node)
     if isinstance(node, ProfileSystemEntry):
         return _profile_system_entry_markdown(node)
     if isinstance(node, ProfileMcpEntry):
@@ -3189,6 +3271,17 @@ def _skills_directive_markdown(stmt: SkillsDirectiveStmt) -> str:
     )
 
 
+def _codemode_directive_markdown(stmt: CodeModeDirectiveStmt) -> str:
+    value = "enabled" if stmt.enabled else "disabled"
+    return (
+        f"`> codemode: {value}`\n\n"
+        "Controls progressive tool discovery and bounded Monty execution for subsequent agent "
+        "calls in this lexical scope. Enabled scopes expose `search_tools`, `get_tool_schema`, "
+        "and `execute_code`; the expanded form configures discovery, hydration, execution, "
+        "result, concurrency, and timeout limits. The default is disabled."
+    )
+
+
 def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     value = _system_value_preview(stmt)
     return (
@@ -3246,6 +3339,21 @@ def _settings_field_markdown(field: SettingsField) -> str:
     }
     if field.name in skill_descriptions:
         return f"`{field.name}` = {value}\n\n{skill_descriptions[field.name]}"
+    codemode_descriptions = {
+        "default_search_limit": "Default number of tool names returned by `search_tools`.",
+        "max_search_limit": "Maximum page size accepted by `search_tools`.",
+        "max_hydrated_tools": "Maximum exact tool schemas hydrated during one agent run.",
+        "max_discovery_result_bytes": "Maximum serialized result size for discovery controls.",
+        "max_code_chars": "Maximum Monty source length accepted by `execute_code`.",
+        "max_nested_calls": "Maximum host tool calls made by one `execute_code` invocation.",
+        "max_concurrent_calls": "Maximum concurrently active host tool calls.",
+        "max_tool_result_bytes": "Maximum serialized size of one nested host tool result.",
+        "max_total_tool_result_bytes": "Maximum aggregate nested tool-result size per execution.",
+        "max_print_bytes": "Maximum captured standard output from one Monty execution.",
+        "request_timeout": "Timeout in seconds for one nested host tool call.",
+    }
+    if field.name in codemode_descriptions:
+        return f"`{field.name}` = {value}\n\n{codemode_descriptions[field.name]}"
     if field.name == "compaction_mode":
         return (
             f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
@@ -3382,6 +3490,16 @@ def _profile_skills_entry_markdown(entry: ProfileSkillsEntry) -> str:
     return (
         f"`> skills: {value}`\n\n"
         "Skill discovery policy stored in this profile. Applied when the profile is used."
+    )
+
+
+def _profile_codemode_entry_markdown(entry: ProfileCodeModeEntry) -> str:
+    value = "enabled" if entry.enabled else "disabled"
+    configured = " Includes bounded execution settings." if entry.fields else ""
+    return (
+        f"`> codemode: {value}`\n\n"
+        "CodeMode tool-discovery and execution policy stored in this profile. "
+        f"Applied when the profile is used.{configured}"
     )
 
 

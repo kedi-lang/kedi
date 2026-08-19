@@ -5,7 +5,8 @@ from typing import Any, Sequence, cast
 
 from pydantic_ai import Agent
 from pydantic_ai.models import Model
-from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.tools import RunContext
+from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 
 
 class PydanticAICompatibilityError(RuntimeError):
@@ -80,6 +81,32 @@ def effective_model(
 
     try:
         return agent._get_model_outside_run(model)
+    except AttributeError as exc:
+        raise _unsupported_layout(exc) from exc
+
+
+def build_nested_tool_manager(
+    *,
+    ctx: RunContext[Any],
+    toolset: AbstractToolset[Any],
+    tools: dict[str, ToolsetTool[Any]],
+) -> Any:
+    """Build the supported Pydantic AI nested-call manager for CodeMode."""
+
+    try:
+        from pydantic_ai.tool_manager import ToolManager
+
+        parent = ctx.tool_manager
+        if parent is None:
+            raise PydanticAICompatibilityError(
+                "Pydantic AI did not attach a tool manager to the active run context"
+            )
+        return ToolManager(
+            toolset=toolset,
+            root_capability=parent.root_capability,
+            ctx=ctx,
+            tools=tools,
+        )
     except AttributeError as exc:
         raise _unsupported_layout(exc) from exc
 

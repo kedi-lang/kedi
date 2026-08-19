@@ -126,12 +126,14 @@ def test_acp_adapter_default_model_and_async_close() -> None:
     assert client.closed
 
 
-def test_acp_adapter_uses_env_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = FakeACPClient()
-    adapter = ACPAdapter(client=cast(Any, client))
+def test_acp_adapter_does_not_resolve_command_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("KEDI_ACP_AGENT_COMMAND", "env-acp --stdio")
+    adapter = ACPAdapter()
 
-    assert adapter.invoke_sync(prompt="env") == f"sync:env:{Path.cwd()}:30"
+    with pytest.raises(RuntimeError, match="requires an explicit command"):
+        adapter.invoke_sync(prompt="env")
 
 
 def test_acp_adapter_accepts_pathlike_cwd(tmp_path: Path) -> None:
@@ -141,15 +143,12 @@ def test_acp_adapter_accepts_pathlike_cwd(tmp_path: Path) -> None:
     assert adapter.invoke_sync(prompt="path", cwd=tmp_path) == f"sync:path:{tmp_path}:30"
 
 
-def test_acp_adapter_uses_real_client_from_env_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_acp_adapter_uses_real_client_from_constructor_command(tmp_path: Path) -> None:
     log_path = tmp_path / "acp.jsonl"
-    monkeypatch.setenv(
-        "KEDI_ACP_AGENT_COMMAND",
-        f"{sys.executable} {FAKE_ACP_AGENT}",
+    adapter = ACPAdapter(
+        command=[sys.executable, str(FAKE_ACP_AGENT)],
+        model_settings={"env": {"KEDI_ACP_FAKE_LOG": str(log_path)}},
     )
-    adapter = ACPAdapter(model_settings={"env": {"KEDI_ACP_FAKE_LOG": str(log_path)}})
 
     try:
         assert adapter.invoke_sync(prompt="first", cwd=str(tmp_path)) == "echo:first"
@@ -168,13 +167,8 @@ def test_acp_adapter_uses_real_client_from_env_command(
 
 def test_acp_adapter_buffers_chunks_and_emits_one_final_message(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "KEDI_ACP_AGENT_COMMAND",
-        f"{sys.executable} {FAKE_ACP_AGENT}",
-    )
-    adapter = ACPAdapter()
+    adapter = ACPAdapter(command=[sys.executable, str(FAKE_ACP_AGENT)])
     streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
 
     try:
@@ -189,13 +183,8 @@ def test_acp_adapter_buffers_chunks_and_emits_one_final_message(
 
 def test_acp_adapter_async_invoke_emits_final_message(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(
-        "KEDI_ACP_AGENT_COMMAND",
-        f"{sys.executable} {FAKE_ACP_AGENT}",
-    )
-    adapter = ACPAdapter()
+    adapter = ACPAdapter(command=[sys.executable, str(FAKE_ACP_AGENT)])
     streamed: list[AgentMessageEvent | AgentRunStateEvent] = []
 
     async def scenario() -> str:
@@ -211,16 +200,8 @@ def test_acp_adapter_async_invoke_emits_final_message(
     assert [(event.phase, event.content) for event in messages] == [("final", "echo:async-event")]
 
 
-def test_acp_adapter_uses_profile_command_before_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_acp_adapter_uses_explicit_profile_command(tmp_path: Path) -> None:
     profile_log_path = tmp_path / "profile-acp.jsonl"
-    env_log_path = tmp_path / "env-acp.jsonl"
-    monkeypatch.setenv(
-        "KEDI_ACP_AGENT_COMMAND",
-        f"{sys.executable} {FAKE_ACP_AGENT}",
-    )
-    monkeypatch.setenv("KEDI_ACP_FAKE_LOG", str(env_log_path))
     adapter = ACPAdapter(
         model_settings={
             "env": {"KEDI_ACP_FAKE_LOG": str(profile_log_path)},
@@ -235,7 +216,6 @@ def test_acp_adapter_uses_profile_command_before_env(
         adapter.close()
 
     assert profile_log_path.exists()
-    assert not env_log_path.exists()
 
 
 def test_acp_adapter_uses_constructor_command_when_settings_omit_command(tmp_path: Path) -> None:
@@ -253,13 +233,10 @@ def test_acp_adapter_uses_constructor_command_when_settings_omit_command(tmp_pat
     assert log_path.exists()
 
 
-def test_acp_adapter_requires_command_when_no_client_or_setting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("KEDI_ACP_AGENT_COMMAND", raising=False)
+def test_acp_adapter_requires_command_when_no_client_or_setting() -> None:
     adapter = ACPAdapter()
 
-    with pytest.raises(RuntimeError, match="requires a command"):
+    with pytest.raises(RuntimeError, match="requires an explicit command"):
         adapter.invoke_sync(prompt="missing")
 
 

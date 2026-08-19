@@ -32,6 +32,7 @@ from kedi.agent_adapter.conversation import (
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
+    defer_artifact_admission,
     with_approval,
     with_artifact_result,
 )
@@ -965,6 +966,36 @@ def test_tool_result_artifact_wrapper_handles_async_and_awaitable_results(
 
     assert manager.get_value(async_result["ref_id"]) == "async-result"
     assert manager.get_value(awaitable_result["ref_id"]) == "awaitable-result"
+
+
+def test_tool_result_artifact_wrapper_can_defer_async_admission(
+    manager: ArtifactManager,
+) -> None:
+    async def async_tool() -> str:
+        return "async-raw"
+
+    def awaitable_tool() -> Any:
+        async def resolve() -> str:
+            return "awaitable-raw"
+
+        return resolve()
+
+    policy = artifact_policy()
+    async_spec = with_artifact_result(
+        ToolSpec(async_tool, "async_tool"),
+        manager=manager,
+        policy=policy,
+    )
+    awaitable_spec = with_artifact_result(
+        ToolSpec(awaitable_tool, "awaitable_tool"),
+        manager=manager,
+        policy=policy,
+    )
+
+    with defer_artifact_admission():
+        assert asyncio.run(async_spec.fn()) == "async-raw"
+        assert asyncio.run(awaitable_spec.fn()) == "awaitable-raw"
+    assert manager.history.snapshot() == ()
 
 
 def test_tool_result_artifact_wrapper_records_only_successful_approved_calls(

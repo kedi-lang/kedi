@@ -9,6 +9,7 @@ from ..agent_adapter.registry import validate_adapter_kind
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from .codemode import normalize_codemode_settings
 from .compaction import CompactionSettings, normalize_compaction_settings
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentCommand, AgentProfile
@@ -17,6 +18,7 @@ from .registry import (
     ProfileAgentMember,
     ProfileApprovalMember,
     ProfileArtifactsMember,
+    ProfileCodeModeMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
@@ -42,6 +44,7 @@ if TYPE_CHECKING:
         ApprovalDirectiveStmt,
         ArtifactsDirectiveStmt,
         ArtifactsField,
+        CodeModeDirectiveStmt,
         EffortDirectiveStmt,
         HistoryDirectiveStmt,
         McpDirectiveStmt,
@@ -415,6 +418,16 @@ def eval_skills_directive(
     )
 
 
+def eval_codemode_directive(
+    rt: KediRuntime,
+    stmt: CodeModeDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    values = eval_settings_fields(rt, stmt.fields, env)
+    values["enabled"] = stmt.enabled
+    return AgentProfile(codemode=normalize_codemode_settings(values))
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -425,6 +438,7 @@ def _member_to_patch(
         | ProfileApprovalMember
         | ProfileHistoryMember
         | ProfileSkillsMember
+        | ProfileCodeModeMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -505,6 +519,10 @@ def _member_to_patch(
         return AgentProfile(
             skills=normalize_skills_settings(values, enabled=member.enabled),
         )
+    if member.kind == "codemode":
+        values = eval_settings_fields(rt, member.fields, env)
+        values["enabled"] = member.enabled
+        return AgentProfile(codemode=normalize_codemode_settings(values))
     if member.kind == "system":
         system = eval_system_value(
             rt,

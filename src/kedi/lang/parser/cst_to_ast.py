@@ -41,6 +41,7 @@ from ...agent_profile.settings import (
     is_valid_model_setting_key,
     parse_plain_setting_value,
 )
+from ...agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from ...artifacts import (
     ARTIFACT_POLICY_INPUT_FIELDS,
     ArtifactPolicy,
@@ -61,6 +62,7 @@ from ..ast import (
     BacktickLineStmt,
     CallArg,
     CallSegment,
+    CodeModeDirectiveStmt,
     EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
@@ -81,6 +83,7 @@ from ..ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileCodeModeEntry,
     ProfileArtifactsEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
@@ -378,6 +381,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "skills_directive":
                 stmt = self._walk_skills_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "codemode_directive":
+                stmt = self._walk_codemode_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "system_directive":
@@ -984,6 +991,8 @@ class _Walker:
             return self._walk_history_directive(node)
         if t == "skills_directive":
             return self._walk_skills_directive(node)
+        if t == "codemode_directive":
+            return self._walk_codemode_directive(node)
         if t == "system_directive":
             return self._walk_system_directive(node)
         if t == "mcp_directive":
@@ -1931,6 +1940,65 @@ class _Walker:
             loc=self._span(node),
         )
 
+    def _walk_codemode_directive(self, node: Node) -> CodeModeDirectiveStmt:
+        value_node = _field(node, "value")
+        if value_node is not None:
+            value = _src_text(self.source, value_node).strip()
+            if value not in {"enabled", "disabled"}:
+                self._error(
+                    value_node,
+                    "codemode directive must be 'enabled' or 'disabled'",
+                    code="K-CODEMODE-VALUE",
+                )
+            return CodeModeDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
+        body_node = _field(node, "body")
+        assert body_node is not None
+        enabled = True
+        fields: list[SettingsField] = []
+        seen: set[str] = set()
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            field = self._walk_settings_value_field(child)
+            name = field.name
+            if name not in CODEMODE_SETTING_FIELDS:
+                self._error(
+                    child,
+                    "codemode setting must be one of: "
+                    + ", ".join(sorted(CODEMODE_SETTING_FIELDS)),
+                    code="K-CODEMODE-KEY",
+                )
+                continue
+            if name in seen:
+                self._error(
+                    child,
+                    f"Duplicate codemode setting: {name!r}",
+                    code="K-CODEMODE-DUP",
+                )
+                continue
+            seen.add(name)
+            if name == "enabled":
+                if field.backtick_code is not None:
+                    self._error(
+                        child,
+                        "codemode enabled setting must be the literal 'true' or 'false'",
+                        code="K-CODEMODE-ENABLED",
+                    )
+                    enabled = False
+                else:
+                    value = (field.plain_value or "").strip()
+                    if value not in {"true", "false"}:
+                        self._error(
+                            child,
+                            "codemode enabled setting must be 'true' or 'false'",
+                            code="K-CODEMODE-ENABLED",
+                        )
+                    enabled = value == "true"
+                continue
+            fields.append(field)
+        return CodeModeDirectiveStmt(enabled=enabled, fields=fields, loc=self._span(node))
+
     def _walk_system_directive(self, node: Node) -> SystemDirectiveStmt:
         head = _field(node, "head")
         body = _field(node, "body")
@@ -2145,6 +2213,7 @@ class _Walker:
         approval_members: list[ProfileApprovalEntry] = []
         history_members: list[ProfileHistoryEntry] = []
         skills_members: list[ProfileSkillsEntry] = []
+        codemode_members: list[ProfileCodeModeEntry] = []
         system_members: list[ProfileSystemEntry] = []
         mcp_members: list[ProfileMcpEntry] = []
         settings_members: list[ProfileSettingsEntry] = []
@@ -2252,6 +2321,15 @@ class _Walker:
                         ProfileSkillsEntry(
                             enabled=skills_stmt.enabled,
                             fields=skills_stmt.fields,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "codemode_directive":
+                    codemode_stmt = self._walk_codemode_directive(child)
+                    codemode_members.append(
+                        ProfileCodeModeEntry(
+                            enabled=codemode_stmt.enabled,
+                            fields=codemode_stmt.fields,
                             loc=self._span(child),
                         )
                     )
@@ -2405,6 +2483,7 @@ class _Walker:
             and not approval_members
             and not history_members
             and not skills_members
+            and not codemode_members
             and not system_members
             and not mcp_members
             and not settings_members
@@ -2418,7 +2497,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> skills:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> skills:', '> codemode:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2430,6 +2509,7 @@ class _Walker:
             approval_members=approval_members,
             history_members=history_members,
             skills_members=skills_members,
+            codemode_members=codemode_members,
             system_members=system_members,
             mcp_members=mcp_members,
             settings_members=settings_members,

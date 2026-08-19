@@ -35,6 +35,7 @@ from .budget import (
     SubagentBudgetExceeded,
     SubagentConcurrencyExceeded,
 )
+from .context import SubagentExecutionContext, _subagent_execution_scope
 from .limits import SubagentUsageLimits
 from .persistence import StoredConversation, SubagentStateStore
 from .runs import (
@@ -168,6 +169,7 @@ class SubagentCoordinator:
         self._state_lock = Lock()
         self._persistence_lock = Lock()
         self._active_runs = 0
+        self._closed = False
         self._budget_stack: ContextVar[tuple[DelegationBudget, ...]] = ContextVar(
             f"kedi_subagent_budget_stack_{id(self)}",
             default=(),
@@ -236,6 +238,9 @@ class SubagentCoordinator:
         conversation_id: str | None = None,
         root_run_id_override: str | None = None,
     ) -> SubagentHandle:
+        with self._coordination_lock:
+            if self._closed:
+                raise RuntimeError("SubagentCoordinator is closed")
         if subagent not in allowed_subagents:
             raise KediExecutionError(
                 f"Subagent profile {subagent!r} is not allowed in the current profile"
@@ -464,6 +469,33 @@ class SubagentCoordinator:
         except KeyError:
             raise KediExecutionError(f"Unknown subagent run ID: {run_id!r}") from None
 
+    async def aclose(self) -> None:
+        """Cancel active child tasks and wait for their terminal transitions."""
+
+        with self._coordination_lock:
+            self._closed = True
+        with self._task_lock:
+            active = tuple(
+                (run_id, owned_task)
+                for run_id, owned_task in self._tasks.items()
+                if not owned_task.task.done()
+            )
+        for run_id, _ in active:
+            try:
+                self.cancel(run_id)
+            except KediExecutionError:
+                continue
+        if active:
+            await asyncio.gather(
+                *(self._bridge_task_wait(run_id, owned_task) for run_id, owned_task in active),
+                return_exceptions=True,
+            )
+        with self._task_lock:
+            for timeout_handle in self._timeout_handles.values():
+                timeout_handle.cancel()
+            self._timeout_handles.clear()
+            self._cancel_requested.clear()
+
     def _task_for(
         self,
         run_id: str,
@@ -657,7 +689,11 @@ class SubagentCoordinator:
                     conversation=conversation,
                 )
                 safety_token = self._safety_ceiling.set(child_ceiling)
-                with bind_agent_run(run_id, parent_run_id=event_parent_run_id):
+                with bind_agent_run(
+                    run_id,
+                    parent_run_id=event_parent_run_id,
+                    agent_name=subagent,
+                ):
                     with observe_invocations(
                         lambda usage: self._record_and_assert_usage(run_id, span, usage)
                     ):
@@ -763,6 +799,8 @@ class SubagentCoordinator:
     ) -> None:
         unique = tuple({id(budget): budget for budget in budgets}.values())
         with self._coordination_lock:
+            if self._closed:
+                raise RuntimeError("SubagentCoordinator is closed")
             exhausted = next(
                 (budget for budget in unique if budget.started >= budget.limit),
                 None,
@@ -819,29 +857,37 @@ class SubagentCoordinator:
             getattr(adapter, "supports_native_subagent_resume", False)
         ):
             effective_task = _task_with_verified_history(conversation.turns, task)
-        with self._deps.trace_frame(KediTraceFrame(kind="subagent", label=f"delegate {subagent}")):
-            with adapter.subagent_scope(request):
-                if final_schema is None:
-                    task_summary = await adapter.invoke(prompt=effective_task, **run_kwargs)
-                    return DelegationResult(
-                        run_id=run_id,
-                        subagent=subagent,
-                        task_summary=task_summary,
-                    )
-
-                schema = wrapped_final_schema(final_schema)
-                produced = await adapter.produce_subagent(
-                    template=effective_task,
-                    output_schema=schema,
-                    **run_kwargs,
-                )
-                result = validate_structured_result(produced, schema)
+        execution_context = SubagentExecutionContext(
+            run_id=run_id,
+            profile=profile,
+            conversation_id=conversation.conversation_id,
+        )
+        with (
+            self._deps.trace_frame(KediTraceFrame(kind="subagent", label=f"delegate {subagent}")),
+            _subagent_execution_scope(execution_context),
+            adapter.subagent_scope(request),
+        ):
+            if final_schema is None:
+                task_summary = await adapter.invoke(prompt=effective_task, **run_kwargs)
                 return DelegationResult(
                     run_id=run_id,
                     subagent=subagent,
-                    task_summary=result["task_summary"],
-                    final_result=result["final_result"],
+                    task_summary=task_summary,
                 )
+
+            schema = wrapped_final_schema(final_schema)
+            produced = await adapter.produce_subagent(
+                template=effective_task,
+                output_schema=schema,
+                **run_kwargs,
+            )
+            result = validate_structured_result(produced, schema)
+            return DelegationResult(
+                run_id=run_id,
+                subagent=subagent,
+                task_summary=result["task_summary"],
+                final_result=result["final_result"],
+            )
 
     def _activate_conversation(
         self,

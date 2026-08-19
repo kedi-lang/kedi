@@ -299,6 +299,12 @@ class SkillsDirectiveStmt(Stmt):
 
 
 @dataclass
+class CodeModeDirectiveStmt(Stmt):
+    enabled: bool = True
+    fields: List["SettingsField"] = field(default_factory=list)
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -371,6 +377,7 @@ class ProfileDefStmt(Stmt):
     approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
     history_members: List["ProfileHistoryEntry"] = field(default_factory=list)
     skills_members: List["ProfileSkillsEntry"] = field(default_factory=list)
+    codemode_members: List["ProfileCodeModeEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
@@ -431,6 +438,13 @@ class ProfileHistoryEntry:
 
 @dataclass
 class ProfileSkillsEntry:
+    enabled: bool
+    fields: List[SettingsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileCodeModeEntry:
     enabled: bool
     fields: List[SettingsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)

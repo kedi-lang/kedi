@@ -11,6 +11,7 @@ from lsprotocol import types as lsp
 
 from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
+    ProfileCodeModeEntry,
     OutputSegment,
     ProfileDefStmt,
     ProfileSkillsEntry,
@@ -571,6 +572,85 @@ def test_profile_skills_participate_in_capability_analysis() -> None:
         )
         == set()
     )
+
+
+def test_codemode_directive_uses_dedicated_adapter_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_codemode=False),
+    )
+
+    diagnostics = features.compute_diagnostics(
+        "> adapter: pydantic\n> codemode: enabled\n",
+        "main.kedi",
+    )
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CODEMODE"
+    assert "CodeMode tool execution" in diagnostics[0].message
+    assert (
+        features.compute_diagnostics(
+            "> adapter: pydantic\n> codemode: disabled\n",
+            "main.kedi",
+        )
+        == []
+    )
+
+
+def test_profile_codemode_participates_in_capability_analysis() -> None:
+    enabled = ProfileDefStmt(
+        name="enabled",
+        codemode_members=[ProfileCodeModeEntry(enabled=True)],
+    )
+    disabled = ProfileDefStmt(
+        name="disabled",
+        codemode_members=[ProfileCodeModeEntry(enabled=False)],
+    )
+
+    assert features._profile_capability_usage(
+        enabled,
+        profile_defs={},
+        proc_names=set(),
+    ) == {"codemode"}
+    assert (
+        features._profile_capability_usage(
+            disabled,
+            profile_defs={},
+            proc_names=set(),
+        )
+        == set()
+    )
+
+
+def test_profile_codemode_source_reports_direct_and_composed_capability_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_codemode=False),
+    )
+    source = """
+> profile: coded:
+    > adapter: pydantic
+    > codemode:
+        max_nested_calls: 3
+> use: coded
+"""
+
+    diagnostics = features.compute_diagnostics(source, "main.kedi")
+
+    assert [item.code for item in diagnostics].count("K-ADAPTER-CODEMODE") == 2
+    assert {item.range.start.line for item in diagnostics} == {3, 5}
+
+    disabled = """
+> profile: direct:
+    > adapter: pydantic
+    > codemode: disabled
+"""
+    assert features.compute_diagnostics(disabled, "main.kedi") == []
 
 
 def test_diagnostics_warn_when_adapter_lacks_mcp_support() -> None:

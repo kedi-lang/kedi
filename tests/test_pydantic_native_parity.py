@@ -8,7 +8,14 @@ from typing import Any, cast
 import pytest
 from pydantic_ai import ModelRetry, ModelSettings
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import (
@@ -35,11 +42,17 @@ from kedi.agent_adapter.adapters._pydantic_compat import (
     has_application_tools,
     infer_agent_name,
 )
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import (
     ApprovalDecision,
     ApprovalPolicy,
     ApprovalRequest,
 )
+from kedi.agent_adapter.subagents import (
+    SubagentConversationContext,
+    SubagentExecutionRequest,
+)
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
     current_required_tool_calls,
@@ -324,6 +337,52 @@ def test_external_approval_handoff_preserves_kedi_semantics_through_resume() -> 
     assert current_required_tool_calls() is None
 
 
+def test_external_approval_executes_canonical_read_only_tool_without_deferral() -> None:
+    calls: list[str] = []
+
+    async def respond(
+        messages: list[ModelMessage],
+        _info: AgentInfo,
+    ) -> ModelResponse:
+        tool_returned = any(
+            isinstance(part, ToolReturnPart)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
+        if tool_returned:
+            return ModelResponse(parts=[TextPart("verified")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "read_file",
+                    {"path": "README.md"},
+                    tool_call_id="read-only-call",
+                )
+            ]
+        )
+
+    def read_file(*, path: str) -> str:
+        calls.append(path)
+        return path
+
+    spec = ToolSpec(
+        fn=read_file,
+        name="read_file",
+        risk="read_only",
+    )
+    adapter = PydanticAdapter(FunctionModel(respond), approval_resolution="external")
+
+    result = adapter.run_sync(
+        "Read the file.",
+        output_type=[str, DeferredToolRequests],
+        toolsets=[pydantic_toolset_from_specs([spec])],
+    )
+
+    assert result.output == "verified"
+    assert calls == ["README.md"]
+
+
 @pytest.mark.parametrize(
     ("metadata", "message"),
     [
@@ -397,6 +456,72 @@ def test_native_rejects_unknown_approval_resolution_owner() -> None:
     with pytest.raises(ValueError, match="Unknown approval resolution owner"):
         PydanticAdapter(TestModel(), approval_resolution=cast(Any, "unknown"))
 
+    with pytest.raises(ValueError, match="Unknown subagent approval resolution owner"):
+        PydanticAdapter(
+            TestModel(),
+            subagent_approval_resolution=cast(Any, "unknown"),
+        )
+
+
+def test_subagent_approval_owner_can_differ_from_external_parent() -> None:
+    calls: list[str] = []
+    approval_requests: list[ApprovalRequest] = []
+
+    async def approve(request: ApprovalRequest) -> ApprovalDecision:
+        approval_requests.append(request)
+        return ApprovalDecision.allow()
+
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        returned = any(
+            isinstance(part, ToolReturnPart)
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+        )
+        if returned:
+            return ModelResponse(parts=[TextPart("child complete")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "write_file",
+                    {"path": "child.txt"},
+                    tool_call_id="child-write-1",
+                )
+            ]
+        )
+
+    def write_file(*, path: str) -> str:
+        calls.append(path)
+        return path
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond),
+        approval_resolution="external",
+        subagent_approval_resolution="kedi",
+    )
+    profile = AgentProfile(
+        name="worker",
+        approval=ApprovalPolicy.dynamic(approve),
+    )
+    request = SubagentExecutionRequest(
+        profile=profile,
+        tools=(ToolSpec(fn=write_file, name="write_file", risk="mutating"),),
+        instructions=None,
+        approval_ceiling=(),
+        usage_limits=SubagentUsageLimits(),
+        conversation=SubagentConversationContext(conversation_id="child-conversation"),
+    )
+
+    assert adapter.active_approval_resolution == "external"
+    with adapter.subagent_scope(request):
+        assert adapter.active_approval_resolution == "kedi"
+        result = asyncio.run(adapter.invoke(prompt="Write the child file."))
+
+    assert result == "child complete"
+    assert calls == ["child.txt"]
+    assert [approval.tool_name for approval in approval_requests] == ["write_file"]
+    assert adapter.active_approval_resolution == "external"
+
 
 def test_native_run_rejects_invalid_toolset_and_capability_containers() -> None:
     adapter = PydanticAdapter(TestModel())
@@ -415,6 +540,17 @@ def test_native_capability_injection_is_idempotent() -> None:
     capabilities = adapter._with_deferred_approval_capability(capabilities)
 
     assert len(capabilities) == 1
+
+
+def test_approval_required_toolset_fails_closed_for_unknown_projected_tool() -> None:
+    toolset = pydantic_toolset_from_specs([ToolSpec(lambda: "ok", "known", risk="read_only")])
+    wrapped = pydantic_adapter_module._approval_required_toolset(toolset)
+
+    assert wrapped.approval_required_func(
+        cast(Any, SimpleNamespace()),
+        ToolDefinition(name="unknown"),
+        {},
+    )
 
 
 def test_native_run_includes_active_profile_mcp_toolsets(

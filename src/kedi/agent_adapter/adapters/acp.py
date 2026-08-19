@@ -455,11 +455,9 @@ class ACPAdapter:
         if command is None:
             command = self._command
         if command is None:
-            command = _normalize_optional_command(os.getenv("KEDI_ACP_AGENT_COMMAND"))
-        if command is None:
             raise RuntimeError(
-                "ACPAdapter requires a command. Set KEDI_ACP_AGENT_COMMAND, pass "
-                "--acp-command, or use multiline '> agent:' syntax."
+                "ACPAdapter requires an explicit command in multiline '> agent:' syntax "
+                "or ACPAdapter(command=...)."
             )
         key = (command, cwd, tuple(sorted(env.items())))
         client = self._clients.get(key)

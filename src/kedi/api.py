@@ -252,6 +252,7 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple(_stable_repr(server) for server in profile.mcp_servers),
         _approval_identity(profile.approval),
         profile.skills,
+        profile.codemode,
         profile.artifacts.as_cache_key() if profile.artifacts is not None else None,
     )
 

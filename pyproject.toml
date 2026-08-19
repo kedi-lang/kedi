@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv",
     "pydantic-settings",
     "pydantic-ai==2.23.0",
-    "pydantic-monty>=0.0.19",
+    "pydantic-monty>=0.0.21",
     "jsonschema>=4.26",
     "tree-sitter>=0.25",
     "tree-sitter-kedi==0.4.0",

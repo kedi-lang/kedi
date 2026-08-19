@@ -4693,3 +4693,52 @@ def test_subagent_lsp_diagnostics_definition_and_tokens() -> None:
         "/tmp/subagents.kedi",
     )
     assert any(item.code == "K-ADAPTER-SUBAGENTS" for item in diagnostics)
+
+
+def test_subagent_coordinator_close_is_fail_closed_and_cleans_owned_handles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _adapter, runtime, _tools = _manager_tools()
+    coordinator = runtime._subagent_coordinator
+
+    async def exercise() -> None:
+        task = asyncio.create_task(asyncio.sleep(60))
+        coordinator._tasks["active-close"] = _OwnedSubagentTask(
+            cast("asyncio.Task[DelegationResult]", task),
+            asyncio.get_running_loop(),
+        )
+        timeout = asyncio.get_running_loop().call_later(60, lambda: None)
+        coordinator._timeout_handles["active-close"] = timeout
+
+        def reject_cancel(_run_id: str) -> bool:
+            raise KediExecutionError("synthetic cancellation failure")
+
+        async def skip_wait(_run_id: str, _owned: _OwnedSubagentTask) -> None:
+            return None
+
+        monkeypatch.setattr(coordinator, "cancel", reject_cancel)
+        monkeypatch.setattr(coordinator, "_bridge_task_wait", skip_wait)
+        await coordinator.aclose()
+
+        assert timeout.cancelled()
+        with pytest.raises(RuntimeError, match="closed"):
+            coordinator.start(
+                allowed_subagents=(),
+                subagent="worker",
+                task="task",
+                final_schema=None,
+                parent_profile=AgentProfile.empty(),
+                parent_budget=cast(Any, None),
+                parent_concurrency=cast(Any, None),
+            )
+        with pytest.raises(RuntimeError, match="closed"):
+            coordinator._reserve_start(
+                (DelegationBudget.for_profile(profile_name="parent", max_agents=1),),
+                DelegationConcurrency.for_limit(1),
+            )
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())

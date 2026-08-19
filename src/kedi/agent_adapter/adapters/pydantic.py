@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Iterator, Literal, Mapping, Sequence, cast, overload
@@ -20,14 +20,9 @@ from pydantic_ai.capabilities import (
 )
 from pydantic_ai.exceptions import ApprovalRequired
 from pydantic_ai.messages import (
-    AgentStreamEvent as PydanticAgentStreamEvent,
-)
-from pydantic_ai.messages import (
     CompactionPart,
-    FunctionToolCallEvent,
     ModelMessage,
-    OutputToolCallEvent,
-    PartEndEvent,
+    ModelResponse,
     TextPart,
     ToolCallPart,
     UserContent,
@@ -48,7 +43,7 @@ from pydantic_ai.tools import (
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from ...agent_profile import AgentProfile
+from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
     pydantic_model_settings,
@@ -67,7 +62,9 @@ from ..approval import (
     ToolRisk,
 )
 from ..conversation import AdapterConversationContext
-from ..events import AgentMessageResolver, agent_event_run
+from ..codemode import CodeModeLimits
+from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
+from ..events import AgentMessageResolver, agent_event_run, current_agent_run_identity
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..models import codex_responses_model, is_codex_model_id
@@ -154,35 +151,24 @@ class _KediAgentEventCapability(AbstractCapability[Any]):
         self.resolver = resolver
         self._message_index = 0
 
-    async def wrap_run_event_stream(
+    async def after_model_request(
         self,
         ctx: RunContext[Any],
         *,
-        stream: AsyncIterable[PydanticAgentStreamEvent],
-    ) -> AsyncIterator[PydanticAgentStreamEvent]:
-        del ctx
-        text_parts: list[str] = []
-        sealed = False
-
-        def seal_message() -> None:
-            nonlocal sealed
-            if sealed or not text_parts:
-                return
-            sealed = True
+        request_context: Any,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        del ctx, request_context
+        text = "".join(part.content for part in response.parts if isinstance(part, TextPart))
+        if text:
             self._message_index += 1
             self.resolver.complete_message(
                 f"{self.resolver.run_id}:pydantic:{self._message_index}",
-                "".join(text_parts),
+                text,
             )
-
-        async for event in stream:
-            if isinstance(event, PartEndEvent) and isinstance(event.part, TextPart):
-                text_parts.append(event.part.content)
-            elif isinstance(event, (FunctionToolCallEvent, OutputToolCallEvent)):
-                seal_message()
-                self.resolver.mark_tool_boundary()
-            yield event
-        seal_message()
+        if any(isinstance(part, ToolCallPart) for part in response.parts):
+            self.resolver.mark_tool_boundary()
+        return response
 
 
 class _KediDeferredApprovalCapability(HandleDeferredToolCalls[Any]):
@@ -242,6 +228,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     kind: AgentAdapterKind = "agent-framework"
     shortname = "pydantic"
     supports_native_subagent_resume = True
+    approval_resolution: PydanticApprovalResolution
+    subagent_approval_resolution: PydanticApprovalResolution | None
     capabilities = AdapterCapabilities(
         supports_structured_output=True,
         supports_tool_registration=True,
@@ -250,6 +238,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_codemode=True,
         supports_native_approvals=True,
         supports_native_approval_handler=True,
         supports_subagents=True,
@@ -274,7 +263,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         *,
         model_settings: dict[str, Any] | None = None,
         approval_resolution: PydanticApprovalResolution = "kedi",
+        subagent_approval_resolution: PydanticApprovalResolution | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
+        codemode: bool | CodeModeSettings = False,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -298,6 +289,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             f"kedi_pydantic_approval_ceiling_{id(self)}",
             default=(),
         )
+        self._approval_resolution_var: ContextVar[PydanticApprovalResolution | None] = ContextVar(
+            f"kedi_pydantic_approval_resolution_{id(self)}",
+            default=None,
+        )
         self._run_tool_specs_var: ContextVar[tuple[ToolSpec, ...] | None] = ContextVar(
             f"kedi_pydantic_run_tool_specs_{id(self)}",
             default=None,
@@ -312,8 +307,14 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         if approval_resolution not in {"kedi", "external"}:
             raise ValueError(f"Unknown approval resolution owner: {approval_resolution!r}")
+        if subagent_approval_resolution not in {None, "kedi", "external"}:
+            raise ValueError(
+                f"Unknown subagent approval resolution owner: {subagent_approval_resolution!r}"
+            )
         self.approval_resolution = approval_resolution
+        self.subagent_approval_resolution = subagent_approval_resolution
         self._subagent_failure_policy = subagent_failure_policy
+        self.codemode = normalize_codemode_settings(codemode)
         self._model_overrides: dict[str, Model] = {}
         logical_model = model if isinstance(model, str) else None
         if isinstance(model, str):
@@ -386,6 +387,9 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
         token = self._subagent_conversation_var.set(request.conversation)
+        approval_token = self._approval_resolution_var.set(
+            self.subagent_approval_resolution or self.approval_resolution
+        )
         try:
             with (
                 self.tool_scope(request.tools),
@@ -395,7 +399,16 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             ):
                 yield
         finally:
+            self._approval_resolution_var.reset(approval_token)
             self._subagent_conversation_var.reset(token)
+
+    @property
+    def active_approval_resolution(self) -> PydanticApprovalResolution:
+        """Return the task-local approval owner for the active agent run."""
+
+        resolution_var = getattr(self, "_approval_resolution_var", None)
+        active = resolution_var.get() if resolution_var is not None else None
+        return active or getattr(self, "approval_resolution", "kedi")
 
     @contextmanager
     def conversation_scope(
@@ -622,11 +635,27 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         tool_specs = self._tool_specs_for_run(kwargs)
         run_kwargs = self._run_kwargs(kwargs, tool_specs=tool_specs)
         conversation = self._subagent_conversation_var.get()
-        with self._run_tool_spec_scope(tool_specs):
+        event_scope = (
+            nullcontext(None)
+            if current_agent_run_identity() is not None
+            else agent_event_run(self.shortname)
+        )
+        with (
+            self._run_tool_spec_scope(tool_specs),
+            delegation_scope(self._subagent_failure_policy),
+            event_scope as event_resolver,
+        ):
+            if event_resolver is not None:
+                capabilities = run_kwargs.get("capabilities")
+                capability_list = list(cast("Sequence[Any]", capabilities or ()))
+                capability_list.append(_KediAgentEventCapability(event_resolver))
+                run_kwargs["capabilities"] = capability_list
             async with super().iter(user_prompt, **cast(Any, run_kwargs)) as agent_run:
                 yield agent_run
                 if agent_run.result is not None:
                     self._capture_conversation_messages(conversation, agent_run)
+                    if event_resolver is not None:
+                        event_resolver.complete_run(final_text=str(agent_run.result.output))
 
     async def _run_agent(
         self,
@@ -824,15 +853,38 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         caller_toolsets = _toolset_sequence(run_kwargs.get("toolsets"))
         if caller_toolsets or toolsets:
             run_kwargs["toolsets"] = [
-                *(_approval_required_toolset(toolset) for toolset in caller_toolsets),
+                *(
+                    _approval_required_toolset(
+                        toolset,
+                        adapter_shortname=self.shortname,
+                    )
+                    for toolset in caller_toolsets
+                ),
                 *(toolsets or ()),
             ]
         capabilities = run_kwargs.get("capabilities")
-        if self.approval_resolution == "kedi" and (
+        approval_resolution = self.active_approval_resolution
+        codemode = normalize_codemode_settings(
+            self.active_profile.codemode or getattr(self, "codemode", None)
+        )
+        if codemode is not None and codemode.enabled:
+            if approval_resolution == "external":
+                raise ValueError(
+                    "Pydantic CodeMode requires inline Kedi approval resolution; "
+                    "external deferred approval is not supported inside execute_code"
+                )
+            capabilities = _with_capability(
+                capabilities,
+                PydanticCodeModeCapability,
+                lambda: pydantic_code_mode_capability(
+                    limits=CodeModeLimits(**codemode.limit_values())
+                ),
+            )
+        if approval_resolution == "kedi" and (
             caller_toolsets or toolsets is not None or self._has_native_approval_tools()
         ):
             capabilities = self._with_deferred_approval_capability(capabilities)
-        elif self.approval_resolution == "external" and (
+        elif approval_resolution == "external" and (
             caller_toolsets or toolsets is not None or self._has_native_approval_tools()
         ):
             capabilities = self._with_external_approval_capability(capabilities)
@@ -905,7 +957,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         if not self._has_native_approval_tools():
             return
         native_toolsets = [
-            _approval_required_toolset(toolset) for toolset in application_toolsets(self)
+            _approval_required_toolset(
+                toolset,
+                adapter_shortname=self.shortname,
+            )
+            for toolset in application_toolsets(self)
         ]
         existing_toolsets = run_kwargs.get("toolsets")
         if existing_toolsets is None:
@@ -923,7 +979,14 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets = build_base_toolset_list(self, cap_toolsets)
         toolset_count = application_toolset_count(self)
         return [
-            _approval_required_toolset(toolset) if index < toolset_count else toolset
+            (
+                _approval_required_toolset(
+                    toolset,
+                    adapter_shortname=self.shortname,
+                )
+                if index < toolset_count
+                else toolset
+            )
             for index, toolset in enumerate(toolsets)
         ]
 
@@ -941,9 +1004,17 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         toolsets: list[Any] = []
         scoped_tools = self.scoped_tools if include_scoped_tools else ()
         if scoped_tools:
-            toolsets.append(FunctionToolset(tools=scoped_tools).approval_required())
+            toolsets.append(
+                _approval_required_toolset(
+                    FunctionToolset(tools=scoped_tools),
+                    adapter_shortname=self.shortname,
+                )
+            )
         toolsets.extend(
-            toolset.approval_required()
+            _approval_required_toolset(
+                toolset,
+                adapter_shortname=self.shortname,
+            )
             for toolset in self._mcp_toolsets_for_profile(self.active_profile)
         )
         return toolsets or None
@@ -1453,12 +1524,41 @@ def _external_tool_spec(name: str) -> ToolSpec:
     )
 
 
-def _approval_required_toolset(toolset: Any) -> Any:
+def _approval_required_toolset(
+    toolset: Any,
+    *,
+    adapter_shortname: str = "pydantic",
+) -> Any:
     from pydantic_ai.toolsets.approval_required import ApprovalRequiredToolset
 
     if isinstance(toolset, ApprovalRequiredToolset):
         return toolset
-    return toolset.approval_required()
+    if not hasattr(toolset, "apply"):
+        return toolset.approval_required()
+    tool_specs = {tool.name: tool for tool in _kedi_tool_specs_from_toolsets((toolset,))}
+    if not tool_specs:
+        return toolset.approval_required()
+
+    def requires_approval(
+        ctx: RunContext[Any],
+        tool_def: ToolDefinition,
+        tool_args: dict[str, Any],
+    ) -> bool:
+        del ctx
+        tool = tool_specs.get(tool_def.name)
+        if tool is None:
+            return True
+        try:
+            request = approval_request_for_tool(
+                tool,
+                tool_args,
+                adapter_shortname,
+            )
+        except Exception:
+            return True
+        return request.risk != "read_only"
+
+    return toolset.approval_required(requires_approval)
 
 
 def _external_tool_risk(arguments: Mapping[str, Any]) -> ToolRisk:

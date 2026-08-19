@@ -13,7 +13,12 @@ from kedi.agent_adapter.registry import (
     build_adapter,
     known_adapter_shortnames,
 )
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import (
+    AgentProfile,
+    AgentProfileOverrideUnsupported,
+    CodeModeSettings,
+    normalize_codemode_settings,
+)
 from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
 from kedi.agent_profile.model import (
     eval_agent_command_value,
@@ -28,6 +33,7 @@ from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    CodeModeDirectiveStmt,
     EffortDirectiveStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
@@ -259,6 +265,167 @@ def test_parse_settings_directives_top_level_profile_and_procedure() -> None:
     assert profile.settings_members[0].fields[0].plain_value == "false"
     assert isinstance(prog.procedures[0].body[0], SettingsDirectiveStmt)
     assert prog.procedures[0].body[0].fields[0].name == "num_retries"
+
+
+def test_parse_codemode_directive_short_and_expanded_forms() -> None:
+    prog = parse_program(
+        """
+> codemode: enabled
+> profile: bounded:
+    > codemode:
+        max_nested_calls: 12
+        max_concurrent_calls: `4`
+@inspect():
+    > codemode: disabled
+    = done
+"""
+    )
+
+    top = prog.ordered_toplevel[0]
+    assert isinstance(top, CodeModeDirectiveStmt)
+    assert top.enabled is True
+    bounded = prog.profile_defs["bounded"].codemode_members[0]
+    assert bounded.enabled is True
+    assert [(field.name, field.plain_value, field.backtick_code) for field in bounded.fields] == [
+        ("max_nested_calls", "12", None),
+        ("max_concurrent_calls", None, "4"),
+    ]
+    procedure = prog.procedures[0]
+    assert isinstance(procedure.body[0], CodeModeDirectiveStmt)
+    assert procedure.body[0].enabled is False
+
+
+def test_codemode_directive_captures_typed_limits_and_rejects_settings_alias() -> None:
+    source = """
+> codemode:
+    default_search_limit: 4
+    max_search_limit: 20
+    max_nested_calls: 12
+    request_timeout: 15.5
+@inspect():
+    >> inspect [answer]
+"""
+    rt = compile_program(parse_program(source), adapter=_adapter())
+    profile = _procedure_def(rt._procedures["inspect"]).captured_agent_profile
+
+    assert profile.codemode is not None
+    assert profile.codemode.enabled is True
+    assert profile.codemode.default_search_limit == 4
+    assert profile.codemode.max_search_limit == 20
+    assert profile.codemode.max_nested_calls == 12
+    assert profile.codemode.request_timeout == 15.5
+    with pytest.raises(KediParseError, match="model setting must be one of"):
+        parse_program("> settings:\n    codemode: true\n")
+
+
+def test_codemode_profile_and_lexical_procedure_execution() -> None:
+    source = """
+> codemode: enabled
+> profile: bounded:
+    > codemode:
+        enabled: false
+        max_nested_calls: 3
+> use: bounded
+
+@local() -> int:
+    > codemode: disabled
+    = `1`
+
+= `local()`
+"""
+    rt = compile_program(parse_program(source), adapter=_adapter())
+
+    assert rt.run_main() == 1
+    profile = _procedure_def(rt._procedures["local"]).captured_agent_profile
+    assert profile.codemode == CodeModeSettings(enabled=False, max_nested_calls=3)
+
+
+@pytest.mark.parametrize(
+    ("source", "message"),
+    [
+        ("> codemode:\n    # comment\n    unknown: 1\n", "codemode setting must be one of"),
+        ("> codemode:\n    max_nested_calls: 2\n    max_nested_calls: 3\n", "Duplicate"),
+        ("> codemode:\n    enabled: `True`\n", "literal 'true' or 'false'"),
+        ("> codemode:\n    enabled: maybe\n", "must be 'true' or 'false'"),
+    ],
+)
+def test_codemode_directive_rejects_invalid_expanded_settings(
+    source: str,
+    message: str,
+) -> None:
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source)
+
+
+@pytest.mark.parametrize("value", ["on", "true", "maybe"])
+def test_codemode_directive_rejects_noncanonical_short_values(value: str) -> None:
+    with pytest.raises(KediParseError, match="codemode directive must be"):
+        parse_program(f"> codemode: {value}\n")
+
+
+def test_codemode_settings_validate_activation_and_limits() -> None:
+    configured = CodeModeSettings(
+        enabled=False,
+        default_search_limit=2,
+        max_search_limit=4,
+        request_timeout=2.5,
+    )
+
+    assert normalize_codemode_settings(None) is None
+    assert normalize_codemode_settings(configured) is configured
+    assert normalize_codemode_settings(True) == CodeModeSettings(enabled=True)
+    assert normalize_codemode_settings({"max_nested_calls": 2}) == CodeModeSettings(
+        max_nested_calls=2
+    )
+    assert configured.limit_values() == {
+        "default_search_limit": 2,
+        "max_search_limit": 4,
+        "max_hydrated_tools": 64,
+        "max_discovery_result_bytes": 256_000,
+        "max_code_chars": 20_000,
+        "max_nested_calls": 64,
+        "max_concurrent_calls": 8,
+        "max_tool_result_bytes": 256_000,
+        "max_total_tool_result_bytes": 1_000_000,
+        "max_print_bytes": 256_000,
+        "request_timeout": 2.5,
+    }
+
+    with pytest.raises(TypeError, match="enabled must be a boolean"):
+        CodeModeSettings(enabled=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="integer settings must be integers"):
+        CodeModeSettings(max_nested_calls=True)
+    with pytest.raises(ValueError, match="limits must be positive"):
+        CodeModeSettings(max_nested_calls=0)
+    with pytest.raises(TypeError, match="request_timeout must be a number"):
+        CodeModeSettings(request_timeout="slow")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="request_timeout must be positive"):
+        CodeModeSettings(request_timeout=0)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        CodeModeSettings(default_search_limit=2, max_search_limit=1)
+    with pytest.raises(ValueError, match="unknown codemode settings"):
+        normalize_codemode_settings({"unknown": 1})
+
+
+def test_runtime_rejects_enabled_codemode_on_unsupported_adapter() -> None:
+    from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
+
+    adapter = _adapter()
+
+    with pytest.raises(AgentProfileOverrideUnsupported, match="CodeMode is not supported"):
+        KediRuntime._assert_profile_override_supported(
+            AgentProfile(codemode=True),
+            adapter,
+        )
+
+    KediRuntime._assert_profile_override_supported(
+        AgentProfile(codemode=False),
+        adapter,
+    )
+    KediRuntime._assert_profile_override_supported(
+        AgentProfile(codemode=True),
+        object.__new__(PydanticAdapter),
+    )
 
 
 def test_mcp_profile_capture_uses_runtime_globals() -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -132,12 +131,6 @@ def _skills_command_help() -> str:
     help="Backend adapter for template execution",
 )
 @click.option(
-    "--acp-command",
-    envvar="KEDI_ACP_AGENT_COMMAND",
-    default=None,
-    help="Stdio command for the ACP agent harness",
-)
-@click.option(
     "--adapter-model",
     envvar=["KEDI_ADAPTER_MODEL", "MODEL_NAME"],
     default="groq:qwen/qwen3-32b",
@@ -254,7 +247,6 @@ def main(
     source: str | None,
     command_source: str | None,
     adapter: str,
-    acp_command: str | None,
     adapter_model: str,
     codegen_agent: str,
     codegen_model: str,
@@ -289,8 +281,6 @@ def main(
         return _run_skills_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:
         return _run_package_command(source, list(ctx.args))
-    if acp_command is not None:
-        os.environ["KEDI_ACP_AGENT_COMMAND"] = acp_command
     if idle_mode:
         if source is not None or command_source is not None:
             raise click.UsageError("--idle does not accept SOURCE or -c/--command.")

@@ -233,7 +233,8 @@ def pydantic_cache_settings(
             "openai_prompt_cache_key",
             conversation.cache_key,
         )
-        _setdefault_unconfigured(result, configured, "openai_previous_response_id", "auto")
+        if not _pydantic_response_storage_disabled(result, configured):
+            _setdefault_unconfigured(result, configured, "openai_previous_response_id", "auto")
     elif policy.backend == "openrouter":
         if conversation is not None:
             for key in (
@@ -323,7 +324,7 @@ def langchain_cache_settings(
     )
     model_kwargs.setdefault("prompt_cache_key", conversation.cache_key)
     result["model_kwargs"] = model_kwargs
-    if policy.continuation:
+    if policy.continuation and not _langchain_response_storage_disabled(result, model):
         result.setdefault("use_previous_response_id", True)
     return result
 
@@ -419,6 +420,35 @@ def _setdefault_unconfigured(
 ) -> None:
     if key not in configured:
         result.setdefault(key, value)
+
+
+def _pydantic_response_storage_disabled(
+    result: Mapping[str, Any],
+    configured: Mapping[str, Any],
+) -> bool:
+    if "openai_store" in result:
+        return result["openai_store"] is False
+    return configured.get("openai_store") is False
+
+
+def _langchain_response_storage_disabled(
+    result: Mapping[str, Any],
+    model: str | object,
+) -> bool:
+    if result.get("store") is False:
+        return True
+    result_model_kwargs = result.get("model_kwargs")
+    if isinstance(result_model_kwargs, Mapping) and result_model_kwargs.get("store") is False:
+        return True
+    if isinstance(model, str):
+        return False
+    if getattr(model, "store", None) is False:
+        return True
+    configured_model_kwargs = getattr(model, "model_kwargs", None)
+    return (
+        isinstance(configured_model_kwargs, Mapping)
+        and configured_model_kwargs.get("store") is False
+    )
 
 
 def _response_cache_policy(

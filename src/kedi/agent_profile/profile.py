@@ -11,6 +11,7 @@ from ..effort import EffortValue
 from .compaction import CompactionSettings
 from .mcp import McpServerSpec
 from .skills import SkillsSettings, skills_settings
+from .codemode import CodeModeSettings, normalize_codemode_settings
 
 if TYPE_CHECKING:
     from ..agent_adapter.tool_override import ToolSpec
@@ -45,11 +46,13 @@ class AgentProfile:
     workflow_mode: WorkflowMode | None = None
     history: bool | None = None
     compaction: CompactionSettings | None = None
+    codemode: CodeModeSettings | bool | None = None
     output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "skills", skills_settings(self.skills))
+        object.__setattr__(self, "codemode", normalize_codemode_settings(self.codemode))
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -104,6 +107,8 @@ class AgentProfile:
             updates["history"] = other.history
         if other.compaction is not None:
             updates["compaction"] = other.compaction
+        if other.codemode is not None:
+            updates["codemode"] = other.codemode
         if other.output_type is not None:
             updates["output_type"] = other.output_type
         if other.artifacts is not None:
