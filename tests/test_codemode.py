@@ -44,7 +44,7 @@ from kedi.agent_adapter.codemode import (
     CodeModeTool,
 )
 from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeToolset
-from kedi.agent_adapter.codemode.core import _name_score
+from kedi.agent_adapter.codemode.core import _SequentialDispatchGate, _name_score
 import kedi.agent_adapter.codemode.pydantic as pydantic_codemode_module
 from kedi.agent_adapter.adapters._pydantic_compat import (
     PydanticAICompatibilityError,
@@ -478,6 +478,20 @@ def test_codemode_bounds_calls_and_serializes_sequential_tools() -> None:
         assert aliased == 7
         assert max_active == 1
 
+        active = 0
+        max_active = 0
+        unrelated = await session.execute_code(
+            code=(
+                "import asyncio\n"
+                "values = await asyncio.gather(second(value=5), second(value=6))\n"
+                "sum(values)"
+            ),
+            invoke=invoke,
+            restart=True,
+        )
+        assert unrelated == 11
+        assert max_active == 2
+
         with pytest.raises(CodeModeExecutionError, match="at most 2 nested calls"):
             await session.execute_code(
                 code=("await first(value=1)\nawait first(value=2)\nawait first(value=3)"),
@@ -485,6 +499,41 @@ def test_codemode_bounds_calls_and_serializes_sequential_tools() -> None:
                 restart=True,
             )
         await session.close()
+
+    asyncio.run(run())
+
+
+def test_codemode_sequential_gate_releases_cancelled_waiter() -> None:
+    async def run() -> None:
+        gate = _SequentialDispatchGate()
+        parallel_entered = asyncio.Event()
+        release_parallel = asyncio.Event()
+
+        async def hold_parallel() -> None:
+            async with gate.enter(sequential=False):
+                parallel_entered.set()
+                await release_parallel.wait()
+
+        holder = asyncio.create_task(hold_parallel())
+        await parallel_entered.wait()
+
+        async def wait_exclusively() -> None:
+            async with gate.enter(sequential=True):
+                raise AssertionError("cancelled sequential waiter entered the gate")
+
+        waiter = asyncio.create_task(wait_exclusively())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        second_parallel_entered = False
+        async with gate.enter(sequential=False):
+            second_parallel_entered = True
+        assert second_parallel_entered
+
+        release_parallel.set()
+        await holder
 
     asyncio.run(run())
 

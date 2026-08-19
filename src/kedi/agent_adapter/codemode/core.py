@@ -9,8 +9,8 @@ import json
 import keyword
 import re
 import secrets
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +53,52 @@ locate progress, correct the error, and continue from variables that were alread
 """
 
 ToolInvoker = Callable[[str, dict[str, Any]], Awaitable[Any]]
+
+
+class _SequentialDispatchGate:
+    """Run sequential tools exclusively without serializing unrelated calls."""
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._active_parallel = 0
+        self._exclusive = False
+        self._waiting_exclusive = 0
+
+    @asynccontextmanager
+    async def enter(self, *, sequential: bool) -> AsyncIterator[None]:
+        if sequential:
+            async with self._condition:
+                self._waiting_exclusive += 1
+                try:
+                    await self._condition.wait_for(
+                        lambda: not self._exclusive and self._active_parallel == 0
+                    )
+                except BaseException:
+                    self._waiting_exclusive -= 1
+                    self._condition.notify_all()
+                    raise
+                self._waiting_exclusive -= 1
+                self._exclusive = True
+            try:
+                yield
+            finally:
+                async with self._condition:
+                    self._exclusive = False
+                    self._condition.notify_all()
+            return
+
+        async with self._condition:
+            await self._condition.wait_for(
+                lambda: not self._exclusive and self._waiting_exclusive == 0
+            )
+            self._active_parallel += 1
+        try:
+            yield
+        finally:
+            async with self._condition:
+                self._active_parallel -= 1
+                if self._active_parallel == 0:
+                    self._condition.notify_all()
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,12 +418,8 @@ class CodeModeSession:
             for name in sorted(self._hydrated)
             if name in self._catalog.tools
         ]
-        # Tool functions are first-class Monty values, so an indirect call can evade
-        # AST name matching. Hydrating a sequential tool therefore serializes the
-        # execution's complete dispatch lane.
-        serialize_calls = any(tool.sequential for tool in hydrated_tools)
-        dispatch_lock = asyncio.Lock()
         dispatch_slots = asyncio.Semaphore(self.limits.max_concurrent_calls)
+        dispatch_gate = _SequentialDispatchGate()
         call_count = 0
         total_result_bytes = 0
         host_error: Exception | None = None
@@ -406,10 +448,8 @@ class CodeModeSession:
                     if task is not None:
                         self._active_host_tasks.discard(task)
 
-            if serialize_calls:
-                result = await _locked(dispatch_lock, perform)
-            else:
-                result = await _locked(dispatch_slots, perform)
+            async with dispatch_slots, dispatch_gate.enter(sequential=tool.sequential):
+                result = await perform()
             jsonable, size = _json_boundary_value(result)
             if size > self.limits.max_tool_result_bytes:
                 raise CodeModeBoundaryError(
@@ -550,14 +590,6 @@ def _external_tool(
     invoke.__name__ = tool.callable_name
     invoke.__doc__ = tool.description
     return invoke
-
-
-async def _locked(
-    lock: asyncio.Lock | asyncio.Semaphore,
-    fn: Callable[[], Awaitable[Any]],
-) -> Any:
-    async with lock:
-        return await fn()
 
 
 def _json_boundary_value(value: Any) -> tuple[Any, int]:
