@@ -169,6 +169,36 @@ def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
     )
 
 
+def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
+    src = "> codemode:\n  enabled: true\n  max_nested_calls: `8`\n"
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/codemode.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+
+    assert any(
+        line == 0 and col == len("> ") and length == len("codemode") and token_type == keyword_type
+        for line, col, length, token_type, _ in tokens
+    )
+    assert any(
+        line == 1 and col == 2 and length == len("enabled") and token_type == property_type
+        for line, col, length, token_type, _ in tokens
+    )
+    assert any(
+        line == 1
+        and col == len("  enabled: ")
+        and length == len("true")
+        and token_type == string_type
+        for line, col, length, token_type, _ in tokens
+    )
+    assert any(
+        line == 2 and col == 2 and length == len("max_nested_calls") and token_type == property_type
+        for line, col, length, token_type, _ in tokens
+    )
+
+
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
     tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)

@@ -31,6 +31,7 @@ class AgentMessageEvent:
     parent_run_id: str | None = None
     segment_index: int = 0
     segment_count: int = 1
+    agent_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,7 @@ class AgentRunStateEvent:
     sequence: int
     state: AgentRunState
     parent_run_id: str | None = None
+    agent_name: str | None = None
 
 
 AgentStreamEvent: TypeAlias = AgentMessageEvent | AgentRunStateEvent
@@ -56,6 +58,7 @@ AgentEventCallback: TypeAlias = Callable[[AgentStreamEvent], None]
 class AgentRunIdentity:
     run_id: str
     parent_run_id: str | None = None
+    agent_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -188,12 +191,26 @@ def observe_agent_events(
     sink: AgentEventSink | AgentEventCallback,
 ) -> Iterator[None]:
     dispatcher = AgentEventDispatcher(sink)
+    try:
+        with bind_agent_event_dispatcher(dispatcher):
+            yield
+    finally:
+        dispatcher.close()
+
+
+@contextmanager
+def bind_agent_event_dispatcher(
+    dispatcher: AgentEventDispatcher,
+) -> Iterator[None]:
+    """Bind a caller-owned dispatcher to the current task without closing it."""
+
+    if not dispatcher.active:
+        raise RuntimeError("Cannot bind a closed Kedi agent event dispatcher")
     token = _EVENT_DISPATCHER.set(dispatcher)
     try:
         yield
     finally:
         _EVENT_DISPATCHER.reset(token)
-        dispatcher.close()
 
 
 def current_agent_event_dispatcher() -> AgentEventDispatcher | None:
@@ -209,8 +226,9 @@ def bind_agent_run(
     run_id: str,
     *,
     parent_run_id: str | None = None,
+    agent_name: str | None = None,
 ) -> Iterator[None]:
-    token = _BOUND_RUN_IDENTITY.set(AgentRunIdentity(run_id, parent_run_id))
+    token = _BOUND_RUN_IDENTITY.set(AgentRunIdentity(run_id, parent_run_id, agent_name))
     try:
         yield
     finally:
@@ -389,6 +407,7 @@ class AgentMessageResolver:
                 sequence=0,
                 phase=phase,
                 content=state.content,
+                agent_name=self.identity.agent_name,
             )
         )
 
@@ -400,6 +419,7 @@ class AgentMessageResolver:
                 adapter=self.adapter,
                 sequence=0,
                 state=state,
+                agent_name=self.identity.agent_name,
             )
         )
 

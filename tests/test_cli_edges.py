@@ -182,24 +182,11 @@ def test_cli_add_git_source_reports_the_cloned_revision(monkeypatch: Any) -> Non
     assert "abc123" in result.output
 
 
-def test_cli_acp_command_sets_process_env(monkeypatch: Any) -> None:
-    seen: dict[str, str | None] = {}
-
-    def fake_run_source_cli(*args: Any, **kwargs: Any) -> tuple[int, str]:
-        seen["command"] = cli_module.os.getenv("KEDI_ACP_AGENT_COMMAND")
-        return 0, "ok"
-
-    monkeypatch.delenv("KEDI_ACP_AGENT_COMMAND", raising=False)
-    monkeypatch.setattr(cli_module, "run_source_cli", fake_run_source_cli)
-
-    result = CliRunner().invoke(
-        cli_module.main,
-        ["-c", "= done", "--adapter", "acp", "--acp-command", "vsh run --acp"],
-    )
+def test_cli_help_does_not_expose_acp_command_option() -> None:
+    result = CliRunner().invoke(cli_module.main, ["--help"])
 
     assert result.exit_code == 0
-    assert result.output == "ok\n"
-    assert seen == {"command": "vsh run --acp"}
+    assert "--acp-command" not in result.output
 
 
 def test_cli_command_passes_extra_args_to_program_env() -> None:

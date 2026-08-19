@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any, Callable, cast
 
 import pytest
@@ -11,7 +12,11 @@ from pydantic_ai.messages import CompactionPart, ModelMessage, ModelResponse, Te
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.google import GoogleModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.models.openai import (
+    OpenAIChatModel,
+    OpenAIResponsesModel,
+    OpenAIResponsesModelSettings,
+)
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.models.zai import ZaiModel
 from pydantic_ai.providers.alibaba import AlibabaProvider
@@ -25,6 +30,7 @@ from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.providers.zai import ZaiProvider
 
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
+from kedi.agent_adapter import prefix_cache as prefix_cache_module
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
@@ -90,10 +96,14 @@ class StatefulHistoryAdapter(MockAdapter):
         return f"response-{turn}"
 
 
-def _openai_model() -> OpenAIResponsesModel:
+def _openai_model(
+    *,
+    settings: OpenAIResponsesModelSettings | None = None,
+) -> OpenAIResponsesModel:
     return OpenAIResponsesModel(
         "gpt-5.4",
         provider=OpenAIProvider(api_key="test"),
+        settings=settings,
     )
 
 
@@ -375,6 +385,25 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
     )
     assert explicit["openai_prompt_cache_key"] == "caller-key"
     assert explicit["openai_previous_response_id"] == "response-id"
+    storage_disabled = pydantic_prefix_cache_settings(
+        {},
+        model=_openai_model(settings={"openai_store": False}),
+        conversation=conversation,
+    )
+    assert storage_disabled == {"openai_prompt_cache_key": "cache-key"}
+    explicit_storage_disabled = pydantic_prefix_cache_settings(
+        {
+            "openai_store": False,
+            "openai_previous_response_id": "caller-response-id",
+        },
+        model=_openai_model(),
+        conversation=conversation,
+    )
+    assert explicit_storage_disabled == {
+        "openai_prompt_cache_key": "cache-key",
+        "openai_previous_response_id": "caller-response-id",
+        "openai_store": False,
+    }
     assert pydantic_prefix_cache_settings(
         {},
         model=_openai_chat_model(),
@@ -420,7 +449,6 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
         "openrouter_cache_messages": True,
         "openrouter_cache_tool_definitions": True,
     }
-
     anthropic = pydantic_prefix_cache_settings(
         {"anthropic_cache_messages": False},
         model=_anthropic_model(),
@@ -488,6 +516,17 @@ def test_pydantic_prefix_cache_defaults_preserve_explicit_settings() -> None:
             conversation=conversation,
         )
         == {}
+    )
+
+
+def test_langchain_storage_disable_detection_covers_run_and_model_flags() -> None:
+    assert prefix_cache_module._langchain_response_storage_disabled(
+        {"store": False},
+        "openai:gpt-test",
+    )
+    assert prefix_cache_module._langchain_response_storage_disabled(
+        {},
+        SimpleNamespace(store=False),
     )
 
 
@@ -597,6 +636,14 @@ def test_langchain_prefix_cache_defaults_are_provider_aware_and_non_destructive(
     assert explicit == {
         "model_kwargs": {"prompt_cache_key": "caller-key", "store": False},
         "use_previous_response_id": False,
+    }
+    storage_disabled = langchain_prefix_cache_settings(
+        {"model_kwargs": {"store": False}},
+        model="openai:gpt-5.4",
+        conversation=conversation,
+    )
+    assert storage_disabled == {
+        "model_kwargs": {"prompt_cache_key": "cache-key", "store": False},
     }
     assert langchain_prefix_cache_settings(
         {"temperature": 0.2},
@@ -839,6 +886,13 @@ def test_pydantic_run_kwargs_receive_conversation_cache_defaults() -> None:
         )
     explicit_settings = cast(dict[str, Any], explicit["model_settings"])
     assert explicit_settings["openai_prompt_cache_key"] == "caller-key"
+
+    storage_disabled = PydanticAdapter(_openai_model(settings={"openai_store": False}))
+    with storage_disabled.conversation_scope(conversation):
+        storage_disabled_kwargs = storage_disabled._run_kwargs({}, tool_specs=())
+    assert storage_disabled_kwargs["model_settings"] == {
+        "openai_prompt_cache_key": "runtime-cache-key",
+    }
 
     anthropic = PydanticAdapter(_anthropic_model())
     with anthropic.conversation_scope(conversation):

@@ -6,6 +6,12 @@ from .compaction import (
     CompactionSettingsError,
     normalize_compaction_settings,
 )
+from .codemode import (
+    CODEMODE_LIMIT_FIELDS,
+    CODEMODE_SETTING_FIELDS,
+    CodeModeSettings,
+    normalize_codemode_settings,
+)
 from .mcp import McpServerSpec, McpTransport
 from .model import (
     AgentProfileOverrideUnsupported,
@@ -14,6 +20,7 @@ from .model import (
     eval_adapter_directive,
     eval_agent_directive,
     eval_approval_directive,
+    eval_codemode_directive,
     eval_effort_directive,
     eval_history_directive,
     eval_mcp_directive,
@@ -28,6 +35,7 @@ from .registry import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileCodeModeMember,
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
@@ -70,7 +78,11 @@ __all__ = [
     "CompactionMode",
     "CompactionSettings",
     "CompactionSettingsError",
+    "CODEMODE_LIMIT_FIELDS",
+    "CODEMODE_SETTING_FIELDS",
+    "CodeModeSettings",
     "ProfileApprovalMember",
+    "ProfileCodeModeMember",
     "ProfileHistoryMember",
     "ProfileSkillsMember",
     "SkillsSettings",
@@ -105,6 +117,7 @@ __all__ = [
     "dspy_lm_settings",
     "eval_adapter_directive",
     "eval_approval_directive",
+    "eval_codemode_directive",
     "eval_agent_directive",
     "eval_effort_directive",
     "eval_history_directive",
@@ -117,6 +130,7 @@ __all__ = [
     "eval_use_profile",
     "is_valid_model_setting_key",
     "normalize_compaction_settings",
+    "normalize_codemode_settings",
     "parse_plain_setting_value",
     "pydantic_model_settings",
     "procedure_def_for_tool",

@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 import inspect
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Callable, Coroutine, Iterator, Mapping, Sequence, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Coroutine,
+    Iterator,
+    Mapping,
+    NoReturn,
+    Sequence,
+    cast,
+)
 
 from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
 
-from ...agent_profile import AgentProfile
+from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.compaction import (
     CompactionSettingsError,
 )
@@ -26,6 +36,13 @@ from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
 from ..conversation import AdapterConversationContext
+from ..codemode import CodeModeError, CodeModeLimits
+from ..codemode.tool_specs import (
+    CodeModeProjection,
+    append_codemode_instructions,
+    approval_policies,
+    codemode_projection,
+)
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
@@ -57,6 +74,7 @@ class LangChainAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_codemode=True,
         supports_native_approvals=True,
         supports_native_approval_handler=True,
         supports_subagents=True,
@@ -76,6 +94,7 @@ class LangChainAdapter:
         *,
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
+        codemode: bool | CodeModeSettings = False,
         **kwargs: Any,
     ) -> None:
         if subagent_failure_policy not in {"recover", "fail_closed"}:
@@ -84,6 +103,7 @@ class LangChainAdapter:
         self._model_settings = langchain_model_settings(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
         self._subagent_failure_policy = subagent_failure_policy
+        self.codemode = normalize_codemode_settings(codemode)
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
@@ -153,18 +173,26 @@ class LangChainAdapter:
 
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
-        tools = await self._tools_for_run()
-        system_prompt = self._cache_aware_system_prompt(instructions, model=model)
-        agent = self._create_agent(
-            model=model,
-            tools=tools,
-            response_format=resolved_output_type,
-            system_prompt=system_prompt,
-            middleware=self._middleware_for_run(model, tools),
-        )
-        payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
-        result = await self._invoke_agent(agent, payload, emit_final=False)
-        return cast(OutputDataT, _langchain_structured_response(result))
+        async with self._projected_tools_for_run() as projection:
+            system_prompt = self._cache_aware_system_prompt(
+                append_codemode_instructions(instructions, enabled=projection.enabled),
+                model=model,
+            )
+            tools = _langchain_projection_tools(projection)
+            agent = self._create_agent(
+                model=model,
+                tools=tools,
+                response_format=resolved_output_type,
+                system_prompt=system_prompt,
+                middleware=self._middleware_for_run(
+                    model,
+                    tools,
+                    codemode_enabled=projection.enabled,
+                ),
+            )
+            payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
+            result = await self._invoke_agent(agent, payload, emit_final=False)
+            return cast(OutputDataT, _langchain_structured_response(result))
 
     async def produce_subagent(
         self,
@@ -177,40 +205,58 @@ class LangChainAdapter:
 
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
-        tools = await self._tools_for_run()
-        system_prompt = self._cache_aware_system_prompt(instructions, model=model)
-        agent = self._create_agent(
-            model=model,
-            tools=tools,
-            response_format=ToolStrategy(output_schema),
-            system_prompt=system_prompt,
-            middleware=self._middleware_for_run(model, tools),
-        )
-        payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
-        result = _langchain_structured_response(
-            await self._invoke_agent(agent, payload, emit_final=False)
-        )
-        if not isinstance(result, Mapping):
-            raise TypeError("LangChain subagent structured output must be an object")
-        return result
+        async with self._projected_tools_for_run() as projection:
+            system_prompt = self._cache_aware_system_prompt(
+                append_codemode_instructions(instructions, enabled=projection.enabled),
+                model=model,
+            )
+            tools = _langchain_projection_tools(projection)
+            agent = self._create_agent(
+                model=model,
+                tools=tools,
+                response_format=ToolStrategy(output_schema),
+                system_prompt=system_prompt,
+                middleware=self._middleware_for_run(
+                    model,
+                    tools,
+                    codemode_enabled=projection.enabled,
+                ),
+            )
+            payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
+            result = _langchain_structured_response(
+                await self._invoke_agent(agent, payload, emit_final=False)
+            )
+            if not isinstance(result, Mapping):
+                raise TypeError("LangChain subagent structured output must be an object")
+            return result
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
-        tools = await self._tools_for_run()
-        system_prompt = self._cache_aware_system_prompt(
-            instructions or self.active_profile.system,
-            model=model,
-        )
-        agent = self._create_agent(
-            model=model,
-            tools=tools,
-            response_format=None,
-            system_prompt=system_prompt,
-            middleware=self._middleware_for_run(model, tools),
-        )
-        payload = {"messages": self._messages_for_prompt(prompt, model=model), **kwargs}
-        return _langchain_text_response(await self._invoke_agent(agent, payload, emit_final=True))
+        async with self._projected_tools_for_run() as projection:
+            system_prompt = self._cache_aware_system_prompt(
+                append_codemode_instructions(
+                    instructions or self.active_profile.system,
+                    enabled=projection.enabled,
+                ),
+                model=model,
+            )
+            tools = _langchain_projection_tools(projection)
+            agent = self._create_agent(
+                model=model,
+                tools=tools,
+                response_format=None,
+                system_prompt=system_prompt,
+                middleware=self._middleware_for_run(
+                    model,
+                    tools,
+                    codemode_enabled=projection.enabled,
+                ),
+            )
+            payload = {"messages": self._messages_for_prompt(prompt, model=model), **kwargs}
+            return _langchain_text_response(
+                await self._invoke_agent(agent, payload, emit_final=True)
+            )
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -466,14 +512,54 @@ class LangChainAdapter:
             )
         ]
 
-    def _middleware_for_run(self, model: Any, tools: Sequence[Any]) -> list[Any]:
+    def _middleware_for_run(
+        self,
+        model: Any,
+        tools: Sequence[Any],
+        *,
+        codemode_enabled: bool = False,
+    ) -> list[Any]:
         return [
             *_langchain_cache_middleware(
                 model,
                 enabled=self._conversation_var.get() is not None,
             ),
-            *self._approval_middleware_for_run(tools),
+            *([] if codemode_enabled else self._approval_middleware_for_run(tools)),
         ]
+
+    @asynccontextmanager
+    async def _projected_tools_for_run(self) -> AsyncIterator[CodeModeProjection]:
+        native_tools = await self._tools_for_run()
+        settings = normalize_codemode_settings(
+            self.active_profile.codemode or getattr(self, "codemode", None)
+        )
+        limits = (
+            CodeModeLimits(**settings.limit_values())
+            if settings is not None and settings.enabled
+            else None
+        )
+        if limits is None:
+            yield CodeModeProjection(tools=tuple(native_tools))
+            return
+
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
+        specs = tuple(
+            known_specs.get(tool.name) or _langchain_tool_spec_from_native(tool)
+            for tool in native_tools
+        )
+        projection = codemode_projection(
+            specs,
+            limits=limits,
+            policies=approval_policies(
+                self.active_profile.approval,
+                self._approval_ceiling_var.get(),
+            ),
+            adapter_shortname=self.shortname,
+        )
+        try:
+            yield projection
+        finally:
+            await projection.close()
 
     async def _mcp_tools_for_profile(self, profile: AgentProfile) -> list[Any]:
         if not profile.mcp_servers:
@@ -572,7 +658,10 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         "description": description,
         "args_schema": tool.json_schema,
     }
-    if tool.metadata is not None and tool.metadata.get("kind") == "subagent":
+    if tool.metadata is not None and tool.metadata.get("kind") in {
+        "subagent",
+        "codemode_control",
+    }:
         kwargs["handle_tool_error"] = True
     if _is_async_callable(tool.fn):
         kwargs["coroutine"] = _langchain_async_tool_function(tool)
@@ -581,6 +670,56 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
     native_tool = StructuredTool.from_function(**kwargs)
     native_tool.metadata = tool.metadata
     return native_tool
+
+
+def _langchain_projection_tools(projection: CodeModeProjection) -> list[Any]:
+    if not projection.enabled:
+        return list(projection.tools)
+    return [_langchain_tool_from_spec(cast(ToolSpec, tool)) for tool in projection.tools]
+
+
+def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
+    name = getattr(tool, "name", None)
+    if not isinstance(name, str) or not name:
+        raise TypeError("LangChain CodeMode tools must expose a non-empty name")
+    args_schema = getattr(tool, "args_schema", None)
+    if isinstance(args_schema, Mapping):
+        json_schema = dict(args_schema)
+    else:
+        model_json_schema = getattr(args_schema, "model_json_schema", None)
+        json_schema = (
+            model_json_schema()
+            if callable(model_json_schema)
+            else {"type": "object", "properties": {}}
+        )
+
+    async def invoke(**arguments: Any) -> Any:
+        ainvoke = getattr(tool, "ainvoke", None)
+        if callable(ainvoke):
+            result = ainvoke(arguments)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        invoke_sync = getattr(tool, "invoke", None)
+        if not callable(invoke_sync):
+            raise TypeError(f"LangChain tool {name!r} is not invokable")
+        result = invoke_sync(arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    invoke.__name__ = name
+    description = getattr(tool, "description", None)
+    metadata = getattr(tool, "metadata", None)
+    return ToolSpec(
+        fn=invoke,
+        name=name,
+        description=description if isinstance(description, str) else name,
+        json_schema=json_schema,
+        metadata=dict(metadata) if isinstance(metadata, Mapping) else {"source": "langchain"},
+        risk="mutating",
+        risk_resolver=_langchain_external_tool_risk,
+    )
 
 
 def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
@@ -596,6 +735,8 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
         except KediExecutionError as exc:
             _raise_langchain_subagent_error(tool, exc)
             raise
+        except CodeModeError as exc:
+            _raise_langchain_codemode_error(exc)
 
     return _tool
 
@@ -611,8 +752,16 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
         except KediExecutionError as exc:
             _raise_langchain_subagent_error(tool, exc)
             raise
+        except CodeModeError as exc:
+            _raise_langchain_codemode_error(exc)
 
     return _tool
+
+
+def _raise_langchain_codemode_error(exc: CodeModeError) -> NoReturn:
+    from langchain_core.tools import ToolException
+
+    raise ToolException(str(exc)) from exc
 
 
 def _langchain_approval_middleware(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import sys
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from hashlib import sha256
@@ -12,7 +12,7 @@ from typing import Any, Coroutine, Iterator, Mapping, Sequence, cast
 
 from pydantic import BaseModel
 
-from ...agent_profile import AgentProfile
+from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.settings import CLAUDE_AGENT_SETTING_KEYS, claude_agent_settings
 from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
@@ -21,6 +21,14 @@ from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
 from ..conversation import AdapterConversationContext
+from ..codemode import CodeModeLimits, materialize_mcp_tool_specs
+from ..codemode.tool_specs import (
+    CONTROL_TOOL_NAMES,
+    CodeModeProjection,
+    append_codemode_instructions,
+    approval_policies,
+    codemode_projection,
+)
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
@@ -64,6 +72,7 @@ class ClaudeAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_codemode=True,
         supports_native_approvals=True,
         supports_native_approval_handler=True,
         supports_subagents=True,
@@ -83,6 +92,7 @@ class ClaudeAdapter:
         *,
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
+        codemode: bool | CodeModeSettings = False,
         **kwargs: Any,
     ) -> None:
         if subagent_failure_policy not in {"recover", "fail_closed"}:
@@ -91,6 +101,7 @@ class ClaudeAdapter:
         self._settings = claude_agent_settings(model_settings or {})
         self._extra_kwargs = dict(kwargs)
         self._subagent_failure_policy = subagent_failure_policy
+        self.codemode = normalize_codemode_settings(codemode)
         self._tool_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
             f"kedi_claude_profile_stack_{id(self)}",
@@ -197,52 +208,58 @@ class ClaudeAdapter:
         sdk = _claude_sdk()
         run_kwargs = dict(kwargs)
         instructions = cast(str | None, run_kwargs.pop("instructions", None))
-        options, session_fingerprint = self._options_for_run(
-            sdk,
-            output_type=output_type,
-            output_schema=output_schema,
-            instructions=instructions,
-            run_kwargs=run_kwargs,
-        )
-        result = None
-        message_index = 0
-        with (
-            delegation_scope(self._subagent_failure_policy),
-            agent_event_run(self.shortname) as resolver,
-        ):
-            async for message in sdk.query(prompt=prompt, options=options):
-                system_error = _claude_non_retryable_system_error(sdk, message)
-                if system_error is not None:
-                    raise RuntimeError(system_error)
-                if resolver is not None:
-                    message_index = _observe_claude_message(
-                        sdk,
-                        message,
-                        resolver,
-                        message_index,
-                    )
-                if _is_result_message(sdk, message):
-                    result = message
+        async with AsyncExitStack() as stack:
+            projection, codemode_settings = await self._projected_tools_for_run(stack)
+            options, session_fingerprint = self._options_for_run(
+                sdk,
+                output_type=output_type,
+                output_schema=output_schema,
+                instructions=instructions,
+                run_kwargs=run_kwargs,
+                tools=cast(Sequence[ToolSpec], projection.tools),
+                codemode_settings=codemode_settings,
+            )
+            result = None
+            message_index = 0
+            with (
+                delegation_scope(self._subagent_failure_policy),
+                agent_event_run(self.shortname) as resolver,
+            ):
+                async for message in sdk.query(prompt=prompt, options=options):
+                    system_error = _claude_non_retryable_system_error(sdk, message)
+                    if system_error is not None:
+                        raise RuntimeError(system_error)
+                    if resolver is not None:
+                        message_index = _observe_claude_message(
+                            sdk,
+                            message,
+                            resolver,
+                            message_index,
+                        )
+                    if _is_result_message(sdk, message):
+                        result = message
 
-            if result is None:
-                raise RuntimeError("Claude Agent SDK did not return a result message.")
-            if bool(getattr(result, "is_error", False)):
-                raise RuntimeError(str(getattr(result, "result", "Claude Agent SDK run failed.")))
-            if invocation_observer() is not None:
-                report_invocation(_claude_invocation_usage(result))
-            conversation = self._conversation_var.get()
-            if conversation is not None:
-                conversation.result_state.update(
-                    {
-                        "claude_session_id": result.session_id,
-                        "claude_session_fingerprint": session_fingerprint,
-                    }
-                )
-            if resolver is not None:
-                resolver.complete_run(
-                    final_text=_claude_text_response(result) if emit_final else None
-                )
-            return result
+                if result is None:
+                    raise RuntimeError("Claude Agent SDK did not return a result message.")
+                if bool(getattr(result, "is_error", False)):
+                    raise RuntimeError(
+                        str(getattr(result, "result", "Claude Agent SDK run failed."))
+                    )
+                if invocation_observer() is not None:
+                    report_invocation(_claude_invocation_usage(result))
+                conversation = self._conversation_var.get()
+                if conversation is not None:
+                    conversation.result_state.update(
+                        {
+                            "claude_session_id": result.session_id,
+                            "claude_session_fingerprint": session_fingerprint,
+                        }
+                    )
+                if resolver is not None:
+                    resolver.complete_run(
+                        final_text=_claude_text_response(result) if emit_final else None
+                    )
+                return result
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -337,7 +354,11 @@ class ClaudeAdapter:
         output_schema: dict[str, Any] | None,
         instructions: str | None,
         run_kwargs: Mapping[str, Any],
+        tools: Sequence[ToolSpec] | None = None,
+        codemode_settings: CodeModeSettings | None = None,
     ) -> tuple[Any, str]:
+        run_tools = tuple(self.scoped_tools if tools is None else tools)
+        codemode_enabled = codemode_settings is not None and codemode_settings.enabled
         options_kwargs = {
             **self._settings_for_run(),
             **dict(run_kwargs),
@@ -350,19 +371,17 @@ class ClaudeAdapter:
         model = self._model_for_run()
         if model is not None:
             options_kwargs["model"] = model
-        system_prompt = instructions or self.active_profile.system
-        if system_prompt is not None:
-            options_kwargs.setdefault(
-                "system_prompt",
-                {
-                    **CLAUDE_CODE_SYSTEM_PROMPT_PRESET,
-                    "append": system_prompt,
-                },
-            )
-        else:
-            options_kwargs.setdefault("system_prompt", dict(CLAUDE_CODE_SYSTEM_PROMPT_PRESET))
+        system_prompt = append_codemode_instructions(
+            instructions or self.active_profile.system,
+            enabled=codemode_enabled,
+        )
+        _set_claude_system_prompt(options_kwargs, system_prompt, codemode_enabled=codemode_enabled)
 
-        mcp_servers, allowed_tools = self._mcp_servers_for_run(sdk)
+        mcp_servers, allowed_tools = self._mcp_servers_for_run(
+            sdk,
+            tools=run_tools,
+            include_external=not codemode_enabled,
+        )
         if mcp_servers:
             existing_servers = options_kwargs.get("mcp_servers")
             if isinstance(existing_servers, Mapping):
@@ -380,7 +399,8 @@ class ClaudeAdapter:
                 options_kwargs["allowed_tools"] = allowed_tools
         session_fingerprint = _claude_session_fingerprint(
             options_kwargs,
-            tools=self.scoped_tools,
+            tools=run_tools,
+            codemode_settings=codemode_settings,
         )
         conversation = self._conversation_var.get()
         if conversation is not None:
@@ -409,25 +429,65 @@ class ClaudeAdapter:
             sdk,
             options_kwargs.get("hooks"),
             profile=self.active_profile,
-            tools=self.scoped_tools,
+            tools=run_tools,
             approval_ceiling=self._approval_ceiling_var.get(),
+            passthrough_tool_names=(
+                frozenset(f"{_CLAUDE_KEDI_MCP_TOOL_PREFIX}{name}" for name in CONTROL_TOOL_NAMES)
+                if codemode_enabled
+                else frozenset()
+            ),
         )
         options_cls = getattr(sdk, "ClaudeAgentOptions")
         return options_cls(**options_kwargs), session_fingerprint
 
-    def _mcp_servers_for_run(self, sdk: Any) -> tuple[dict[str, Any], list[str]]:
-        mcp_servers = _claude_external_mcp_servers(self.active_profile)
+    def _mcp_servers_for_run(
+        self,
+        sdk: Any,
+        *,
+        tools: Sequence[ToolSpec] | None = None,
+        include_external: bool = True,
+    ) -> tuple[dict[str, Any], list[str]]:
+        run_tools = tuple(self.scoped_tools if tools is None else tools)
+        mcp_servers = _claude_external_mcp_servers(self.active_profile) if include_external else {}
         allowed_tools: list[str] = []
-        if self.scoped_tools:
-            mcp_servers["kedi"] = _claude_sdk_mcp_server(sdk, self.scoped_tools)
-            allowed_tools.extend(f"mcp__kedi__{tool.name}" for tool in self.scoped_tools)
+        if run_tools:
+            mcp_servers["kedi"] = _claude_sdk_mcp_server(sdk, run_tools)
+            allowed_tools.extend(f"mcp__kedi__{tool.name}" for tool in run_tools)
         return mcp_servers, allowed_tools
+
+    async def _projected_tools_for_run(
+        self,
+        stack: AsyncExitStack,
+    ) -> tuple[CodeModeProjection, CodeModeSettings | None]:
+        settings = normalize_codemode_settings(
+            self.active_profile.codemode or getattr(self, "codemode", None)
+        )
+        if settings is None or not settings.enabled:
+            return CodeModeProjection(tools=tuple(self.scoped_tools)), None
+
+        mcp_tools = await materialize_mcp_tool_specs(
+            stack,
+            self.active_profile.mcp_servers,
+            adapter_shortname=self.shortname,
+        )
+        projection = codemode_projection(
+            (*self.scoped_tools, *mcp_tools),
+            limits=CodeModeLimits(**settings.limit_values()),
+            policies=approval_policies(
+                self.active_profile.approval,
+                self._approval_ceiling_var.get(),
+            ),
+            adapter_shortname=self.shortname,
+        )
+        stack.push_async_callback(projection.close)
+        return projection, settings
 
 
 def _claude_session_fingerprint(
     options: Mapping[str, Any],
     *,
     tools: Sequence[ToolSpec],
+    codemode_settings: CodeModeSettings | None = None,
 ) -> str:
     payload = {
         "options": dict(options),
@@ -444,6 +504,7 @@ def _claude_session_fingerprint(
             }
             for tool in tools
         ],
+        "codemode": codemode_settings,
     }
     encoded = json.dumps(
         payload,
@@ -464,6 +525,35 @@ def _claude_fingerprint_default(value: Any) -> Any:
             f"{getattr(value, '__qualname__', type(value).__qualname__)}"
         }
     return {"type": f"{type(value).__module__}.{type(value).__qualname__}"}
+
+
+def _set_claude_system_prompt(
+    options: dict[str, Any],
+    instructions: str | None,
+    *,
+    codemode_enabled: bool,
+) -> None:
+    existing = options.get("system_prompt")
+    if existing is None:
+        prompt = dict(CLAUDE_CODE_SYSTEM_PROMPT_PRESET)
+        if instructions is not None:
+            prompt["append"] = instructions
+        options["system_prompt"] = prompt
+        return
+    if not codemode_enabled:
+        return
+    if isinstance(existing, str):
+        options["system_prompt"] = append_codemode_instructions(existing, enabled=True)
+        return
+    if isinstance(existing, Mapping):
+        prompt = dict(existing)
+        append = prompt.get("append")
+        if append is not None and not isinstance(append, str):
+            raise TypeError("Claude system_prompt append must be a string")
+        prompt["append"] = append_codemode_instructions(append, enabled=True)
+        options["system_prompt"] = prompt
+        return
+    raise TypeError("Claude system_prompt must be a string or preset mapping")
 
 
 def _claude_sdk() -> Any:
@@ -640,6 +730,7 @@ def _with_kedi_approval_hook(
     profile: AgentProfile,
     tools: Sequence[ToolSpec],
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
+    passthrough_tool_names: frozenset[str] = frozenset(),
 ) -> dict[str, list[Any]]:
     """Append a PreToolUse policy bridge without discarding caller-provided hooks."""
 
@@ -663,6 +754,7 @@ def _with_kedi_approval_hook(
                     profile=profile,
                     tools=tools,
                     approval_ceiling=approval_ceiling,
+                    passthrough_tool_names=passthrough_tool_names,
                 )
             ],
         )
@@ -684,6 +776,7 @@ def _claude_pre_tool_use_hook(
     profile: AgentProfile,
     tools: Sequence[ToolSpec],
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
+    passthrough_tool_names: frozenset[str] = frozenset(),
 ) -> Any:
     """Build a Claude hook that applies Kedi policy to every native tool call."""
 
@@ -696,6 +789,15 @@ def _claude_pre_tool_use_hook(
         arguments = hook_input.get("tool_input")
         if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
             return _claude_hook_deny("Claude supplied an incomplete tool permission request.")
+
+        if tool_name in passthrough_tool_names:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": dict(arguments),
+                }
+            }
 
         tool = known_tools.get(tool_name, _claude_native_tool_spec(tool_name))
         try:

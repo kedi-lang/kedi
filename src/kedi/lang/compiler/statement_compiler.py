@@ -10,6 +10,7 @@ from ...agent_profile.model import (
     eval_agent_directive,
     eval_approval_directive,
     eval_artifacts_directive,
+    eval_codemode_directive,
     eval_effort_directive,
     eval_history_directive,
     eval_mcp_directive,
@@ -26,6 +27,7 @@ from ..ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
+    CodeModeDirectiveStmt,
     AssignBlockStmt,
     AssignStmt,
     BacktickLineStmt,
@@ -299,6 +301,9 @@ class StatementExecutor:
                     continue
                 if isinstance(stmt, SkillsDirectiveStmt):
                     active = active.merge(eval_skills_directive(self.rt, stmt, closure_env))
+                    continue
+                if isinstance(stmt, CodeModeDirectiveStmt):
+                    active = active.merge(eval_codemode_directive(self.rt, stmt, closure_env))
                     continue
                 if isinstance(stmt, SystemDirectiveStmt):
                     active = active.merge(eval_system_directive(self.rt, stmt, closure_env))

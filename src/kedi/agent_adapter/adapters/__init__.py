@@ -5,6 +5,7 @@ from pydantic_ai import Agent
 
 from .._schema import make_repr
 from .._schema import output_field_definition as _output_field_definition
+from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
 from . import acp, claude, codex, dspy, langchain, lazy, pydantic, webgpu
 from .acp import ACPAdapter
 from .claude import (
@@ -45,7 +46,9 @@ __all__ = [
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
+    "PydanticCodeModeCapability",
     "pydantic_approval_request_from_deferred",
+    "pydantic_code_mode_capability",
     "pydantic_deferred_results_from_decisions",
     "pydantic_tool_from_spec",
     "pydantic_toolset_from_specs",

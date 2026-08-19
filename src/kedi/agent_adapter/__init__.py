@@ -19,6 +19,7 @@ from .events import (
     AgentRunStateEvent,
     AgentStreamEvent,
     AsyncAgentEventQueue,
+    bind_agent_event_dispatcher,
     observe_agent_events,
 )
 from .meta import (
@@ -29,6 +30,8 @@ from .meta import (
     T,
 )
 from .models import CodexModel, CodexModelAdapter, codex_responses_model
+from .subagents import SubagentUsageLimits
+from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tool_override import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
@@ -42,8 +45,10 @@ if TYPE_CHECKING:
         LangChainAdapter,
         LazyAdapter,
         PydanticAdapter,
+        PydanticCodeModeCapability,
         WebGPUAdapter,
         pydantic_approval_request_from_deferred,
+        pydantic_code_mode_capability,
         pydantic_deferred_results_from_decisions,
         pydantic_tool_from_spec,
         pydantic_toolset_from_specs,
@@ -60,7 +65,9 @@ _ADAPTER_EXPORTS = frozenset(
         "LangChainAdapter",
         "LazyAdapter",
         "PydanticAdapter",
+        "PydanticCodeModeCapability",
         "pydantic_approval_request_from_deferred",
+        "pydantic_code_mode_capability",
         "pydantic_deferred_results_from_decisions",
         "pydantic_tool_from_spec",
         "pydantic_toolset_from_specs",
@@ -107,6 +114,7 @@ __all__ = [
     "AgentAdapterKind",
     "ApprovalCancelled",
     "AsyncAgentEventQueue",
+    "bind_agent_event_dispatcher",
     "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
@@ -119,12 +127,16 @@ __all__ = [
     "LangChainAdapter",
     "LazyAdapter",
     "PydanticAdapter",
+    "PydanticCodeModeCapability",
     "pydantic_approval_request_from_deferred",
+    "pydantic_code_mode_capability",
     "pydantic_deferred_results_from_decisions",
     "pydantic_tool_from_spec",
     "pydantic_toolset_from_specs",
     "SupportsToolRegistration",
     "SupportsConversationState",
+    "SubagentExecutionContext",
+    "SubagentUsageLimits",
     "T",
     "ToolSpec",
     "WebGPUAdapter",
@@ -133,4 +145,5 @@ __all__ = [
     "kedi_program_to_pydantic_tools",
     "observe_agent_events",
     "codex_responses_model",
+    "current_subagent_execution",
 ]

@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterator, Mapping, Sequence, cast, get_type_hi
 
 from pydantic import BaseModel, create_model
 
-from ...agent_profile import AgentProfile
+from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.settings import CODEX_AGENT_SETTING_KEYS, codex_agent_settings
 from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
@@ -26,6 +26,12 @@ from ..approval import (
     resolve_tool_approval_async,
 )
 from ..conversation import AdapterConversationContext
+from ..codemode import CodeModeLimits
+from ..codemode.tool_specs import (
+    CodeModeToolSpecBridge,
+    append_codemode_instructions,
+    approval_policies,
+)
 from ..events import agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind
@@ -63,6 +69,7 @@ class _CodexRun:
     timeout: float
     thread_fingerprint: str
     output_type: type[Any] | None = None
+    codemode_bridge: CodeModeToolSpecBridge | None = None
 
 
 class CodexAdapter:
@@ -78,6 +85,7 @@ class CodexAdapter:
         supports_model_override=True,
         supports_effort=True,
         supports_settings=True,
+        supports_codemode=True,
         supports_native_approvals=True,
         supports_native_approval_handler=False,
         supports_subagents=True,
@@ -103,6 +111,7 @@ class CodexAdapter:
         turn_timeout: float = 300,
         client: CodexAppServerClient | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
+        codemode: bool | CodeModeSettings = False,
         **kwargs: Any,
     ) -> None:
         if subagent_failure_policy not in {"recover", "fail_closed"}:
@@ -114,6 +123,7 @@ class CodexAdapter:
         }
         self._turn_timeout = turn_timeout
         self._subagent_failure_policy = subagent_failure_policy
+        self.codemode = normalize_codemode_settings(codemode)
         self._client = client or CodexAppServerClient(
             command,
             env=env,
@@ -195,11 +205,26 @@ class CodexAdapter:
         output_type: type[OutputDataT] | None = None,
         **kwargs: Any,
     ) -> OutputDataT:
+        if self._codemode_settings() is not None:
+            from ..utils import run_sync
+
+            return run_sync(
+                self.produce(
+                    template,
+                    output_schema=output_schema,
+                    output_type=output_type,
+                    **kwargs,
+                )
+            )
         run = self._prepare_run(template, output_schema, output_type, kwargs)
         result = self._run_sync(run, emit_final=False)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        if self._codemode_settings() is not None:
+            from ..utils import run_sync
+
+            return run_sync(self.invoke(prompt=prompt, **kwargs))
         run = self._prepare_invoke(prompt, kwargs)
         result = self._run_sync(run, emit_final=True)
         return result.text
@@ -265,43 +290,47 @@ class CodexAdapter:
         *,
         emit_final: bool,
     ) -> CodexTurnResult:
-        with (
-            delegation_scope(self._subagent_failure_policy),
-            agent_event_run(self.shortname) as resolver,
-        ):
-            conversation = self._conversation_var.get()
-            tool_context = copy_context()
-            approval_context = copy_context()
-            if conversation is None:
-                result = await self._client.run_stateless_turn(
-                    thread_params=run.thread_params,
-                    turn_params=run.turn_params,
-                    tools=run.tools,
-                    tool_context=tool_context,
-                    turn_timeout=run.timeout,
-                    approval_handler=run.native_approval_handler,
-                    approval_context=approval_context,
-                    event_resolver=resolver,
-                )
-            else:
-                thread_id = self._conversation_thread_id(conversation, run)
-                result = await self._client.run_conversation_turn(
-                    thread_id=thread_id,
-                    thread_params=run.thread_params,
-                    turn_params=run.turn_params,
-                    tools=run.tools,
-                    tool_context=tool_context,
-                    turn_timeout=run.timeout,
-                    approval_handler=run.native_approval_handler,
-                    approval_context=approval_context,
-                    event_resolver=resolver,
-                )
-                self._commit_conversation_turn(conversation, run, result, thread_id)
-            if invocation_observer() is not None:
-                report_invocation(_codex_invocation_usage(result))
-            if resolver is not None:
-                resolver.complete_run(final_text=result.text if emit_final else None)
-            return result
+        try:
+            with (
+                delegation_scope(self._subagent_failure_policy),
+                agent_event_run(self.shortname) as resolver,
+            ):
+                conversation = self._conversation_var.get()
+                tool_context = copy_context()
+                approval_context = copy_context()
+                if conversation is None:
+                    result = await self._client.run_stateless_turn(
+                        thread_params=run.thread_params,
+                        turn_params=run.turn_params,
+                        tools=run.tools,
+                        tool_context=tool_context,
+                        turn_timeout=run.timeout,
+                        approval_handler=run.native_approval_handler,
+                        approval_context=approval_context,
+                        event_resolver=resolver,
+                    )
+                else:
+                    thread_id = self._conversation_thread_id(conversation, run)
+                    result = await self._client.run_conversation_turn(
+                        thread_id=thread_id,
+                        thread_params=run.thread_params,
+                        turn_params=run.turn_params,
+                        tools=run.tools,
+                        tool_context=tool_context,
+                        turn_timeout=run.timeout,
+                        approval_handler=run.native_approval_handler,
+                        approval_context=approval_context,
+                        event_resolver=resolver,
+                    )
+                    self._commit_conversation_turn(conversation, run, result, thread_id)
+                if invocation_observer() is not None:
+                    report_invocation(_codex_invocation_usage(result))
+                if resolver is not None:
+                    resolver.complete_run(final_text=result.text if emit_final else None)
+                return result
+        finally:
+            if run.codemode_bridge is not None:
+                await run.codemode_bridge.close()
 
     def _run_sync(
         self,
@@ -397,14 +426,31 @@ class CodexAdapter:
             **self._validated_settings(run_kwargs),
         }
         model = profile.model or self._model
-        system = instructions if instructions is not None else profile.system
-        policies = self._approval_policies(profile.approval)
-        approved_tools = tuple(
-            _tool_with_approval_policies(tool, policies, self.shortname)
-            for tool in self.scoped_tools
+        codemode_settings = self._codemode_settings()
+        system = append_codemode_instructions(
+            instructions if instructions is not None else profile.system,
+            enabled=codemode_settings is not None,
         )
-        tools = {tool.name: tool.fn for tool in approved_tools}
-        dynamic_tools = [_dynamic_tool_spec(tool) for tool in approved_tools]
+        policies = self._approval_policies(profile.approval)
+        codemode_bridge = None
+        if codemode_settings is not None:
+            codemode_bridge = CodeModeToolSpecBridge(
+                self.scoped_tools,
+                limits=CodeModeLimits(**codemode_settings.limit_values()),
+                policies=approval_policies(
+                    profile.approval,
+                    self._approval_ceiling_var.get(),
+                ),
+                adapter_shortname=self.shortname,
+            )
+            projected_tools = codemode_bridge.control_tools
+        else:
+            projected_tools = tuple(
+                _tool_with_approval_policies(tool, policies, self.shortname)
+                for tool in self.scoped_tools
+            )
+        tools = {tool.name: tool.fn for tool in projected_tools}
+        dynamic_tools = [_dynamic_tool_spec(tool) for tool in projected_tools]
 
         thread_params: dict[str, Any] = {
             "ephemeral": self._conversation_var.get() is None,
@@ -454,8 +500,12 @@ class CodexAdapter:
             tools=tools,
             native_approval_handler=_codex_native_approval_handler(policies),
             timeout=float(timeout),
-            thread_fingerprint=_codex_thread_fingerprint(thread_params),
+            thread_fingerprint=_codex_thread_fingerprint(
+                thread_params,
+                extra=codemode_settings,
+            ),
             output_type=output_type,
+            codemode_bridge=codemode_bridge,
         )
 
     def _conversation_thread_id(
@@ -504,6 +554,14 @@ class CodexAdapter:
         if local_policy is not None or not policies:
             return (*policies, local_policy)
         return policies
+
+    def _codemode_settings(self) -> CodeModeSettings | None:
+        settings = normalize_codemode_settings(
+            self.active_profile.codemode or getattr(self, "codemode", None)
+        )
+        if settings is None or not settings.enabled:
+            return None
+        return settings
 
     @staticmethod
     def _validated_settings(settings: Mapping[str, Any]) -> dict[str, Any]:
@@ -751,8 +809,13 @@ def _copy_setting(
         target[destination] = settings[source]
 
 
-def _codex_thread_fingerprint(thread_params: Mapping[str, Any]) -> str:
-    payload = {key: value for key, value in thread_params.items() if key != "ephemeral"}
+def _codex_thread_fingerprint(
+    thread_params: Mapping[str, Any],
+    *,
+    extra: object = None,
+) -> str:
+    thread_payload = {key: value for key, value in thread_params.items() if key != "ephemeral"}
+    payload = thread_payload if extra is None else {"thread": thread_payload, "extra": extra}
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

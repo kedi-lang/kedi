@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field, replace
 from threading import Event
+from typing import Any, cast
 
 import pytest
-from pydantic_ai.messages import FunctionToolCallEvent, PartEndEvent, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import events as event_module
@@ -20,6 +21,7 @@ from kedi.agent_adapter.events import (
     AsyncAgentEventQueue,
     agent_event_run,
     bind_agent_run,
+    bind_agent_event_dispatcher,
     current_agent_event_dispatcher,
     current_agent_run_identity,
     observe_agent_events,
@@ -59,7 +61,7 @@ def test_semantic_events_resolve_commentary_and_authoritative_final() -> None:
 
     with observe_agent_events(sink):
         assert current_agent_event_dispatcher() is not None
-        with bind_agent_run("root", parent_run_id="parent"):
+        with bind_agent_run("root", parent_run_id="parent", agent_name="worker"):
             with agent_event_run("fake") as resolver:
                 assert resolver is not None
                 assert current_agent_run_identity() == resolver.identity
@@ -83,6 +85,7 @@ def test_semantic_events_resolve_commentary_and_authoritative_final() -> None:
     ]
     assert all(event.run_id == "root" for event in sink.events)
     assert all(event.parent_run_id == "parent" for event in sink.events)
+    assert all(event.agent_name == "worker" for event in sink.events)
     assert isinstance(sink.events[1], AgentMessageEvent)
     assert sink.events[1].content == "Checking the parser."
     assert isinstance(sink.events[2], AgentMessageEvent)
@@ -163,6 +166,31 @@ def test_no_observer_is_a_noop() -> None:
         assert resolver is None
 
 
+def test_pydantic_event_capability_accepts_none_and_rejects_invalid_container() -> None:
+    adapter = PydanticAdapter(TestModel())
+    events: list[AgentStreamEvent] = []
+
+    with observe_agent_events(events.append):
+        assert adapter.run_sync("emit events").output is not None
+    assert events
+
+    async def reject_invalid() -> None:
+        with (
+            observe_agent_events(events.append),
+            pytest.raises(
+                TypeError,
+                match="capabilities must be a list or tuple",
+            ),
+        ):
+            async with adapter._iter_with_kedi_state(
+                "invalid",
+                {"capabilities": cast(Any, object())},
+            ):
+                pass
+
+    asyncio.run(reject_invalid())
+
+
 def test_dispatcher_lifecycle_and_lane_ordering() -> None:
     delivered: list[AgentStreamEvent] = []
     dispatcher = AgentEventDispatcher(delivered.append)
@@ -176,6 +204,9 @@ def test_dispatcher_lifecycle_and_lane_ordering() -> None:
     dispatcher.publish(_run_state("late"))
     dispatcher.close()
     assert delivered == [replace(_run_state(), sequence=1)]
+    with pytest.raises(RuntimeError, match="closed Kedi agent event dispatcher"):
+        with bind_agent_event_dispatcher(dispatcher):
+            pass
 
     first_commentary = _commentary("first")
     later_control = _run_state("control")
@@ -342,19 +373,15 @@ def test_pydantic_event_capability_seals_text_at_tool_boundary() -> None:
             with agent_event_run("pydantic") as resolver:
                 assert resolver is not None
                 capability = pydantic_adapter_module._KediAgentEventCapability(resolver)
-
-                async def stream():
-                    yield PartEndEvent(index=0, part=TextPart("Inspecting."))
-                    yield FunctionToolCallEvent(ToolCallPart("read_file", {}))
-
-                observed = [
-                    event
-                    async for event in capability.wrap_run_event_stream(
-                        None,  # type: ignore[arg-type]
-                        stream=stream(),
-                    )
-                ]
-                assert len(observed) == 2
+                response = ModelResponse(
+                    parts=[TextPart("Inspecting."), ToolCallPart("read_file", {})]
+                )
+                observed = await capability.after_model_request(
+                    None,  # type: ignore[arg-type]
+                    request_context=None,  # type: ignore[arg-type]
+                    response=response,
+                )
+                assert observed is response
 
     asyncio.run(scenario())
     messages = [event for event in events if isinstance(event, AgentMessageEvent)]

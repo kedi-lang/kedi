@@ -64,6 +64,33 @@ def test_hover_on_profile_output_describes_delegation_fallback() -> None:
     assert "Subagent output: `list[str]`" in profile_body
 
 
+def test_hover_on_codemode_directive_and_limit() -> None:
+    source = "> adapter: pydantic\n> codemode:\n    max_nested_calls: 12\n    request_timeout: 30\n"
+
+    directive = hover_text_at(source, "example.kedi", "codemode")
+    limit = hover_text_at(source, "example.kedi", "max_nested_calls")
+
+    assert "search_tools" in directive
+    assert "execute_code" in directive
+    assert "Maximum host tool calls" in limit
+
+
+def test_hover_on_profile_codemode_directive_and_limit() -> None:
+    source = """
+> profile: bounded:
+    > adapter: pydantic
+    > codemode:
+        max_nested_calls: 12
+"""
+
+    directive = hover_text_at(source, "example.kedi", "codemode")
+    limit = hover_text_at(source, "example.kedi", "max_nested_calls")
+
+    assert "policy stored in this profile" in directive
+    assert "bounded execution settings" in directive
+    assert "Maximum host tool calls" in limit
+
+
 def test_hover_on_defaulted_procedure_header_shows_defaults():
     src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
     body = hover_text_at(src, "example.kedi", "translate")

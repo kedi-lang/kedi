@@ -627,6 +627,99 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
     assert all(message["result"]["success"] for message in tool_responses)
 
 
+def test_codex_codemode_projects_dynamic_controls_and_executes_nested_tool() -> None:
+    seen: dict[str, Any] = {}
+    calls: list[int] = []
+
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            seen.update(kwargs)
+            tools = kwargs["tools"]
+            assert set(tools) == {"search_tools", "get_tool_schema", "execute_code"}
+            assert tools["search_tools"]()["tool_names"] == ["double"]
+            tools["get_tool_schema"](tool_names=["double"])
+            result = await tools["execute_code"](code="await double(value=6)")
+            return CodexTurnResult(text=str(result), turn={})
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    def double(*, value: int) -> int:
+        calls.append(value)
+        return value * 2
+
+    adapter = CodexAdapter(
+        model="gpt-test",
+        client=cast(CodexAppServerClient, FakeClient()),
+        codemode=True,
+    )
+    with (
+        adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        adapter.tool_scope(
+            (
+                ToolSpec(
+                    fn=double,
+                    name="double",
+                    json_schema={
+                        "type": "object",
+                        "properties": {"value": {"type": "integer"}},
+                        "required": ["value"],
+                    },
+                ),
+            )
+        ),
+    ):
+        assert adapter.invoke_sync(prompt="Use CodeMode.") == "12"
+
+    assert calls == [6]
+    dynamic_tools = seen["thread_params"]["dynamicTools"]
+    assert {tool["name"] for tool in dynamic_tools} == {
+        "search_tools",
+        "get_tool_schema",
+        "execute_code",
+    }
+    assert "CodeMode" in seen["thread_params"]["developerInstructions"]
+
+
+def test_codex_codemode_sync_produce_uses_async_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClient:
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    adapter = CodexAdapter(
+        client=cast(CodexAppServerClient, FakeClient()),
+        codemode=True,
+    )
+
+    async def produce(
+        template: str,
+        output_schema: dict[str, Any] | None = None,
+        output_type: type[Any] | None = None,
+        **kwargs: Any,
+    ) -> Answer:
+        assert template == "structured"
+        assert output_schema is None
+        assert output_type is Answer
+        assert kwargs == {"run_id": "run"}
+        return Answer(answer="ok")
+
+    monkeypatch.setattr(adapter, "produce", produce)
+
+    assert adapter.produce_sync(
+        "structured",
+        output_type=Answer,
+        run_id="run",
+    ) == Answer(answer="ok")
+
+
 def test_codex_adapter_bridges_native_app_server_approvals(tmp_path: Path) -> None:
     adapter, log_path = _adapter(tmp_path)
 

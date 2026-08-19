@@ -62,6 +62,13 @@ class ProfileSkillsMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileCodeModeMember:
+    kind: Literal["codemode"] = "codemode"
+    enabled: bool
+    fields: tuple["SettingsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -142,6 +149,7 @@ class ProfileDefinition:
         | ProfileApprovalMember
         | ProfileHistoryMember
         | ProfileSkillsMember
+        | ProfileCodeModeMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import builtins
 import inspect
+import json
 import sys
 import threading
 from contextvars import ContextVar
@@ -44,6 +45,7 @@ from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.codemode import CodeModeExecutionError
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
     AgentRunStateEvent,
@@ -211,6 +213,9 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert LangChainAdapter.capabilities.supports("native_approval_handler")
     for adapter in (PydanticAdapter, LangChainAdapter, ClaudeAdapter, CodexAdapter, ACPAdapter):
         assert adapter.capabilities.supports("stream_events")
+    for adapter in (PydanticAdapter, LangChainAdapter, ClaudeAdapter, CodexAdapter):
+        assert adapter.capabilities.supports("codemode")
+    assert not DSPyAdapter.capabilities.supports("codemode")
     assert not DSPyAdapter.capabilities.supports("stream_events")
     assert not WebGPUAdapter.capabilities.supports("stream_events")
 
@@ -396,8 +401,8 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
         def __init__(self, configs: dict[str, Any]) -> None:
             events["mcp_configs"].append(configs)
 
-        async def get_tools(self) -> list[str]:
-            return ["mcp-tool"]
+        async def get_tools(self) -> list[Any]:
+            return events.get("mcp_tools", ["mcp-tool"])
 
     def fake_init_chat_model(model: str, **settings: Any) -> dict[str, Any]:
         call = {"model": model, "settings": settings}
@@ -535,6 +540,201 @@ def test_langchain_adapter_invoke_returns_text(monkeypatch: pytest.MonkeyPatch) 
         "messages": [{"role": "user", "content": "say hi"}],
         "run_id": "abc",
     }
+
+
+def test_langchain_codemode_projects_and_executes_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    calls: list[int] = []
+
+    def double(*, value: int) -> int:
+        calls.append(value)
+        return value * 2
+
+    adapter = LangChainAdapter(model={"fake": "model"}, codemode=True)
+    adapter.register_tool(
+        ToolSpec(
+            fn=double,
+            name="double",
+            description="Double one integer.",
+            json_schema={
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+            },
+        )
+    )
+
+    async def exercise_projection() -> None:
+        with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+            async with adapter._projected_tools_for_run() as projection:
+                tools = {
+                    tool.name: tool
+                    for tool in langchain_adapter_module._langchain_projection_tools(projection)
+                }
+                assert set(tools) == {"search_tools", "get_tool_schema", "execute_code"}
+                assert tools["search_tools"].func()["tool_names"] == ["double"]
+                tools["get_tool_schema"].func(tool_names=["double"])
+                result = await tools["execute_code"].coroutine(code="await double(value=4)")
+                assert result == 8
+
+    asyncio.run(exercise_projection())
+    assert calls == [4]
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        assert adapter.invoke_sync(prompt="Use CodeMode.") == "plain langchain text"
+    exposed = {tool.name for tool in events["agents"][-1]["tools"]}
+    assert exposed == {"search_tools", "get_tool_schema", "execute_code"}
+    assert "CodeMode" in events["agents"][-1]["system_prompt"]
+    assert events["agents"][-1]["middleware"] == []
+
+
+def test_langchain_codemode_materializes_profile_mcp_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    calls: list[dict[str, Any]] = []
+
+    class FakeMCPTool:
+        name = "mcp_lookup"
+        description = "Look up MCP data."
+        args_schema = {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        }
+        metadata = {"source": "mcp"}
+
+        async def ainvoke(self, arguments: dict[str, Any]) -> dict[str, Any]:
+            calls.append(arguments)
+            return {"found": arguments["query"]}
+
+    events["mcp_tools"] = [FakeMCPTool()]
+    adapter = LangChainAdapter(model={"fake": "model"}, codemode=True)
+    profile = AgentProfile(
+        approval=ApprovalPolicy.allow(),
+        mcp_servers=(McpServerSpec(command="fake-mcp"),),
+    )
+
+    async def run() -> None:
+        with adapter.profile_override(profile):
+            async with adapter._projected_tools_for_run() as projection:
+                tools = {
+                    tool.name: tool
+                    for tool in langchain_adapter_module._langchain_projection_tools(projection)
+                }
+                assert tools["search_tools"].func()["tool_names"] == ["mcp_lookup"]
+                tools["get_tool_schema"].func(tool_names=["mcp_lookup"])
+                result = await tools["execute_code"].coroutine(
+                    code="await mcp_lookup(query='kedi')"
+                )
+                assert result == {"found": "kedi"}
+
+    asyncio.run(run())
+    assert calls == [{"query": "kedi"}]
+
+
+def test_langchain_codemode_returns_sandbox_errors_to_the_model() -> None:
+    async def fail_code(*, code: str, restart: bool = False) -> None:
+        del code, restart
+        raise CodeModeExecutionError("mapping methods are unavailable")
+
+    tool = langchain_adapter_module._langchain_tool_from_spec(
+        ToolSpec(
+            fn=fail_code,
+            name="execute_code",
+            description="Execute CodeMode code.",
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "restart": {"type": "boolean", "default": False},
+                },
+                "required": ["code"],
+            },
+            metadata={"kind": "codemode_control"},
+        )
+    )
+
+    result = asyncio.run(tool.ainvoke({"code": "mapping.get('key')"}))
+
+    assert result == "mapping methods are unavailable"
+
+    def fail_sync(*, code: str, restart: bool = False) -> None:
+        del code, restart
+        raise CodeModeExecutionError("sync mapping failure")
+
+    sync_tool = langchain_adapter_module._langchain_tool_from_spec(
+        ToolSpec(
+            fn=fail_sync,
+            name="execute_code",
+            description="Execute CodeMode code.",
+            json_schema={
+                "type": "object",
+                "properties": {"code": {"type": "string"}},
+                "required": ["code"],
+            },
+            metadata={"kind": "codemode_control"},
+        )
+    )
+    assert sync_tool.invoke({"code": "mapping.get('key')"}) == "sync mapping failure"
+
+
+def test_langchain_native_codemode_tool_variants() -> None:
+    class Arguments(BaseModel):
+        value: int
+
+    with pytest.raises(TypeError, match="non-empty name"):
+        langchain_adapter_module._langchain_tool_spec_from_native(
+            SimpleNamespace(name="", args_schema=None)
+        )
+
+    immediate = langchain_adapter_module._langchain_tool_spec_from_native(
+        SimpleNamespace(
+            name="immediate",
+            description=None,
+            args_schema=Arguments,
+            metadata=None,
+            ainvoke=lambda arguments: arguments["value"] + 1,
+        )
+    )
+    assert immediate.json_schema == Arguments.model_json_schema()
+    assert immediate.description == "immediate"
+    assert immediate.metadata == {"source": "langchain"}
+    assert asyncio.run(immediate.fn(value=2)) == 3
+
+    async def delayed() -> int:
+        return 5
+
+    awaiting = langchain_adapter_module._langchain_tool_spec_from_native(
+        SimpleNamespace(
+            name="awaiting",
+            description="Await a value.",
+            args_schema=None,
+            metadata={"source": "native"},
+            invoke=lambda _arguments: delayed(),
+        )
+    )
+    assert awaiting.json_schema == {"type": "object", "properties": {}}
+    assert asyncio.run(awaiting.fn()) == 5
+
+    synchronous = langchain_adapter_module._langchain_tool_spec_from_native(
+        SimpleNamespace(
+            name="synchronous",
+            description="Return a value.",
+            args_schema={"type": "object"},
+            metadata={},
+            invoke=lambda _arguments: 7,
+        )
+    )
+    assert asyncio.run(synchronous.fn()) == 7
+
+    missing = langchain_adapter_module._langchain_tool_spec_from_native(
+        SimpleNamespace(name="missing", description="Missing.", args_schema=None)
+    )
+    with pytest.raises(TypeError, match="not invokable"):
+        asyncio.run(missing.fn())
 
 
 def test_langchain_adapter_emits_completed_model_messages(
@@ -1655,6 +1855,173 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
     assert events["options"][-1]["system_prompt"] == {
         "type": "preset",
         "preset": "claude_code",
+    }
+
+
+def test_claude_codemode_system_prompt_shapes() -> None:
+    unchanged: dict[str, Any] = {"system_prompt": "existing"}
+    claude_adapter_module._set_claude_system_prompt(
+        unchanged,
+        "ignored",
+        codemode_enabled=False,
+    )
+    assert unchanged == {"system_prompt": "existing"}
+
+    string_prompt: dict[str, Any] = {"system_prompt": "existing"}
+    claude_adapter_module._set_claude_system_prompt(
+        string_prompt,
+        None,
+        codemode_enabled=True,
+    )
+    assert string_prompt["system_prompt"].startswith("existing\n\n")
+    assert "CodeMode" in string_prompt["system_prompt"]
+
+    preset: dict[str, Any] = {
+        "system_prompt": {"type": "preset", "preset": "claude_code", "append": "base"}
+    }
+    claude_adapter_module._set_claude_system_prompt(
+        preset,
+        None,
+        codemode_enabled=True,
+    )
+    assert preset["system_prompt"]["append"].startswith("base\n\n")
+
+    invalid_append: dict[str, Any] = {"system_prompt": {"append": 3}}
+    with pytest.raises(TypeError, match="append must be a string"):
+        claude_adapter_module._set_claude_system_prompt(
+            invalid_append,
+            None,
+            codemode_enabled=True,
+        )
+
+    with pytest.raises(TypeError, match="string or preset mapping"):
+        claude_adapter_module._set_claude_system_prompt(
+            {"system_prompt": 3},
+            None,
+            codemode_enabled=True,
+        )
+
+
+def test_claude_codemode_projects_sdk_controls_and_executes_nested_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+    calls: list[int] = []
+
+    def double(*, value: int) -> int:
+        calls.append(value)
+        return value * 2
+
+    async def query(*, prompt: str, options: Any) -> Any:
+        events["prompts"].append({"prompt": prompt, "options": options})
+        server = options.kwargs["mcp_servers"]["kedi"]
+        tools = {tool.name: tool for tool in server["tools"]}
+        await tools["search_tools"]({})
+        await tools["get_tool_schema"]({"tool_names": ["double"]})
+        events["codemode_result"] = await tools["execute_code"]({"code": "await double(value=6)"})
+        yield sdk.ResultMessage(result="done")
+
+    setattr(sdk, "query", query)
+    adapter = ClaudeAdapter(model="claude", codemode=True)
+    adapter.register_tool(
+        ToolSpec(
+            fn=double,
+            name="double",
+            json_schema={
+                "type": "object",
+                "properties": {"value": {"type": "integer"}},
+                "required": ["value"],
+            },
+        )
+    )
+
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        assert adapter.invoke_sync(prompt="Use CodeMode.") == "done"
+
+    assert calls == [6]
+    assert json.loads(events["codemode_result"]["content"][0]["text"]) == 12
+    options = events["options"][-1]
+    assert set(options["allowed_tools"]) == {
+        "mcp__kedi__search_tools",
+        "mcp__kedi__get_tool_schema",
+        "mcp__kedi__execute_code",
+    }
+    assert "CodeMode" in options["system_prompt"]["append"]
+    controls = {tool.name for tool in options["mcp_servers"]["kedi"]["tools"]}
+    assert controls == {"search_tools", "get_tool_schema", "execute_code"}
+
+    hook = options["hooks"]["PreToolUse"][-1].hooks[0]
+    allowed = asyncio.run(
+        hook(
+            {
+                "tool_name": "mcp__kedi__execute_code",
+                "tool_input": {"code": "1 + 1"},
+            },
+            "call-1",
+            None,
+        )
+    )
+    assert allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_claude_codemode_routes_profile_mcp_through_local_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    sdk = sys.modules["claude_agent_sdk"]
+    materialized: list[tuple[McpServerSpec, ...]] = []
+
+    async def materialize(
+        _stack: Any,
+        specs: tuple[McpServerSpec, ...],
+        *,
+        adapter_shortname: str,
+    ) -> tuple[ToolSpec, ...]:
+        assert adapter_shortname == "claude"
+        materialized.append(tuple(specs))
+
+        async def lookup(*, query: str) -> dict[str, str]:
+            return {"source": "mcp", "query": query}
+
+        return (
+            ToolSpec(
+                fn=lookup,
+                name="mcp_lookup",
+                json_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            ),
+        )
+
+    async def query(*, prompt: str, options: Any) -> Any:
+        events["prompts"].append({"prompt": prompt, "options": options})
+        assert set(options.kwargs["mcp_servers"]) == {"kedi"}
+        tools = {tool.name: tool for tool in options.kwargs["mcp_servers"]["kedi"]["tools"]}
+        await tools["get_tool_schema"]({"tool_names": ["mcp_lookup"]})
+        events["mcp_codemode_result"] = await tools["execute_code"](
+            {"code": "await mcp_lookup(query='kedi')"}
+        )
+        yield sdk.ResultMessage(result="done")
+
+    monkeypatch.setattr(claude_adapter_module, "materialize_mcp_tool_specs", materialize)
+    setattr(sdk, "query", query)
+    server = McpServerSpec(command="fake-mcp")
+    adapter = ClaudeAdapter(model="claude", codemode=True)
+    with adapter.profile_override(
+        AgentProfile(
+            approval=ApprovalPolicy.allow(),
+            mcp_servers=(server,),
+        )
+    ):
+        assert adapter.invoke_sync(prompt="Use MCP through CodeMode.") == "done"
+
+    assert materialized == [(server,)]
+    assert json.loads(events["mcp_codemode_result"]["content"][0]["text"]) == {
+        "source": "mcp",
+        "query": "kedi",
     }
 
 

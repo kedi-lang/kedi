@@ -21,6 +21,7 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 from pydantic import BaseModel, TypeAdapter
@@ -108,6 +109,7 @@ def _default_engine() -> Any:
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
+    from kedi.agent_surface import AgentSurface
     from kedi.lang.ast import EvalSuite, TestSuite
 
 # -----------------------------
@@ -193,6 +195,8 @@ class KediRuntime:
         self._outstanding_lock = Lock()
         self._origin_counter_lock = Lock()
         self._conversation_state_lock = Lock()
+        self._lifecycle_lock = Lock()
+        self._closed = False
         self._procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
@@ -280,6 +284,49 @@ class KediRuntime:
 
     def c(self, func_name: str, *args: Any) -> CallExpr:
         return c(func_name, *args)
+
+    def bind_agent(
+        self,
+        *,
+        adapter: AgentAdapter[Any] | None = None,
+        profile: AgentProfile | None = None,
+        close_conversation_state: bool = False,
+    ) -> AgentSurface:
+        """Assemble Kedi runtime services for a native embedded-agent lifecycle."""
+
+        from .agent_surface import AgentSurface
+
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("KediRuntime is closed")
+        selected_profile = (profile or self.default_agent_profile).frozen_copy()
+        selected_adapter = adapter or self._resolve_adapter(selected_profile)
+        self._assert_profile_override_supported(selected_profile, selected_adapter)
+        tool_specs = cast(
+            "tuple[ToolSpec, ...]",
+            self._resolve_agent_tool_specs(selected_profile, selected_adapter),
+        )
+        instructions = self._agent_instructions(selected_profile, selected_adapter)
+        effective_profile = replace(selected_profile, system=instructions)
+        conversation_state = self._conversation_state_for_profile(selected_profile)
+        return AgentSurface(
+            agent=selected_adapter,
+            profile=effective_profile,
+            tool_specs=tool_specs,
+            conversation_state=conversation_state,
+            close_conversation_state=close_conversation_state,
+        )
+
+    async def aclose(self) -> None:
+        """Cancel owned child runs and close runtime-owned session resources."""
+
+        with self._lifecycle_lock:
+            self._closed = True
+        await self._subagent_coordinator.aclose()
+        if self._implicit_conversation_state is not None:
+            self._implicit_conversation_state.close()
+        if self.conversation_state is None:
+            self.artifacts.close()
 
     # Decorators
     def procedure(self, fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -1120,6 +1167,17 @@ class KediRuntime:
                     f"native compaction is not supported by adapter {shortname!r}"
                 )
 
+        codemode = profile.codemode
+        if codemode is not None and codemode.enabled:
+            capabilities = getattr(adapter, "capabilities", None)
+            if not isinstance(capabilities, AdapterCapabilities) or not capabilities.supports(
+                "codemode"
+            ):
+                shortname = getattr(adapter, "shortname", type(adapter).__name__)
+                raise AgentProfileOverrideUnsupported(
+                    f"CodeMode is not supported by adapter {shortname!r}"
+                )
+
         if isinstance(adapter, SupportsProfileOverride):
             return
         if (
@@ -1128,12 +1186,13 @@ class KediRuntime:
             or profile.mcp_servers
             or profile.settings
             or profile.compaction is not None
+            or profile.codemode is not None
         ):
             raise AgentProfileOverrideUnsupported(
                 "Active adapter does not support agent profile override "
                 f"(requested model={profile.model!r}, effort={profile.effort!r}, "
                 f"mcp_servers={profile.mcp_servers!r}, settings={dict(profile.settings)!r}, "
-                f"compaction={profile.compaction!r})"
+                f"compaction={profile.compaction!r}, codemode={profile.codemode!r})"
             )
 
     def _resolve_adapter(self, profile: Any) -> AgentAdapter[Any]:
