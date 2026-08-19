@@ -36,12 +36,12 @@ from typing import List, Optional, Union
 
 from tree_sitter import Node, Tree
 
+from ...agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from ...agent_profile.settings import (
     MODEL_SETTING_KEYS,
     is_valid_model_setting_key,
     parse_plain_setting_value,
 )
-from ...agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from ...artifacts import (
     ARTIFACT_POLICY_INPUT_FIELDS,
     ArtifactPolicy,
@@ -83,8 +83,8 @@ from ..ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
-    ProfileCodeModeEntry,
     ProfileArtifactsEntry,
+    ProfileCodeModeEntry,
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,

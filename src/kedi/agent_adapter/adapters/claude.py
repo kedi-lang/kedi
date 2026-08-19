@@ -20,7 +20,6 @@ from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
-from ..conversation import AdapterConversationContext
 from ..codemode import CodeModeLimits, materialize_mcp_tool_specs
 from ..codemode.tool_specs import (
     CONTROL_TOOL_NAMES,
@@ -29,6 +28,7 @@ from ..codemode.tool_specs import (
     approval_policies,
     codemode_projection,
 )
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind

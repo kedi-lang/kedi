@@ -14,7 +14,6 @@ from ..tool_override import (
 )
 from .core import CODEMODE_INSTRUCTIONS, CodeModeLimits, CodeModeSession, CodeModeTool
 
-
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
 
 SEARCH_TOOLS_SCHEMA: dict[str, Any] = {

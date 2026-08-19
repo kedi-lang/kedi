@@ -5,6 +5,14 @@ from .core import (
     CodeModeSession,
     CodeModeTool,
 )
+from .errors import (
+    CodeModeBoundaryError,
+    CodeModeCatalogError,
+    CodeModeCursorError,
+    CodeModeError,
+    CodeModeExecutionError,
+    CodeModeHydrationError,
+)
 from .mcp import materialize_mcp_tool_specs
 from .tool_specs import (
     CONTROL_TOOL_NAMES,
@@ -13,14 +21,6 @@ from .tool_specs import (
     append_codemode_instructions,
     approval_policies,
     codemode_projection,
-)
-from .errors import (
-    CodeModeBoundaryError,
-    CodeModeCatalogError,
-    CodeModeCursorError,
-    CodeModeError,
-    CodeModeExecutionError,
-    CodeModeHydrationError,
 )
 
 __all__ = [

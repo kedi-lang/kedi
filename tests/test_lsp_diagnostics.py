@@ -11,8 +11,8 @@ from lsprotocol import types as lsp
 
 from kedi.agent_adapter import AdapterCapabilities
 from kedi.lang.ast import (
-    ProfileCodeModeEntry,
     OutputSegment,
+    ProfileCodeModeEntry,
     ProfileDefStmt,
     ProfileSkillsEntry,
     Program,

@@ -10,8 +10,8 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi import (
-    AgentSurface,
     AgentRunStateEvent,
+    AgentSurface,
     ConversationState,
     KediRuntime,
     SubagentUsageLimits,

@@ -29,8 +29,8 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.providers.zai import ZaiProvider
 
-from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter import prefix_cache as prefix_cache_module
+from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState

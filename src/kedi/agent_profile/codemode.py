@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Final, Mapping, TypedDict
 
-
 CODEMODE_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "default_search_limit",

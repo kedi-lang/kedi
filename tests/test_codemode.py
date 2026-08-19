@@ -27,6 +27,11 @@ from pydantic_ai.tools import RunContext, Tool, ToolDenied
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, ToolsetTool
 from pydantic_ai.usage import RunUsage
 
+import kedi.agent_adapter.codemode.pydantic as pydantic_codemode_module
+from kedi.agent_adapter.adapters._pydantic_compat import (
+    PydanticAICompatibilityError,
+    build_nested_tool_manager,
+)
 from kedi.agent_adapter.adapters.pydantic import (
     PydanticAdapter,
     pydantic_toolset_from_specs,
@@ -43,13 +48,8 @@ from kedi.agent_adapter.codemode import (
     CodeModeSession,
     CodeModeTool,
 )
+from kedi.agent_adapter.codemode.core import _name_score, _SequentialDispatchGate
 from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeToolset
-from kedi.agent_adapter.codemode.core import _SequentialDispatchGate, _name_score
-import kedi.agent_adapter.codemode.pydantic as pydantic_codemode_module
-from kedi.agent_adapter.adapters._pydantic_compat import (
-    PydanticAICompatibilityError,
-    build_nested_tool_manager,
-)
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
     current_required_tool_calls,

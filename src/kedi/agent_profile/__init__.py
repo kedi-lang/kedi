@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from .compaction import (
-    CompactionMode,
-    CompactionSettings,
-    CompactionSettingsError,
-    normalize_compaction_settings,
-)
 from .codemode import (
     CODEMODE_LIMIT_FIELDS,
     CODEMODE_SETTING_FIELDS,
     CodeModeSettings,
     normalize_codemode_settings,
+)
+from .compaction import (
+    CompactionMode,
+    CompactionSettings,
+    CompactionSettingsError,
+    normalize_compaction_settings,
 )
 from .mcp import McpServerSpec, McpTransport
 from .model import (

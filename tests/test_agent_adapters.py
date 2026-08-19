@@ -44,8 +44,8 @@ from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
 from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
-from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.codemode import CodeModeExecutionError
+from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
     AgentRunStateEvent,

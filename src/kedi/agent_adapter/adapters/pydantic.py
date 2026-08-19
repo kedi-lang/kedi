@@ -61,9 +61,9 @@ from ..approval import (
     ToolApprovalDenied,
     ToolRisk,
 )
-from ..conversation import AdapterConversationContext
 from ..codemode import CodeModeLimits
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run, current_agent_run_identity
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind

@@ -35,7 +35,6 @@ from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
 from ..approval import ApprovalPolicy, ToolRisk
-from ..conversation import AdapterConversationContext
 from ..codemode import CodeModeError, CodeModeLimits
 from ..codemode.tool_specs import (
     CodeModeProjection,
@@ -43,6 +42,7 @@ from ..codemode.tool_specs import (
     approval_policies,
     codemode_projection,
 )
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind

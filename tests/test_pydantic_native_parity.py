@@ -35,6 +35,7 @@ from kedi.agent_adapter import (
     pydantic_tool_from_spec,
     pydantic_toolset_from_specs,
 )
+from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.adapters._pydantic_compat import (
     PydanticAICompatibilityError,
     application_toolset_count,
@@ -42,7 +43,6 @@ from kedi.agent_adapter.adapters._pydantic_compat import (
     has_application_tools,
     infer_agent_name,
 )
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.approval import (
     ApprovalDecision,
     ApprovalPolicy,

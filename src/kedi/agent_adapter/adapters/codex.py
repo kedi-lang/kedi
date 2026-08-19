@@ -25,13 +25,13 @@ from ..approval import (
     ToolRisk,
     resolve_tool_approval_async,
 )
-from ..conversation import AdapterConversationContext
 from ..codemode import CodeModeLimits
 from ..codemode.tool_specs import (
     CodeModeToolSpecBridge,
     append_codemode_instructions,
     approval_policies,
 )
+from ..conversation import AdapterConversationContext
 from ..events import agent_event_run
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind

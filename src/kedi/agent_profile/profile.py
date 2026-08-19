@@ -8,10 +8,10 @@ from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
+from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
 from .mcp import McpServerSpec
 from .skills import SkillsSettings, skills_settings
-from .codemode import CodeModeSettings, normalize_codemode_settings
 
 if TYPE_CHECKING:
     from ..agent_adapter.tool_override import ToolSpec
