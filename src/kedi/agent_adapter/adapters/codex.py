@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Callable, Iterator, Mapping, Sequence, cast, get_type_hints
 
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, TypeAdapter, create_model
 
 from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.settings import CODEX_AGENT_SETTING_KEYS, codex_agent_settings
@@ -614,30 +614,33 @@ def _callable_json_schema(tool: ToolSpec) -> dict[str, Any]:
     return model.model_json_schema()
 
 
-def _output_json_schema(output_type: type[Any]) -> dict[str, Any]:
-    if issubclass(output_type, BaseModel):
-        return _codex_json_schema(output_type.model_json_schema())
-    if output_type is str:
-        return {"type": "string"}
-    if output_type is int:
-        return {"type": "integer"}
-    if output_type is float:
-        return {"type": "number"}
-    if output_type is bool:
-        return {"type": "boolean"}
-    return {"type": "object", "additionalProperties": False}
+def _output_json_schema(output_type: Any) -> dict[str, Any]:
+    schema = TypeAdapter(output_type).json_schema()
+    if schema.get("type") != "object":
+        schema = {
+            "type": "object",
+            "properties": {"response": schema},
+            "required": ["response"],
+            "additionalProperties": False,
+        }
+    return _codex_json_schema(schema)
 
 
-def _parse_structured_result(result: CodexTurnResult, output_type: type[Any]) -> Any:
+def _parse_structured_result(result: CodexTurnResult, output_type: Any) -> Any:
     try:
         value = json.loads(result.text)
     except json.JSONDecodeError as exc:
         raise CodexAppServerProtocolError(
             f"Codex returned invalid structured output: {result.text}"
         ) from exc
-    if issubclass(output_type, BaseModel):
-        return output_type.model_validate(value)
-    return value
+    adapter = TypeAdapter(output_type)
+    if adapter.json_schema().get("type") != "object":
+        if not isinstance(value, Mapping) or "response" not in value:
+            raise CodexAppServerProtocolError(
+                "Codex scalar structured output must contain a 'response' field."
+            )
+        value = value["response"]
+    return adapter.validate_python(value)
 
 
 def _json_object_result(result: CodexTurnResult) -> Mapping[str, Any]:
