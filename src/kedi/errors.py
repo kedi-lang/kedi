@@ -114,6 +114,14 @@ class KediNameError(KediExecutionError, NameError):
     pass
 
 
+class LoopIterationLimitError(RuntimeError):
+    """Raised when a conditional loop remains true beyond its configured limit."""
+
+
+class KediLoopIterationLimitError(KediExecutionError, LoopIterationLimitError):
+    pass
+
+
 def python_error_message(exc: BaseException, kind: str) -> str:
     prefix_map = {
         "inline": "Inline Python error",
@@ -169,6 +177,8 @@ def build_execution_error(
     error_cls: type[KediExecutionError] = KediExecutionError
     if isinstance(exc, NameError):
         error_cls = KediNameError
+    elif isinstance(exc, LoopIterationLimitError):
+        error_cls = KediLoopIterationLimitError
     elif isinstance(exc, KeyError):
         error_cls = KediKeyExecutionError
     elif isinstance(exc, TypeError):

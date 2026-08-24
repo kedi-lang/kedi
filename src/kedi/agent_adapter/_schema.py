@@ -12,12 +12,17 @@ def make_repr(cls: type) -> str:
     return _type_repr if not _type_repr.startswith("<class") else cls.__name__
 
 
+def output_field_metadata(type_: ResolvedKediType) -> tuple[Any, str | None]:
+    if get_origin(type_) is not Annotated:
+        return type_, None
+
+    annotation, first_metadata, *_ = get_args(type_)
+    description = first_metadata if isinstance(first_metadata, str) else None
+    return annotation, description
+
+
 def output_field_definition(type_: ResolvedKediType) -> tuple[Any, Any]:
-    if get_origin(type_) is Annotated:
-        args = get_args(type_)
-        if len(args) == 0:
-            return type_, ...
-        description = args[1] if len(args) > 1 and isinstance(args[1], str) else None
-        if description is not None:
-            return args[0], Field(description=description)
-    return type_, ...
+    annotation, description = output_field_metadata(type_)
+    if description is not None:
+        return annotation, Field(description=description)
+    return annotation, ...

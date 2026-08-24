@@ -83,9 +83,16 @@ class WorkflowExecutor:
             if isinstance(outcome, WorkflowAbortError):
                 raise outcome
             if isinstance(outcome, Exception):
-                results[call_id] = ExternalException(exception=outcome)
+                results[call_id] = ExternalException(exception=_sandbox_exception(outcome))
             elif isinstance(outcome, BaseException):
                 raise outcome
             else:
                 results[call_id] = ExternalReturnValue(return_value=outcome)
         return snapshot.resume(results)
+
+
+def _sandbox_exception(exc: Exception) -> RuntimeError:
+    """Create a traceback-free exception safe to serialize into Monty."""
+
+    message = str(exc).strip() or type(exc).__name__
+    return RuntimeError(message)

@@ -114,6 +114,6 @@ def build_nested_tool_manager(
 def _unsupported_layout(exc: AttributeError) -> PydanticAICompatibilityError:
     return PydanticAICompatibilityError(
         "The installed Pydantic AI version has an unsupported Agent tool layout. "
-        "Install the Kedi-supported pydantic-ai==2.23.0 release. "
+        "Install the Kedi-supported pydantic-ai-slim==2.23.0 release. "
         f"Missing private contract: {exc}"
     )

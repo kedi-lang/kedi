@@ -31,13 +31,16 @@ from ..ast import (
     AssignStmt,
     BacktickLineStmt,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    IfStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -49,6 +52,14 @@ from ..ast import (
     UseDirectiveStmt,
 )
 from ..parser.escapes import preserve_escaped_whitespace
+from .control_flow import (
+    assert_conditional_loop_capacity,
+    branch_trace,
+    evaluate_condition,
+    evaluate_iterable,
+    loop_binding,
+    loop_trace,
+)
 from .evaluation import (
     evaluate_assignment_rhs,
     evaluate_python_inline,
@@ -276,71 +287,19 @@ class StatementExecutor:
         profile_registry = self.rt._profile_registry
 
         try:
-            for stmt in proc.body:
-                if isinstance(stmt, AgentDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
-                    adapter_selection_kind = "agent-harness"
-                    active = active.merge(eval_agent_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, AdapterDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
-                    adapter_selection_kind = "agent-framework"
-                    active = active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ModelDirectiveStmt):
-                    active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, EffortDirectiveStmt):
-                    active = active.merge(eval_effort_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ApprovalDirectiveStmt):
-                    active = active.merge(eval_approval_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, HistoryDirectiveStmt):
-                    active = active.merge(eval_history_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SkillsDirectiveStmt):
-                    active = active.merge(eval_skills_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, CodeModeDirectiveStmt):
-                    active = active.merge(eval_codemode_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SystemDirectiveStmt):
-                    active = active.merge(eval_system_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, McpDirectiveStmt):
-                    active = active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SettingsDirectiveStmt):
-                    active = active.merge(eval_settings_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ArtifactsDirectiveStmt):
-                    active = active.merge(eval_artifacts_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, UseDirectiveStmt):
-                    active = active.merge(
-                        eval_use_directive(
-                            self.rt,
-                            stmt,
-                            profile_registry,
-                            closure_env,
-                            available_procedures=set(self.rt._procedures.keys()),
-                        )
-                    )
-                    continue
-
-                with block_agent_profile_scope(active):
-                    result = self._execute_body_statement(
-                        stmt,
-                        proc,
-                        closure_env,
-                        type_scope,
-                        saved_procs,
-                        new_proc_names,
-                        active,
-                    )
-                    if result is not _NO_RETURN:
-                        last_return = result
+            block_result, _, _ = self._execute_block(
+                proc.body,
+                proc,
+                closure_env,
+                type_scope,
+                saved_procs,
+                new_proc_names,
+                active,
+                adapter_selection_kind,
+                profile_registry,
+            )
+            if block_result is not _NO_RETURN:
+                last_return = block_result
 
         finally:
             pop_type_env(self.rt)
@@ -355,6 +314,128 @@ class StatementExecutor:
 
         return last_return
 
+    def _execute_block(
+        self,
+        statements: list[Stmt],
+        proc: ProcedureDef,
+        closure_env: dict[str, Any],
+        type_scope: dict[str, Any],
+        saved_procs: dict[str, Any],
+        new_proc_names: list[str],
+        active: AgentProfile,
+        adapter_selection_kind: str | None,
+        profile_registry: dict[str, Any],
+    ) -> tuple[Any, AgentProfile, str | None]:
+        """Execute one ordered block while keeping directive state block-local."""
+        last_return: Any = _NO_RETURN
+        for stmt in statements:
+            updated = self._apply_profile_directive(
+                stmt,
+                active,
+                adapter_selection_kind,
+                closure_env,
+                profile_registry,
+            )
+            if updated is not None:
+                active, adapter_selection_kind = updated
+                continue
+
+            with block_agent_profile_scope(active):
+                result = self._execute_body_statement(
+                    stmt,
+                    proc,
+                    closure_env,
+                    type_scope,
+                    saved_procs,
+                    new_proc_names,
+                    active,
+                    adapter_selection_kind,
+                    profile_registry,
+                )
+            if result is not _NO_RETURN:
+                last_return = result
+
+        return last_return, active, adapter_selection_kind
+
+    def _apply_profile_directive(
+        self,
+        stmt: Stmt,
+        active: AgentProfile,
+        adapter_selection_kind: str | None,
+        closure_env: dict[str, Any],
+        profile_registry: dict[str, Any],
+    ) -> tuple[AgentProfile, str | None] | None:
+        if isinstance(stmt, AgentDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
+            return (
+                active.merge(eval_agent_directive(self.rt, stmt, closure_env)),
+                "agent-harness",
+            )
+        if isinstance(stmt, AdapterDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
+            return (
+                active.merge(eval_adapter_directive(self.rt, stmt, closure_env)),
+                "agent-framework",
+            )
+        if isinstance(stmt, ModelDirectiveStmt):
+            return active.merge(
+                eval_model_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, EffortDirectiveStmt):
+            return active.merge(
+                eval_effort_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, ApprovalDirectiveStmt):
+            return (
+                active.merge(eval_approval_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, HistoryDirectiveStmt):
+            return active.merge(
+                eval_history_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, SkillsDirectiveStmt):
+            return active.merge(
+                eval_skills_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, CodeModeDirectiveStmt):
+            return (
+                active.merge(eval_codemode_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, SystemDirectiveStmt):
+            return active.merge(
+                eval_system_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, McpDirectiveStmt):
+            return active.merge(
+                eval_mcp_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, SettingsDirectiveStmt):
+            return (
+                active.merge(eval_settings_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, ArtifactsDirectiveStmt):
+            return (
+                active.merge(eval_artifacts_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, UseDirectiveStmt):
+            return (
+                active.merge(
+                    eval_use_directive(
+                        self.rt,
+                        stmt,
+                        profile_registry,
+                        closure_env,
+                        available_procedures=set(self.rt._procedures.keys()),
+                    )
+                ),
+                adapter_selection_kind,
+            )
+        return None
+
     def _execute_body_statement(
         self,
         stmt: Stmt,
@@ -364,10 +445,77 @@ class StatementExecutor:
         saved_procs: dict[str, Any],
         new_proc_names: list[str],
         active: AgentProfile,
+        adapter_selection_kind: str | None = None,
+        profile_registry: dict[str, Any] | None = None,
     ) -> Any:
         from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
+
+        if profile_registry is None:
+            profile_registry = self.rt._profile_registry
+
+        if isinstance(stmt, IfStmt):
+            condition = evaluate_condition(self.rt, stmt, closure_env)
+            body = stmt.body if condition else stmt.else_body
+            if body is None:
+                return _NO_RETURN
+            with branch_trace(self.rt, stmt, alternative=not condition):
+                result, _, _ = self._execute_block(
+                    body,
+                    proc,
+                    closure_env,
+                    type_scope,
+                    saved_procs,
+                    new_proc_names,
+                    active,
+                    adapter_selection_kind,
+                    profile_registry,
+                )
+            return result
+
+        if isinstance(stmt, LoopStmt):
+            last_return: Any = _NO_RETURN
+            with loop_trace(self.rt, stmt):
+                values = evaluate_iterable(self.rt, stmt, closure_env)
+                for value in values:
+                    with loop_binding(self.rt, closure_env, stmt.binder, value):
+                        result, _, _ = self._execute_block(
+                            stmt.body,
+                            proc,
+                            closure_env,
+                            type_scope,
+                            saved_procs,
+                            new_proc_names,
+                            active,
+                            adapter_selection_kind,
+                            profile_registry,
+                        )
+                    if result is not _NO_RETURN:
+                        last_return = result
+            return last_return
+
+        if isinstance(stmt, ConditionalLoopStmt):
+            conditional_last_return: Any = _NO_RETURN
+            completed_iterations = 0
+            with loop_trace(self.rt, stmt):
+                while evaluate_condition(self.rt, stmt, closure_env):
+                    assert_conditional_loop_capacity(self.rt, completed_iterations)
+                    result, _, _ = self._execute_block(
+                        stmt.body,
+                        proc,
+                        closure_env,
+                        type_scope,
+                        saved_procs,
+                        new_proc_names,
+                        active,
+                        adapter_selection_kind,
+                        profile_registry,
+                    )
+                    completed_iterations += 1
+                    if result is not _NO_RETURN:
+                        conditional_last_return = result
+            return conditional_last_return
 
         if isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**closure_env)

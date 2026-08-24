@@ -87,7 +87,13 @@ def artifact_tool_specs(
         "kind": "artifact_management",
         "kedi_tool_kind": "artifact_management",
     }
-    ref_id_schema = {"type": "string", "description": "Artifact reference ID."}
+    ref_id_schema = {
+        "type": "string",
+        "description": (
+            "Copy the exact opaque ref_id from an artifact result or search_artifacts response. "
+            "Never substitute a source name, tool name, summary, or guessed ID."
+        ),
+    }
     return (
         ToolSpec(
             fn=read_artifact,

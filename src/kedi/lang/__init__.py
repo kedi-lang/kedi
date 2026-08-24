@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from .ast import (
     CallSegment,
+    ConditionalLoopStmt,
+    IfStmt,
     InputSegment,
     ModuleExport,
     ModuleImport,
@@ -20,6 +22,7 @@ from .ast import (
     Program,
     ProgramWithValidation,
     RawInvokeStmt,
+    LoopStmt,
     ReturnStmt,
     Segment,
     Span,
@@ -50,6 +53,9 @@ __all__ = [
     "ProcedureDef",
     "TemplateBlock",
     "TemplateLine",
+    "IfStmt",
+    "ConditionalLoopStmt",
+    "LoopStmt",
     "RawInvokeStmt",
     "ReturnStmt",
     "Segment",

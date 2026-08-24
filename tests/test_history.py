@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any, Callable, cast
 
 import pytest
-from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 from pydantic_ai.messages import CompactionPart, ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
@@ -752,6 +751,8 @@ def test_langchain_provider_detection_handles_native_and_openai_compatible_model
 
 
 def test_langchain_bedrock_uses_native_prompt_cache_middleware() -> None:
+    from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
+
     bedrock = type(
         "ChatBedrockConverse",
         (),

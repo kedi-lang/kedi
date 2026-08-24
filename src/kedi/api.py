@@ -102,6 +102,7 @@ class _APIConfig:
     conversation: ConversationState | None = None
     parallel: bool = False
     max_workers: int = 8
+    loop_iteration_limit: int = 10_000
 
 
 @dataclass(frozen=True)
@@ -542,6 +543,7 @@ def _decorate_kedi_program(
                 runtime_globals=runtime_globals,
                 engine=engine,
                 conversation_state=conversation,
+                loop_iteration_limit=config.loop_iteration_limit,
             )
             with block_agent_profile_scope(profile):
                 if use_main:
@@ -689,6 +691,7 @@ def _build_config(
     adapter_kwargs: Mapping[str, Any],
     parallel: bool | None = None,
     max_workers: int | None = None,
+    loop_iteration_limit: int | None = None,
 ) -> _APIConfig:
     if load_env:
         dotenv.load_dotenv()
@@ -697,6 +700,12 @@ def _build_config(
     base_max_workers = 8 if base is None else base.max_workers
     resolved_parallel = base_parallel if parallel is None else parallel
     resolved_max_workers = base_max_workers if max_workers is None else max_workers
+    base_loop_iteration_limit = 10_000 if base is None else base.loop_iteration_limit
+    resolved_loop_iteration_limit = (
+        base_loop_iteration_limit if loop_iteration_limit is None else loop_iteration_limit
+    )
+    if isinstance(resolved_loop_iteration_limit, bool) or resolved_loop_iteration_limit <= 0:
+        raise ValueError("loop_iteration_limit must be a positive integer")
     base_conversation = None if base is None else base.conversation
     resolved_conversation = (
         base_conversation
@@ -777,6 +786,7 @@ def _build_config(
         conversation=resolved_conversation,
         parallel=resolved_parallel,
         max_workers=resolved_max_workers,
+        loop_iteration_limit=resolved_loop_iteration_limit,
     )
 
 
@@ -803,6 +813,7 @@ def configure(
     conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
     max_workers: int | None = None,
+    loop_iteration_limit: int | None = None,
     **adapter_kwargs: Any,
 ) -> None:
     """Set the default Python API configuration for the current context.
@@ -830,6 +841,7 @@ def configure(
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
+            loop_iteration_limit=loop_iteration_limit,
         )
     )
 
@@ -895,6 +907,7 @@ def context(
     conversation: ConversationState | None | object = _UNSET,
     parallel: bool | None = None,
     max_workers: int | None = None,
+    loop_iteration_limit: int | None = None,
     **adapter_kwargs: Any,
 ) -> _KediContext:
     return _KediContext(
@@ -917,6 +930,7 @@ def context(
             adapter_kwargs=adapter_kwargs,
             parallel=parallel,
             max_workers=max_workers,
+            loop_iteration_limit=loop_iteration_limit,
         )
     )
 
@@ -976,6 +990,7 @@ def interactive(
     subagent_timeout_seconds: float | None = 120.0,
     subagent_usage_limits: SubagentUsageLimits | None = None,
     subagent_state_path: str | Path | None = None,
+    loop_iteration_limit: int | None = None,
     **adapter_kwargs: Any,
 ) -> InteractiveSession:
     """Create a process-local incremental Kedi execution session."""
@@ -1001,6 +1016,7 @@ def interactive(
         adapter_kwargs=adapter_kwargs,
         parallel=parallel,
         max_workers=max_workers,
+        loop_iteration_limit=loop_iteration_limit,
     )
     active_conversation = config.conversation
     owns_conversation = active_conversation is None
@@ -1023,6 +1039,7 @@ def interactive(
         subagent_state_path=subagent_state_path,
         conversation_state=active_conversation,
         close_conversation_state=owns_conversation,
+        loop_iteration_limit=config.loop_iteration_limit,
     )
 
 

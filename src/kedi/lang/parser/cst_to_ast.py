@@ -32,7 +32,7 @@ from __future__ import annotations
 import ast as py_ast
 import re
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from tree_sitter import Node, Tree
 
@@ -63,11 +63,13 @@ from ..ast import (
     CallArg,
     CallSegment,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    IfStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
@@ -103,6 +105,7 @@ from ..ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
@@ -329,8 +332,17 @@ class _Walker:
         prog.loc = self._span(root)
 
         prelude_consumed = False
+        pending_else_owner: Optional[IfStmt] = None
         for child in children:
             t = child.type
+            if t in ("block_comment", "line_comment"):
+                continue
+            if t == "else_clause":
+                owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
+                self._attach_else_clause(owners, child, None)
+                pending_else_owner = None
+                continue
+            pending_else_owner = None
             if t == "python_block":
                 # The first top-level python_block, IF it appears before
                 # any other top-level content, becomes the prelude
@@ -460,6 +472,19 @@ class _Walker:
                 stmt = self._walk_assign_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "if_stmt":
+                stmt = self._walk_if_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+                pending_else_owner = stmt
+            elif t == "loop_stmt":
+                stmt = self._walk_loop_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "conditional_loop_stmt":
+                stmt = self._walk_conditional_loop_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "assign_block_stmt":
                 stmt = self._walk_assign_block_stmt(child)
                 prog.toplevel_body.append(stmt)
@@ -484,10 +509,6 @@ class _Walker:
                 stmt = self._walk_template_line(child, deprecated=True)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t in ("block_comment", "line_comment"):
-                # Extras — not part of the AST. Already handled by
-                # tree-sitter; we skip them here.
-                continue
             elif t == "ERROR" or child.is_error:
                 self._error(
                     child, self._parse_error_message(child, "unexpected source at top level")
@@ -939,14 +960,30 @@ class _Walker:
         return proc
 
     def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
+        proc.body.extend(self._walk_block_statements(block_node, proc))
+
+    def _walk_block_statements(self, block_node: Node, proc: Optional[ProcedureDef]) -> List[Stmt]:
+        statements: List[Stmt] = []
+        pending_else_owner: Optional[IfStmt] = None
         for child in _named_children(block_node):
+            if child.type in ("block_comment", "line_comment"):
+                continue
+            if child.type == "else_clause":
+                owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
+                self._attach_else_clause(owners, child, proc)
+                pending_else_owner = None
+                continue
+            pending_else_owner = None
             if child.type == "template_block_stmt":
-                proc.body.extend(self._walk_template_block_statements(child))
+                statements.extend(self._walk_template_block_statements(child))
                 continue
             stmt = self._walk_stmt(child, proc)
             if stmt is None:
                 continue
-            proc.body.append(stmt)
+            statements.append(stmt)
+            if isinstance(stmt, IfStmt):
+                pending_else_owner = stmt
+        return statements
 
     # =================================================================
     # Statements
@@ -974,9 +1011,9 @@ class _Walker:
             if proc is None:
                 self._error(node, "'> optimize:' is only valid inside a procedure body")
                 return None
-            span = self._walk_optimize_directive(node, proc)
+            span, block = self._walk_optimize_directive(node)
             proc.optimize_spans.append(span)
-            return None
+            return block
         if t == "model_directive":
             return self._walk_model_directive(node)
         if t == "agent_directive":
@@ -1008,6 +1045,12 @@ class _Walker:
             return None
         if t == "assign_stmt":
             return self._walk_assign_stmt(node)
+        if t == "if_stmt":
+            return self._walk_if_stmt(node, proc)
+        if t == "loop_stmt":
+            return self._walk_loop_stmt(node, proc)
+        if t == "conditional_loop_stmt":
+            return self._walk_conditional_loop_stmt(node, proc)
         if t == "assign_block_stmt":
             return self._walk_assign_block_stmt(node)
         if t == "raw_invoke_stmt":
@@ -1051,6 +1094,130 @@ class _Walker:
         # but keep parsing the rest of the body.
         self._error(node, f"unexpected statement node {t!r}")
         return None
+
+    def _walk_if_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> IfStmt:
+        condition = _field(node, "condition")
+        consequence = _field(node, "consequence")
+        assert condition is not None
+        assert consequence is not None
+
+        condition_code, condition_segments = self._walk_control_condition(condition)
+        return IfStmt(
+            condition_code=condition_code,
+            condition_segments=condition_segments,
+            body=self._walk_block_statements(consequence, proc),
+            else_body=None,
+            condition_loc=self._span(condition),
+            loc=self._span(node),
+        )
+
+    def _attach_else_clause(
+        self,
+        statements: List[Any],
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> None:
+        if not statements or not isinstance(statements[-1], IfStmt):
+            self._error(node, "'> else:' must immediately follow an if block", code="K-ELSE-ORPHAN")
+            return
+
+        owner = statements[-1]
+        if owner.else_body is not None:
+            self._error(node, "an if block can have only one else block", code="K-ELSE-DUP")
+            return
+
+        body = _field(node, "body")
+        assert body is not None
+        owner.else_body = self._walk_block_statements(body, proc)
+
+        end = self._span(node)
+        start = owner.loc
+        if start is not None:
+            owner.loc = Span(
+                start_byte=start.start_byte,
+                end_byte=end.end_byte,
+                start_line=start.start_line,
+                start_col=start.start_col,
+                end_line=end.end_line,
+                end_col=end.end_col,
+                source_path=start.source_path,
+                source_id=start.source_id,
+            )
+
+    def _walk_loop_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> LoopStmt:
+        binder = _field(node, "binder")
+        iterable = _field(node, "iterable")
+        body = _field(node, "body")
+        assert binder is not None
+        assert iterable is not None
+        assert body is not None
+        return LoopStmt(
+            binder=_identifier_name(self.source, binder),
+            iterable_code=self._walk_inline_python_expr(iterable),
+            body=self._walk_block_statements(body, proc),
+            binder_loc=self._span(binder),
+            iterable_loc=self._span(iterable),
+            loc=self._span(node),
+        )
+
+    def _walk_conditional_loop_stmt(
+        self,
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> ConditionalLoopStmt:
+        condition = _field(node, "condition")
+        body = _field(node, "body")
+        assert condition is not None
+        assert body is not None
+        condition_code, condition_segments = self._walk_control_condition(condition)
+        return ConditionalLoopStmt(
+            condition_code=condition_code,
+            condition_segments=condition_segments,
+            body=self._walk_block_statements(body, proc),
+            condition_loc=self._span(condition),
+            loc=self._span(node),
+        )
+
+    def _walk_control_condition(self, node: Node) -> tuple[str, Optional[List[Segment]]]:
+        if node.type == "inline_python_expr":
+            return self._walk_inline_python_expr(node), None
+
+        segments = self._walk_template_expr(node)
+        for output in self._condition_outputs(segments):
+            self.diagnostics.append(
+                KediDiagnostic(
+                    severity="error",
+                    message=(
+                        "Template conditions cannot declare output fields; use plain text, "
+                        "<substitutions>, or inline Python values"
+                    ),
+                    span=output.loc or self._span(node),
+                    code="K-CONDITION-OUTPUT",
+                )
+            )
+        return "", segments
+
+    @staticmethod
+    def _condition_outputs(segments: List[Segment]) -> List[OutputSegment]:
+        outputs: List[OutputSegment] = []
+
+        def visit(segment: Segment) -> None:
+            if isinstance(segment, OutputSegment):
+                outputs.append(segment)
+                return
+            if not isinstance(segment, CallSegment):
+                return
+            for argument in segment.args:
+                if not isinstance(argument, LiteralArg):
+                    continue
+                for nested in argument.render_segments:
+                    visit(nested)
+                if argument.call_segment is not None:
+                    visit(argument.call_segment)
+
+        for segment in segments:
+            visit(segment)
+        return outputs
 
     def _walk_assign_stmt(self, node: Node) -> AssignStmt:
         target = _named_children(node)[0]
@@ -1521,7 +1688,7 @@ class _Walker:
 
     def _walk_segment(self, node: Node) -> Segment:
         t = node.type
-        if t == "text_segment":
+        if t in ("text_segment", "condition_text_segment"):
             raw = _src_text(self.source, node)
             # NOTE: do NOT strip leading/trailing whitespace here. The
             # runtime in `compiler/evaluation.py:prepare_segments`
@@ -1531,6 +1698,14 @@ class _Walker:
             # double up: it would also remove meaningful whitespace
             # that sits BETWEEN segments (e.g. the gap between `<x>`
             # and `mid` in ``  left   <x>   mid``).
+            text, escaped_positions = self._unescape_text_segment(node, raw)
+            return TextSegment(
+                text=text,
+                escaped_whitespace=escaped_positions,
+                loc=self._span(node),
+            )
+        if t == "condition_colon_segment":
+            raw = _src_text(self.source, node)
             text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,
@@ -2525,7 +2700,7 @@ class _Walker:
             loc=self._span(node),
         )
 
-    def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
+    def _walk_optimize_directive(self, node: Node) -> tuple[OptimizeSpan, TemplateBlock]:
         name_node = _field(node, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -2558,11 +2733,10 @@ class _Walker:
         # Keep them in one TemplateBlock so the whole span is one LLM call,
         # matching ordinary `>>` continuation semantics. The optimizer still
         # owns the individual line objects and mutates them in place.
-        proc.body.append(TemplateBlock(lines=template_lines, loc=self._span(node)))
-        return OptimizeSpan(
-            name=name,
-            template_lines=template_lines,
-            loc=self._span(node),
+        loc = self._span(node)
+        return (
+            OptimizeSpan(name=name, template_lines=template_lines, loc=loc),
+            TemplateBlock(lines=template_lines, loc=loc),
         )
 
     # =================================================================

@@ -24,6 +24,7 @@ from ...agent_profile import AgentProfile, McpServerSpec, McpTransport
 from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ...dynamic_models import build_dynamic_model
 from ...resolved_types import ResolvedKediType
+from .._schema import output_field_definition
 from ..meta import AdapterCapabilities, AgentAdapterKind
 from ..telemetry import (
     mcp_initialization_span,
@@ -618,7 +619,10 @@ def _output_adapter(
         output_type = build_dynamic_model(
             "_WebGPUOutput",
             BaseModel,
-            {name: (field_type, ...) for name, field_type in output_schema.items()},
+            {
+                name: output_field_definition(field_type)
+                for name, field_type in output_schema.items()
+            },
         )
     if output_type is None:
         raise ValueError("Output spec must be provided.")

@@ -16,6 +16,7 @@ from functools import wraps
 from typing import Any, Callable, Iterator, Sequence, cast
 
 import dspy
+from pydantic import TypeAdapter
 
 from ...agent_profile import AgentProfile
 from ...agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
@@ -23,6 +24,7 @@ from ...dynamic_models import build_dynamic_model
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_litellm
 from ...resolved_types import ResolvedKediType
+from .._schema import output_field_metadata
 from ..approval import ApprovalPolicy
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..llm_wrapper import ThinkingStrippingLM
@@ -186,11 +188,28 @@ class DSPyAdapter:
         """
         if not output_schema:
             raise ValueError("Output schema must be provided.")
-        field_definitions: dict = {
-            field: (type_, dspy.OutputField()) for field, type_ in output_schema.items()
-        }
+        field_definitions: dict[str, tuple[Any, Any]] = {}
+        for field, type_ in output_schema.items():
+            annotation, description = output_field_metadata(type_)
+            output_field = (
+                dspy.OutputField(desc=description)
+                if description is not None
+                else dspy.OutputField()
+            )
+            field_definitions[field] = (annotation, output_field)
         field_definitions.update({"user_prompt": (str, dspy.InputField())})
         return build_dynamic_model("_OutputSignature", dspy.Signature, field_definitions)
+
+    @staticmethod
+    def output_type_builder(output_type: type[Any]) -> type[dspy.Signature]:
+        return build_dynamic_model(
+            "_OutputTypeSignature",
+            dspy.Signature,
+            {
+                "user_prompt": (str, dspy.InputField()),
+                "result": (output_type, dspy.OutputField()),
+            },
+        )
 
     @staticmethod
     def invoke_signature() -> type[dspy.Signature]:
@@ -206,9 +225,10 @@ class DSPyAdapter:
     async def produce(
         self,
         template: str,
-        output_schema: dict[str, ResolvedKediType],
+        output_schema: dict[str, ResolvedKediType] | None = None,
+        output_type: type[Any] | None = None,
         **kwargs,
-    ) -> dspy.Prediction:
+    ) -> Any:
         """
         Adapter to use DSPy agents.
         """
@@ -216,6 +236,7 @@ class DSPyAdapter:
             self.produce_sync,
             template,
             output_schema,
+            output_type=output_type,
             **kwargs,
         )
 
@@ -236,18 +257,23 @@ class DSPyAdapter:
     def produce_sync(
         self,
         template: str,
-        output_schema: dict[str, ResolvedKediType],
+        output_schema: dict[str, ResolvedKediType] | None = None,
+        output_type: type[Any] | None = None,
         **kwargs,
-    ) -> dspy.Prediction:
+    ) -> Any:
         """
         Synchronous version of produce method.
         """
-        if not output_schema:
+        if not output_schema and output_type is None:
             raise ValueError("Output spec must be provided.")
         from ..utils import run_sync
 
         kwargs.pop("user_prompt", None)
-        sig = self.type_builder(output_schema)
+        sig = (
+            self.type_builder(output_schema)
+            if output_schema
+            else self.output_type_builder(cast(type[Any], output_type))
+        )
         instructions = kwargs.pop("instructions", None)
         sig = sig.with_instructions(instructions)
         tools = cast(list[Callable[..., Any]], list(self.scoped_tools))
@@ -259,6 +285,10 @@ class DSPyAdapter:
                     adapter = dspy.ReAct(sig, tools=tools) if tools else dspy.Predict(sig)
                     prediction = adapter(**kwargs, user_prompt=template)
         _report_dspy_invocation(prediction)
+        if not output_schema:
+            return TypeAdapter(cast(type[Any], output_type)).validate_python(
+                _prediction_value(prediction, "result")
+            )
         return prediction
 
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:

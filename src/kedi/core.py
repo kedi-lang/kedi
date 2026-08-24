@@ -11,6 +11,7 @@ from threading import Lock, get_ident
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Callable,
     Dict,
@@ -49,6 +50,14 @@ _SHARED_PARALLEL_LOCK = Lock()
 
 _PARALLEL_TRUE = frozenset({"1", "true", "yes", "on"})
 _PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
+DEFAULT_LOOP_ITERATION_LIMIT = 10_000
+_CLAIM_OUTPUT_DESCRIPTION = (
+    "Whether the claim can be established as true from the available context."
+)
+_CLAIM_INSTRUCTION = (
+    "Return true only if the following claim can be established as true from the available "
+    "context; otherwise return false."
+)
 
 
 def shared_thread_engine(max_workers: int = 8) -> Any:
@@ -181,6 +190,7 @@ class KediRuntime:
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
         subagent_state_path: str | Path | None = None,
         conversation_state: "ConversationState | None" = None,
+        loop_iteration_limit: int = DEFAULT_LOOP_ITERATION_LIMIT,
     ) -> None:
         from .agent_profile import AgentProfile
         from .artifacts import ArtifactManager
@@ -241,6 +251,9 @@ class KediRuntime:
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
         self.conversation_state = conversation_state
+        if isinstance(loop_iteration_limit, bool) or loop_iteration_limit <= 0:
+            raise ValueError("loop_iteration_limit must be a positive integer")
+        self.loop_iteration_limit = loop_iteration_limit
         self._implicit_conversation_state: ConversationState | None = None
         self.artifacts = (
             conversation_state.artifacts if conversation_state is not None else ArtifactManager()
@@ -802,6 +815,72 @@ class KediRuntime:
         view = KediPromise(future, capture_key)
         env[capture_key] = view
         return {capture_key: view}
+
+    def _evaluate_claim(self, claim: str) -> bool:
+        """Classify a rendered control-flow claim through the active agent lane."""
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_profile import current_block_agent_profile
+
+        profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(profile)
+        captured_tool_specs = self._resolve_agent_tool_specs(profile, adapter)
+        self._assert_profile_override_supported(profile, adapter)
+        question = f"{_CLAIM_INSTRUCTION}\nClaim: {claim}"
+
+        override_ctx = nullcontext()
+        if isinstance(adapter, SupportsProfileOverride):
+            override_ctx = adapter.profile_override(profile)
+
+        tool_adapter: Any = None
+        tool_ctx: Any = nullcontext()
+        if isinstance(adapter, SupportsToolRegistration):
+            tool_adapter = adapter
+            tool_ctx = tool_adapter.tool_scope()
+
+        with tool_ctx:
+            if tool_adapter is not None:
+                for spec in captured_tool_specs:
+                    tool_adapter.register_tool(spec)
+            run_kwargs: dict[str, Any] = {}
+            instructions = self._agent_instructions(profile, adapter)
+            if instructions is not None:
+                run_kwargs["instructions"] = instructions
+
+            def produce_claim(active_question: str) -> bool:
+                claim_output_type = cast(
+                    type[Any],
+                    Annotated[bool, _CLAIM_OUTPUT_DESCRIPTION],
+                )
+                result = adapter.produce_sync(
+                    template=active_question,
+                    output_type=claim_output_type,
+                    **run_kwargs,
+                )
+                if type(result) is not bool:
+                    raise TypeError(
+                        "Kedi template condition must return an exact bool; "
+                        f"received {type(result).__name__}"
+                    )
+                return result
+
+            with override_ctx:
+                return self._run_conversation_call(
+                    adapter,
+                    question,
+                    produce_claim,
+                    context=(
+                        instructions,
+                        _tool_request_context(captured_tool_specs),
+                        {"result": "bool"},
+                    ),
+                    instructions=instructions,
+                    tools=captured_tool_specs,
+                    profile=profile,
+                    call_kind="produce",
+                    output_field_count=1,
+                    output_schema={"result": "bool"},
+                )
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()

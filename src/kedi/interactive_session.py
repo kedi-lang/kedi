@@ -36,6 +36,7 @@ class InteractiveSession:
         subagent_state_path: str | Path | None = None,
         conversation_state: ConversationState | None = None,
         close_conversation_state: bool = False,
+        loop_iteration_limit: int = 10_000,
     ) -> None:
         self._cwd = Path.cwd() if cwd is None else Path(cwd)
         self._cwd = self._cwd.resolve()
@@ -53,6 +54,7 @@ class InteractiveSession:
             subagent_usage_limits=subagent_usage_limits,
             subagent_state_path=subagent_state_path,
             conversation_state=conversation_state,
+            loop_iteration_limit=loop_iteration_limit,
         )
         self._env = self._compiler.initialize_fragments()
         self._top_level_state = self._compiler.new_top_level_state()

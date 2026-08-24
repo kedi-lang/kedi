@@ -44,17 +44,22 @@ from ..ast import (
     AssignBlockStmt,
     AssignStmt,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    IfStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
     Program,
     ProgramWithValidation,
     RawInvokeStmt,
+    LoopStmt,
+    ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
@@ -62,12 +67,23 @@ from ..ast import (
     TemplateBlock,
     TemplateLine,
     TypeDef,
+    TypeDefStmt,
     UseDirectiveStmt,
 )
 from .evaluation import evaluate_python_inline, execute_python_block
+from .control_flow import (
+    assert_conditional_loop_capacity,
+    branch_trace,
+    evaluate_condition,
+    evaluate_iterable,
+    loop_binding,
+    loop_trace,
+)
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type
+
+_NO_TOP_LEVEL_RESULT = object()
 
 if TYPE_CHECKING:
     from ...agent_adapter.conversation import ConversationState
@@ -204,6 +220,7 @@ def compile_program(
     subagent_usage_limits: SubagentUsageLimits | None = None,
     subagent_state_path: str | Path | None = None,
     conversation_state: ConversationState | None = None,
+    loop_iteration_limit: int = 10_000,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -243,6 +260,7 @@ def compile_program(
         subagent_usage_limits=subagent_usage_limits,
         subagent_state_path=subagent_state_path,
         conversation_state=conversation_state,
+        loop_iteration_limit=loop_iteration_limit,
     )
     with runtime_span(
         f"compile {display_name}",
@@ -286,6 +304,7 @@ class ProgramCompiler:
         subagent_usage_limits: SubagentUsageLimits | None = None,
         subagent_state_path: str | Path | None = None,
         conversation_state: ConversationState | None = None,
+        loop_iteration_limit: int = 10_000,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -298,6 +317,7 @@ class ProgramCompiler:
         self.subagent_usage_limits = subagent_usage_limits
         self.subagent_state_path = subagent_state_path
         self.conversation_state = conversation_state
+        self.loop_iteration_limit = loop_iteration_limit
         self.rt = KediRuntime(
             adapter=adapter,
             executor=executor,
@@ -309,6 +329,7 @@ class ProgramCompiler:
             subagent_usage_limits=subagent_usage_limits,
             subagent_state_path=subagent_state_path,
             conversation_state=conversation_state,
+            loop_iteration_limit=loop_iteration_limit,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
@@ -504,6 +525,7 @@ class ProgramCompiler:
                         subagent_usage_limits=self.subagent_usage_limits,
                         subagent_state_path=self.subagent_state_path,
                         conversation_state=self.conversation_state,
+                        loop_iteration_limit=self.loop_iteration_limit,
                     ).compile(program)
 
                 loaded = self.module_loader.load(module_path, imported_prog, compile_module)
@@ -945,127 +967,18 @@ class ProgramCompiler:
         env: dict[str, Any],
         state: _TopLevelExecutionState,
     ) -> Any:
-        prog = prepared.program
-        profile_registry = self.rt._profile_registry
-
         with self.rt.trace_frame(
             KediTraceFrame(kind="program", label="top-level program", span=None)
         ):
-            for item in prepared.sequence:
-                if isinstance(item, ProcedureDef):
-                    if not item.auto_spec and not item.ai_prompt:
-                        self.rt.procedure(self.proc_compiler.compile_procedure(item))
-                    continue
-                if isinstance(item, TypeDef):
-                    register_type(self.rt, item, self.rt._type_env_stack[0])
-                    continue
-                if isinstance(item, ModuleImport):
-                    module_path = self._resolve_import_path(
-                        prog,
-                        item,
-                        source_path=prepared.import_source_path,
-                    )
-                    loaded = self.module_loader.loaded_for(module_path)
-                    self._merge_exports(
-                        item,
-                        loaded.path,
-                        loaded.program,
-                        loaded.runtime,
-                        target_env=env,
-                    )
-                    continue
-                if isinstance(item, AgentDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(
-                        state.adapter_selection_kind, "agent-harness"
-                    )
-                    state.adapter_selection_kind = "agent-harness"
-                    state.active_profile = state.active_profile.merge(
-                        eval_agent_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, AdapterDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(
-                        state.adapter_selection_kind, "agent-framework"
-                    )
-                    state.adapter_selection_kind = "agent-framework"
-                    state.active_profile = state.active_profile.merge(
-                        eval_adapter_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, ModelDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_model_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, EffortDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_effort_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, ApprovalDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_approval_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, HistoryDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_history_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, SkillsDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_skills_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, CodeModeDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_codemode_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, SystemDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_system_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, McpDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_mcp_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, SettingsDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_settings_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, ArtifactsDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_artifacts_directive(self.rt, item, env)
-                    )
-                    continue
-                if isinstance(item, UseDirectiveStmt):
-                    state.active_profile = state.active_profile.merge(
-                        eval_use_directive(
-                            self.rt,
-                            item,
-                            profile_registry,
-                            env,
-                            available_procedures=set(self.rt._procedures.keys()),
-                        )
-                    )
-                    continue
-                if isinstance(item, ProfileDefStmt):
-                    profile_registry[item.name] = prepared.local_profiles[item.name]
-                    continue
-                if isinstance(item, TemplateLine):
-                    raise ValueError(
-                        "Top-level TemplateLine is not a valid program node; "
-                        "use '>>' for a top-level template prompt."
-                    )
-                with block_agent_profile_scope(state.active_profile):
-                    self.executor.execute_single_statement(item, env, is_toplevel=True)
+            block_result = self._execute_top_level_sequence(
+                prepared,
+                env,
+                state,
+                prepared.sequence,
+            )
 
             if prepared.toplevel_return is None:
-                return None
+                return None if block_result is _NO_TOP_LEVEL_RESULT else block_result
 
             with block_agent_profile_scope(state.active_profile):
                 if isinstance(prepared.toplevel_return, ReturnStmt):
@@ -1084,6 +997,203 @@ class ProgramCompiler:
                     env,
                     span=prepared.toplevel_return.loc,
                 )
+
+    def _execute_top_level_sequence(
+        self,
+        prepared: _PreparedProgram,
+        env: dict[str, Any],
+        state: _TopLevelExecutionState,
+        sequence: tuple[Any, ...] | list[Any],
+    ) -> Any:
+        """Execute one top-level-owned block, recursively preserving lexical directives."""
+        prog = prepared.program
+        profile_registry = self.rt._profile_registry
+        last_result: Any = _NO_TOP_LEVEL_RESULT
+
+        for item in sequence:
+            if isinstance(item, IfStmt):
+                with block_agent_profile_scope(state.active_profile):
+                    condition = evaluate_condition(self.rt, item, env)
+                body = item.body if condition else item.else_body
+                if body is None:
+                    continue
+                branch_state = replace(state)
+                with branch_trace(self.rt, item, alternative=not condition):
+                    result = self._execute_top_level_sequence(
+                        prepared,
+                        env,
+                        branch_state,
+                        body,
+                    )
+                if result is not _NO_TOP_LEVEL_RESULT:
+                    last_result = result
+                continue
+            if isinstance(item, LoopStmt):
+                with loop_trace(self.rt, item):
+                    values = evaluate_iterable(self.rt, item, env)
+                    for value in values:
+                        iteration_state = replace(state)
+                        with loop_binding(self.rt, env, item.binder, value):
+                            result = self._execute_top_level_sequence(
+                                prepared,
+                                env,
+                                iteration_state,
+                                item.body,
+                            )
+                        if result is not _NO_TOP_LEVEL_RESULT:
+                            last_result = result
+                continue
+            if isinstance(item, ConditionalLoopStmt):
+                completed_iterations = 0
+                with loop_trace(self.rt, item):
+                    while True:
+                        with block_agent_profile_scope(state.active_profile):
+                            condition = evaluate_condition(self.rt, item, env)
+                        if not condition:
+                            break
+                        assert_conditional_loop_capacity(self.rt, completed_iterations)
+                        iteration_state = replace(state)
+                        result = self._execute_top_level_sequence(
+                            prepared,
+                            env,
+                            iteration_state,
+                            item.body,
+                        )
+                        completed_iterations += 1
+                        if result is not _NO_TOP_LEVEL_RESULT:
+                            last_result = result
+                continue
+            if isinstance(item, ProcedureDef):
+                if not item.auto_spec and not item.ai_prompt:
+                    self.rt.procedure(self.proc_compiler.compile_procedure(item))
+                continue
+            if isinstance(item, ProcDefStmt) and item.proc is not None:
+                child = item.proc
+                child.captured_agent_profile = state.active_profile.frozen_copy()
+                child.lexical_env = env
+                self.rt.procedure(self.proc_compiler._make_procedure_impl(child, env))
+                continue
+            if isinstance(item, TypeDef):
+                register_type(self.rt, item, self.rt._type_env_stack[0])
+                continue
+            if isinstance(item, TypeDefStmt) and item.typedef is not None:
+                register_type(
+                    self.rt,
+                    item.typedef,
+                    self.rt._type_env_stack[0],
+                    env,
+                )
+                continue
+            if isinstance(item, ModuleImport):
+                module_path = self._resolve_import_path(
+                    prog,
+                    item,
+                    source_path=prepared.import_source_path,
+                )
+                loaded = self.module_loader.loaded_for(module_path)
+                self._merge_exports(
+                    item,
+                    loaded.path,
+                    loaded.program,
+                    loaded.runtime,
+                    target_env=env,
+                )
+                continue
+            if isinstance(item, AgentDirectiveStmt):
+                _assert_adapter_selection_not_mixed(state.adapter_selection_kind, "agent-harness")
+                state.adapter_selection_kind = "agent-harness"
+                state.active_profile = state.active_profile.merge(
+                    eval_agent_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, AdapterDirectiveStmt):
+                _assert_adapter_selection_not_mixed(state.adapter_selection_kind, "agent-framework")
+                state.adapter_selection_kind = "agent-framework"
+                state.active_profile = state.active_profile.merge(
+                    eval_adapter_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, ModelDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_model_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, EffortDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_effort_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, ApprovalDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_approval_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, HistoryDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_history_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, SkillsDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_skills_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, CodeModeDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_codemode_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, SystemDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_system_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, McpDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_mcp_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, SettingsDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_settings_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, ArtifactsDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_artifacts_directive(self.rt, item, env)
+                )
+                continue
+            if isinstance(item, UseDirectiveStmt):
+                state.active_profile = state.active_profile.merge(
+                    eval_use_directive(
+                        self.rt,
+                        item,
+                        profile_registry,
+                        env,
+                        available_procedures=set(self.rt._procedures.keys()),
+                    )
+                )
+                continue
+            if isinstance(item, ProfileDefStmt):
+                profile_registry[item.name] = prepared.local_profiles[item.name]
+                continue
+            if isinstance(item, TemplateLine):
+                raise ValueError(
+                    "Top-level TemplateLine is not a valid program node; "
+                    "use '>>' for a top-level template prompt."
+                )
+            if isinstance(item, ReturnStmt):
+                with block_agent_profile_scope(state.active_profile):
+                    last_result = self.stmt_compiler.compile_return(item)(**env)
+                continue
+            if isinstance(item, ReturnBlockStmt):
+                with block_agent_profile_scope(state.active_profile):
+                    last_result = self.stmt_compiler.compile_return_block(item, env)
+                continue
+            with block_agent_profile_scope(state.active_profile):
+                self.executor.execute_single_statement(item, env, is_toplevel=True)
+
+        return last_result
 
     def _attach_validation(self, prog: Program) -> None:
         """Attach validation suites if present.

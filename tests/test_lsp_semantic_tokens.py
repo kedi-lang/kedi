@@ -23,6 +23,21 @@ def test_semantic_tokens_full_emits_tokens():
     assert len(tokens.data) % 5 == 0
 
 
+def test_semantic_tokens_cover_template_condition_text_and_inputs() -> None:
+    src = "> if: <city> is in Turkey\n  [result] = yes\n"
+    decoded = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
+    )
+    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(line == 0 and token_type == string_type for line, _, _, token_type, _ in decoded)
+    assert any(
+        line == 0 and col == 7 and length == 4 and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+
+
 def test_semantic_tokens_legend_constants():
     assert "function" in features.SEMANTIC_TOKEN_TYPES
     assert "type" in features.SEMANTIC_TOKEN_TYPES
@@ -300,6 +315,30 @@ def test_tree_sitter_highlights_capture_workflow_and_compaction_settings() -> No
         assert {"enabled", "compaction_mode", "compaction_threshold"} <= captured("property")
         assert "dynamic" in captured("constant")
         assert "native" in captured("string") | captured("text.literal")
+
+
+def test_tree_sitter_and_zed_highlight_control_flow_keywords_and_binder() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (
+        b"> if: `ready`:\n  [status] = yes\n> else:\n  > loop [n]: `range(3)`:\n    [value] = <n>\n"
+    )
+    language = Language(tree_sitter_kedi.language())
+
+    for query_path in (
+        root / "tree-sitter-kedi/queries/highlights.scm",
+        root / "kedi-zed/languages/kedi/highlights.scm",
+    ):
+        query = Query(language, query_path.read_text(encoding="utf-8"))
+        captures = QueryCursor(query).captures(Parser(language).parse(source).root_node)
+
+        def captured(name: str) -> set[str]:
+            return {
+                source[node.start_byte : node.end_byte].decode("utf-8")
+                for node in captures.get(name, [])
+            }
+
+        assert {"if", "else", "loop"} <= captured("keyword")
+        assert "n" in captured("variable")
 
 
 def test_lsp_semantic_tokens_cover_workflow_and_compaction_settings() -> None:

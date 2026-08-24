@@ -44,7 +44,19 @@ _INVOCATION_OBSERVER: ContextVar[InvocationObserver | None] = ContextVar(
 
 @contextmanager
 def observe_invocations(observer: InvocationObserver) -> Iterator[None]:
-    token = _INVOCATION_OBSERVER.set(observer)
+    previous = _INVOCATION_OBSERVER.get()
+
+    if previous is None:
+        token = _INVOCATION_OBSERVER.set(observer)
+    else:
+
+        def composed(usage: InvocationUsage, /) -> None:
+            try:
+                observer(usage)
+            finally:
+                previous(usage)
+
+        token = _INVOCATION_OBSERVER.set(composed)
     try:
         yield
     finally:

@@ -329,6 +329,137 @@ You can use backtick-wrapped Python expressions in type annotations:
 
 Backtick type annotations are evaluated at runtime with full access to prelude, globals, and local scope. They work identically to regular type annotations.
 
+## Native Control Flow
+
+Kedi provides deterministic and model-classified conditionals, conditional
+loops, and sequential iterable loops. A trailing `:` after an inline Python
+header selects deterministic evaluation. A condition without that trailing
+colon is a Kedi template claim evaluated by the active agent adapter.
+
+### Conditional branches
+
+```kedi
+[score: int] = `72`
+
+> if: `score >= 60`:
+  [result] = passed
+> else:
+  [result] = failed
+
+= <result>
+```
+
+The condition is evaluated exactly once and must return an exact Python
+`bool`. Kedi does not apply truthiness to integers, strings, containers, or
+other objects. The closing `:` after the embedded Python expression is required.
+Only the selected body executes, and writes from that body stay visible in the
+containing Kedi scope. `> else:` is optional. There is no
+`elif`; use a nested `> if:` when another condition is required.
+
+Directives selected inside a branch apply only within that branch. Existing
+Kedi return behavior remains unchanged: a return in a selected body contributes
+to the scope's last return value; it does not introduce Python-style early
+return.
+
+### Template conditions
+
+```kedi
+[city] = Ankara
+[minimum_population: int] = `5_000_000`
+
+> if: <city> has more than `minimum_population` residents
+  [result] = major city
+> else:
+  [result] = smaller city
+
+= <result>
+```
+
+A template condition has no trailing `:` after its claim. Plain text,
+`<name>` substitutions, procedure calls, and inline Python values are rendered
+with the same native Kedi semantics used by other templates. Output fields such
+as `[answer]` are invalid because a condition does not produce a user-visible
+binding.
+
+Kedi asks the active adapter for an exact annotated `bool` using this request:
+
+```text
+Return true only if the following claim can be established as true from the available context; otherwise return false.
+Claim: {rendered claim}
+```
+
+The call inherits the active profile, model settings, system instructions,
+tools, MCP servers, history, caching, usage limits, cancellation, retries,
+streaming, and telemetry. If the claim cannot be established from that context,
+the adapter must return `false`. No synthetic condition result is written to
+`KediEnv`.
+
+The trailing colon is the unambiguous boundary between both forms:
+
+```kedi
+> if: `is_ready`:
+  # Deterministic: evaluate is_ready as an exact Python bool.
+  [mode] = deterministic
+
+> if: `is_ready`
+  # Model-classified: render the Python value into the claim.
+  [mode] = classified
+```
+
+### Conditional loops
+
+```kedi
+[remaining: int] = `3`
+
+> loop: `remaining > 0`:
+  `remaining -= 1`
+
+= `remaining`
+```
+
+The deterministic condition is re-evaluated before every iteration and must
+return an exact `bool`. A false first result runs zero iterations. Body writes
+remain visible to the next condition evaluation.
+
+Template claims use the same no-trailing-colon form and are re-rendered and
+classified before every iteration:
+
+```kedi
+> loop: <work> remains unfinished
+  >> Continue the unfinished work.
+```
+
+Conditional loops allow 10,000 body iterations by default. If the condition is
+still true after exactly that many completed iterations, Kedi raises
+`LoopIterationLimitError` before starting another body. Each nested or dynamic
+loop owns an independent counter. Python callers can set the positive
+`loop_iteration_limit` through `compile_program()`, `configure()`, `context()`,
+or `interactive()`.
+
+### Sequential loops
+
+```kedi
+[items: list[int]] = `[1, 2, 3, 4, 5]`
+[total: int] = `0`
+
+> loop [n]: `items`:
+  `total += n`
+
+= `total`
+```
+
+The header expression is evaluated exactly once and must return an `Iterable`.
+Iterations run sequentially in source order. Kedi does not materialize the
+iterable or introduce implicit parallelism, so lists, tuples, dictionaries,
+strings, generators, ranges, and custom iterables preserve their native
+iteration behavior.
+
+The binder receives each yielded value without coercion. If its name was
+already bound, Kedi restores the previous value after the loop. Otherwise Kedi
+removes the binder. Restoration also happens when the body raises or is
+cancelled, and nested loops may safely shadow the same binder. Other writes
+made by the body remain visible after the loop.
+
 ## Procedures
 
 ### Basic Procedures
@@ -990,7 +1121,7 @@ enable scoped skill discovery.
   DeepSeek, Z.AI, and xAI require no request flag for their implicit cache.
   Moonshot and Azure receive only their supported stable routing key. Bedrock
   receives explicit framework-native cache points; with LangChain this requires
-  the provider's `langchain-aws` integration package. Preconstructed LangChain
+  the `kedi[langchain-aws]` optional dependency group. Preconstructed LangChain
   `ChatOpenAI` models using the official Moonshot, Alibaba, DeepSeek, or Z.AI
   base URLs are recognized without changing their configured endpoint.
 
@@ -1467,6 +1598,9 @@ This registers two read-only agent tools:
 - `read_skill(skill_name: str)` returns the exact UTF-8 `SKILL.md` content for
   one listed identifier.
 
+Names outside the active scope's deterministic `max_skills` set cannot be read
+by guessing their identifiers.
+
 Skill instructions are never inserted into the model context automatically.
 The agent must first list relevant skills, then explicitly read the one it
 needs. Skill names are limited to one directory name; path traversal, absolute
@@ -1892,6 +2026,42 @@ def extract_output(*, text: str, output_type: type[T]) -> T:
     """
     ...
 ```
+
+Low-level adapters expose the same structured-output operation directly through
+`produce()` / `produce_sync()`. Here, `template` is ordinary prompt text; it does
+not need to contain Kedi output placeholders. Pass either a field mapping through
+`output_schema` or one prebuilt Python type through `output_type`:
+
+```python
+from typing import Annotated
+
+from pydantic import BaseModel
+
+
+class Review(BaseModel):
+    accepted: bool
+    reason: str
+
+
+fields = await adapter.produce(
+    template="Evaluate whether this proposal is safe.",
+    output_schema={
+        "accepted": Annotated[bool, "Whether the proposal is safe"],
+        "reason": Annotated[str, "Short justification for the decision"],
+    },
+)
+review = await adapter.produce(
+    template="Evaluate whether this proposal is safe.",
+    output_type=Review,
+)
+```
+
+For `output_schema`, `Annotated[type, "description"]` keeps `type` as the field
+type and publishes the second argument as the model-facing field description.
+Adapters with structured-output support accept both forms; supplying a schema
+takes precedence over a prebuilt type. An adapter must receive at least one output
+specification. ACP currently advertises no structured-output capability, so its
+`produce()` surface raises `NotImplementedError` for either form.
 
 ### `@kedi.bind`
 

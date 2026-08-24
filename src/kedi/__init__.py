@@ -61,6 +61,7 @@ from .executors.debug import (
     default_debug_export_path,
 )
 from .interactive_session import InteractiveSession
+from .errors import LoopIterationLimitError
 from .promise import KediPromise, KediPromiseLeak, force
 
 __all__ = [
@@ -115,6 +116,7 @@ __all__ = [
     "tool",
     "type",
     "KediRuntime",
+    "LoopIterationLimitError",
     "InteractiveSession",
     "force",
     "KediPromise",

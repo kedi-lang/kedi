@@ -255,6 +255,32 @@ class AssignStmt(Stmt):
 
 
 @dataclass
+class IfStmt(Stmt):
+    condition_code: str = ""
+    body: List[Stmt] = field(default_factory=list)
+    else_body: Optional[List[Stmt]] = None
+    condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    condition_segments: Optional[Expr] = None
+
+
+@dataclass
+class LoopStmt(Stmt):
+    binder: str = ""
+    iterable_code: str = ""
+    body: List[Stmt] = field(default_factory=list)
+    binder_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    iterable_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ConditionalLoopStmt(Stmt):
+    condition_code: str = ""
+    condition_segments: Optional[Expr] = None
+    body: List[Stmt] = field(default_factory=list)
+    condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class ModelDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None

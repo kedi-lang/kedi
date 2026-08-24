@@ -86,11 +86,13 @@ from ..lang.ast import (
     CallArg,
     CallSegment,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    IfStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
     McpDirectiveStmt,
@@ -122,6 +124,7 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -254,7 +257,23 @@ def _segments_of(stmt) -> list:
         return list(stmt.segments)
     if isinstance(stmt, AssignStmt):
         return list(stmt.expr)
+    if isinstance(stmt, (IfStmt, ConditionalLoopStmt)):
+        return list(stmt.condition_segments or [])
     return []
+
+
+def _control_body_statements(stmt) -> list:
+    if isinstance(stmt, IfStmt):
+        return [*stmt.body, *(stmt.else_body or [])]
+    if isinstance(stmt, (LoopStmt, ConditionalLoopStmt)):
+        return list(stmt.body)
+    return []
+
+
+def _iter_control_statements(statements):
+    for stmt in statements:
+        yield stmt
+        yield from _iter_control_statements(_control_body_statements(stmt))
 
 
 # =====================================================================
@@ -325,6 +344,8 @@ def _iter_stmt_type_exprs(stmt):
     for segment in _segments_of(stmt):
         if isinstance(segment, OutputSegment):
             yield segment.type_expr
+    for child in _control_body_statements(stmt):
+        yield from _iter_stmt_type_exprs(child)
 
 
 def _collect_annotated_type_diagnostics(
@@ -2210,6 +2231,18 @@ def _resolve_in_stmt(
 ) -> Optional[SymbolRef]:
     if not hasattr(stmt, "loc") or stmt.loc is None or not _position_inside(pos, stmt.loc):
         return None
+    if (
+        isinstance(stmt, LoopStmt)
+        and stmt.binder_loc is not None
+        and _position_inside(pos, stmt.binder_loc)
+    ):
+        return SymbolRef(
+            kind="loop_binder",
+            name=stmt.binder,
+            declaration_span=stmt.binder_loc,
+            scope_proc=proc,
+            cursor_span=stmt.binder_loc,
+        )
     if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
         return _resolve_in_type_def(stmt.typedef, pos, type_by_name, imported_values)
     # AssignStmt / AssignBlockStmt target name
@@ -2284,6 +2317,40 @@ def _resolve_in_stmt(
             ancestor_procs,
         )
         if r is not None:
+            return r
+    for child in _control_body_statements(stmt):
+        r = _resolve_in_stmt(
+            prog,
+            child,
+            pos,
+            proc,
+            proc_by_name,
+            type_by_name,
+            imported_values,
+            ancestor_procs,
+        )
+        if r is not None:
+            if (
+                isinstance(stmt, LoopStmt)
+                and r.name == stmt.binder
+                and r.kind
+                in {
+                    "local",
+                    "parameter",
+                    "param_decl",
+                    "module_value",
+                    "imported_value",
+                    "runtime_value",
+                }
+                and stmt.binder_loc is not None
+            ):
+                return SymbolRef(
+                    kind="loop_binder",
+                    name=stmt.binder,
+                    declaration_span=stmt.binder_loc,
+                    scope_proc=proc,
+                    cursor_span=r.cursor_span,
+                )
             return r
     return None
 
@@ -2494,7 +2561,7 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
     """Find an output/assign-target named ``name`` in a procedure body."""
     if proc is None:
         return None
-    for stmt in proc.body:
+    for stmt in _iter_control_statements(proc.body):
         if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
             return assignment_name_span(stmt)
         for seg in _segments_of(stmt):
@@ -2507,14 +2574,16 @@ def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
     from ..lang.ast import ProcDefStmt
 
     return [
-        stmt.proc for stmt in proc.body if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+        stmt.proc
+        for stmt in _iter_control_statements(proc.body)
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
     ]
 
 
 def _direct_type_defs(proc: ProcedureDef) -> list[TypeDef]:
     return [
         stmt.typedef
-        for stmt in proc.body
+        for stmt in _iter_control_statements(proc.body)
         if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None
     ]
 
@@ -2658,6 +2727,12 @@ def compute_hover(
             )
         else:
             text = f"`{sym.name}`\n\nParameter."
+    elif sym.kind == "loop_binder":
+        text = (
+            f"**Loop binder** `{sym.name}: int`\n\n"
+            "Available only while this sequential range-loop iteration executes. "
+            "The previous binding is restored after the loop."
+        )
     elif sym.kind == "local":
         text = (
             f"**Local** `{sym.name}`\n\n"
@@ -2923,6 +2998,24 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, ProcDefStmt) and node.proc is not None:
             visit(node.proc)
             return
+        if isinstance(node, IfStmt):
+            for segment in node.condition_segments or []:
+                visit(segment)
+            for stmt in node.body:
+                visit(stmt)
+            for stmt in node.else_body or []:
+                visit(stmt)
+            return
+        if isinstance(node, LoopStmt):
+            for stmt in node.body:
+                visit(stmt)
+            return
+        if isinstance(node, ConditionalLoopStmt):
+            for segment in node.condition_segments or []:
+                visit(segment)
+            for stmt in node.body:
+                visit(stmt)
+            return
         if isinstance(node, OptimizeSpan):
             for tl in node.template_lines or []:
                 visit(tl)
@@ -3049,6 +3142,35 @@ def _describe_ast_node(node) -> Optional[str]:
         return (
             "**Python return**\n\n"
             "The Python value becomes the procedure or program result without string rendering."
+        )
+    if isinstance(node, IfStmt):
+        if node.condition_segments is not None:
+            return (
+                "**Model-classified condition** `> if: claim`\n\n"
+                "Renders the claim through Kedi template substitutions and continues only when "
+                "the active adapter establishes it as true."
+            )
+        return (
+            "**Conditional branch** ``> if: `condition`:``\n\n"
+            "Evaluates the embedded Python expression once. It must return an exact `bool`; "
+            "only the selected Kedi body executes."
+        )
+    if isinstance(node, LoopStmt):
+        return (
+            f"**Sequential loop** `{node.binder}`\n\n"
+            "Evaluates the embedded Python expression once and requires an `Iterable`. "
+            "The binder is restored when the loop exits."
+        )
+    if isinstance(node, ConditionalLoopStmt):
+        if node.condition_segments is not None:
+            return (
+                "**Model-classified loop** `> loop: claim`\n\n"
+                "Re-renders and classifies the claim before every iteration. The loop stops when "
+                "the claim cannot be established as true."
+            )
+        return (
+            "**Conditional loop** ``> loop: `condition`:``\n\n"
+            "Re-evaluates the exact-`bool` Python condition before every iteration."
         )
     if isinstance(node, BacktickLineStmt):
         return "**Inline Python statement** `` `…` `` — side-effecting Python line."
@@ -3877,10 +3999,10 @@ def _find_all_references(
                 if suite_span is not None:
                     candidates.append(suite_span)
         for p in _all_procedures(prog):
-            for stmt in p.body:
+            for stmt in _iter_control_statements(p.body):
                 for seg in _segments_of(stmt):
                     _collect_call_refs(seg, sym.name, candidates)
-        for stmt in prog.toplevel_body:
+        for stmt in _iter_control_statements(prog.toplevel_body):
             for seg in _segments_of(stmt):
                 _collect_call_refs(seg, sym.name, candidates)
         if prog.toplevel_return is not None:
@@ -3922,10 +4044,12 @@ def _find_all_references(
                 target_span = _use_single_target_span(prog, stmt)
                 if target_span is not None:
                     out.append(target_span)
+    elif sym.kind == "loop_binder" and sym.declaration_span is not None:
+        _collect_loop_binder_refs(prog, sym, out)
     elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):
         if sym.scope_proc is not None:
             for proc, ancestors in _procedure_scope_entries(prog):
-                for stmt in proc.body:
+                for stmt in _iter_control_statements(proc.body):
                     for seg in _segments_of(stmt):
                         _collect_lexical_input_refs(
                             seg,
@@ -4053,12 +4177,43 @@ def _collect_lexical_input_refs(
                 )
 
 
+def _collect_loop_binder_refs(
+    prog: Program | ProgramWithValidation,
+    target: SymbolRef,
+    out: List[Span],
+) -> None:
+    def visit(statements, active: bool = False) -> None:
+        for stmt in statements:
+            if isinstance(stmt, LoopStmt):
+                is_target = stmt.binder_loc == target.declaration_span
+                if is_target:
+                    visit(stmt.body, True)
+                elif not (active and stmt.binder == target.name):
+                    visit(stmt.body, active)
+                continue
+
+            if active:
+                for segment in _segments_of(stmt):
+                    _collect_input_refs(segment, target.name, out)
+            if isinstance(stmt, IfStmt):
+                visit(stmt.body, active)
+                visit(stmt.else_body or [], active)
+            elif isinstance(stmt, ConditionalLoopStmt):
+                visit(stmt.body, active)
+
+    visit(prog.toplevel_body)
+    for proc in _all_procedures(prog):
+        visit(proc.body)
+
+
 def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
     if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.type_expr is not None:
         _collect_type_refs_in_expr(stmt.type_expr, name, out)
     for seg in _segments_of(stmt):
         if isinstance(seg, OutputSegment) and seg.type_expr is not None:
             _collect_type_refs_in_expr(seg.type_expr, name, out)
+    for child in _control_body_statements(stmt):
+        _collect_type_refs_in_stmt(child, name, out)
 
 
 def _collect_type_refs_in_type_def(td: TypeDef, name: str, out: List[Span]) -> None:
@@ -4123,6 +4278,7 @@ def compute_prepare_rename(
         "parameter",
         "param_decl",
         "local",
+        "loop_binder",
         "output_decl",
         "imported_value",
     ):

@@ -533,6 +533,8 @@ def test_skills_settings_support_cwd_exclusions_and_maximum(tmp_path: Path) -> N
     )
 
     assert store.list_skills(limit=100) == ["alpha"]
+    with pytest.raises(FileNotFoundError, match="not found"):
+        store.read_skill(skill_name="beta")
 
 
 def test_skills_source_fallback_skips_an_empty_registry(tmp_path: Path) -> None:

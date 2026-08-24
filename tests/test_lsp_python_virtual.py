@@ -571,6 +571,108 @@ def test_python_virtual_document_maps_inline_python_nested_in_call_arguments() -
     assert virtual["text"].count("__kedi_inline_expression_") == 3
 
 
+def test_python_virtual_document_maps_control_flow_headers_and_bodies() -> None:
+    src = (
+        "[total: int] = `0`\n"
+        "> if: `total == 0`:\n"
+        "  > loop [n]: `range(1, 4)`:\n"
+        "    `total += n`\n"
+        "> else:\n"
+        "  `total = -1`\n"
+        "= `total`\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/control.kedi")
+
+    ast.parse(virtual["text"])
+    assert [region["text"] for region in virtual["ranges"]] == [
+        "0",
+        "total == 0",
+        "range(1, 4)",
+        "total += n",
+        "total = -1",
+        "total",
+    ]
+    assert "    if (" in virtual["text"]
+    assert "        for n in (" in virtual["text"]
+    assert "        del n" in virtual["text"]
+    assert any(
+        symbol["name"] == "n" and symbol["sourceRange"]["start"] == {"line": 2, "character": 10}
+        for symbol in virtual["symbols"]
+    )
+
+
+def test_python_virtual_document_maps_template_and_conditional_loop_headers() -> None:
+    src = (
+        "[city] = Ankara\n"
+        "> if: <city> has `len(city)` letters\n"
+        "  [status] = yes\n"
+        "[remaining: int] = `2`\n"
+        "> loop: `remaining > 0`:\n"
+        "  `remaining -= 1`\n"
+        "> loop: <remaining> is below `3`\n"
+        "  `remaining += 1`\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/control.kedi")
+
+    ast.parse(virtual["text"])
+    mapped = [region["text"] for region in virtual["ranges"]]
+    assert "len(city)" in mapped
+    assert "remaining > 0" in mapped
+    assert "3" in mapped
+    assert virtual["text"].count("while (") == 2
+
+
+def test_python_virtual_control_flow_defensive_fallbacks_and_scope_merging() -> None:
+    from kedi.lang.ast import ConditionalLoopStmt, IfStmt, LoopStmt, ProcDefStmt, ProcedureDef
+    from kedi.lsp import python_virtual as pv
+
+    builder = pv.VirtualBuilder("", None)
+    empty_if = IfStmt(condition_code="", body=[], else_body=[])
+    pv._emit_if_stmt(builder, pv.RegionCursor([]), empty_if, {}, "", {})
+    assert "cast(bool, _kedi_placeholder())" in builder.finish()
+    assert builder.lines.count("    pass") == 2
+
+    no_else = IfStmt(condition_code="", body=[])
+    pv._emit_if_stmt(builder, pv.RegionCursor([]), no_else, {}, "", {})
+    assert list(pv._iter_control_statements([no_else])) == [no_else]
+
+    loop_scope = {"n": pv.ScopeName(typ="str", source_range=None)}
+    empty_loop = LoopStmt(binder="n", iterable_code="", body=[])
+    pv._emit_loop_stmt(builder, pv.RegionCursor([]), empty_loop, loop_scope, "", {})
+    text = builder.finish()
+    assert "cast(Iterable[Any], _kedi_placeholder())" in text
+    assert "n: str = cast(str, _kedi_placeholder())" in text
+    assert loop_scope["n"].typ == "str"
+
+    empty_conditional_loop = ConditionalLoopStmt(condition_code="", body=[])
+    pv._emit_conditional_loop_stmt(
+        builder,
+        pv.RegionCursor([]),
+        empty_conditional_loop,
+        {},
+        "",
+        {},
+    )
+    text = builder.finish()
+    assert "cast(bool, _kedi_placeholder())" in text
+    assert text.endswith("    pass\n")
+
+    merged: dict[str, pv.ScopeName] = {}
+    pv._merge_control_scopes(merged, {"value": pv.ScopeName("int", None)})
+    pv._merge_control_scopes(merged, {"value": pv.ScopeName("str", None)})
+    assert merged["value"].typ == "Any"
+
+    nested = ProcedureDef(name="nested", params=[])
+    statements = list(
+        pv._iter_control_statements(
+            [IfStmt(condition_code="", body=[], else_body=[ProcDefStmt(proc=nested)])]
+        )
+    )
+    assert any(isinstance(stmt, ProcDefStmt) for stmt in statements)
+
+
 def test_python_virtual_document_maps_directive_inline_python() -> None:
     src = (
         "```\n"
