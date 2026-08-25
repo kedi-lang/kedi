@@ -765,6 +765,51 @@ def test_internal_sandbox_dependency_check_does_not_call_kedi_from_prelude(
     assert '"pydantic_monty"' not in checked_names
 
 
+def test_internal_sandbox_executes_code_with_inputs(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: sandbox\n\n"
+        '[result: Any] = `execute_code("sum(values)", {"values": [1, 2, 3]})`\n\n'
+        "= `result`\n",
+        encoding="utf-8",
+    )
+
+    assert _compile_file(main).run_main() == 6
+
+
+def test_internal_sandbox_defaults_to_empty_inputs(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        '> import: sandbox\n\n[result: int] = `execute_code("1 + 2")`\n\n= `result`\n',
+        encoding="utf-8",
+    )
+
+    assert _compile_file(main).run_main() == 3
+
+
+def test_internal_sandbox_can_return_execution_errors(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        '> import: sandbox\n\n[result: str] = `execute_code("missing_name")`\n\n= `result`\n',
+        encoding="utf-8",
+    )
+
+    assert "missing_name" in _compile_file(main).run_main()
+
+
+def test_internal_sandbox_can_fail_fast_explicitly(tmp_path: Path) -> None:
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: sandbox\n\n"
+        '[result: str] = `execute_code("missing_name", {}, True)`\n\n'
+        "= `result`\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="Sandbox execution failed"):
+        _compile_file(main).run_main()
+
+
 def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> None:
     main = tmp_path / "main.kedi"
     main.write_text(
