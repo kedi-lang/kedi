@@ -1458,7 +1458,23 @@ class _Walker:
 
     def _validate_template_block_scope(self, lines: List[TemplateLine]) -> None:
         produced_names: set[str] = set()
+        seen_output_names: set[str] = set()
         for line in lines:
+            for output in self._condition_outputs(line.segments):
+                if output.name in seen_output_names:
+                    self.diagnostics.append(
+                        KediDiagnostic(
+                            severity="error",
+                            message=(
+                                f"Template block declares output field {output.name!r} "
+                                "more than once."
+                            ),
+                            span=output.loc or line.loc or Span(0, 0, 1, 1, 1, 1),
+                            code="K-TEMPLATE-DUPLICATE-OUTPUT",
+                        )
+                    )
+                else:
+                    seen_output_names.add(output.name)
             for seg in line.segments:
                 if isinstance(seg, InputSegment) and seg.name in produced_names:
                     self.diagnostics.append(
@@ -2714,6 +2730,7 @@ class _Walker:
             )
             if block_node is not None:
                 template_lines = self._walk_template_block_stmt(block_node).lines
+                self._validate_template_block_scope(template_lines)
             else:
                 for tline in body_children:
                     if tline.type != "template_line":

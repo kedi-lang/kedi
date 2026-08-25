@@ -727,6 +727,12 @@ such as `Annotated[str, "Exact URL pointing to the file"]` instead. Its
 description is included in the generated provider schema while its wire type
 remains `string`. Claude currently accepts all of the formats listed above.
 
+Native Kedi annotations reject `tuple`, `Tuple`, `Sequence`, `Mapping`,
+`Iterable`, `object`, `bytearray`, `slice`, and `range`. These names remain
+ordinary Python values inside Python expressions and blocks; the restriction
+applies only when they are used as Kedi type contracts. Prefer `list`, `dict`,
+or a named custom type for model-facing schemas.
+
 Type fields can also have single-line inline Python defaults:
 
 ```kedi

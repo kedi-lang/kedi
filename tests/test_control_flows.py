@@ -552,7 +552,7 @@ def test_nested_loop_restores_each_shadowed_binder() -> None:
         parse_program(
             """
 [n: int] = `99`
-[seen: list[tuple[str, int]]] = `[]`
+[seen: list] = `[]`
 > loop [n]: `range(2)`:
   `seen.append(("outer-before", n))`
   > loop [n]: `range(10, 12)`:

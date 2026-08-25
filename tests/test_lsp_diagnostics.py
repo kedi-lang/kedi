@@ -46,6 +46,31 @@ def test_diagnostics_accept_annotated_output_description():
     assert features.compute_diagnostics(src, "example.kedi") == []
 
 
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Iterable",
+        "Mapping",
+        "Sequence",
+        "Tuple",
+        "bytearray",
+        "object",
+        "range",
+        "slice",
+        "tuple",
+    ],
+)
+def test_diagnostics_reject_unsupported_kedi_types(annotation: str) -> None:
+    src = f"@p(value: {annotation}) -> str:\n  = ok\n"
+
+    diagnostics = features.compute_diagnostics(src, "example.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-TYPE-UNSUPPORTED"
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Error
+    assert annotation in diagnostics[0].message
+
+
 def test_diagnostics_warns_when_annotated_description_is_missing():
     src = "@p():\n  >> Capital is [capital: Annotated[str]].\n"
     diags = features.compute_diagnostics(src, "example.kedi")

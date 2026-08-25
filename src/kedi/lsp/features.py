@@ -154,6 +154,7 @@ from ..lang.compiler.environment import (
     KEDI_RUNTIME_TYPE_ORIGINS,
     KEDI_TYPING_TYPE_NAMES,
 )
+from ..lang.compiler.type_system import UNSUPPORTED_KEDI_TYPE_NAMES
 from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
@@ -211,7 +212,7 @@ except Exception:  # pragma: no cover - optional runtime dependency in degraded 
 def _build_lsp_type_registry() -> dict[str, str]:
     registry: dict[str, str] = {}
     for name in dir(_builtins):
-        if name.startswith("_"):
+        if name.startswith("_") or name in UNSUPPORTED_KEDI_TYPE_NAMES:
             continue
         value = vars(_builtins)[name]
         if isinstance(value, type) and not name.startswith("_"):
@@ -354,6 +355,15 @@ def _collect_annotated_type_diagnostics(
 ) -> None:
     if expr is None:
         return
+    if isinstance(expr, (TypeRef, TypeApply)):
+        if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES and expr.loc is not None:
+            out.append(
+                _error(
+                    expr.loc,
+                    "K-TYPE-UNSUPPORTED",
+                    f"Unsupported Kedi type annotation '{expr.name}'.",
+                )
+            )
     if isinstance(expr, TypeApply):
         if expr.name == "Annotated" and expr.loc is not None:
             if len(expr.args) == 1:
@@ -399,6 +409,16 @@ def _warning(span: Span, code: str, message: str) -> lsp.Diagnostic:
     return lsp.Diagnostic(
         range=_span_to_range(span),
         severity=lsp.DiagnosticSeverity.Warning,
+        code=code,
+        source="kedi",
+        message=message,
+    )
+
+
+def _error(span: Span, code: str, message: str) -> lsp.Diagnostic:
+    return lsp.Diagnostic(
+        range=_span_to_range(span),
+        severity=lsp.DiagnosticSeverity.Error,
         code=code,
         source="kedi",
         message=message,

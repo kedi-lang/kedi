@@ -392,6 +392,44 @@ def test_template_block_single_agent_run() -> None:
     assert "Bar baz [foo]" in calls[0]
 
 
+@pytest.mark.parametrize(
+    "declarations",
+    (
+        "[value] and [value]",
+        "[value: str] and [value]",
+        "[value] and [value: str]",
+        "[value: str] and [value: int]",
+        "[value]\nrepeat [value]",
+    ),
+)
+def test_template_block_rejects_duplicate_output_fields(declarations: str) -> None:
+    source = f">> {declarations}\n= ok\n"
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(source)
+
+    assert any(
+        diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in exc.value.diagnostics
+    )
+    diagnostics = compute_diagnostics(source, "/tmp/duplicate-output.kedi")
+    assert any(diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in diagnostics)
+
+
+def test_separate_template_blocks_may_reuse_an_output_name() -> None:
+    parse_program(">> First [value].\n>> Second [value].\n= ok\n")
+
+
+def test_optimize_template_rejects_duplicate_output_fields() -> None:
+    source = "@p():\n  > optimize: prompt:\n    >> Put [value] and [value: str].\n  = ok\n= <p()>\n"
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(source)
+
+    assert any(
+        diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in exc.value.diagnostics
+    )
+
+
 def test_template_block_stateful_run(monkeypatch: Any) -> None:
     src = (
         "@p():\n"

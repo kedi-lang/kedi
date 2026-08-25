@@ -30,14 +30,10 @@ KEDI_TYPING_TYPE_NAMES = frozenset(
         "Callable",
         "Dict",
         "FrozenSet",
-        "Iterable",
         "List",
         "Literal",
-        "Mapping",
         "Optional",
-        "Sequence",
         "Set",
-        "Tuple",
         "Type",
         "Union",
     }
@@ -520,12 +516,7 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
 
 def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[str, Any]:
     """Build environment for type annotation evaluation."""
-    env: dict[str, Any] = {
-        "__builtins__": builtins.__dict__,
-        "builtins": builtins,
-        "typing": typing,
-        "typing_extensions": typing_extensions,
-    }
+    env: dict[str, Any] = {"__builtins__": builtins.__dict__}
 
     # Import only names that are meaningful as Kedi type annotations.
     for module in (typing, typing_extensions):

@@ -31,7 +31,7 @@ from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
-from kedi.agent_adapter._schema import output_field_metadata
+from kedi.agent_adapter._schema import _portable_output_json_schema, output_field_metadata
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
@@ -365,6 +365,47 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         PydanticAdapter.type_builder({})
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("template"))
+
+
+@pytest.mark.parametrize(
+    "builder",
+    (
+        PydanticAdapter.type_builder,
+        LangChainAdapter.type_builder,
+        ClaudeAdapter.type_builder,
+        CodexAdapter.type_builder,
+    ),
+)
+def test_adapter_output_models_use_portable_fixed_tuple_schema(builder: Any) -> None:
+    model = builder({"pair": tuple[int, int]})
+    pair_schema = model.model_json_schema()["properties"]["pair"]
+
+    assert "prefixItems" not in pair_schema
+    assert pair_schema["items"] == {"type": "integer"}
+    assert pair_schema["minItems"] == pair_schema["maxItems"] == 2
+    assert model.model_validate({"pair": [3, 5]}).pair == (3, 5)
+
+    mixed_schema = builder({"pair": tuple[int, str]}).model_json_schema()["properties"]["pair"]
+    assert mixed_schema["items"] == {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+    empty_schema = builder({"pair": tuple[()]}).model_json_schema()["properties"]["pair"]
+    assert "prefixItems" not in empty_schema
+    assert empty_schema["minItems"] == empty_schema["maxItems"] == 0
+
+
+def test_portable_output_schema_handles_empty_and_predefined_tuple_items() -> None:
+    schema = {
+        "empty": {"prefixItems": []},
+        "predefined": {
+            "prefixItems": [{"type": "integer"}],
+            "items": {"type": "number"},
+        },
+    }
+
+    _portable_output_json_schema(schema)
+
+    assert schema["empty"] == {"items": {}}
+    assert schema["predefined"] == {"items": {"type": "number"}}
 
 
 def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
@@ -3099,14 +3140,16 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
         CodexAdapter.type_builder,
     ],
 )
-def test_structured_output_builders_preserve_annotated_descriptions(
+def test_structured_output_builders_only_use_explicit_annotated_descriptions(
     builder: Any,
 ) -> None:
     output_type = builder({"answer": Annotated[str, "Documented answer"]})
+    undocumented_output_type = builder({"answer": str})
 
     assert output_type.model_json_schema()["properties"]["answer"]["description"] == (
         "Documented answer"
     )
+    assert "description" not in undocumented_output_type.model_json_schema()["properties"]["answer"]
 
 
 def test_dspy_adapter_reuses_existing_global_lm(

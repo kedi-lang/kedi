@@ -27,12 +27,11 @@ from ...agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
 )
-from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_definition
+from .._schema import build_output_model
 from ..approval import ApprovalPolicy, ToolRisk
 from ..codemode import CodeModeError, CodeModeLimits
 from ..codemode.tool_specs import (
@@ -150,12 +149,7 @@ class LangChainAdapter:
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
-        if not output_schema:
-            raise ValueError("Output schema cannot be empty.")
-        field_definitions = {
-            field: output_field_definition(type_) for field, type_ in output_schema.items()
-        }
-        return build_dynamic_model("_OutputModel", BaseModel, field_definitions)
+        return build_output_model(output_schema)
 
     async def produce(
         self,

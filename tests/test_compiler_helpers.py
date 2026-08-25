@@ -221,9 +221,14 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     broken_rt = KediRuntime()
     cast(Any, broken_rt)._current_env = RaisingCurrentEnv()
     assert build_python_env(broken_rt, {"local": 1})["local"] == 1
-    assert "List" in build_type_env(broken_rt, None)
-    assert "Protocol" not in build_type_env(broken_rt, None)
-    assert "Generic" not in build_type_env(broken_rt, None)
+    type_env = build_type_env(broken_rt, None)
+    assert type_env["__builtins__"] is builtins.__dict__
+    assert "builtins" not in type_env
+    assert "typing" not in type_env
+    assert "typing_extensions" not in type_env
+    assert "List" in type_env
+    assert "Protocol" not in type_env
+    assert "Generic" not in type_env
     assert build_type_env(broken_rt, None)["datetime"].__name__ == "datetime"
     assert build_type_env(broken_rt, None)["date"].__name__ == "date"
     assert build_type_env(broken_rt, None)["time"].__name__ == "time"

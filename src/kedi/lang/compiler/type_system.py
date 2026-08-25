@@ -12,10 +12,11 @@ that pass legacy annotations; in that mode it falls back to
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import shlex
-from typing import Annotated, Any, Optional, Union, get_args, get_origin
+from typing import Annotated, Any, Optional, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -34,6 +35,20 @@ from ..ast import (
 )
 from ..type_introspection import make_type_init
 from .environment import build_type_env
+
+UNSUPPORTED_KEDI_TYPE_NAMES = frozenset(
+    {
+        "Iterable",
+        "Mapping",
+        "Sequence",
+        "Tuple",
+        "bytearray",
+        "object",
+        "range",
+        "slice",
+        "tuple",
+    }
+)
 
 # ---------------------------------------------------------------------
 # TypeExpr resolution
@@ -65,9 +80,13 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         # "unresolvable" sentinel and make any Optional-style annotation look unresolved.
         if expr.name == "None":
             return type(None)
+        if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES:
+            return None
         return _lookup_name(rt, expr.name, type_env)
 
     if isinstance(expr, TypeApply):
+        if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES:
+            return None
         base = _lookup_name(rt, expr.name, type_env)
         if base is None:
             return None
@@ -207,6 +226,9 @@ class KediType:
         annotation raises instead of silently degrading to ``str``."""
         if self.is_none():
             return None
+        unsupported = self._unsupported_type_name()
+        if unsupported is not None:
+            raise KediTypeExecutionError(f"Unsupported type annotation {unsupported}")
         resolved = self.resolve(rt, env)
         if resolved is None:
             raise KediTypeExecutionError(f"Unknown type annotation {self!s}")
@@ -260,10 +282,17 @@ class KediType:
 
     # ---- legacy fallback ----
 
+    def _unsupported_type_name(self) -> Optional[str]:
+        if self._expr is not None:
+            return _unsupported_type_name_from_expr(self._expr)
+        return _unsupported_type_name_from_legacy(cast(str, self._legacy_str))
+
     def _legacy_resolve(self, rt: KediRuntime, env: dict[str, Any] | None) -> Optional[Any]:
         """Resolve a raw annotation string via ``eval``."""
         annotation = (self._legacy_str or "").strip()
         if not annotation:
+            return None
+        if _unsupported_type_name_from_legacy(annotation) is not None:
             return None
         # Backtick-wrapped legacy strings (``[x: `Optional[int]`]``).
         if (
@@ -283,6 +312,40 @@ class KediType:
             return rt.executor.evaluate_type_expression(rt, annotation, type_env)
         except Exception:
             return None
+
+
+def _unsupported_type_name_from_expr(expr: Optional[TypeExpr]) -> Optional[str]:
+    if expr is None:
+        return None
+    if isinstance(expr, (TypeRef, TypeApply)):
+        if expr.name in UNSUPPORTED_KEDI_TYPE_NAMES:
+            return expr.name
+        if isinstance(expr, TypeApply):
+            for arg in expr.args:
+                unsupported = _unsupported_type_name_from_expr(arg)
+                if unsupported is not None:
+                    return unsupported
+    elif isinstance(expr, TypeUnion):
+        return _unsupported_type_name_from_expr(expr.left) or _unsupported_type_name_from_expr(
+            expr.right
+        )
+    return None
+
+
+def _unsupported_type_name_from_legacy(annotation: str) -> Optional[str]:
+    expression = annotation.strip("`").strip()
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return None
+    return next(
+        (
+            node.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and node.id in UNSUPPORTED_KEDI_TYPE_NAMES
+        ),
+        None,
+    )
 
 
 def _typeexpr_to_str(e: Optional[TypeExpr]) -> str:

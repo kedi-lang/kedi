@@ -947,8 +947,16 @@ class KediRuntime:
             # model + validate — all inside the captured context so profile/tools are correct.
             resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
             instruction = (
-                "The template string must maintain grammatical and semantic integrity once the output fields are substituted into"
-                " their corresponding locations in the template after the final construction.\n"
+                "Fill each unescaped [name] or [name: type] output field with only that field's "
+                "replacement value; never return the completed template as a field value. "
+                "Escaped square brackets are literal text, not output fields; for example, "
+                "\\[ok\\] represents the literal text [ok]. "
+                "A replacement value may itself contain delimiters; include them when the template "
+                "explicitly requests them. Preserve literal values already present in the template "
+                "exactly; do not replace or invent them. Use relevant tools before filling fields "
+                "that depend on them. After obtaining a sufficient tool result, return the output "
+                "fields without repeating the call. The template must remain grammatically and "
+                "semantically coherent after substitution.\n"
             )
             question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
