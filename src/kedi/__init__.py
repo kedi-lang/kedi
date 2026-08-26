@@ -60,7 +60,8 @@ from .executors.debug import (
     MarkdownDebugExporter,
     default_debug_export_path,
 )
-from .interactive_session import InteractiveSession
+from .interactive_session import InteractiveSession, dump_session, load_session
+from ._interactive import SessionDumpError, SessionLoadError, SessionPersistenceError
 from .errors import LoopIterationLimitError
 from .promise import KediPromise, KediPromiseLeak, force
 
@@ -118,6 +119,11 @@ __all__ = [
     "KediRuntime",
     "LoopIterationLimitError",
     "InteractiveSession",
+    "dump_session",
+    "load_session",
+    "SessionDumpError",
+    "SessionLoadError",
+    "SessionPersistenceError",
     "force",
     "KediPromise",
     "KediPromiseLeak",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, cast
+import json
 
 import pytest
 
@@ -11,6 +12,7 @@ from kedi.errors import KediExecutionError
 from kedi.executors.base import Executor
 from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.lang.parser import parse_program
+from kedi._interactive import persistence as persistence_module
 from tests.mock_adapter import MockAdapter
 
 
@@ -62,7 +64,7 @@ def read_value():
 def test_interactive_session_preserves_types_across_fragments() -> None:
     with kedi.interactive() as session:
         session.execute("~Person(name: str, age: int)")
-        person = session.execute('= `Person(name="Ada", age=42)`')
+        person = cast(Any, session.execute('= `Person(name="Ada", age=42)`'))
 
     assert person.name == "Ada"
     assert person.age == 42
@@ -263,3 +265,174 @@ def test_interactive_session_rejects_package_metadata_after_parsing() -> None:
                 "> package: demo:\n  version: 1.0",
                 source_name="package.kedi",
             )
+
+
+def test_interactive_session_dump_load_restores_values_types_and_procedures_without_replay(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "marker.txt"
+    snapshot = tmp_path / "session.kedi-state"
+    source = f"""
+`open({str(marker)!r}, "a").write("executed\\n")`
+~Person(name: str, age: int)
+
+@double(value: int) -> int:
+  = `value * 2`
+
+[value: int] = `20`
+[person: Person] = `Person(name="Ada", age=2)`
+[data: dict[str, list[int]]] = `{{"items": [1, 2, 3]}}`
+""".strip()
+
+    with kedi.interactive() as session:
+        session.execute(source, source_name="setup.kedi")
+        assert session.dump(snapshot) == snapshot
+
+    with kedi.InteractiveSession.load(snapshot) as restored:
+        assert restored.execute("= `double(value) + person.age`") == 42
+        assert restored.execute('= `data["items"]`') == [1, 2, 3]
+
+    assert marker.read_text(encoding="utf-8") == "executed\n"
+
+
+def test_interactive_session_dump_load_preserves_active_profile(tmp_path: Path) -> None:
+    snapshot = tmp_path / "profile.kedi-state"
+    with kedi.interactive(adapter=MockAdapter()) as session:
+        session.execute("> model: retained-model")
+        session.dump(snapshot)
+
+    adapter = MockAdapter()
+    with kedi.InteractiveSession.load(snapshot, adapter=adapter) as restored:
+        assert restored.execute(">> The result is [answer].\n= `answer`") == "answer-value"
+
+    assert adapter.model_calls == ["retained-model"]
+
+
+def test_public_session_factories_round_trip_with_custom_session_type(
+    tmp_path: Path,
+) -> None:
+    class CustomInteractiveSession(kedi.InteractiveSession):
+        pass
+
+    snapshot = tmp_path / "public-api.kedi-state"
+    with kedi.interactive() as session:
+        session.execute("[value: int] = `42`")
+        assert kedi.dump_session(session, snapshot) == snapshot
+
+    with kedi.load_session(
+        snapshot,
+        session_type=CustomInteractiveSession,
+    ) as restored:
+        assert type(restored) is CustomInteractiveSession
+        assert restored.execute("= `value`") == 42
+
+    load = cast(Any, kedi.load_session)
+    with pytest.raises(TypeError, match="positional"):
+        load(snapshot, CustomInteractiveSession)
+
+
+def test_interactive_session_dump_preserves_state_committed_before_execution_failure(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "failed-fragment.kedi-state"
+    with kedi.interactive() as session:
+        with pytest.raises(KediExecutionError, match="division by zero"):
+            session.execute("[saved: int] = `7`\n= `1 / 0`")
+        session.dump(snapshot)
+
+    with kedi.InteractiveSession.load(snapshot) as restored:
+        assert restored.execute("= `saved`") == 7
+
+
+def test_interactive_session_dump_rejects_all_unsupported_state_atomically(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "existing.kedi-state"
+    snapshot.write_text("previous", encoding="utf-8")
+    shared: list[int] = []
+
+    with kedi.interactive(
+        env={"callback": lambda: None, "left": shared, "right": shared}
+    ) as session:
+        assert session._conversation_state is not None
+        session._conversation_state.record_exchange("hello", "world")
+        with pytest.raises(kedi.SessionDumpError) as info:
+            session.dump(snapshot)
+
+    rendered = str(info.value)
+    assert "environment['callback']" in rendered
+    assert "shared or cyclic object" in rendered
+    assert "conversation contains portable turns" in rendered
+    assert snapshot.read_text(encoding="utf-8") == "previous"
+    assert not tuple(tmp_path.glob(".existing.kedi-state.*.tmp"))
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("```\nvalue = 1\n```", "inline Python prelude"),
+        ("> import: helper", "imports modules"),
+        ("~Value(count: int = `1`)", "executable defaults"),
+    ],
+)
+def test_interactive_session_dump_rejects_fragments_that_require_reexecution(
+    tmp_path: Path,
+    source: str,
+    expected: str,
+) -> None:
+    if source.startswith("> import"):
+        (tmp_path / "helper.kedi").write_text(
+            "[answer: int] = `42`\n\n> export:\n  answer\n",
+            encoding="utf-8",
+        )
+    with kedi.interactive(cwd=tmp_path) as session:
+        session.execute(source)
+        with pytest.raises(kedi.SessionDumpError, match=expected):
+            session.dump(tmp_path / "rejected.kedi-state")
+
+
+def test_interactive_session_load_rejects_modified_snapshot(tmp_path: Path) -> None:
+    snapshot = tmp_path / "session.kedi-state"
+    with kedi.interactive() as session:
+        session.execute("[value: int] = `42`")
+        session.dump(snapshot)
+
+    document = json.loads(snapshot.read_text(encoding="utf-8"))
+    document["payload"]["cell_number"] = 999
+    snapshot.write_text(json.dumps(document), encoding="utf-8")
+
+    with pytest.raises(kedi.SessionLoadError, match="integrity check"):
+        kedi.InteractiveSession.load(snapshot)
+
+
+def test_interactive_session_dump_publish_is_atomic_on_replace_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = tmp_path / "session.kedi-state"
+    snapshot.write_text("previous", encoding="utf-8")
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(persistence_module.os, "replace", fail_replace)
+    with kedi.interactive() as session:
+        session.execute("[value: int] = `42`")
+        with pytest.raises(OSError, match="replace failed"):
+            session.dump(snapshot)
+
+    assert snapshot.read_text(encoding="utf-8") == "previous"
+    assert not tuple(tmp_path.glob(".session.kedi-state.*.tmp"))
+
+
+def test_interactive_session_dump_rejects_execution_and_closed_session(tmp_path: Path) -> None:
+    session = kedi.interactive()
+    session._execute_lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="while it is executing"):
+            session.dump(tmp_path / "busy.kedi-state")
+    finally:
+        session._execute_lock.release()
+    session.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        session.dump(tmp_path / "closed.kedi-state")

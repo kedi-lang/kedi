@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import os
 import platform
+import secrets
+import shlex
 import sys
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, TextIO
 
@@ -23,6 +26,7 @@ BEGIN_MARKER = "+++"
 CONTINUATION_MARKER = "..."
 IDLE_BANNER = " /\\_/\\\n( o.o )\n > ^ <"
 _EXIT_COMMAND = ":exit"
+_DUMP_COMMAND = ":dump"
 _HELP_COMMANDS = frozenset({"help", "help()"})
 _SHOW_COMMAND = ":show"
 
@@ -38,6 +42,7 @@ class IdleConsole:
         stdout: TextIO = sys.stdout,
         stderr: TextIO = sys.stderr,
         input_reader: Callable[[str], str] | None = None,
+        session_path: str | Path | None = None,
     ) -> None:
         self._session = session
         self._stdin = stdin
@@ -46,6 +51,9 @@ class IdleConsole:
         self._input_reader = input_reader or input
         self._buffer: list[str] = []
         self._exit_requested = False
+        self._session_path = (
+            None if session_path is None else Path(session_path).expanduser().resolve()
+        )
 
     @property
     def prompt(self) -> str:
@@ -77,6 +85,12 @@ class IdleConsole:
             return False
         if stripped == _EXIT_COMMAND:
             self._exit_requested = True
+            return False
+        if stripped == _DUMP_COMMAND:
+            self.dump()
+            return False
+        if stripped.startswith(f"{_DUMP_COMMAND} "):
+            self._stderr.write("Usage: :dump\n")
             return False
         if stripped in _HELP_COMMANDS:
             self._write_help()
@@ -110,6 +124,21 @@ class IdleConsole:
                 break
             self.push(line)
 
+    def dump(self) -> Path | None:
+        """Persist the current session and print the command that resumes it."""
+        path = self._session_path or _default_session_path()
+        try:
+            dumped = self._session.dump(path).resolve()
+        except Exception as exc:
+            self._stderr.write(f"Session dump failed:\n{exc}\n")
+            return None
+        self._session_path = dumped
+        self._stdout.write(f"Session dumped to {dumped}\n")
+        self._stdout.write(
+            f"To resume session, run -- kedi --idle --load {shlex.quote(str(dumped))}\n"
+        )
+        return dumped
+
     def _execute(self, source: str) -> None:
         try:
             with redirect_stdout(self._stdout), redirect_stderr(self._stderr):
@@ -130,6 +159,7 @@ class IdleConsole:
         self._stdout.write(
             f"{IDLE_BANNER}\nKedi {__version__} on {platform.system().lower()}\n"
             'Type "help" for interactive help, ":show" to inspect a value, '
+            '":dump" to save, '
             'or ":exit" to leave.\n'
         )
 
@@ -138,7 +168,7 @@ class IdleConsole:
             f"Enter a complete Kedi fragment at {BEGIN_MARKER}. Compound blocks "
             f"continue at {CONTINUATION_MARKER}; press Tab to indent and submit an "
             "empty line to run them. Use :show <expression> to inspect a value. "
-            "Use :exit, Ctrl+C, or Ctrl+D to exit.\n"
+            "Use :dump to save the session. Use :exit, Ctrl+C, or Ctrl+D to exit.\n"
         )
 
     def _use_color(self) -> bool:
@@ -193,6 +223,12 @@ def _history_path() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".kedi_history"
 
 
+def _default_session_path() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    suffix = secrets.token_hex(4)
+    return Path.home() / ".kedi" / "sessions" / f"idle-{timestamp}-{suffix}.kedi-state"
+
+
 def _configure_readline() -> Callable[[], None]:
     try:
         import readline
@@ -217,14 +253,31 @@ def _configure_readline() -> Callable[[], None]:
     return save_history
 
 
-def run_idle(*, adapter: str, model: str) -> int:
+def run_idle(
+    *,
+    adapter: str,
+    model: str,
+    record: bool = False,
+    load_path: str | Path | None = None,
+) -> int:
     """Run a terminal Kedi session with Python-style prompts."""
     from .api import interactive
+    from .interactive_session import load_session
 
     save_history = _configure_readline()
     try:
-        with interactive(adapter=adapter, model=model) as session:
-            IdleConsole(session).interact()
+        session = (
+            load_session(load_path)
+            if load_path is not None
+            else interactive(adapter=adapter, model=model)
+        )
+        with session as active_session:
+            console = IdleConsole(active_session, session_path=load_path)
+            try:
+                console.interact()
+            finally:
+                if record or load_path is not None:
+                    console.dump()
     finally:
         save_history()
     return 0

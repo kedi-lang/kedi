@@ -2427,11 +2427,87 @@ with kedi.interactive(cwd="examples/cells") as session:
     )
 ```
 
-The initial execution model is synchronous, non-durable, and intentionally
-non-transactional. State and external side effects completed before an error
-remain visible, while the failed fragment is never retried automatically. A
-session rejects concurrent or re-entrant `execute()` calls and cannot execute
-after `close()`.
+The execution model is synchronous and intentionally non-transactional. State
+and external side effects completed before an error remain visible, while the
+failed fragment is never retried automatically. A session rejects concurrent
+or re-entrant `execute()` calls and cannot execute after `close()`.
+
+#### Durable Session Snapshots
+
+`kedi.dump_session(session, path)` persists a complete, pickle-free snapshot
+when every part of the logical session state can be restored without replaying
+executable fragments. `kedi.load_session(path)` recompiles source-backed
+declarations, restores their native values, and continues with the next cell.
+The corresponding `InteractiveSession.dump()` and
+`InteractiveSession.load()` methods expose the same operations:
+
+```python
+from pathlib import Path
+
+import kedi
+
+
+snapshot = Path("work.kedi-state")
+with kedi.interactive() as session:
+    session.execute("[base: int] = `40`")
+    session.execute(
+        """
+@add_two() -> int:
+    = `base + 2`
+""".strip()
+    )
+    kedi.dump_session(session, snapshot)
+
+with kedi.load_session(snapshot) as session:
+    assert session.execute("= `add_two()`") == 42
+```
+
+Snapshots are strict and all-or-nothing. Before touching the destination,
+`dump()` validates every fragment, environment binding, active profile,
+conversation, and artifact boundary. If any value is not portable,
+`SessionDumpError` lists the rejected state and no partial snapshot is
+published. An existing destination remains unchanged. Successful writes use a
+same-directory temporary file, `fsync`, and atomic replacement with mode
+`0600`.
+
+The value codec preserves scalar values, bytes, complex and decimal numbers,
+UUIDs, dates and times, paths, regular expressions, lists, tuples, sets,
+frozen sets, dictionaries with typed keys, and instances of source-backed Kedi
+types. Procedure, type, and profile definitions are rebuilt from the source
+stored in the snapshot. Fragment source digests and a document integrity hash
+are verified during load. Snapshot format and Kedi versions must match.
+
+The following state is rejected rather than silently dropped or changed:
+
+- arbitrary Python callables, classes, generators, file/socket handles,
+  threads, locks, tasks, futures, and unknown object instances;
+- shared or cyclic mutable object graphs whose identity would be lost;
+- dynamic approval handlers, process-bound tool/profile bindings, active
+  artifacts, conversation turns, and adapter-native continuation state;
+- imports and inline Python preludes, because rebuilding them would rerun
+  module or Python initialization;
+- runtime-scoped procedure/type declarations and type defaults that require
+  Python execution.
+
+Adapters and executors are infrastructure rather than serialized state. Pass
+them explicitly when restoring a snapshot that needs them:
+
+```python
+session = kedi.load_session(
+    "work.kedi-state",
+    adapter=adapter,
+    executor=executor,
+)
+```
+
+`load_session()` also accepts a keyword-only `session_type=` factory, which
+defaults to `InteractiveSession`. Pass an `InteractiveSession` subclass when
+the restored object needs application-specific session behavior.
+
+`dump()` also rejects an executing or closed session. Loading never executes
+the old top-level assignments, template calls, tool calls, or other side
+effects; only source-backed declarations are compiled before saved values are
+installed.
 
 Interactive fragments do not accept package metadata, export directives, or
 `@test`/`@eval` suites. Those constructs describe whole files or package/test
@@ -2449,7 +2525,7 @@ $ kedi --idle
 ( o.o )
  > ^ <
 Kedi 0.4.0 on darwin
-Type "help" for interactive help, ":show" to inspect a value, or ":exit" to leave.
+Type "help" for interactive help, ":show" to inspect a value, ":dump" to save, or ":exit" to leave.
 +++ [base: int] = `40`
 +++ @add_two() -> int:
 ...     = `base + 2`
@@ -2471,6 +2547,26 @@ prints its value. For example, `:show <name>` renders a substitution, while
 ``:show `value` `` inspects a native Python/Kedi value. This keeps forbidden
 top-level substitutions out of normal `.kedi` files.
 
+`:dump` atomically saves the current interactive session. The first dump uses
+an automatically generated path under `~/.kedi/sessions`; later dumps in the
+same process update that path. On success the REPL prints the exact command for
+resuming the snapshot:
+
+```console
+To resume session, run -- kedi --idle --load <session_path>
+```
+
+Start with `--record` to dump automatically before the process leaves through
+`:exit`, `Ctrl+C`, `Ctrl+D`, or a `SystemExit` raised by inline Python. The dump
+happens before session resources close, and a `SystemExit` status is preserved.
+`--load <session_path>` restores the session and keeps recording subsequent
+changes back to the same snapshot:
+
+```bash
+kedi --idle --record
+kedi --idle --load ~/.kedi/sessions/idle-20260826T120000-ab12cd34.kedi-state
+```
+
 Top-level results use `repr()` so native values remain visible without changing
 their runtime semantics. `:exit` is the only textual exit command; Python's
 `exit()` and `quit()` calls have no special meaning. `Ctrl+C` exits silently,
@@ -2479,6 +2575,7 @@ Readline history is stored in `~/.kedi_history`; set `KEDI_HISTORY` to
 choose another path. Adapter selection remains available through
 `--adapter` and `--adapter-model`. Interactive mode does not accept a source
 file, `-c/--command`, program arguments, or test/eval/optimization modes.
+`--record` and `--load` are valid only with `--idle`.
 
 For a dynamic policy, decorate a Python handler and return one explicit
 decision. The decorator registers it as the default policy. Kedi passes an

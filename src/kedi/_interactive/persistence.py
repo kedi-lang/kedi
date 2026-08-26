@@ -1,0 +1,569 @@
+"""Strict, pickle-free persistence for :class:`kedi.InteractiveSession`."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import math
+import os
+import re
+import tempfile
+from dataclasses import fields
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any, Mapping
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from .._version import __version__
+from ..agent_adapter.approval import ApprovalPolicy
+from ..agent_profile import AgentProfile
+from ..agent_profile.codemode import CodeModeSettings
+from ..agent_profile.compaction import CompactionSettings
+from ..agent_profile.mcp import McpServerSpec
+from ..agent_profile.skills import SkillsSettings
+from ..artifacts import ArtifactPolicy
+
+SNAPSHOT_FORMAT = "kedi.interactive-session"
+SNAPSHOT_FORMAT_VERSION = 1
+MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+MAX_VALUE_DEPTH = 100
+_TAG = "$kedi"
+_PATTERN_TYPE = type(re.compile(""))
+
+
+class SessionPersistenceError(RuntimeError):
+    """Base class for strict interactive-session persistence failures."""
+
+
+class SessionDumpError(SessionPersistenceError):
+    """The complete logical session state cannot be persisted."""
+
+    def __init__(self, issues: list[str] | tuple[str, ...]) -> None:
+        self.issues = tuple(issues)
+        rendered = "\n".join(f"- {issue}" for issue in self.issues)
+        super().__init__(f"Interactive session cannot be dumped:\n{rendered}")
+
+
+class SessionLoadError(SessionPersistenceError):
+    """A session snapshot is invalid, incompatible, or cannot be restored."""
+
+
+class UnsupportedSessionValue(TypeError):
+    """One value cannot be represented without changing its semantics."""
+
+    def __init__(self, path: str, value: object, reason: str | None = None) -> None:
+        logical_type = f"{type(value).__module__}.{type(value).__qualname__}"
+        detail = f" ({reason})" if reason else ""
+        super().__init__(f"{path}: unsupported {logical_type}{detail}")
+
+
+class SessionValueEncoder:
+    """Encode a conservative, type-preserving Python value subset as JSON data."""
+
+    def __init__(self, *, kedi_models: Mapping[type[BaseModel], str]) -> None:
+        self._kedi_models = dict(kedi_models)
+        self._seen: dict[int, str] = {}
+
+    def encode(self, value: Any, *, path: str = "value", depth: int = 0) -> Any:
+        if depth > MAX_VALUE_DEPTH:
+            raise UnsupportedSessionValue(path, value, "maximum nesting depth exceeded")
+        if value is None or isinstance(value, (bool, int, str)):
+            return value
+        if isinstance(value, float):
+            if math.isfinite(value):
+                return value
+            return {_TAG: "float", "value": repr(value)}
+        if isinstance(value, bytes):
+            return {_TAG: "bytes", "data": base64.b64encode(value).decode("ascii")}
+        if isinstance(value, complex):
+            return {_TAG: "complex", "real": repr(value.real), "imag": repr(value.imag)}
+        if isinstance(value, Decimal):
+            return {_TAG: "decimal", "value": str(value)}
+        if isinstance(value, UUID):
+            return {_TAG: "uuid", "value": str(value)}
+        if isinstance(value, datetime):
+            return {_TAG: "datetime", "value": value.isoformat(), "fold": value.fold}
+        if isinstance(value, date):
+            return {_TAG: "date", "value": value.isoformat()}
+        if isinstance(value, time):
+            return {_TAG: "time", "value": value.isoformat(), "fold": value.fold}
+        if isinstance(value, timedelta):
+            return {
+                _TAG: "timedelta",
+                "days": value.days,
+                "seconds": value.seconds,
+                "microseconds": value.microseconds,
+            }
+        if isinstance(value, Path):
+            return {_TAG: "path", "value": str(value)}
+        if isinstance(value, _PATTERN_TYPE):
+            return {_TAG: "regex", "pattern": value.pattern, "flags": value.flags}
+
+        next_depth = depth + 1
+        if type(value) is list:
+            self._claim_identity(value, path)
+            return {
+                _TAG: "list",
+                "items": [
+                    self.encode(item, path=f"{path}[{index}]", depth=next_depth)
+                    for index, item in enumerate(value)
+                ],
+            }
+        if type(value) is tuple:
+            return {
+                _TAG: "tuple",
+                "items": [
+                    self.encode(item, path=f"{path}[{index}]", depth=next_depth)
+                    for index, item in enumerate(value)
+                ],
+            }
+        if type(value) in (set, frozenset):
+            if type(value) is set:
+                self._claim_identity(value, path)
+            items = [
+                self.encode(item, path=f"{path}[{index}]", depth=next_depth)
+                for index, item in enumerate(value)
+            ]
+            items.sort(key=_canonical_json)
+            return {
+                _TAG: "frozenset" if type(value) is frozenset else "set",
+                "items": items,
+            }
+        if type(value) is dict:
+            self._claim_identity(value, path)
+            return {
+                _TAG: "dict",
+                "items": [
+                    [
+                        self.encode(key, path=f"{path}.<key>", depth=next_depth),
+                        self.encode(item, path=f"{path}[{key!r}]", depth=next_depth),
+                    ]
+                    for key, item in value.items()
+                ],
+            }
+        if isinstance(value, BaseModel):
+            self._claim_identity(value, path)
+            model_name = self._kedi_models.get(type(value))
+            if model_name is None:
+                raise UnsupportedSessionValue(
+                    path,
+                    value,
+                    "only source-backed Kedi models can be restored",
+                )
+            model_fields = type(value).model_fields
+            return {
+                _TAG: "kedi_model",
+                "name": model_name,
+                "fields": {
+                    name: self.encode(
+                        getattr(value, name),
+                        path=f"{path}.{name}",
+                        depth=next_depth,
+                    )
+                    for name in model_fields
+                },
+            }
+        raise UnsupportedSessionValue(path, value)
+
+    def _claim_identity(self, value: object, path: str) -> None:
+        value_id = id(value)
+        previous = self._seen.get(value_id)
+        if previous is not None:
+            raise UnsupportedSessionValue(
+                path,
+                value,
+                f"shared or cyclic object also appears at {previous}",
+            )
+        self._seen[value_id] = path
+
+
+class SessionValueDecoder:
+    """Decode only the fixed value tags owned by Kedi."""
+
+    def __init__(self, *, kedi_models: Mapping[str, type[BaseModel]]) -> None:
+        self._kedi_models = dict(kedi_models)
+
+    def decode(self, encoded: Any, *, path: str = "value", depth: int = 0) -> Any:
+        if depth > MAX_VALUE_DEPTH:
+            raise SessionLoadError(f"{path}: maximum nesting depth exceeded")
+        if encoded is None or isinstance(encoded, (bool, int, float, str)):
+            return encoded
+        if not isinstance(encoded, dict) or not isinstance(encoded.get(_TAG), str):
+            raise SessionLoadError(f"{path}: invalid encoded session value")
+        tag = encoded[_TAG]
+        next_depth = depth + 1
+        try:
+            if tag == "float":
+                return float(encoded["value"])
+            if tag == "bytes":
+                return base64.b64decode(encoded["data"], validate=True)
+            if tag == "complex":
+                return complex(float(encoded["real"]), float(encoded["imag"]))
+            if tag == "decimal":
+                return Decimal(encoded["value"])
+            if tag == "uuid":
+                return UUID(encoded["value"])
+            if tag == "datetime":
+                return datetime.fromisoformat(encoded["value"]).replace(fold=encoded["fold"])
+            if tag == "date":
+                return date.fromisoformat(encoded["value"])
+            if tag == "time":
+                return time.fromisoformat(encoded["value"]).replace(fold=encoded["fold"])
+            if tag == "timedelta":
+                return timedelta(
+                    days=encoded["days"],
+                    seconds=encoded["seconds"],
+                    microseconds=encoded["microseconds"],
+                )
+            if tag == "path":
+                return Path(encoded["value"])
+            if tag == "regex":
+                return re.compile(encoded["pattern"], encoded["flags"])
+            if tag in {"list", "tuple", "set", "frozenset"}:
+                items = [
+                    self.decode(item, path=f"{path}[{index}]", depth=next_depth)
+                    for index, item in enumerate(encoded["items"])
+                ]
+                if tag == "list":
+                    return items
+                if tag == "tuple":
+                    return tuple(items)
+                if tag == "set":
+                    return set(items)
+                return frozenset(items)
+            if tag == "dict":
+                result: dict[Any, Any] = {}
+                for index, pair in enumerate(encoded["items"]):
+                    if not isinstance(pair, list) or len(pair) != 2:
+                        raise SessionLoadError(f"{path}: invalid encoded dict entry")
+                    key = self.decode(pair[0], path=f"{path}.<key:{index}>", depth=next_depth)
+                    if key in result:
+                        raise SessionLoadError(f"{path}: duplicate decoded dict key {key!r}")
+                    result[key] = self.decode(
+                        pair[1],
+                        path=f"{path}[{key!r}]",
+                        depth=next_depth,
+                    )
+                return result
+            if tag == "kedi_model":
+                name = encoded["name"]
+                model = self._kedi_models.get(name)
+                if model is None:
+                    raise SessionLoadError(f"{path}: unknown source-backed Kedi model {name!r}")
+                values = {
+                    name: self.decode(value, path=f"{path}.{name}", depth=next_depth)
+                    for name, value in encoded["fields"].items()
+                }
+                return model.model_validate(values)
+        except SessionLoadError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SessionLoadError(f"{path}: invalid {tag!r} session value: {exc}") from exc
+        raise SessionLoadError(f"{path}: unknown session value tag {tag!r}")
+
+
+def encode_profile(
+    profile: AgentProfile,
+    *,
+    encoder: SessionValueEncoder,
+    model_names: Mapping[type[BaseModel], str],
+    path: str,
+) -> dict[str, Any]:
+    if profile.tool_bindings:
+        raise UnsupportedSessionValue(path + ".tool_bindings", profile.tool_bindings)
+    if profile.subagent_bindings:
+        raise UnsupportedSessionValue(path + ".subagent_bindings", profile.subagent_bindings)
+    if profile.approval is not None and profile.approval.handler is not None:
+        raise UnsupportedSessionValue(
+            path + ".approval",
+            profile.approval.handler,
+            "dynamic approval handlers are process-local",
+        )
+    output_type: dict[str, str] | None = None
+    if profile.output_type is not None:
+        builtin_types = {
+            bool: "bool",
+            bytes: "bytes",
+            complex: "complex",
+            dict: "dict",
+            float: "float",
+            frozenset: "frozenset",
+            int: "int",
+            list: "list",
+            set: "set",
+            str: "str",
+        }
+        if profile.output_type in builtin_types:
+            output_type = {"kind": "builtin", "name": builtin_types[profile.output_type]}
+        elif profile.output_type in model_names:
+            output_type = {"kind": "kedi", "name": model_names[profile.output_type]}
+        else:
+            raise UnsupportedSessionValue(path + ".output_type", profile.output_type)
+
+    return {
+        "name": profile.name,
+        "model": profile.model,
+        "adapter_kind": profile.adapter_kind,
+        "adapter_shortname": profile.adapter_shortname,
+        "agent_command": list(profile.agent_command)
+        if isinstance(profile.agent_command, tuple)
+        else profile.agent_command,
+        "effort": profile.effort,
+        "system": profile.system,
+        "settings": encoder.encode(dict(profile.settings), path=path + ".settings"),
+        "tools": list(profile.tools),
+        "mcp_servers": [
+            {
+                "transport": server.transport,
+                "command": server.command,
+                "args": list(server.args),
+                "env": server.env,
+                "url": server.url,
+                "headers": server.headers,
+            }
+            for server in profile.mcp_servers
+        ],
+        "approval": None if profile.approval is None else {"mode": profile.approval.mode},
+        "skills": _encode_skills(profile.skills),
+        "subagents": list(profile.subagents),
+        "max_agents": profile.max_agents,
+        "workflow_mode": profile.workflow_mode,
+        "history": profile.history,
+        "compaction": _dataclass_values(profile.compaction),
+        "codemode": _dataclass_values(profile.codemode),
+        "output_type": output_type,
+        "artifacts": _encode_artifact_policy(profile.artifacts),
+    }
+
+
+def decode_profile(
+    encoded: Mapping[str, Any],
+    *,
+    decoder: SessionValueDecoder,
+    kedi_models: Mapping[str, type[BaseModel]],
+) -> AgentProfile:
+    output_type_data = encoded.get("output_type")
+    output_type: Any | None = None
+    if output_type_data is not None:
+        kind = output_type_data.get("kind")
+        name = output_type_data.get("name")
+        if kind == "builtin":
+            try:
+                output_type = {
+                    "bool": bool,
+                    "bytes": bytes,
+                    "complex": complex,
+                    "dict": dict,
+                    "float": float,
+                    "frozenset": frozenset,
+                    "int": int,
+                    "list": list,
+                    "set": set,
+                    "str": str,
+                }[name]
+            except KeyError as exc:
+                raise SessionLoadError(f"Unknown builtin output type {name!r}") from exc
+        elif kind == "kedi":
+            output_type = kedi_models.get(name)
+            if output_type is None:
+                raise SessionLoadError(f"Unknown Kedi output type {name!r}")
+        else:
+            raise SessionLoadError("Invalid profile output type")
+
+    command = encoded.get("agent_command")
+    if isinstance(command, list):
+        command = tuple(command)
+    approval_data = encoded.get("approval")
+    approval = None
+    if approval_data is not None:
+        mode = approval_data.get("mode")
+        approval = ApprovalPolicy(mode=mode)
+    return AgentProfile(
+        name=encoded.get("name"),
+        model=encoded.get("model"),
+        adapter_kind=encoded.get("adapter_kind"),
+        adapter_shortname=encoded.get("adapter_shortname"),
+        agent_command=command,
+        effort=encoded.get("effort"),
+        system=encoded.get("system"),
+        settings=decoder.decode(encoded["settings"], path="profile.settings"),
+        tools=tuple(encoded.get("tools", ())),
+        mcp_servers=tuple(_decode_mcp_server(item) for item in encoded.get("mcp_servers", ())),
+        approval=approval,
+        skills=_decode_skills(encoded.get("skills")),
+        subagents=tuple(encoded.get("subagents", ())),
+        max_agents=encoded.get("max_agents"),
+        workflow_mode=encoded.get("workflow_mode"),
+        history=encoded.get("history"),
+        compaction=_decode_dataclass(CompactionSettings, encoded.get("compaction")),
+        codemode=_decode_dataclass(CodeModeSettings, encoded.get("codemode")),
+        output_type=output_type,
+        artifacts=_decode_artifact_policy(encoded.get("artifacts")),
+    )
+
+
+def write_snapshot(path: str | Path, payload: Mapping[str, Any]) -> Path:
+    destination = Path(path).expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+    document = {
+        "format": SNAPSHOT_FORMAT,
+        "format_version": SNAPSHOT_FORMAT_VERSION,
+        "kedi_version": __version__,
+        "digest": digest,
+        "payload": payload,
+    }
+    rendered = (_canonical_json(document) + "\n").encode("utf-8")
+    if len(rendered) > MAX_SNAPSHOT_BYTES:
+        raise SessionDumpError(
+            [f"snapshot is {len(rendered)} bytes; limit is {MAX_SNAPSHOT_BYTES} bytes"]
+        )
+    _atomic_write(destination, rendered)
+    return destination
+
+
+def read_snapshot(path: str | Path) -> dict[str, Any]:
+    source = Path(path).expanduser()
+    try:
+        size = source.stat().st_size
+        if size > MAX_SNAPSHOT_BYTES:
+            raise SessionLoadError(
+                f"Interactive session snapshot exceeds {MAX_SNAPSHOT_BYTES} bytes"
+            )
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except SessionLoadError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise SessionLoadError(f"Cannot read interactive session snapshot: {exc}") from exc
+    if not isinstance(document, dict):
+        raise SessionLoadError("Interactive session snapshot root must be an object")
+    if document.get("format") != SNAPSHOT_FORMAT:
+        raise SessionLoadError("Not a Kedi interactive session snapshot")
+    if document.get("format_version") != SNAPSHOT_FORMAT_VERSION:
+        raise SessionLoadError(
+            f"Unsupported interactive session snapshot version {document.get('format_version')!r}"
+        )
+    if document.get("kedi_version") != __version__:
+        raise SessionLoadError(
+            "Interactive session snapshot was created by Kedi "
+            f"{document.get('kedi_version')!r}; current version is {__version__!r}"
+        )
+    payload = document.get("payload")
+    if not isinstance(payload, dict):
+        raise SessionLoadError("Interactive session snapshot payload must be an object")
+    digest = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+    if document.get("digest") != digest:
+        raise SessionLoadError("Interactive session snapshot integrity check failed")
+    return payload
+
+
+def _encode_skills(value: SkillsSettings | bool | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        value = SkillsSettings(enabled=value)
+    return {
+        "enabled": value.enabled,
+        "cwd": None if value.cwd is None else str(value.cwd),
+        "max_skills": value.max_skills,
+        "include_registry": value.include_registry,
+        "include_all": value.include_all,
+        "exclude_paths": [str(path) for path in value.exclude_paths],
+    }
+
+
+def _decode_skills(value: Mapping[str, Any] | None) -> SkillsSettings | None:
+    if value is None:
+        return None
+    return SkillsSettings(
+        enabled=value["enabled"],
+        cwd=None if value.get("cwd") is None else Path(value["cwd"]),
+        max_skills=value["max_skills"],
+        include_registry=value["include_registry"],
+        include_all=value["include_all"],
+        exclude_paths=tuple(Path(path) for path in value["exclude_paths"]),
+    )
+
+
+def _decode_mcp_server(value: Mapping[str, Any]) -> McpServerSpec:
+    values = dict(value)
+    values["args"] = tuple(values.get("args", ()))
+    return McpServerSpec(**values)
+
+
+def _encode_artifact_policy(value: ArtifactPolicy | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        item.name: (
+            sorted(value._specified_fields)
+            if item.name == "_specified_fields"
+            else str(getattr(value, item.name))
+            if item.name == "path"
+            else getattr(value, item.name)
+        )
+        for item in fields(value)
+    }
+
+
+def _decode_artifact_policy(value: Mapping[str, Any] | None) -> ArtifactPolicy | None:
+    if value is None:
+        return None
+    values = dict(value)
+    values["path"] = Path(values["path"])
+    values["_specified_fields"] = frozenset(values["_specified_fields"])
+    return ArtifactPolicy(**values)
+
+
+def _dataclass_values(
+    value: CompactionSettings | CodeModeSettings | bool | None,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        value = CodeModeSettings(enabled=value)
+    return {item.name: getattr(value, item.name) for item in fields(type(value))}
+
+
+def _decode_dataclass(cls: Any, value: Mapping[str, Any] | None) -> Any:
+    return None if value is None else cls(**value)
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    temporary: Path | None = None
+    fd: int | None = None
+    try:
+        fd, raw_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        temporary = Path(raw_path)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            fd = None
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        temporary = None
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

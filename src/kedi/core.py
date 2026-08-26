@@ -953,10 +953,8 @@ class KediRuntime:
                 "\\[ok\\] represents the literal text [ok]. "
                 "A replacement value may itself contain delimiters; include them when the template "
                 "explicitly requests them. Preserve literal values already present in the template "
-                "exactly; do not replace or invent them. Use relevant tools before filling fields "
-                "that depend on them. After obtaining a sufficient tool result, return the output "
-                "fields without repeating the call. The template must remain grammatically and "
-                "semantically coherent after substitution.\n"
+                "exactly; do not replace or invent them. The template must remain grammatically "
+                "and semantically coherent after substitution.\n"
             )
             question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
