@@ -120,6 +120,36 @@ def test_semantic_tokens_cover_assignment_targets_and_args():
     )
 
 
+def test_semantic_tokens_cover_reassignment_and_map_syntax() -> None:
+    src = (
+        "[value: int] = `1`\n"
+        "[value] := `2`\n"
+        "> loop [item]: `[1]`:\n"
+        "  [copy: int] = `item`\n"
+        "> map:\n"
+        "  [value] := `copy`\n"
+    )
+    decoded = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert any(
+        line == 1 and col == 1 and length == len("value") and token_type == variable_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 1 and col == len("[value] ") and length == 2 and token_type == operator_type
+        for line, col, length, token_type, _ in decoded
+    )
+    assert any(
+        line == 4 and col == len("> ") and length == len("map") and token_type == keyword_type
+        for line, col, length, token_type, _ in decoded
+    )
+
+
 def test_semantic_tokens_cover_annotated_description_string():
     line = '  >> Capital is [capital: Annotated[str, "City name"]].'
     src = f"@p():\n{line}\n"

@@ -25,6 +25,7 @@ RuntimeOperation = Literal[
     "compile_program",
     "compile_module",
     "call_procedure",
+    "map_stage",
     "run_python",
 ]
 
@@ -42,6 +43,7 @@ _METRICS: Mapping[RuntimeOperation, _RuntimeMetrics] = {
     "compile_program": _RuntimeMetrics("kedi.compile.count", "kedi.compile.duration"),
     "compile_module": _RuntimeMetrics(None, None),
     "call_procedure": _RuntimeMetrics("kedi.procedure.calls", "kedi.procedure.duration"),
+    "map_stage": _RuntimeMetrics("kedi.map.stages", "kedi.map.duration"),
     "run_python": _RuntimeMetrics(
         "kedi.python.execution.count",
         "kedi.python.execution.duration",

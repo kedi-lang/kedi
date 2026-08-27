@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from concurrent.futures import Future
+from threading import Barrier, Lock
 from typing import Annotated, Any, get_args, get_origin
 
 import pytest
@@ -9,19 +12,29 @@ import kedi
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import current_block_agent_profile
+from kedi.engine import ThreadEngine
 from kedi.lang import (
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
+    ReassignStmt,
     TextSegment,
     compile_program,
     parse_program,
 )
 from kedi.lang.ast import CallSegment, VarArg
-from kedi.lang.compiler.control_flow import loop_binding
+from kedi.lang.compiler.control_flow import (
+    frame_promise_dependencies,
+    loop_binding,
+    run_map_continuations,
+)
+from kedi.lang.compiler.environment import ScopeFrame
+from kedi.promise import KediPromise
 from kedi.lang.parser import KediParseError
 from kedi.lang.parser.cst_to_ast import _Walker
+from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
+from tests.telemetry_helpers import installed_recording_backend
 
 
 class ClaimAdapter(MockAdapter):
@@ -104,6 +117,363 @@ def test_parse_loop_preserves_binder_iterable_and_body() -> None:
     assert loop.iterable_loc is not None
 
 
+def test_parse_reassignment_is_distinct_from_initialization() -> None:
+    program = parse_program("[value: int] = `1`\n[value] := `2`\n")
+
+    reassign = program.ordered_toplevel[1]
+    assert isinstance(reassign, ReassignStmt)
+    assert reassign.name == "value"
+
+
+def test_reassignment_updates_nearest_owner_and_preserves_type() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[value: int] = `1`
+> if: `True`:
+  [value] := `2`
+= `value`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() == 2
+
+
+def test_reassignment_targets_child_shadow_without_leaking() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[value: int] = `1`
+> if: `True`:
+  [value: int] = `2`
+  [value] := `3`
+= `value`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() == 1
+
+
+def test_reassignment_rejects_unknown_and_type_mismatched_targets() -> None:
+    unknown = compile_program(parse_program("[missing] := value\n"))
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        unknown.run_main()
+
+    mismatched = compile_program(parse_program("[value: int] = `1`\n[value] := nope\n"))
+    with pytest.raises(TypeError, match="binding's annotated type"):
+        mismatched.run_main()
+
+
+def test_fenced_reassignment_preserves_native_value() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[value: int] = `1`
+[value] := ```
+return 4
+```
+= `value`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() == 4
+
+
+def test_untyped_fenced_reassignment_preserves_native_value() -> None:
+    runtime = compile_program(
+        parse_program(
+            "[value] = initial\n[value] := ```\nreturn {'native': True}\n```\n= `value`\n"
+        )
+    )
+
+    assert runtime.run_main() == {"native": True}
+
+
+def test_fenced_reassignment_preserves_type_contract() -> None:
+    runtime = compile_program(
+        parse_program("[value: int] = `1`\n[value] := ```\nreturn 'invalid'\n```\n")
+    )
+
+    with pytest.raises(TypeError, match="binding's annotated type"):
+        runtime.run_main()
+
+
+def test_reassignment_preserves_template_output_type_contract() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+>> Produce [value: int].
+[value] := invalid
+""".lstrip()
+        ),
+        adapter=MockAdapter(),
+    )
+
+    with pytest.raises(TypeError, match="binding's annotated type"):
+        runtime.run_main()
+
+
+def test_parse_map_attaches_to_immediately_preceding_binder_loop() -> None:
+    program = parse_program(
+        """
+> loop [item]: `[1, 2]`:
+  [doubled: int] = `item * 2`
+> map:
+  `results.append(doubled)`
+""".lstrip()
+    )
+
+    loop = program.ordered_toplevel[0]
+    assert isinstance(loop, LoopStmt)
+    assert loop.map_body is not None
+    assert len(loop.map_body) == 1
+    assert loop.map_loc is not None
+    assert len(program.ordered_toplevel) == 1
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        ("> map:\n  `pass`\n", "immediately follow a binder loop"),
+        (
+            "> loop: `False`:\n  `pass`\n> map:\n  `pass`\n",
+            "immediately follow a binder loop",
+        ),
+        (
+            "> loop [item]: `[]`:\n  `pass`\n> map:\n  `pass`\n> map:\n  `pass`\n",
+            "only one map stage",
+        ),
+    ],
+)
+def test_map_rejects_invalid_attachment(source: str, message: str) -> None:
+    with pytest.raises(KediParseError, match=message):
+        parse_program(source)
+
+
+def test_map_continues_each_iteration_frame_without_leaking_locals() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[results: list[int]] = `[]`
+> loop [item]: `[1, 2, 3]`:
+  [doubled: int] = `item * 2`
+> map:
+  `results.append(doubled)`
+= `results`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() == [2, 4, 6]
+    assert "item" not in runtime._globals_env
+    assert "doubled" not in runtime._globals_env
+
+
+def test_parallel_map_uses_record_local_template_outputs() -> None:
+    class ItemAdapter(MockAdapter):
+        def produce_sync(self, *, template: str, output_schema=None, **kwargs: Any):
+            marker = "candidate "
+            value = int(template.split(marker, 1)[1].split(" ", 1)[0])
+            return AttrDict({"score": value * 10})
+
+    engine = ThreadEngine(max_workers=4)
+    runtime = compile_program(
+        parse_program(
+            """
+[results: list] = `[]`
+> loop [item]: `[1, 2, 3, 4]`:
+  >> candidate <item> has [score: int]
+> map:
+  `results.append((item, score))`
+= `sorted(results)`
+""".lstrip()
+        ),
+        adapter=ItemAdapter(),
+        engine=engine,
+    )
+    try:
+        assert runtime.run_main() == [(1, 10), (2, 20), (3, 30), (4, 40)]
+    finally:
+        engine.shutdown()
+
+
+def test_parallel_map_chains_a_second_template_per_iteration_record() -> None:
+    class ChainedAdapter(MockAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.first_stage_barrier = Barrier(4)
+            self.events: list[str] = []
+            self.lock = Lock()
+
+        def produce_sync(self, *, template: str, output_schema=None, **kwargs: Any):
+            first = re.search(r"first (\d+) gives", template)
+            if first is not None:
+                item = int(first.group(1))
+                with self.lock:
+                    self.events.append(f"first-{item}")
+                self.first_stage_barrier.wait(timeout=2)
+                return AttrDict({"score": item * 10})
+
+            second = re.search(r"second (\d+) uses (\d+)", template)
+            assert second is not None
+            item, score = map(int, second.groups())
+            with self.lock:
+                self.events.append(f"second-{item}")
+            return AttrDict({"summary": f"{item}:{score}"})
+
+    adapter = ChainedAdapter()
+    engine = ThreadEngine(max_workers=4)
+    runtime = compile_program(
+        parse_program(
+            "[results: list] = `[]`\n"
+            "> loop [item]: `[1, 2, 3, 4]`:\n"
+            "  >> first <item> gives [score: int]\n"
+            "> map:\n"
+            "  >> second <item> uses <score> as [summary: str]\n"
+            "  > if: `True`:\n"
+            "    `results.append((item, score, summary))`\n"
+            "= `sorted(results)`\n"
+        ),
+        adapter=adapter,
+        engine=engine,
+    )
+    try:
+        assert runtime.run_main() == [
+            (1, 10, "1:10"),
+            (2, 20, "2:20"),
+            (3, 30, "3:30"),
+            (4, 40, "4:40"),
+        ]
+        assert all(event.startswith("first-") for event in adapter.events[:4])
+        assert sorted(adapter.events[4:]) == [
+            "second-1",
+            "second-2",
+            "second-3",
+            "second-4",
+        ]
+    finally:
+        engine.shutdown()
+
+
+def test_parallel_map_drains_every_continuation_before_raising_first_failure() -> None:
+    seen: list[int] = []
+    lock = Lock()
+
+    def record(item: int) -> None:
+        with lock:
+            seen.append(item)
+        if item in {1, 3}:
+            raise RuntimeError(f"failed-{item}")
+
+    engine = ThreadEngine(max_workers=4)
+    runtime = compile_program(
+        parse_program(
+            """
+> loop [item]: `[1, 2, 3, 4]`:
+  [copied: int] = `item`
+> map:
+  `record(copied)`
+""".lstrip()
+        ),
+        runtime_globals={"record": record},
+        engine=engine,
+    )
+    try:
+        with pytest.raises(RuntimeError, match="failed-1"):
+            runtime.run_main()
+        assert sorted(seen) == [1, 2, 3, 4]
+    finally:
+        engine.shutdown()
+
+
+def test_map_emits_stage_span_and_bounded_lifecycle_metrics() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[results: list[int]] = `[]`
+> loop [item]: `[1, 2, 3]`:
+  [copied: int] = `item`
+> map:
+  `results.append(copied)`
+""".lstrip()
+        )
+    )
+
+    with installed_recording_backend() as backend:
+        runtime.run_main()
+
+    map_spans = [span for span in backend.finished_spans if span.operation == "map_stage"]
+    assert len(map_spans) == 1
+    assert map_spans[0].name == "map stage"
+    assert map_spans[0].attributes["kedi.map.iteration_count"] == 3
+
+    lifecycle = [metric for metric in backend.metrics if metric.name == "kedi.map.iterations"]
+    totals = {
+        state: sum(metric.value for metric in lifecycle if metric.attributes.get("state") == state)
+        for state in ("scheduled", "started", "completed", "failed")
+    }
+    assert totals == {"scheduled": 3, "started": 3, "completed": 3, "failed": 0}
+    assert any(
+        metric.name == "kedi.map.wait.duration" and metric.kind == "histogram"
+        for metric in backend.metrics
+    )
+
+
+def test_map_helpers_deduplicate_dependencies_and_skip_empty_stages() -> None:
+    future: Future[int] = Future()
+    promise = KediPromise(future, None)
+    frame = ScopeFrame({"first": promise, "second": promise})
+
+    assert frame_promise_dependencies(frame) == [future]
+
+    runtime = compile_program(parse_program("= ok\n"))
+    statement = LoopStmt(binder="item", iterable_code="[]", body=[])
+    run_map_continuations(runtime, statement, [], lambda _index, _frame: None)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> loop [item]: `iterator`:\n  `fail(item)`\n",
+        "@run():\n  > loop [item]: `iterator`:\n    `fail(item)`\n\n= `run()`\n",
+    ],
+)
+def test_loop_closes_iterator_when_body_fails(source: str) -> None:
+    close_calls: list[str] = []
+
+    class ClosingIterator:
+        def __init__(self) -> None:
+            self.value = 0
+
+        def __iter__(self):
+            return self
+
+        def __next__(self) -> int:
+            self.value += 1
+            if self.value > 3:
+                raise StopIteration
+            return self.value
+
+        def close(self) -> None:
+            close_calls.append("closed")
+
+    def fail(item: int) -> None:
+        if item == 2:
+            raise RuntimeError("stop traversal")
+
+    runtime = compile_program(
+        parse_program(source),
+        runtime_globals={"iterator": ClosingIterator(), "fail": fail},
+    )
+
+    with pytest.raises(RuntimeError, match="stop traversal"):
+        runtime.run_main()
+    assert close_calls == ["closed"]
+
+
 @pytest.mark.parametrize(
     "source",
     [
@@ -149,6 +519,18 @@ def test_parse_distinguishes_deterministic_and_template_conditions() -> None:
     assert deterministic_loop.condition_segments is None
     assert isinstance(classified_loop, ConditionalLoopStmt)
     assert classified_loop.condition_segments is not None
+
+
+def test_template_condition_preserves_nonterminal_colons_as_text() -> None:
+    program = parse_program("> if: Scheme: <scheme> is secure\n  [result] = yes\n")
+
+    condition = program.ordered_toplevel[0]
+    assert isinstance(condition, IfStmt)
+    assert condition.condition_segments is not None
+    assert any(
+        isinstance(segment, TextSegment) and "Scheme:" in segment.text
+        for segment in condition.condition_segments
+    )
 
 
 def test_template_condition_preserves_internal_colons_and_nested_call_arguments() -> None:
@@ -220,6 +602,79 @@ def test_top_level_if_executes_only_selected_branch() -> None:
     assert runtime.run_main() == 1
 
 
+def test_if_initialization_is_local_to_selected_branch() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+> if: `True`:
+  [branch_only: bool] = `True`
+""".lstrip()
+        )
+    )
+
+    runtime.run_main()
+
+    assert "branch_only" not in runtime._globals_env
+
+
+def test_if_python_rebinding_updates_existing_outer_owner() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[flag: bool] = `False`
+> if: `True`:
+  `flag = True`
+= `flag`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() is True
+
+
+def test_python_writeback_validates_all_changes_before_committing() -> None:
+    runtime = compile_program(
+        parse_program(
+            "[first: int] = `1`\n"
+            "[second: int] = `2`\n"
+            "> if: `True`:\n"
+            "  `first = 3; second = 'invalid'`\n"
+        )
+    )
+
+    with pytest.raises(TypeError, match="Python write-back.*annotated type"):
+        runtime.run_main()
+
+    assert runtime._globals_env["first"] == 1
+    assert runtime._globals_env["second"] == 2
+
+
+def test_if_local_declaration_shadows_outer_owner_for_python_writeback() -> None:
+    runtime = compile_program(
+        parse_program(
+            """
+[flag: bool] = `False`
+[seen: list[bool]] = `[]`
+> if: `True`:
+  [flag: bool] = `False`
+  `flag = True`
+  `seen.append(flag)`
+= `(flag, seen)`
+""".lstrip()
+        )
+    )
+
+    assert runtime.run_main() == (False, [True])
+
+
+def test_if_python_only_name_does_not_become_a_kedi_binding() -> None:
+    runtime = compile_program(parse_program("> if: `True`:\n  `python_only = True`\n"))
+
+    runtime.run_main()
+
+    assert "python_only" not in runtime._globals_env
+
+
 def test_template_if_renders_native_segments_and_uses_annotated_bool() -> None:
     adapter = ClaimAdapter(lambda prompt: "Claim: Ankara has 6 letters" in prompt)
     runtime = compile_program(
@@ -227,10 +682,11 @@ def test_template_if_renders_native_segments_and_uses_annotated_bool() -> None:
             """
 [city] = Ankara
 [minimum: int] = `5`
+[status] = unknown
 > if: <city> has `len(city)` letters
-  [status] = accepted
+  `status = "accepted"`
 > else:
-  [status] = rejected
+  `status = "rejected"`
 = <status>
 """.lstrip()
         ),
@@ -254,7 +710,12 @@ def test_template_if_treats_unestablished_claim_as_false() -> None:
     adapter = ClaimAdapter(lambda _prompt: False)
     runtime = compile_program(
         parse_program(
-            "> if: Atlantis exists\n  [result] = yes\n> else:\n  [result] = no\n= <result>\n"
+            "[result] = unknown\n"
+            "> if: Atlantis exists\n"
+            '  `result = "yes"`\n'
+            "> else:\n"
+            '  `result = "no"`\n'
+            "= <result>\n"
         ),
         adapter=adapter,
     )
@@ -267,10 +728,11 @@ def test_template_if_supports_adapter_without_override_seams_or_instructions() -
         parse_program(
             "> artifacts:\n"
             "  enabled: false\n\n"
+            "[result] = unknown\n"
             "> if: established\n"
-            "  [result] = yes\n"
+            '  `result = "yes"`\n'
             "> else:\n"
-            "  [result] = no\n"
+            '  `result = "no"`\n'
             "= <result>\n"
         ),
         adapter=BareClaimAdapter(),
@@ -397,9 +859,9 @@ def test_procedure_if_else_and_nested_if() -> None:
 @choose(outer: bool, inner: bool) -> str:
   [result] = neither
   > if: `outer`:
-    [result] = outer
+    `result = "outer"`
     > if: `inner`:
-      [result] = both
+      `result = "both"`
   = <result>
 
 = <choose(<`True`>, <`True`>)>
@@ -515,7 +977,8 @@ def test_incremental_session_preserves_control_flow_writes() -> None:
     with kedi.interactive() as session:
         session.execute("[total: int] = `0`\n")
         session.execute("> loop [n]: `range(1, 4)`:\n  `total += n`\n")
-        session.execute("> if: `total == 6`:\n  [status] = passed\n")
+        session.execute("[status] = unknown\n")
+        session.execute('> if: `total == 6`:\n  `status = "passed"`\n')
         assert session.execute("= `total, status`\n") == (6, "passed")
 
 
@@ -668,6 +1131,28 @@ def test_procedure_range_without_body_return_runs_every_iteration() -> None:
     assert runtime.run_main() == 6
 
 
+def test_procedure_map_and_both_reassignment_forms_share_iteration_scope() -> None:
+    runtime = compile_program(
+        parse_program(
+            "@collect() -> list[int]:\n"
+            "  [results: list[int]] = `[]`\n"
+            "  [total: int] = `0`\n"
+            "  > loop [item]: `[1, 2, 3]`:\n"
+            "    [doubled: int] = `item * 2`\n"
+            "  > map:\n"
+            "    [total] := `total + doubled`\n"
+            "    [total] := ```\n"
+            "    return total\n"
+            "    ```\n"
+            "    `results.append(doubled)`\n"
+            "  = `results + [total]`\n\n"
+            "= `collect()`\n"
+        )
+    )
+
+    assert runtime.run_main() == [2, 4, 6, 12]
+
+
 def test_procedure_conditional_loop_re_evaluates_and_keeps_last_return() -> None:
     runtime = compile_program(
         parse_program(
@@ -735,9 +1220,10 @@ def test_loop_binding_handles_current_env_identity_and_manual_binder_removal() -
     env: dict[str, object] = {}
     token = runtime._current_env.set(env)
     try:
-        with loop_binding(runtime, env, "n", 1):
-            assert env["n"] == 1
-            del env["n"]
+        with loop_binding(runtime, env, "n", 1) as iteration_env:
+            assert iteration_env["n"] == 1
+            assert "n" not in env
+            del iteration_env["n"]
     finally:
         runtime._current_env.reset(token)
 
@@ -746,7 +1232,7 @@ def test_loop_binding_handles_current_env_identity_and_manual_binder_removal() -
 
 def test_module_can_export_value_written_by_control_flow(tmp_path: Path) -> None:
     (tmp_path / "values.kedi").write_text(
-        "> export:\n  value\n\n> if: `True`:\n  [value] = selected\n",
+        '> export:\n  value\n\n[value] = unselected\n> if: `True`:\n  `value = "selected"`\n',
         encoding="utf-8",
     )
     main = tmp_path / "main.kedi"

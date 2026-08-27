@@ -73,11 +73,15 @@ from ..ast import (
 from .evaluation import evaluate_python_inline, execute_python_block
 from .control_flow import (
     assert_conditional_loop_capacity,
+    active_scope,
     branch_trace,
+    child_scope,
     evaluate_condition,
     evaluate_iterable,
     loop_binding,
     loop_trace,
+    managed_loop_iterator,
+    run_map_continuations,
 )
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
@@ -402,7 +406,9 @@ class ProgramCompiler:
         """Initialize persistent state for a new incremental execution stream."""
         self.rt._type_env_stack = [{}]
         self.rt._profile_registry = {}
-        env = dict(self.rt._initial_globals_env)
+        from .environment import ScopeFrame
+
+        env = ScopeFrame(self.rt._initial_globals_env)
         self.rt._globals_env = env
         return env
 
@@ -419,7 +425,11 @@ class ProgramCompiler:
         self.rt._globals_env = env
 
         def fragment() -> Any:
-            return self._execute_top_level(prepared, env, state)
+            token = self.rt._current_env.set(env)
+            try:
+                return self._execute_top_level(prepared, env, state)
+            finally:
+                self.rt._current_env.reset(token)
 
         return native_value(force(self.rt._invoke_procedure(fragment, [])))
 
@@ -957,9 +967,15 @@ class ProgramCompiler:
 
         @self.rt.main
         def _main() -> Any:
-            kwargs: dict[str, Any] = dict(self.rt._initial_globals_env)
+            from .environment import ScopeFrame
+
+            kwargs: dict[str, Any] = ScopeFrame(self.rt._initial_globals_env)
             self.rt._globals_env = kwargs
-            return self._execute_top_level(prepared, kwargs, self.new_top_level_state())
+            token = self.rt._current_env.set(kwargs)
+            try:
+                return self._execute_top_level(prepared, kwargs, self.new_top_level_state())
+            finally:
+                self.rt._current_env.reset(token)
 
     def _execute_top_level(
         self,
@@ -1019,29 +1035,49 @@ class ProgramCompiler:
                     continue
                 branch_state = replace(state)
                 with branch_trace(self.rt, item, alternative=not condition):
-                    result = self._execute_top_level_sequence(
-                        prepared,
-                        env,
-                        branch_state,
-                        body,
-                    )
+                    with child_scope(self.rt, env) as branch_env:
+                        result = self._execute_top_level_sequence(
+                            prepared,
+                            branch_env,
+                            branch_state,
+                            body,
+                        )
                 if result is not _NO_TOP_LEVEL_RESULT:
                     last_result = result
                 continue
             if isinstance(item, LoopStmt):
                 with loop_trace(self.rt, item):
+                    records: list[tuple[Any, _TopLevelExecutionState]] = []
                     values = evaluate_iterable(self.rt, item, env)
-                    for value in values:
-                        iteration_state = replace(state)
-                        with loop_binding(self.rt, env, item.binder, value):
-                            result = self._execute_top_level_sequence(
-                                prepared,
-                                env,
-                                iteration_state,
-                                item.body,
-                            )
-                        if result is not _NO_TOP_LEVEL_RESULT:
-                            last_result = result
+                    with managed_loop_iterator(values):
+                        for value in values:
+                            iteration_state = replace(state)
+                            with loop_binding(self.rt, env, item.binder, value) as iteration_env:
+                                result = self._execute_top_level_sequence(
+                                    prepared,
+                                    iteration_env,
+                                    iteration_state,
+                                    item.body,
+                                )
+                                records.append((iteration_env, iteration_state))
+                            if result is not _NO_TOP_LEVEL_RESULT:
+                                last_result = result
+
+                    if item.map_body is not None:
+                        frames = [record[0] for record in records]
+
+                        def run_map(index: int, frame: Any) -> None:
+                            _, map_state = records[index]
+                            with active_scope(self.rt, frame):
+                                with block_agent_profile_scope(map_state.active_profile):
+                                    self._execute_top_level_sequence(
+                                        prepared,
+                                        frame,
+                                        map_state,
+                                        item.map_body or [],
+                                    )
+
+                        run_map_continuations(self.rt, item, frames, run_map)
                 continue
             if isinstance(item, ConditionalLoopStmt):
                 completed_iterations = 0
@@ -1053,12 +1089,13 @@ class ProgramCompiler:
                             break
                         assert_conditional_loop_capacity(self.rt, completed_iterations)
                         iteration_state = replace(state)
-                        result = self._execute_top_level_sequence(
-                            prepared,
-                            env,
-                            iteration_state,
-                            item.body,
-                        )
+                        with child_scope(self.rt, env) as iteration_env:
+                            result = self._execute_top_level_sequence(
+                                prepared,
+                                iteration_env,
+                                iteration_state,
+                                item.body,
+                            )
                         completed_iterations += 1
                         if result is not _NO_TOP_LEVEL_RESULT:
                             last_result = result

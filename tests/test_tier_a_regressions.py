@@ -320,8 +320,8 @@ def test_a7_env_snapshot_isolates_worker_from_later_writes() -> None:
     # marker="first" is set, the template is scheduled (snapshot taken), THEN the live env's marker
     # is rewritten. A by-value snapshot means the parked worker still sees "first".
     src = (
+        "[marker] = first\n"
         "@gen():\n"
-        "  [marker] = first\n"
         "  >> tmpl [out]\n"
         "  ```\n"
         '  marker = marker + "-second"\n'

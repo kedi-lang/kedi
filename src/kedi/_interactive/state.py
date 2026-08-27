@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from ..agent_adapter.conversation import ConversationState
+from ..lang.compiler.environment import BindingMetadata, ScopeFrame
 from ..lang.compiler.program_compiler import ProgramCompiler
+from ..lang.compiler.type_system import KediType
 from ..lang.parser import parse_program
 from ..promise import KediPromise, force
 from .persistence import (
@@ -157,6 +159,7 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
 
     model_names = _kedi_model_names(session._compiler)
     raw_environment = _materialize_environment(session._env, issues)
+    binding_metadata = _encode_binding_metadata(session._env, issues)
     preflight_encoder = SessionValueEncoder(kedi_models=model_names)
     for name, value in raw_environment.items():
         try:
@@ -216,6 +219,7 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
             for fragment in session._fragments
         ],
         "environment": encoded_environment,
+        "binding_metadata": binding_metadata,
         "default_profile": default_profile,
         "active_profile": active_profile,
         "adapter_selection_kind": session._top_level_state.adapter_selection_kind,
@@ -248,6 +252,65 @@ def _materialize_environment(env: Mapping[Any, Any], issues: list[str]) -> dict[
         except BaseException as exc:
             issues.append(f"environment[{name!r}] could not be resolved: {exc}")
     return materialized
+
+
+def _encode_binding_metadata(
+    env: Mapping[str, Any], issues: list[str]
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(env, ScopeFrame):
+        issues.append("interactive environment does not expose lexical binding metadata")
+        return {}
+
+    encoded: dict[str, dict[str, Any]] = {}
+    for name, metadata in env.local_binding_metadata().items():
+        contract = metadata.type_contract
+        if contract is None:
+            type_contract = None
+        elif isinstance(contract, KediType):
+            type_contract = None if contract.is_none() else str(contract)
+        else:
+            issues.append(
+                f"binding metadata for {name!r} has unsupported type contract "
+                f"{type(contract).__module__}.{type(contract).__qualname__}"
+            )
+            continue
+        encoded[name] = {
+            "kind": metadata.kind,
+            "type_contract": type_contract,
+            "assignable": metadata.assignable,
+            "synthetic": metadata.synthetic,
+        }
+    return encoded
+
+
+def _decode_binding_metadata(
+    encoded: Any,
+    environment: dict[str, Any],
+) -> dict[str, BindingMetadata]:
+    if not isinstance(encoded, dict) or set(encoded) != set(environment):
+        raise SessionLoadError("Restored binding metadata must match the environment exactly")
+
+    decoded: dict[str, BindingMetadata] = {}
+    for name, item in encoded.items():
+        if not isinstance(name, str) or not isinstance(item, dict):
+            raise SessionLoadError("Restored binding metadata entries must be objects")
+        kind = item.get("kind")
+        type_contract = item.get("type_contract")
+        assignable = item.get("assignable")
+        synthetic = item.get("synthetic")
+        if not isinstance(kind, str):
+            raise SessionLoadError(f"Binding metadata for {name!r} has an invalid kind")
+        if type_contract is not None and not isinstance(type_contract, str):
+            raise SessionLoadError(f"Binding metadata for {name!r} has an invalid type contract")
+        if not isinstance(assignable, bool) or not isinstance(synthetic, bool):
+            raise SessionLoadError(f"Binding metadata for {name!r} has invalid flags")
+        decoded[name] = BindingMetadata(
+            kind=kind,
+            type_contract=None if type_contract is None else KediType(type_contract),
+            assignable=assignable,
+            synthetic=synthetic,
+        )
+    return decoded
 
 
 def _declaration_persistence_issues(
@@ -307,8 +370,10 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
     environment = decoder.decode(payload["environment"], path="environment")
     if not isinstance(environment, dict) or not all(isinstance(name, str) for name in environment):
         raise SessionLoadError("Restored environment must be a string-keyed mapping")
-    session._env.clear()
-    session._env.update(environment)
+    metadata = _decode_binding_metadata(payload["binding_metadata"], environment)
+    if not isinstance(session._env, ScopeFrame):
+        raise SessionLoadError("Interactive environment is not a lexical scope frame")
+    session._env.restore_locals(environment, metadata)
     session._compiler.rt._initial_globals_env = dict(environment)
     session._compiler.rt._globals_env = session._env
 

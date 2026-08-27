@@ -37,12 +37,15 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler import environment as compiler_env
 from kedi.lang.compiler.environment import (
+    BindingMetadata,
     KediEnv,
+    ScopeFrame,
     assert_not_cli_args_identifier,
     build_python_env,
     build_type_env,
     cli_args_identifier,
     lookup_value,
+    write_owned_value,
 )
 from kedi.lang.compiler.evaluation import (
     _evaluate_arg,
@@ -138,6 +141,102 @@ def test_kedienv_keeps_regular_dictionary_operations_available() -> None:
 
     with pytest.raises(KeyError, match="dictionary is empty"):
         env.popitem()
+
+
+def test_scope_frame_dict_mutations_preserve_binding_ownership_and_metadata() -> None:
+    parent = ScopeFrame()
+    parent.declare("outer", 1, BindingMetadata(kind="outer"))
+    child = ScopeFrame(parent=parent)
+
+    assert child.setdefault("outer", 2) == 1
+    assert not child.owns("outer")
+    child.update({"local": 3})
+    assert child.binding_metadata("local") == BindingMetadata()
+    child |= {"second": 4}
+    assert child.pop("second") == 4
+    assert child.binding_metadata("second") is None
+    child.clear()
+    assert child.raw_value("outer") == 1
+    assert not child.owns("local")
+
+
+def test_scope_frame_rejects_invalid_restore_assignment_and_mutation_edges() -> None:
+    frame = ScopeFrame()
+    with pytest.raises(ValueError, match="same names"):
+        frame.restore_locals({"value": 1}, {})
+
+    reserved = cli_args_identifier()
+    with pytest.raises(ValueError, match="runtime-owned"):
+        frame.restore_locals(
+            {reserved: object()},
+            {reserved: BindingMetadata(kind="value")},
+        )
+
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        frame.assign("missing", 1)
+
+    frame.declare("readonly", 1, BindingMetadata(assignable=False))
+    with pytest.raises(ValueError, match="read-only"):
+        frame.assign("readonly", 2)
+
+    plain_parent = {"outer": 1}
+    child = ScopeFrame(parent=plain_parent)
+    child.assign("outer", 2)
+    assert plain_parent["outer"] == 2
+    assert child.setdefault("new", 3) == 3
+    assert child.owns("new")
+    assert child.popitem() == ("new", 3)
+    child["new"] = 3
+
+    with pytest.raises(TypeError, match="at most 2 arguments"):
+        child.pop("new", 1, 2)
+    with pytest.raises(KeyError, match="missing"):
+        child.pop("missing")
+
+    empty = ScopeFrame()
+    with pytest.raises(KeyError, match="dictionary is empty"):
+        empty.popitem()
+
+    reserved_frame = ScopeFrame()
+    reserved_frame.restore_locals(
+        {reserved: object()},
+        {
+            reserved: BindingMetadata(
+                kind="runtime",
+                assignable=False,
+                synthetic=True,
+            )
+        },
+    )
+    with pytest.raises(ValueError, match="reserved CLI binding"):
+        reserved_frame.clear()
+
+
+def test_owned_value_writes_validate_scope_ownership_and_readonly_metadata() -> None:
+    frame = ScopeFrame()
+    with pytest.raises(RuntimeError, match="does not own"):
+        write_owned_value(frame, "missing", 1)
+
+    frame.declare("readonly", 1, BindingMetadata(assignable=False))
+    with pytest.raises(ValueError, match="read-only"):
+        write_owned_value(frame, "readonly", 2)
+
+    plain: dict[str, Any] = {}
+    write_owned_value(plain, "value", 3)
+    assert plain == {"value": 3}
+
+
+def test_python_writeback_ignores_dirty_binding_removed_from_source() -> None:
+    runtime = KediRuntime()
+    owner = {"value": 1}
+    source = KediEnv()
+    source._set_binding("value", 1, owner)
+    source["value"] = 2
+    dict.__delitem__(source, "value")
+
+    runtime.executor._sync_existing_variables(runtime, owner, source)
+
+    assert owner == {"value": 1}
 
 
 def test_reserved_cli_args_cannot_be_overwritten_by_kedi_or_python() -> None:
@@ -253,6 +352,15 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(compiler_env, "typing", SimpleNamespace(List=list))
     assert build_type_env(KediRuntime(), None)["List"] is list
 
+    no_globals = KediRuntime()
+    no_globals._globals_env = None
+    assert build_python_env(no_globals, {"local": 1})["local"] == 1
+
+    plain_env: dict[str, Any] = {}
+    no_globals._type_env_stack = [{"Person": Person}]
+    compiler_env._add_type_env(no_globals, plain_env, {})
+    assert plain_env["Person"] is Person
+
 
 def test_runtime_lookup_reads_current_env() -> None:
     rt = KediRuntime()
@@ -341,6 +449,31 @@ def test_proc_wrapper_falls_back_when_generated_source_is_invalid() -> None:
     wrapper = compiler_env._make_proc_wrapper(rt, "loose", loose, {})
 
     assert wrapper() == "ok"
+
+
+def test_statement_compiler_plain_mapping_reassignment_helpers() -> None:
+    env: dict[str, Any] = {"value": 1}
+    assert StatementCompiler._reassignment_type("value", env) is None
+    StatementCompiler._reassign_value("value", 2, env)
+    assert env["value"] == 2
+
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        StatementCompiler._reassignment_type("missing", env)
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        StatementCompiler._reassign_value("missing", 1, env)
+
+
+def test_statement_executor_legacy_sync_updates_only_existing_names() -> None:
+    runtime = KediRuntime()
+    current = {"kept": 2, "new": 3}
+    closure = {"kept": 1, "untouched": 4}
+    token = runtime._current_env.set(current)
+    try:
+        StatementExecutor(runtime)._sync_env(closure)
+    finally:
+        runtime._current_env.reset(token)
+
+    assert closure == {"kept": 2, "untouched": 4}
 
 
 def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
@@ -598,32 +731,13 @@ def test_procedure_compiler_type_and_environment_edges() -> None:
     with pytest.raises(TypeError, match="Return value must be str"):
         compiler._enforce_return_type(ProcedureDef(name="ret", params=[]), 1, {})
 
-    setattr(rt, "_import_env", {"imported": "from import"})
-    setattr(rt, "_globals_env", {"global_value": "from global"})
-    token = rt._current_env.set(cast(Any, "not a dict"))
-    try:
-        prepared = compiler._prepare_kwargs(
-            ProcedureDef(name="env", params=[]),
-            {"local": "value"},
-            {"lexical": "parent", "local": "parent local"},
-        )
-    finally:
-        rt._current_env.reset(token)
+    from kedi.lang.compiler.environment import ScopeFrame
 
-    assert prepared == {
-        "lexical": "parent",
-        "local": "value",
-        "imported": "from import",
-        "global_value": "from global",
-    }
-
-    current: dict[str, Any] = {}
-    token = rt._current_env.set(current)
-    try:
-        compiler._prepare_kwargs(ProcedureDef(name="env", params=[]), {}, None)
-    finally:
-        rt._current_env.reset(token)
-    assert current == {"imported": "from import", "global_value": "from global"}
+    parent = ScopeFrame({"lexical": "parent", "local": "parent local"})
+    prepared = ScopeFrame({"local": "value"}, parent=parent)
+    assert prepared["lexical"] == "parent"
+    assert prepared["local"] == "value"
+    assert dict(prepared) == {"local": "value"}
 
 
 def test_nested_procedure_scope_restores_saved_and_new_names() -> None:

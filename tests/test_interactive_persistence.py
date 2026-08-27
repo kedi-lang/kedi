@@ -35,6 +35,8 @@ from kedi.agent_profile.mcp import McpServerSpec
 from kedi.agent_profile.skills import SkillsSettings
 from kedi.artifacts import ArtifactPolicy
 from kedi.lang.ast import IfStmt, ProcDefStmt, TypeDefStmt
+from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
+from kedi.lang.compiler.type_system import KediType
 from kedi.promise import KediPromise
 
 
@@ -429,6 +431,107 @@ def test_session_load_restores_limits_and_honors_conversation_ownership_override
     assert restored._subagent_usage_limits == limits
     restored.close()
     assert supplied._closed is True
+
+
+def test_session_load_restores_binding_types_and_python_writeback_contracts(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "typed-bindings.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session.execute("[count: int] = `1`")
+        session.dump(snapshot)
+
+    with kedi.load_session(snapshot) as restored:
+        restored.execute("[count] := `2`")
+        assert restored.execute("= `count`") == 2
+
+        with pytest.raises(TypeError, match="annotated type"):
+            restored.execute('[count] := `"invalid"`')
+        assert restored.execute("= `count`") == 2
+
+        with pytest.raises(TypeError, match="annotated type"):
+            restored.execute('`count = "invalid"`')
+        assert restored.execute("= `count`") == 2
+
+
+def test_session_load_preserves_runtime_owned_reserved_binding(tmp_path: Path) -> None:
+    snapshot = tmp_path / "reserved-binding.kedi-state"
+    with kedi.InteractiveSession(runtime_globals={"args": ["value"]}) as session:
+        session.dump(snapshot)
+
+    with kedi.load_session(snapshot) as restored:
+        assert restored.execute("= `args`") == ["value"]
+        with pytest.raises(ValueError, match="Reserved identifier"):
+            restored.execute('[args] := `["replacement"]`')
+
+
+def test_binding_metadata_codec_rejects_nonlexical_and_invalid_entries() -> None:
+    issues: list[str] = []
+    assert state._encode_binding_metadata({}, issues) == {}
+    assert issues == ["interactive environment does not expose lexical binding metadata"]
+
+    frame = ScopeFrame()
+    frame.declare("invalid", 1, BindingMetadata(type_contract=object()))
+    issues = []
+    assert state._encode_binding_metadata(frame, issues) == {}
+    assert "unsupported type contract" in issues[0]
+
+    valid = {
+        "value": {
+            "kind": "value",
+            "type_contract": "int",
+            "assignable": True,
+            "synthetic": False,
+        }
+    }
+    decoded = state._decode_binding_metadata(valid, {"value": 1})
+    assert str(decoded["value"].type_contract) == str(KediType("int"))
+
+    invalid_cases = [
+        ({}, {"value": 1}, "match the environment"),
+        ({"value": []}, {"value": 1}, "entries must be objects"),
+        ({1: {}}, {1: 1}, "entries must be objects"),
+        (
+            {"value": {"kind": 1, "type_contract": None, "assignable": True, "synthetic": False}},
+            {"value": 1},
+            "invalid kind",
+        ),
+        (
+            {
+                "value": {
+                    "kind": "value",
+                    "type_contract": 1,
+                    "assignable": True,
+                    "synthetic": False,
+                }
+            },
+            {"value": 1},
+            "invalid type contract",
+        ),
+        (
+            {
+                "value": {
+                    "kind": "value",
+                    "type_contract": None,
+                    "assignable": 1,
+                    "synthetic": False,
+                }
+            },
+            {"value": 1},
+            "invalid flags",
+        ),
+    ]
+    for encoded, environment, message in invalid_cases:
+        with pytest.raises(SessionLoadError, match=message):
+            state._decode_binding_metadata(cast(Any, encoded), cast(Any, environment))
+
+
+def test_restore_payload_rejects_nonlexical_interactive_environment() -> None:
+    with kedi.InteractiveSession() as session:
+        payload = state._build_snapshot_payload(session)
+        session._env = cast(Any, {})
+        with pytest.raises(SessionLoadError, match="not a lexical scope frame"):
+            state._restore_payload(session, payload)
 
 
 def test_session_load_validates_supplied_conversation_state(tmp_path: Path) -> None:

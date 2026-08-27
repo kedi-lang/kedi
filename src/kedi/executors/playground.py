@@ -158,20 +158,33 @@ class PlaygroundExecutor:
     ) -> Any:
         self._emit_debug("execution_started", action, code=code, local_env=target)
         try:
-            from ..lang.compiler.environment import build_python_env
+            from ..lang.compiler.environment import (
+                build_python_env,
+                validate_owned_value,
+                write_owned_value,
+            )
 
             execution_env = build_python_env(rt, target)
+            owners = execution_env.binding_owners()
             response = self._request(
                 action,
                 code,
                 execution_env,
                 kedi_line_offset=kedi_line_offset,
-                sync_names=list(target),
+                sync_names=list(owners),
             )
             updates = _response_env(response)
-            for name in tuple(target):
-                if name in updates:
-                    target[name] = updates[name]
+            validated = [
+                (
+                    owner,
+                    name,
+                    validate_owned_value(rt, owner, name, updates[name], target),
+                )
+                for name, owner in owners.items()
+                if name in updates
+            ]
+            for owner, name, value in validated:
+                write_owned_value(owner, name, value)
             result = response.get("result")
         except Exception as exc:
             self._emit_debug(

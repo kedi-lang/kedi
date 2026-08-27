@@ -116,6 +116,25 @@ def test_lexical_closure_reads_latest_outer_assignment(monkeypatch: Any) -> None
     assert out == "after"
 
 
+def test_python_rebinding_updates_nearest_existing_kedi_owner() -> None:
+    src = '[value] = before\n@change():\n  `value = "after"`\n\n`change()`\n= <value>\n'
+
+    assert _run(src) == "after"
+
+
+def test_kedi_initialization_in_procedure_shadows_outer_binding() -> None:
+    src = (
+        "[value] = outer\n"
+        "@change():\n"
+        "  [value] = inner\n"
+        '  `value = "updated-inner"`\n\n'
+        "`change()`\n"
+        "= <value>\n"
+    )
+
+    assert _run(src) == "outer"
+
+
 def test_lexical_closure_updates_outer_assignment(monkeypatch: Any) -> None:
     src = (
         "@outer():\n"

@@ -273,6 +273,52 @@ def test_diagnostics_errors_when_adapter_lacks_structured_output(
     assert diag.range.start.character == len(">> Capital is ")
 
 
+def test_capability_diagnostics_descend_into_loop_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_structured_output=False),
+    )
+    source = (
+        "> agent: codex\n"
+        "> loop [item]: `[1]`:\n"
+        "  [copy: int] = `item`\n"
+        "> map:\n"
+        "  >> Result is [result].\n"
+    )
+
+    diagnostics = features.compute_diagnostics(source, "map-capability.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-CAPABILITY"
+    assert diagnostics[0].range.start.line == 4
+
+
+def test_capability_diagnostics_descend_into_else_and_conditional_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(supports_structured_output=False),
+    )
+    source = (
+        "> agent: codex\n"
+        "> if: `False`:\n"
+        "  [unused] = no\n"
+        "> else:\n"
+        "  >> Else [result].\n"
+        "> loop: `False`:\n"
+        "  >> Loop [item].\n"
+    )
+
+    diagnostics = features.compute_diagnostics(source, "nested-capability.kedi")
+
+    assert [diagnostic.range.start.line for diagnostic in diagnostics] == [4, 6]
+
+
 def test_legacy_template_lines_receive_adapter_capability_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1100,3 +1146,37 @@ def test_missing_import_diagnostics_ignore_corrupt_import_without_a_span(
     monkeypatch.setattr(features, "import_resolution_error", lambda *_args: "invalid package")
 
     assert features._missing_import_diagnostics(program) == []
+
+
+def test_reassignment_diagnostics_require_a_visible_binding() -> None:
+    valid = "[count: int] = `0`\n> if: `True`:\n  [count] := `1`\n"
+    unknown = "> if: `True`:\n  [missing] := value\n"
+
+    assert features.compute_diagnostics(valid, "valid.kedi") == []
+    diagnostics = features.compute_diagnostics(unknown, "unknown.kedi")
+
+    assert [diagnostic.code for diagnostic in diagnostics] == ["K-REASSIGN-UNKNOWN"]
+    assert "missing" in diagnostics[0].message
+
+
+def test_reassignment_diagnostics_cover_reserved_missing_span_and_imported_values(
+    tmp_path: Path,
+) -> None:
+    from kedi.lang.ast import Program, ReassignStmt
+
+    reserved = features.compute_diagnostics("[args] := value\n", str(tmp_path / "reserved.kedi"))
+    assert [diagnostic.code for diagnostic in reserved] == ["K-REASSIGN-RESERVED"]
+
+    assert (
+        features._reassignment_diagnostics(
+            Program(toplevel_body=[ReassignStmt(name="missing", loc=None)])
+        )
+        == []
+    )
+
+    module = tmp_path / "values.kedi"
+    module.write_text("> export:\n  value\n\n[value] = original\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: values:\n  value\n\n[value] := replacement\n"
+    main.write_text(source, encoding="utf-8")
+    assert features.compute_diagnostics(source, str(main)) == []

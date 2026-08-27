@@ -255,6 +255,18 @@ class AssignStmt(Stmt):
 
 
 @dataclass
+class ReassignBlockStmt(Stmt):
+    name: str = ""
+    code: str = ""
+
+
+@dataclass
+class ReassignStmt(Stmt):
+    name: str = ""
+    expr: Expr = field(default_factory=list)
+
+
+@dataclass
 class IfStmt(Stmt):
     condition_code: str = ""
     body: List[Stmt] = field(default_factory=list)
@@ -268,8 +280,10 @@ class LoopStmt(Stmt):
     binder: str = ""
     iterable_code: str = ""
     body: List[Stmt] = field(default_factory=list)
+    map_body: Optional[List[Stmt]] = None
     binder_loc: Optional[Span] = field(default=None, repr=False, compare=False)
     iterable_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    map_loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

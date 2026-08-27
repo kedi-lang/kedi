@@ -63,7 +63,7 @@ def test_control_flow_hover_describes_kedi_headers_and_defers_python() -> None:
     assert "Conditional branch" in if_hover.contents.value
     assert "> if: `condition`:" in if_hover.contents.value
     assert loop_hover is not None
-    assert "Sequential loop" in loop_hover.contents.value
+    assert "Iterable loop" in loop_hover.contents.value
     assert python_hover is None
 
 
@@ -158,7 +158,7 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
         lsp.Position(3, lines[3].index("outer")),
     )
     assert outer_hover is not None
-    assert "Local" in outer_hover.contents.value
+    assert "Module value" in outer_hover.contents.value
 
     outer_binder_refs = features.compute_references(
         source,
@@ -651,6 +651,105 @@ def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
         (0, 7),
         (2, 7),
     ]
+
+
+def test_reassignment_and_map_references_resolve_to_iteration_owners() -> None:
+    from kedi.lang import parse_program
+
+    source = (
+        "[count: int] = `0`\n"
+        "> loop [item]: `[1, 2]`:\n"
+        "  [label] = item-<item>\n"
+        "> map:\n"
+        "  [count] := <label>\n"
+        "  = <item>\n"
+        "= <count>\n"
+    )
+    uri = "file:///tmp/map.kedi"
+
+    count_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=3),
+    )
+    label_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=14),
+    )
+    binder_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=1, character=8),
+        include_declaration=True,
+    )
+    count_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=0, character=2),
+        include_declaration=True,
+    )
+    map_hover = features.compute_hover(
+        source,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=9),
+    )
+
+    assert count_definition is not None
+    assert (count_definition.range.start.line, count_definition.range.start.character) == (0, 1)
+    assert label_definition is not None
+    assert (label_definition.range.start.line, label_definition.range.start.character) == (2, 3)
+    assert [
+        (location.range.start.line, location.range.start.character)
+        for location in binder_references
+    ] == [(1, 8), (2, 18), (5, 5)]
+    assert [
+        (location.range.start.line, location.range.start.character) for location in count_references
+    ] == [(0, 1), (4, 3), (6, 3)]
+    assert map_hover is not None
+    assert (
+        features._generic_hover(
+            parse_program(source),
+            lsp.Position(line=4, character=9),
+        )
+        is not None
+    )
+
+
+def test_imported_reassignment_target_resolves_to_exported_declaration(tmp_path: Path) -> None:
+    module = tmp_path / "values.kedi"
+    module.write_text("> export:\n  value\n\n[value] = original\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: values:\n  value\n\n[value] := replacement\n"
+    main.write_text(source, encoding="utf-8")
+
+    definition = features.compute_definition(
+        source,
+        main.as_uri(),
+        str(main),
+        lsp.Position(line=3, character=2),
+    )
+
+    assert definition is not None
+    assert definition.uri == module.as_uri()
+    assert (definition.range.start.line, definition.range.start.character) == (3, 1)
+
+
+def test_control_flow_declaration_does_not_resolve_outside_its_child_scope() -> None:
+    source = "> if: `True`:\n  [branch_only] = yes\n= <branch_only>\n"
+
+    definition = features.compute_definition(
+        source,
+        "file:///tmp/scope.kedi",
+        "/tmp/scope.kedi",
+        lsp.Position(line=2, character=3),
+    )
+
+    assert definition is None
 
 
 # ---------------------------------------------------------------------

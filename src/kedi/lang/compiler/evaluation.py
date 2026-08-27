@@ -176,7 +176,7 @@ def prepare_segments(
             # None (no annotation) still defaults to str downstream; a written
             # but unresolvable annotation raises instead of silently becoming str.
             pytype = kedi_type.resolve_required(rt, kwargs)
-            expr.append(rt.o(seg.name, pytype))
+            expr.append(rt.o(seg.name, pytype, binding_contract=kedi_type))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
             expr.append(str(value))

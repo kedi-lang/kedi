@@ -29,6 +29,23 @@ def test_interactive_session_persists_native_values_without_replay() -> None:
     assert calls == ["first"]
 
 
+def test_interactive_session_persists_map_aggregate_without_iteration_locals() -> None:
+    with kedi.interactive() as session:
+        session.execute("[results: list] = `[]`")
+        session.execute(
+            "> loop [item]: `[1, 2, 3]`:\n"
+            "  [scaled: int] = `item * 11`\n"
+            "> map:\n"
+            "  `results.append((item, scaled))`\n"
+        )
+
+        assert session.execute("= `sorted(results)`") == [(1, 11), (2, 22), (3, 33)]
+        with pytest.raises(KediExecutionError, match="item"):
+            session.execute("= `item`")
+        with pytest.raises(KediExecutionError, match="scaled"):
+            session.execute("= `scaled`")
+
+
 def test_interactive_session_procedure_reads_latest_global_value() -> None:
     with kedi.interactive() as session:
         session.execute(

@@ -124,6 +124,8 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
+    ReassignBlockStmt,
+    ReassignStmt,
     LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
@@ -150,6 +152,7 @@ from ..lang.ast import (
 )
 from ..lang.call_arg_access import iter_call_arg_nested
 from ..lang.compiler.environment import (
+    CLI_ARGS_IDENTIFIER,
     KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS,
     KEDI_RUNTIME_TYPE_ORIGINS,
     KEDI_TYPING_TYPE_NAMES,
@@ -256,7 +259,7 @@ def _segments_of(stmt) -> list:
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
-    if isinstance(stmt, AssignStmt):
+    if isinstance(stmt, (AssignStmt, ReassignStmt)):
         return list(stmt.expr)
     if isinstance(stmt, (IfStmt, ConditionalLoopStmt)):
         return list(stmt.condition_segments or [])
@@ -266,7 +269,9 @@ def _segments_of(stmt) -> list:
 def _control_body_statements(stmt) -> list:
     if isinstance(stmt, IfStmt):
         return [*stmt.body, *(stmt.else_body or [])]
-    if isinstance(stmt, (LoopStmt, ConditionalLoopStmt)):
+    if isinstance(stmt, LoopStmt):
+        return [*stmt.body, *(stmt.map_body or [])]
+    if isinstance(stmt, ConditionalLoopStmt):
         return list(stmt.body)
     return []
 
@@ -291,6 +296,7 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
         out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
+        out.extend(_reassignment_diagnostics(prog))
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -317,6 +323,58 @@ def _annotated_type_diagnostics(
     out: List[lsp.Diagnostic] = []
     for expr in _iter_type_exprs(prog):
         _collect_annotated_type_diagnostics(expr, out)
+    return out
+
+
+def _reassignment_diagnostics(
+    prog: Program | ProgramWithValidation,
+) -> List[lsp.Diagnostic]:
+    imported_values = imported_surface_for_program(prog).values
+    out: List[lsp.Diagnostic] = []
+
+    def visit(
+        statements: Sequence[object],
+        proc: ProcedureDef | None,
+        ancestors: tuple[ProcedureDef, ...],
+    ) -> None:
+        for stmt in _iter_control_statements(statements):
+            if not isinstance(stmt, (ReassignStmt, ReassignBlockStmt)):
+                continue
+            target_span = assignment_name_span(stmt)
+            if target_span is None:
+                continue
+            if stmt.name == CLI_ARGS_IDENTIFIER:
+                out.append(
+                    _error(
+                        target_span,
+                        "K-REASSIGN-RESERVED",
+                        f"Reserved CLI argument binding '{CLI_ARGS_IDENTIFIER}' cannot be reassigned.",
+                    )
+                )
+                continue
+            if stmt.name in imported_values:
+                continue
+            if (
+                _resolve_value_declaration(
+                    prog,
+                    proc,
+                    ancestors,
+                    stmt.name,
+                    target_span,
+                )
+                is None
+            ):
+                out.append(
+                    _error(
+                        target_span,
+                        "K-REASSIGN-UNKNOWN",
+                        f"Cannot reassign unknown Kedi binding '{stmt.name}'.",
+                    )
+                )
+
+    visit(prog.toplevel_body, None, ())
+    for proc, ancestors in _procedure_scope_entries(prog):
+        visit(proc.body, proc, ancestors)
     return out
 
 
@@ -440,6 +498,14 @@ class SymbolRef:
     scope_proc: Optional[ProcedureDef]
     # The span of the identifier token under the cursor (for prepareRename).
     cursor_span: Span
+
+
+@dataclass(frozen=True)
+class _ValueDeclaration:
+    kind: str
+    name: str
+    declaration_span: Span
+    scope_proc: Optional[ProcedureDef]
 
 
 def _merged_profile_defs(
@@ -1271,6 +1337,64 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, IfStmt):
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                    type_defs,
+                    warned_approval_spans,
+                )
+            )
+            if stmt.else_body is not None:
+                diagnostics.extend(
+                    _scan_capability_scope(
+                        prog,
+                        stmt.else_body,
+                        active,
+                        profile_defs,
+                        profile_states,
+                        proc_names,
+                        type_defs,
+                        warned_approval_spans,
+                    )
+                )
+            continue
+        if isinstance(stmt, LoopStmt):
+            loop_statements = list(stmt.body)
+            if stmt.map_body is not None:
+                loop_statements.extend(stmt.map_body)
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    loop_statements,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                    type_defs,
+                    warned_approval_spans,
+                )
+            )
+            continue
+        if isinstance(stmt, ConditionalLoopStmt):
+            diagnostics.extend(
+                _scan_capability_scope(
+                    prog,
+                    stmt.body,
+                    active,
+                    profile_defs,
+                    profile_states,
+                    proc_names,
+                    type_defs,
+                    warned_approval_spans,
+                )
+            )
             continue
         if isinstance(stmt, ProcedureDef):
             diagnostics.extend(
@@ -2225,6 +2349,168 @@ def _resolve_lexical_name(
     return None
 
 
+def _direct_statement_declarations(
+    stmt,
+    name: str,
+    proc: Optional[ProcedureDef],
+) -> list[_ValueDeclaration]:
+    declarations: list[_ValueDeclaration] = []
+    if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
+        span = assignment_name_span(stmt)
+        if span is not None:
+            declarations.append(
+                _ValueDeclaration(
+                    kind="local" if proc is not None else "module_value",
+                    name=name,
+                    declaration_span=span,
+                    scope_proc=proc,
+                )
+            )
+    for segment in _segments_of(stmt):
+        if isinstance(segment, OutputSegment) and segment.name == name:
+            span = _output_name_span(segment)
+            if span is not None:
+                declarations.append(
+                    _ValueDeclaration(
+                        kind="output_decl",
+                        name=name,
+                        declaration_span=span,
+                        scope_proc=proc,
+                    )
+                )
+    return declarations
+
+
+def _statements_contain_byte(statements: Sequence[object], byte: int) -> bool:
+    for stmt in statements:
+        loc = getattr(stmt, "loc", None)
+        if isinstance(loc, Span) and loc.start_byte <= byte < loc.end_byte:
+            return True
+    return False
+
+
+def _declaration_in_scope_path(
+    statements: Sequence[object],
+    name: str,
+    reference_byte: int,
+    proc: Optional[ProcedureDef],
+) -> _ValueDeclaration | None:
+    """Resolve ``name`` in the lexical block containing ``reference_byte``.
+
+    Control-flow bodies are child scopes. A loop body and its attached map
+    share one iteration scope, with the binder acting as that scope's first
+    declaration.
+    """
+
+    latest: _ValueDeclaration | None = None
+    for stmt in statements:
+        loc = getattr(stmt, "loc", None)
+        if loc is None:
+            continue
+        if loc.start_byte >= reference_byte:
+            break
+        if loc.start_byte <= reference_byte < loc.end_byte:
+            if isinstance(stmt, IfStmt):
+                for branch in (stmt.body, stmt.else_body or []):
+                    if _statements_contain_byte(branch, reference_byte):
+                        return (
+                            _declaration_in_scope_path(branch, name, reference_byte, proc) or latest
+                        )
+                return latest
+            if isinstance(stmt, LoopStmt):
+                iteration_body = [*stmt.body, *(stmt.map_body or [])]
+                if not _statements_contain_byte(iteration_body, reference_byte):
+                    return latest
+                nested = _declaration_in_scope_path(
+                    iteration_body,
+                    name,
+                    reference_byte,
+                    proc,
+                )
+                if nested is not None:
+                    return nested
+                if stmt.binder == name and stmt.binder_loc is not None:
+                    return _ValueDeclaration(
+                        kind="loop_binder",
+                        name=name,
+                        declaration_span=stmt.binder_loc,
+                        scope_proc=proc,
+                    )
+                return latest
+            if isinstance(stmt, ConditionalLoopStmt):
+                if _statements_contain_byte(stmt.body, reference_byte):
+                    return (
+                        _declaration_in_scope_path(
+                            stmt.body,
+                            name,
+                            reference_byte,
+                            proc,
+                        )
+                        or latest
+                    )
+                return latest
+            return latest
+        declarations = _direct_statement_declarations(stmt, name, proc)
+        if declarations:
+            latest = max(declarations, key=lambda item: item.declaration_span.start_byte)
+    return latest
+
+
+def _resolve_value_declaration(
+    prog: Program | ProgramWithValidation,
+    proc: Optional[ProcedureDef],
+    ancestor_procs: tuple[ProcedureDef, ...],
+    name: str,
+    reference_span: Span,
+) -> _ValueDeclaration | None:
+    reference_byte = reference_span.start_byte
+    if proc is not None:
+        declaration = _declaration_in_scope_path(proc.body, name, reference_byte, proc)
+        if declaration is not None:
+            return declaration
+        parameter_span = _param_decl_span(proc, name) if name in proc.params else None
+        if parameter_span is not None:
+            return _ValueDeclaration("parameter", name, parameter_span, proc)
+
+        for ancestor in reversed(ancestor_procs):
+            declaration = _declaration_in_scope_path(
+                ancestor.body,
+                name,
+                reference_byte,
+                ancestor,
+            )
+            if declaration is not None:
+                return declaration
+            parameter_span = _param_decl_span(ancestor, name) if name in ancestor.params else None
+            if parameter_span is not None:
+                return _ValueDeclaration("parameter", name, parameter_span, ancestor)
+
+        top_level_reference = (
+            max(
+                (
+                    loc.end_byte
+                    for stmt in prog.toplevel_body
+                    if isinstance((loc := getattr(stmt, "loc", None)), Span)
+                ),
+                default=reference_byte,
+            )
+            + 1
+        )
+        return _declaration_in_scope_path(
+            prog.toplevel_body,
+            name,
+            top_level_reference,
+            None,
+        )
+
+    return _declaration_in_scope_path(
+        prog.toplevel_body,
+        name,
+        reference_byte,
+        None,
+    )
+
+
 def _resolve_in_proc_signature_types(
     proc: ProcedureDef,
     pos: lsp.Position,
@@ -2270,9 +2556,46 @@ def _resolve_in_stmt(
         name_span = assignment_name_span(stmt)
         if name_span is not None and _position_inside(pos, name_span):
             return SymbolRef(
-                kind="local",
+                kind=(
+                    "module_value"
+                    if proc is None and any(stmt is item for item in prog.toplevel_body)
+                    else "local"
+                ),
                 name=stmt.name,
                 declaration_span=name_span,
+                scope_proc=proc,
+                cursor_span=name_span,
+            )
+    if isinstance(stmt, (ReassignStmt, ReassignBlockStmt)) and stmt.loc is not None:
+        name_span = assignment_name_span(stmt)
+        if name_span is not None and _position_inside(pos, name_span):
+            declaration = _resolve_value_declaration(
+                prog,
+                proc,
+                ancestor_procs,
+                stmt.name,
+                name_span,
+            )
+            if declaration is not None:
+                return SymbolRef(
+                    kind=declaration.kind,
+                    name=stmt.name,
+                    declaration_span=declaration.declaration_span,
+                    scope_proc=declaration.scope_proc,
+                    cursor_span=name_span,
+                )
+            if stmt.name in imported_values:
+                return SymbolRef(
+                    kind="imported_value",
+                    name=stmt.name,
+                    declaration_span=imported_values[stmt.name].declaration_span,
+                    scope_proc=proc,
+                    cursor_span=name_span,
+                )
+            return SymbolRef(
+                kind="runtime_value" if stmt.name == "args" else "local",
+                name=stmt.name,
+                declaration_span=None,
                 scope_proc=proc,
                 cursor_span=name_span,
             )
@@ -2335,6 +2658,7 @@ def _resolve_in_stmt(
             type_by_name,
             imported_values,
             ancestor_procs,
+            prog=prog,
         )
         if r is not None:
             return r
@@ -2350,27 +2674,6 @@ def _resolve_in_stmt(
             ancestor_procs,
         )
         if r is not None:
-            if (
-                isinstance(stmt, LoopStmt)
-                and r.name == stmt.binder
-                and r.kind
-                in {
-                    "local",
-                    "parameter",
-                    "param_decl",
-                    "module_value",
-                    "imported_value",
-                    "runtime_value",
-                }
-                and stmt.binder_loc is not None
-            ):
-                return SymbolRef(
-                    kind="loop_binder",
-                    name=stmt.binder,
-                    declaration_span=stmt.binder_loc,
-                    scope_proc=proc,
-                    cursor_span=r.cursor_span,
-                )
             return r
     return None
 
@@ -2383,20 +2686,36 @@ def _resolve_in_segment(
     type_by_name: dict,
     imported_values: dict[str, ImportedValueInfo],
     ancestor_procs: tuple[ProcedureDef, ...] = (),
+    *,
+    prog: Program | ProgramWithValidation | None = None,
 ) -> Optional[SymbolRef]:
     if not hasattr(seg, "loc") or seg.loc is None or not _position_inside(pos, seg.loc):
         return None
     if isinstance(seg, InputSegment):
         # Could be a parameter, an output, or an assign-target reference.
         name_span = _input_name_span(seg) or seg.loc
-        lexical = _resolve_lexical_name(proc, ancestor_procs, seg.name)
-        if lexical is not None:
-            kind, declaration_span, owner = lexical
+        declaration = (
+            _resolve_value_declaration(
+                prog,
+                proc,
+                ancestor_procs,
+                seg.name,
+                name_span,
+            )
+            if prog is not None
+            else None
+        )
+        if declaration is None and prog is None:
+            lexical = _resolve_lexical_name(proc, ancestor_procs, seg.name)
+            if lexical is not None:
+                kind, declaration_span, owner = lexical
+                declaration = _ValueDeclaration(kind, seg.name, declaration_span, owner)
+        if declaration is not None:
             return SymbolRef(
-                kind=kind,
+                kind=declaration.kind,
                 name=seg.name,
-                declaration_span=declaration_span,
-                scope_proc=owner,
+                declaration_span=declaration.declaration_span,
+                scope_proc=declaration.scope_proc,
                 cursor_span=name_span,
             )
         if seg.name in imported_values:
@@ -2454,6 +2773,7 @@ def _resolve_in_segment(
                     type_by_name,
                     imported_values,
                     ancestor_procs,
+                    prog=prog,
                 )
                 if r is not None:
                     return r
@@ -3029,6 +3349,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, LoopStmt):
             for stmt in node.body:
                 visit(stmt)
+            for stmt in node.map_body or []:
+                visit(stmt)
             return
         if isinstance(node, ConditionalLoopStmt):
             for segment in node.condition_segments or []:
@@ -3053,7 +3375,7 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for seg in node.segments:
                 visit(seg)
             return
-        if isinstance(node, AssignStmt):
+        if isinstance(node, (AssignStmt, ReassignStmt)):
             for seg in node.expr:
                 visit(seg)
             return
@@ -3156,6 +3478,16 @@ def _describe_ast_node(node) -> Optional[str]:
             f"`{node.name}: {ann}`\n\n"
             "Value returned by this Python block and assigned in the current scope."
         )
+    if isinstance(node, ReassignStmt):
+        return (
+            f"**Reassignment** `{node.name}`\n\n"
+            "Updates the nearest visible Kedi binding while preserving its declared type."
+        )
+    if isinstance(node, ReassignBlockStmt):
+        return (
+            f"**Python reassignment** `{node.name}`\n\n"
+            "The Python block result updates the nearest visible Kedi binding."
+        )
     if isinstance(node, ReturnStmt):
         return "**Return**\n\nFinal value emitted by this procedure or top-level program."
     if isinstance(node, ReturnBlockStmt):
@@ -3176,10 +3508,16 @@ def _describe_ast_node(node) -> Optional[str]:
             "only the selected Kedi body executes."
         )
     if isinstance(node, LoopStmt):
+        continuation = (
+            " Its attached map stage continues each iteration in that iteration's isolated scope."
+            if node.map_body is not None
+            else ""
+        )
         return (
-            f"**Sequential loop** `{node.binder}`\n\n"
+            f"**Iterable loop** `{node.binder}`\n\n"
             "Evaluates the embedded Python expression once and requires an `Iterable`. "
-            "The binder is restored when the loop exits."
+            "Each iteration has an isolated child scope."
+            f"{continuation}"
         )
     if isinstance(node, ConditionalLoopStmt):
         if node.condition_segments is not None:
@@ -4008,48 +4346,52 @@ def _find_all_references(
         out.append(_declaration_identifier_span(prog, sym))
 
     if sym.kind in ("procedure", "agent_tool"):
-        candidates: List[Span] = []
+        procedure_candidates: List[Span] = []
         for profile in prog.profile_defs.values():
             for tool_name, tool_span in _profile_use_entry_spans(prog, profile):
                 if tool_name == sym.name:
-                    candidates.append(tool_span)
+                    procedure_candidates.append(tool_span)
         for suite in _validation_suites(prog):
             if suite.procedure_name == sym.name:
                 suite_span = _validation_procedure_span(prog, suite)
                 if suite_span is not None:
-                    candidates.append(suite_span)
+                    procedure_candidates.append(suite_span)
         for p in _all_procedures(prog):
             for stmt in _iter_control_statements(p.body):
                 for seg in _segments_of(stmt):
-                    _collect_call_refs(seg, sym.name, candidates)
+                    _collect_call_refs(seg, sym.name, procedure_candidates)
         for stmt in _iter_control_statements(prog.toplevel_body):
             for seg in _segments_of(stmt):
-                _collect_call_refs(seg, sym.name, candidates)
+                _collect_call_refs(seg, sym.name, procedure_candidates)
         if prog.toplevel_return is not None:
             for seg in _segments_of(prog.toplevel_return):
-                _collect_call_refs(seg, sym.name, candidates)
+                _collect_call_refs(seg, sym.name, procedure_candidates)
         out.extend(
-            candidate for candidate in candidates if _reference_resolves_to(prog, candidate, sym)
+            candidate
+            for candidate in procedure_candidates
+            if _reference_resolves_to(prog, candidate, sym)
         )
     elif sym.kind == "type":
-        candidates = []
+        type_candidates: List[Span] = []
         for td in _all_type_defs(prog):
-            _collect_type_refs_in_type_def(td, sym.name, candidates)
+            _collect_type_refs_in_type_def(td, sym.name, type_candidates)
         for profile in prog.profile_defs.values():
             for member in profile.output_members:
-                _collect_type_refs_in_expr(member.type_expr, sym.name, candidates)
+                _collect_type_refs_in_expr(member.type_expr, sym.name, type_candidates)
         for stmt in prog.toplevel_body:
-            _collect_type_refs_in_stmt(stmt, sym.name, candidates)
+            _collect_type_refs_in_stmt(stmt, sym.name, type_candidates)
         for p in _all_procedures(prog):
             if p.return_type_expr is not None:
-                _collect_type_refs_in_expr(p.return_type_expr, sym.name, candidates)
+                _collect_type_refs_in_expr(p.return_type_expr, sym.name, type_candidates)
             for v in (p.param_type_exprs or {}).values():
                 if v is not None:
-                    _collect_type_refs_in_expr(v, sym.name, candidates)
+                    _collect_type_refs_in_expr(v, sym.name, type_candidates)
             for stmt in p.body:
-                _collect_type_refs_in_stmt(stmt, sym.name, candidates)
+                _collect_type_refs_in_stmt(stmt, sym.name, type_candidates)
         out.extend(
-            candidate for candidate in candidates if _reference_resolves_to(prog, candidate, sym)
+            candidate
+            for candidate in type_candidates
+            if _reference_resolves_to(prog, candidate, sym)
         )
     elif sym.kind == "agent_profile":
         for profile in prog.profile_defs.values():
@@ -4064,22 +4406,27 @@ def _find_all_references(
                 target_span = _use_single_target_span(prog, stmt)
                 if target_span is not None:
                     out.append(target_span)
-    elif sym.kind == "loop_binder" and sym.declaration_span is not None:
-        _collect_loop_binder_refs(prog, sym, out)
-    elif sym.kind in ("parameter", "param_decl", "local", "output_decl"):
-        if sym.scope_proc is not None:
-            for proc, ancestors in _procedure_scope_entries(prog):
-                for stmt in _iter_control_statements(proc.body):
-                    for seg in _segments_of(stmt):
-                        _collect_lexical_input_refs(
-                            seg,
-                            sym.name,
-                            proc,
-                            ancestors,
-                            sym.scope_proc,
-                            sym.declaration_span,
-                            out,
-                        )
+    elif sym.kind in {
+        "parameter",
+        "param_decl",
+        "local",
+        "output_decl",
+        "loop_binder",
+        "module_value",
+        "imported_value",
+    }:
+        value_candidates: list[Span] = []
+        _collect_value_reference_candidates(prog.toplevel_body, sym.name, value_candidates)
+        if prog.toplevel_return is not None:
+            for segment in _segments_of(prog.toplevel_return):
+                _collect_input_refs(segment, sym.name, value_candidates)
+        for procedure in _all_procedures(prog):
+            _collect_value_reference_candidates(procedure.body, sym.name, value_candidates)
+        out.extend(
+            candidate
+            for candidate in value_candidates
+            if _reference_resolves_to(prog, candidate, sym)
+        )
     # Deduplicate spans by (start_byte, end_byte) — extra-safe.
     seen: set = set()
     uniq: List[Span] = []
@@ -4125,10 +4472,13 @@ def _reference_resolves_to(
     if resolved is None:  # pragma: no cover - collectors only emit resolvable syntax spans
         return False
     procedure_kinds = {"procedure", "agent_tool"}
+    parameter_kinds = {"parameter", "param_decl"}
     same_kind = (
         resolved.kind == target.kind
         or resolved.kind in procedure_kinds
         and target.kind in procedure_kinds
+        or resolved.kind in parameter_kinds
+        and target.kind in parameter_kinds
     )
     return same_kind and resolved.declaration_span == target.declaration_span
 
@@ -4153,6 +4503,20 @@ def _collect_input_refs(seg, name: str, out: List[Span]) -> None:
     elif isinstance(seg, CallSegment):
         for arg in seg.args:
             _collect_literal_arg_refs(arg, name, out, _collect_input_refs)
+
+
+def _collect_value_reference_candidates(
+    statements: Sequence[object],
+    name: str,
+    out: List[Span],
+) -> None:
+    for stmt in _iter_control_statements(statements):
+        if isinstance(stmt, (ReassignStmt, ReassignBlockStmt)) and stmt.name == name:
+            target_span = assignment_name_span(stmt)
+            if target_span is not None:
+                out.append(target_span)
+        for segment in _segments_of(stmt):
+            _collect_input_refs(segment, name, out)
 
 
 def _procedure_scope_entries(
@@ -4208,8 +4572,10 @@ def _collect_loop_binder_refs(
                 is_target = stmt.binder_loc == target.declaration_span
                 if is_target:
                     visit(stmt.body, True)
+                    visit(stmt.map_body or [], True)
                 elif not (active and stmt.binder == target.name):
                     visit(stmt.body, active)
+                    visit(stmt.map_body or [], active)
                 continue
 
             if active:

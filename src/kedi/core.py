@@ -139,6 +139,7 @@ class InputExpr:
 class OutputExpr:
     key: str
     pytype: Optional[Any] = None
+    binding_contract: Optional[Any] = None
 
 
 @dataclass
@@ -154,8 +155,13 @@ def i(key: str) -> InputExpr:
     return InputExpr(key)
 
 
-def o(key: str, pytype: Optional[Any] = None) -> OutputExpr:
-    return OutputExpr(key, pytype)
+def o(
+    key: str,
+    pytype: Optional[Any] = None,
+    *,
+    binding_contract: Optional[Any] = None,
+) -> OutputExpr:
+    return OutputExpr(key, pytype, binding_contract)
 
 
 def c(func_name: str, *args: Any) -> CallExpr:
@@ -212,6 +218,10 @@ class KediRuntime:
         self._import_env: ValueEnv = {}
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
             "kedi_current_env", default=None
+        )
+        self._procedure_env_observer: ContextVar[Callable[[ValueEnv], None] | None] = ContextVar(
+            "kedi_procedure_env_observer",
+            default=None,
         )
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
@@ -292,8 +302,14 @@ class KediRuntime:
     def i(self, key: str) -> InputExpr:
         return i(key)
 
-    def o(self, key: str, pytype: Optional[Any] = None) -> OutputExpr:
-        return o(key, pytype)
+    def o(
+        self,
+        key: str,
+        pytype: Optional[Any] = None,
+        *,
+        binding_contract: Optional[Any] = None,
+    ) -> OutputExpr:
+        return o(key, pytype, binding_contract=binding_contract)
 
     def c(self, func_name: str, *args: Any) -> CallExpr:
         return c(func_name, *args)
@@ -544,6 +560,10 @@ class KediRuntime:
                 )
                 with frame_ctx:
                     result = fn(*args)
+                observer = self._procedure_env_observer.get()
+                observed_env = self._current_env.get()
+                if observer is not None and observed_env is not None:
+                    observer(observed_env)
                 final = (
                     self._evaluate_value(result, local_env)
                     if isinstance(result, (InputExpr, CallExpr))
@@ -794,7 +814,9 @@ class KediRuntime:
             env[capture_key] = response
             return {capture_key: response}
 
-        env_snapshot = dict(env)
+        from .lang.compiler.environment import snapshot_visible_values
+
+        env_snapshot = snapshot_visible_values(env)
 
         def _job() -> Dict[str, Any]:
             token = self._current_env.set(env_snapshot)
@@ -915,6 +937,20 @@ class KediRuntime:
             out.key: (out.pytype if out.pytype is not None else str) for out in outputs
         }
         explicit_typed_fields = {out.key for out in outputs if out.pytype is not None}
+        binding_contracts = {out.key: out.binding_contract for out in outputs}
+
+        def declare_output(key: str, value: Any) -> None:
+            from .lang.compiler.environment import BindingMetadata, ScopeFrame
+
+            if isinstance(env, ScopeFrame):
+                env.declare(
+                    key,
+                    value,
+                    BindingMetadata(type_contract=binding_contracts[key]),
+                )
+            else:
+                env[key] = value
+
         # Keep question format stable for tests; append description after to preserve key parsing
         prompt_template = (
             "Fields to be substituted into the template string for final construction: ({})."
@@ -1037,7 +1073,7 @@ class KediRuntime:
         if not parallel:
             result_map = _produce()  # raises on the main thread, wrapped by the trace frame
             for key in required:
-                env[key] = result_map[key]
+                declare_output(key, result_map[key])
             return {k: env[k] for k in required}
 
         # Parallel path. Snapshot the value-env by VALUE so the deferred worker sees the env as of
@@ -1045,7 +1081,9 @@ class KediRuntime:
         # shared by reference, which would let later main-thread writes leak into a scheduled job.
         # Every per-call adapter scope (tool/profile ContextVars) is isolated per worker by the
         # copy_context() snapshot, so even tool-using templates pipeline safely.
-        env_snapshot = dict(env)
+        from .lang.compiler.environment import snapshot_visible_values
+
+        env_snapshot = snapshot_visible_values(env)
 
         def _job() -> Dict[str, Any]:
             # The job runs on a worker AFTER the originating template's trace frame has exited on the
@@ -1068,7 +1106,7 @@ class KediRuntime:
         self._register_outstanding(future)
         views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
         for key in required:
-            env[key] = views[key]
+            declare_output(key, views[key])
         return dict(views)
 
     def _run_conversation_call(

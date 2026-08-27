@@ -624,8 +624,65 @@ def test_python_virtual_document_maps_template_and_conditional_loop_headers() ->
     assert virtual["text"].count("while (") == 2
 
 
-def test_python_virtual_control_flow_defensive_fallbacks_and_scope_merging() -> None:
-    from kedi.lang.ast import ConditionalLoopStmt, IfStmt, LoopStmt, ProcDefStmt, ProcedureDef
+def test_python_virtual_map_scope_and_reassignment_do_not_leak_or_shadow() -> None:
+    src = (
+        "[total: int] = `0`\n"
+        "> loop [item]: `[1, 2]`:\n"
+        "  [double: int] = `item * 2`\n"
+        "> map:\n"
+        "  [total] := `total + double`\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/map.kedi")
+    text = virtual["text"]
+    module_stubs = text.split("def __kedi_toplevel__", 1)[0]
+
+    ast.parse(text)
+    assert "double:" not in module_stubs
+    assert "        total\n" in text
+    assert "__kedi_reassigned_total_5: int = (" in text
+    assert "            total + double" in text
+
+
+def test_python_virtual_emits_procedure_map_and_reassignment_variants() -> None:
+    src = (
+        "@collect() -> int:\n"
+        "  [total: int] = `0`\n"
+        "  > loop [item]: `[1, 2]`:\n"
+        "    @identity() -> int:\n"
+        "      = `item`\n"
+        "    [double: int] = `item * 2`\n"
+        "  > map:\n"
+        "    [total] := `total + double`\n"
+        "  > loop: `False`:\n"
+        "    [unused: int] = `0`\n"
+        "  [total] := ```\n"
+        "  return total\n"
+        "  ```\n"
+        "  [total] := unchanged\n"
+        "  = `total`\n"
+    )
+
+    virtual = compute_python_virtual_document(src, "/tmp/procedure-map.kedi")
+
+    ast.parse(virtual["text"])
+    assert "def __kedi_reassign_block_total_11" in virtual["text"]
+    assert "__kedi_reassigned_total_14: int" in virtual["text"]
+    assert "def identity() -> int:" in virtual["text"]
+
+
+def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -> None:
+    from kedi.lang.ast import (
+        ConditionalLoopStmt,
+        IfStmt,
+        LoopStmt,
+        ProcDefStmt,
+        ProcedureDef,
+        PythonExprNativeSegment,
+        ReassignBlockStmt,
+        ReassignStmt,
+        TextSegment,
+    )
     from kedi.lsp import python_virtual as pv
 
     builder = pv.VirtualBuilder("", None)
@@ -659,11 +716,6 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_merging() -> 
     assert "cast(bool, _kedi_placeholder())" in text
     assert text.endswith("    pass\n")
 
-    merged: dict[str, pv.ScopeName] = {}
-    pv._merge_control_scopes(merged, {"value": pv.ScopeName("int", None)})
-    pv._merge_control_scopes(merged, {"value": pv.ScopeName("str", None)})
-    assert merged["value"].typ == "Any"
-
     nested = ProcedureDef(name="nested", params=[])
     statements = list(
         pv._iter_control_statements(
@@ -671,6 +723,41 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_merging() -> 
         )
     )
     assert any(isinstance(stmt, ProcDefStmt) for stmt in statements)
+
+    nested_loop = LoopStmt(
+        binder="item",
+        body=[ProcDefStmt(proc=nested)],
+        map_body=[ReassignStmt(name="value", expr=[TextSegment(text="x")])],
+    )
+    conditional = ConditionalLoopStmt(
+        condition_code="",
+        body=[ProcDefStmt(proc=nested)],
+    )
+    walked = list(pv._iter_control_statements([nested_loop, conditional]))
+    assert len(walked) == 5
+    outer = ProcedureDef(name="outer", params=[], body=[nested_loop])
+    assert [proc.name for proc in pv._all_procedures([outer])] == ["outer", "nested"]
+
+    fallback_builder = pv.VirtualBuilder("", None)
+    fallback_cursor = pv.RegionCursor([])
+    pv._emit_reassign_block(
+        fallback_builder,
+        fallback_cursor,
+        ReassignBlockStmt(name="value", code="return 1"),
+        {"value": pv.ScopeName(typ="int", source_range=None)},
+        "",
+    )
+    pv._emit_reassign_stmt(
+        fallback_builder,
+        fallback_cursor,
+        ReassignStmt(
+            name="value",
+            expr=[PythonExprNativeSegment(code="1")],
+        ),
+        {"value": pv.ScopeName(typ="int", source_range=None)},
+        "",
+    )
+    assert "_kedi_placeholder" in fallback_builder.finish()
 
 
 def test_python_virtual_document_maps_directive_inline_python() -> None:

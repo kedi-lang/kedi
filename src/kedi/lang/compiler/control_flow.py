@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, cast
+from time import perf_counter
+from typing import Any
 
 from ...core import KediRuntime
 from ...errors import KediTraceFrame, LoopIterationLimitError
 from ..ast import ConditionalLoopStmt, IfStmt, LoopStmt
-from .environment import assert_not_cli_args_identifier
+from .environment import ScopeFrame, assert_not_cli_args_identifier
 from .evaluation import evaluate_python_inline, render_expression
 
 
@@ -70,6 +71,17 @@ def evaluate_iterable(
 
 
 @contextmanager
+def managed_loop_iterator(values: Iterator[Any]) -> Iterator[Iterator[Any]]:
+    """Close a loop iterator when traversal finishes or its body fails."""
+    try:
+        yield values
+    finally:
+        close = getattr(values, "close", None)
+        if callable(close):
+            close()
+
+
+@contextmanager
 def branch_trace(rt: KediRuntime, stmt: IfStmt, *, alternative: bool) -> Iterator[None]:
     """Add the selected branch to Kedi's source-mapped traceback stack."""
     with rt.trace_frame(
@@ -98,49 +110,133 @@ def assert_conditional_loop_capacity(rt: KediRuntime, completed_iterations: int)
 
 
 @contextmanager
+def child_scope(rt: KediRuntime, parent: dict[str, Any]) -> Iterator[ScopeFrame]:
+    """Activate one lexical child frame and restore the previous frame afterward."""
+    frame = ScopeFrame(parent=parent)
+    token = rt._current_env.set(frame)
+    try:
+        yield frame
+    finally:
+        rt._current_env.reset(token)
+
+
+@contextmanager
 def loop_binding(
     rt: KediRuntime,
     env: dict[str, Any],
     name: str,
     value: Any,
-) -> Iterator[None]:
-    """Install a synthetic binder and restore every environment it can mutate."""
+) -> Iterator[ScopeFrame]:
+    """Create one isolated iteration frame containing its synthetic binder."""
     assert_not_cli_args_identifier(name)
-    targets = _binding_targets(rt, env)
-    snapshots = [
-        (target, name in target, dict.__getitem__(target, name) if name in target else None)
-        for target in targets
-    ]
+    with child_scope(rt, env) as frame:
+        frame.declare_synthetic(name, value)
+        yield frame
 
-    # ScopedDict propagates ordinary assignments to its closure. A loop binder is
-    # synthetic and local, so install it directly and restore any body propagation
-    # from the snapshots below.
-    dict.__setitem__(env, name, value)
-    current = rt._current_env.get()
-    if isinstance(current, dict) and current is not env:
-        dict.__setitem__(current, name, value)
 
+def frame_promise_dependencies(frame: ScopeFrame) -> list[Any]:
+    """Return unique futures produced inside one iteration frame."""
+    from ...promise import KediPromise
+
+    dependencies: list[Any] = []
+    seen: set[int] = set()
+    for value in dict.values(frame):
+        if not isinstance(value, KediPromise):
+            continue
+        identity = id(value._future)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        dependencies.append(value._future)
+    return dependencies
+
+
+@contextmanager
+def active_scope(rt: KediRuntime, frame: ScopeFrame) -> Iterator[None]:
+    """Reactivate a retained frame for its deferred map continuation."""
+    token = rt._current_env.set(frame)
     try:
         yield
     finally:
-        for target, existed, previous in reversed(snapshots):
-            if existed:
-                dict.__setitem__(target, name, previous)
-            elif name in target:
-                dict.__delitem__(target, name)
+        rt._current_env.reset(token)
 
 
-def _binding_targets(rt: KediRuntime, env: dict[str, Any]) -> list[dict[str, Any]]:
-    targets: list[dict[str, Any]] = []
-    seen: set[int] = set()
+def await_map_futures(futures: list[Any]) -> None:
+    """Drain every map continuation and then surface the first failure."""
+    first_error: BaseException | None = None
+    for future in futures:
+        try:
+            future.result()
+        except BaseException as exc:  # noqa: BLE001 - preserve scheduler failure semantics
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
 
-    def add(target: object) -> None:
-        while isinstance(target, dict) and id(target) not in seen:
-            mapping = cast(dict[str, Any], target)
-            targets.append(mapping)
-            seen.add(id(mapping))
-            target = getattr(mapping, "_closure", None)
 
-    add(env)
-    add(rt._current_env.get())
-    return targets
+def run_map_continuations(
+    rt: KediRuntime,
+    stmt: LoopStmt,
+    frames: list[ScopeFrame],
+    continuation: Any,
+) -> None:
+    """Schedule one continuation per retained iteration frame and join the stage."""
+    if not frames or stmt.map_body is None:
+        return
+
+    from ...telemetry import add_counter, record_histogram, runtime_span
+
+    attributes = {"kedi.map.iteration_count": len(frames)}
+    with rt.trace_frame(KediTraceFrame(kind="map", label="map stage", span=stmt.map_loc)):
+        with runtime_span(
+            "map stage",
+            "map_stage",
+            attributes=attributes,
+            metric_attributes={},
+        ):
+            add_counter(
+                "runtime",
+                "kedi.map.iterations",
+                len(frames),
+                attributes={"state": "scheduled"},
+            )
+            futures: list[Any] = []
+
+            def execute(index: int, frame: ScopeFrame) -> None:
+                add_counter(
+                    "runtime",
+                    "kedi.map.iterations",
+                    attributes={"state": "started"},
+                )
+                try:
+                    continuation(index, frame)
+                except BaseException:  # noqa: BLE001 - retain the original map failure
+                    add_counter(
+                        "runtime",
+                        "kedi.map.iterations",
+                        attributes={"state": "failed"},
+                    )
+                    raise
+                add_counter(
+                    "runtime",
+                    "kedi.map.iterations",
+                    attributes={"state": "completed"},
+                )
+
+            for index, frame in enumerate(frames):
+                dependencies = frame_promise_dependencies(frame)
+                future = rt._engine.schedule(
+                    dependencies,
+                    lambda frame=frame, index=index: execute(index, frame),
+                )
+                futures.append(future)
+            wait_started_at = perf_counter()
+            try:
+                await_map_futures(futures)
+            finally:
+                record_histogram(
+                    "runtime",
+                    "kedi.map.wait.duration",
+                    max(0.0, perf_counter() - wait_started_at),
+                    unit="s",
+                )

@@ -9,7 +9,7 @@ from ...core import KediRuntime
 from ...errors import KediTypeExecutionError
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
-from .environment import ScopedDict, build_python_env
+from .environment import BindingMetadata, ScopeFrame, build_python_env
 from .statement_compiler import StatementExecutor
 from .type_system import KediType
 
@@ -31,18 +31,30 @@ class ProcedureCompiler:
         """Create procedure implementation with scoping."""
 
         def _body(**kwargs: Any) -> Any:
-            # Setup environment
-            kwargs = self._prepare_kwargs(proc, kwargs, parent_env)
             self._enforce_param_types(proc, kwargs)
 
-            # Setup scoped environment for execution
-            closure_env = ScopedDict(kwargs, readonly=set(proc.params), closure=parent_env)
+            lexical_parent = parent_env if parent_env is not None else self.rt._globals_env
+            closure_env = ScopeFrame(parent=lexical_parent)
+            for name, value in kwargs.items():
+                closure_env.declare(
+                    name,
+                    value,
+                    BindingMetadata(kind="parameter"),
+                )
 
-            # Execute body (nested procedures handled dynamically during execution)
-            last_return = self.executor.execute(proc, closure_env)
+            token = self.rt._current_env.set(closure_env)
+            try:
+                # Execute body (nested procedures handled dynamically during execution)
+                last_return = self.executor.execute(proc, closure_env)
 
-            # Enforce return type
-            return self._enforce_return_type(proc, last_return, closure_env)
+                observer = self.rt._procedure_env_observer.get()
+                if observer is not None:
+                    observer(closure_env)
+
+                # Enforce return type
+                return self._enforce_return_type(proc, last_return, closure_env)
+            finally:
+                self.rt._current_env.reset(token)
 
         defaults = self._evaluate_param_defaults(proc, parent_env)
 
@@ -60,29 +72,6 @@ class ProcedureCompiler:
             name: self.rt.executor.evaluate_type_expression(self.rt, code, env)
             for name, code in proc.param_defaults.items()
         }
-
-    def _prepare_kwargs(
-        self,
-        proc: ProcedureDef,
-        kwargs: dict[str, Any],
-        parent_env: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        """Prepare kwargs with lexical and global environments."""
-        # Merge lexical environment
-        if parent_env:
-            kwargs = {**parent_env, **kwargs}
-
-        # Inject imported and top-level values.
-        current_env = self.rt._current_env.get()
-        for env in (self.rt._import_env, self.rt._globals_env):
-            if not isinstance(env, dict):
-                continue
-            for k, v in env.items():
-                kwargs.setdefault(k, v)
-                if isinstance(current_env, dict):
-                    current_env.setdefault(k, v)
-
-        return kwargs
 
     def _enforce_param_types(self, proc: ProcedureDef, kwargs: dict[str, Any]) -> None:
         """Enforce parameter type annotations."""
@@ -167,7 +156,7 @@ class ProcedureCompiler:
                     if child is None:
                         continue
                     # Capture lexical environment
-                    child.lexical_env = dict(closure_env)
+                    child.lexical_env = closure_env
                     fn_nested = self._make_procedure_impl(child, child.lexical_env)
 
                     procs = self.rt._procedures

@@ -105,6 +105,8 @@ from ..ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
+    ReassignBlockStmt,
+    ReassignStmt,
     LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
@@ -342,6 +344,10 @@ class _Walker:
                 self._attach_else_clause(owners, child, None)
                 pending_else_owner = None
                 continue
+            if t == "map_clause":
+                self._attach_map_clause(prog.ordered_toplevel, child, None)
+                pending_else_owner = None
+                continue
             pending_else_owner = None
             if t == "python_block":
                 # The first top-level python_block, IF it appears before
@@ -472,6 +478,10 @@ class _Walker:
                 stmt = self._walk_assign_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
+            elif t == "reassign_stmt":
+                stmt = self._walk_reassign_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
             elif t == "if_stmt":
                 stmt = self._walk_if_stmt(child, None)
                 prog.toplevel_body.append(stmt)
@@ -487,6 +497,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "assign_block_stmt":
                 stmt = self._walk_assign_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "reassign_block_stmt":
+                stmt = self._walk_reassign_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "raw_invoke_stmt":
@@ -973,6 +987,10 @@ class _Walker:
                 self._attach_else_clause(owners, child, proc)
                 pending_else_owner = None
                 continue
+            if child.type == "map_clause":
+                self._attach_map_clause(statements, child, proc)
+                pending_else_owner = None
+                continue
             pending_else_owner = None
             if child.type == "template_block_stmt":
                 statements.extend(self._walk_template_block_statements(child))
@@ -1045,6 +1063,8 @@ class _Walker:
             return None
         if t == "assign_stmt":
             return self._walk_assign_stmt(node)
+        if t == "reassign_stmt":
+            return self._walk_reassign_stmt(node)
         if t == "if_stmt":
             return self._walk_if_stmt(node, proc)
         if t == "loop_stmt":
@@ -1053,6 +1073,8 @@ class _Walker:
             return self._walk_conditional_loop_stmt(node, proc)
         if t == "assign_block_stmt":
             return self._walk_assign_block_stmt(node)
+        if t == "reassign_block_stmt":
+            return self._walk_reassign_block_stmt(node)
         if t == "raw_invoke_stmt":
             return self._walk_raw_invoke_stmt(node)
         if t == "return_stmt":
@@ -1143,6 +1165,44 @@ class _Walker:
                 source_path=start.source_path,
                 source_id=start.source_id,
             )
+
+    def _attach_map_clause(
+        self,
+        statements: List[Any],
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> None:
+        if not statements or not isinstance(statements[-1], LoopStmt):
+            self._error(
+                node,
+                "'> map:' must immediately follow a binder loop",
+                code="K-MAP-ORPHAN",
+            )
+            return
+
+        owner = statements[-1]
+        if owner.map_body is not None:
+            self._error(node, "a loop can have only one map stage", code="K-MAP-DUP")
+            return
+
+        body = _field(node, "body")
+        assert body is not None
+        owner.map_body = self._walk_block_statements(body, proc)
+        owner.map_loc = self._span(node)
+
+        end = owner.map_loc
+        start = owner.loc
+        assert start is not None
+        owner.loc = Span(
+            start_byte=start.start_byte,
+            end_byte=end.end_byte,
+            start_line=start.start_line,
+            start_col=start.start_col,
+            end_line=end.end_line,
+            end_col=end.end_col,
+            source_path=start.source_path,
+            source_id=start.source_id,
+        )
 
     def _walk_loop_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> LoopStmt:
         binder = _field(node, "binder")
@@ -1270,6 +1330,31 @@ class _Walker:
             code=code,
             type_annotation=type_anno,
             type_expr=type_expr,
+            loc=self._span(node),
+        )
+
+    def _walk_reassign_stmt(self, node: Node) -> ReassignStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        rhs_node = _field(node, "rhs")
+        native_expr = self._sole_inline_python_expr(rhs_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
+            segments: List[Segment] = [
+                PythonExprNativeSegment(code=code, loc=self._span(native_expr))
+            ]
+        else:
+            segments = self._walk_template_expr(rhs_node) if rhs_node is not None else []
+        return ReassignStmt(name=name, expr=segments, loc=self._span(node))
+
+    def _walk_reassign_block_stmt(self, node: Node) -> ReassignBlockStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        code_node = _field(node, "code")
+        return ReassignBlockStmt(
+            name=_identifier_name(self.source, name_node),
+            code=self._dedent_fenced(code_node) if code_node is not None else "",
             loc=self._span(node),
         )
 
@@ -1714,14 +1799,6 @@ class _Walker:
             # double up: it would also remove meaningful whitespace
             # that sits BETWEEN segments (e.g. the gap between `<x>`
             # and `mid` in ``  left   <x>   mid``).
-            text, escaped_positions = self._unescape_text_segment(node, raw)
-            return TextSegment(
-                text=text,
-                escaped_whitespace=escaped_positions,
-                loc=self._span(node),
-            )
-        if t == "condition_colon_segment":
-            raw = _src_text(self.source, node)
             text, escaped_positions = self._unescape_text_segment(node, raw)
             return TextSegment(
                 text=text,

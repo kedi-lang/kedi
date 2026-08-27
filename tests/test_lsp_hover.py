@@ -689,7 +689,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         ("this", 1, 1, "**Module** `this`"),
         ("~Review", 1, 2, "Kedi type definition"),
         ("decision", 1, 0, "**Field** `decision: str`"),
-        ("global_note", 1, 1, "**Local** `global_note`"),
+        ("global_note", 1, 1, "**Module value** `global_note`"),
         ("@review_code", 1, 2, "Review code with CLI args and Python interop."),
         ("@line_count", 1, 2, "`@line_count()`"),
         ("<language>", 1, 2, "`language: str`"),
