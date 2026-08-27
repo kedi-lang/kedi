@@ -21,8 +21,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 import kedi
-import kedi.api as kedi_api
 import kedi.agent_profile.model as profile_model
+import kedi.api as kedi_api
 from kedi import (
     HookDeniedError,
     HookExecutionError,
@@ -39,11 +39,11 @@ from kedi.agent_adapter.adapters.acp import ACPAdapter
 from kedi.agent_adapter.adapters.claude import (
     ClaudeAdapter,
     _active_claude_hook_identities,
-    _claude_session_fingerprint,
-    _claude_tool_call_input,
     _claude_post_tool_use_failure_hook,
     _claude_post_tool_use_hook,
     _claude_pre_tool_use_hook,
+    _claude_session_fingerprint,
+    _claude_tool_call_input,
     _with_kedi_approval_hook,
 )
 from kedi.agent_adapter.adapters.codex import CodexAdapter
@@ -54,12 +54,12 @@ from kedi.agent_adapter.adapters.langchain import (
     _langchain_hook_origin,
     _validated_tool_arguments,
 )
-from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.adapters.pydantic import (
     _KediHookCapability,
     pydantic_toolset_from_specs,
 )
+from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
 from kedi.agent_adapter.approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -67,6 +67,7 @@ from kedi.agent_adapter.approval import (
     ToolApprovalDenied,
 )
 from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.events import agent_event_run, bind_agent_run, observe_agent_events
 from kedi.agent_adapter.hooks import (
     AdapterHookSnapshot,
     HookDispatcher,
@@ -88,22 +89,20 @@ from kedi.agent_adapter.hooks import boundary as hook_boundary
 from kedi.agent_adapter.hooks import dispatcher as hook_dispatcher
 from kedi.agent_adapter.hooks import tool_wrapper as hook_tool_wrapper
 from kedi.agent_adapter.hooks.telemetry import HookChainTelemetry
-from kedi.agent_adapter.events import agent_event_run, bind_agent_run, observe_agent_events
+from kedi.agent_adapter.tool_override import ToolSpec, with_artifact_result
 from kedi.agent_profile import (
     AgentProfile,
+    AgentProfileOverrideUnsupported,
     HookSettings,
     eval_hooks_directive,
     normalize_hook_settings,
 )
-from kedi.agent_adapter.tool_override import ToolSpec
-from kedi.agent_adapter.tool_override import with_artifact_result
-from kedi.artifacts import ArtifactManager, ArtifactPolicy
-from kedi.core import KediRuntime
-from kedi.agent_profile import AgentProfileOverrideUnsupported
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
 from kedi.agent_profile.model import eval_profile_definition
-from kedi.lang.ast import HooksDirectiveStmt, ProfileDefStmt, SettingsField
+from kedi.artifacts import ArtifactManager, ArtifactPolicy
+from kedi.core import KediRuntime
 from kedi.lang import compile_program
+from kedi.lang.ast import HooksDirectiveStmt, ProfileDefStmt, SettingsField
 from kedi.lang.parser import KediParseError, parse_program
 from tests.telemetry_helpers import installed_recording_backend
 

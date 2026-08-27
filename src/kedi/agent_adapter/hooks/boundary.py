@@ -14,8 +14,12 @@ from ..events import (
     current_agent_run_identity,
     current_bound_agent_run_identity,
 )
-from .dispatcher import HookDispatcher, HookDispatcherSnapshot, bind_hook_dispatcher
-from .dispatcher import current_hook_dispatcher
+from .dispatcher import (
+    HookDispatcher,
+    HookDispatcherSnapshot,
+    bind_hook_dispatcher,
+    current_hook_dispatcher,
+)
 from .models import HookDeniedError, UserPromptSubmitDecision, UserPromptSubmitRequest
 from .registration import HookRegistrationMixin
 

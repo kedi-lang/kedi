@@ -25,9 +25,9 @@ from ..agent_adapter.approval import ApprovalPolicy
 from ..agent_profile import AgentProfile
 from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings
+from ..agent_profile.hooks import HookSettings
 from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings
-from ..agent_profile.hooks import HookSettings
 from ..artifacts import ArtifactPolicy
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"

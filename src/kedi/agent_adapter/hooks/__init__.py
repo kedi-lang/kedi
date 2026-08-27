@@ -1,4 +1,10 @@
 from .boundary import hooked_agent_run, native_agent_hook_run
+from .dispatcher import (
+    HookDispatcher,
+    HookDispatcherSnapshot,
+    bind_hook_dispatcher,
+    current_hook_dispatcher,
+)
 from .models import (
     HOOK_EVENT_NAMES,
     HookContext,
@@ -20,12 +26,6 @@ from .models import (
     UserPromptSubmitRequest,
     validate_hook_event_name,
     validate_hook_event_names,
-)
-from .dispatcher import (
-    HookDispatcher,
-    HookDispatcherSnapshot,
-    bind_hook_dispatcher,
-    current_hook_dispatcher,
 )
 from .registration import AdapterHookSnapshot, HookRegistrationMixin, handler_identity
 from .tool_wrapper import (

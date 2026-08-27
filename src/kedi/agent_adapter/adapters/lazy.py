@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, TypeVar
 
 from typing_extensions import runtime_checkable
 
-from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.hooks import HookEventName, HookHandler, HookRegistrationMixin
+from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
 from kedi.agent_adapter.subagents import SupportsSubagentExecution
 from kedi.telemetry import add_counter, record_histogram, span
 
