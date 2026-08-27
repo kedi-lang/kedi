@@ -4,14 +4,18 @@
 require("pydantic_monty", required_by="Sandbox")
 ```
 
-@execute_code(code: str, inputs: dict[str, Any], fail_fast: bool = `True`) -> Any:
+@execute_code(code: str, inputs: dict[str, Any] = `{}`, fail_fast: bool = `False`) -> Any:
     ###
     Executes the given code in a sandboxed environment with the provided inputs.
 
+    The final expression is returned as the result; printed text is not the return value.
+    With fail_fast disabled, an execution exception is returned as a string.
+
     Args:
-        code (str): The code to execute.
-        inputs (dict[str, Any]): The inputs to provide to the code.
-        fail_fast (bool, optional): Whether to fail fast on exceptions. Defaults to `True`.
+        code (str): The code to execute. Pass quoted source without its surrounding quotation marks.
+        inputs (dict[str, Any], optional): The inputs to provide to the code. Defaults to an empty mapping.
+        fail_fast (bool, optional): Whether to raise execution exceptions instead of returning
+            them as strings. Defaults to `False`.
 
     Returns:
         Any: The result of executing the code.
@@ -19,10 +23,10 @@ require("pydantic_monty", required_by="Sandbox")
     = ```
     from pydantic_monty import Monty
 
-    sandbox = Monty(code, inputs=list(inputs.keys()))
     try:
-        result = sandbox.run(inputs=inputs)
-        return result
+        with Monty() as pool:
+            with pool.checkout() as session:
+                return session.feed_run(code, inputs=inputs)
     except Exception as e:
         if fail_fast:
             raise RuntimeError("Sandbox execution failed: " + str(e))
@@ -34,8 +38,11 @@ require("pydantic_monty", required_by="Sandbox")
     Sandbox profile to run Python code in a sandboxed environment.
     ###
     > system:
-        You are a sandboxed environment agent that executes Python code provided by the user.
-        The final expression of program will be evaluated and returned as the result.
+        Execute requested sandbox code faithfully without repairing or reinterpreting it.
+        Treat code quoted in a request as opaque source: pass its exact characters without the surrounding quotes, and never replace or reinterpret it.
+        When a request says not to fail fast or asks for an error result, set fail_fast to false.
+        Use the program's final expression as its return value; do not use print to return a value.
+        Once execute_code returns the requested result or error, return it in the requested output field without repeating the call.
     > use:
         execute_code
 

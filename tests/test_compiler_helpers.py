@@ -13,7 +13,7 @@ from kedi.errors import KediTraceFrame
 from kedi.lang import compile_program as compile_kedi_program
 from kedi.lang import parse_program
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     CallArg,
     CallSegment,
     InputSegment,
@@ -37,17 +37,20 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler import environment as compiler_env
 from kedi.lang.compiler.environment import (
+    BindingMetadata,
     KediEnv,
+    ScopeFrame,
     assert_not_cli_args_identifier,
     build_python_env,
     build_type_env,
     cli_args_identifier,
     lookup_value,
+    write_owned_value,
 )
 from kedi.lang.compiler.evaluation import (
     _evaluate_arg,
     _stringify_segments,
-    evaluate_assignment_rhs,
+    evaluate_binding_rhs,
     prepare_segments,
     render_expression,
 )
@@ -140,15 +143,111 @@ def test_kedienv_keeps_regular_dictionary_operations_available() -> None:
         env.popitem()
 
 
+def test_scope_frame_dict_mutations_preserve_binding_ownership_and_metadata() -> None:
+    parent = ScopeFrame()
+    parent.declare("outer", 1, BindingMetadata(kind="outer"))
+    child = ScopeFrame(parent=parent)
+
+    assert child.setdefault("outer", 2) == 1
+    assert not child.owns("outer")
+    child.update({"local": 3})
+    assert child.binding_metadata("local") == BindingMetadata()
+    child |= {"second": 4}
+    assert child.pop("second") == 4
+    assert child.binding_metadata("second") is None
+    child.clear()
+    assert child.raw_value("outer") == 1
+    assert not child.owns("local")
+
+
+def test_scope_frame_rejects_invalid_restore_assignment_and_mutation_edges() -> None:
+    frame = ScopeFrame()
+    with pytest.raises(ValueError, match="same names"):
+        frame.restore_locals({"value": 1}, {})
+
+    reserved = cli_args_identifier()
+    with pytest.raises(ValueError, match="runtime-owned"):
+        frame.restore_locals(
+            {reserved: object()},
+            {reserved: BindingMetadata(kind="value")},
+        )
+
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        frame.assign("missing", 1)
+
+    frame.declare("readonly", 1, BindingMetadata(assignable=False))
+    with pytest.raises(ValueError, match="read-only"):
+        frame.assign("readonly", 2)
+
+    plain_parent = {"outer": 1}
+    child = ScopeFrame(parent=plain_parent)
+    child.assign("outer", 2)
+    assert plain_parent["outer"] == 2
+    assert child.setdefault("new", 3) == 3
+    assert child.owns("new")
+    assert child.popitem() == ("new", 3)
+    child["new"] = 3
+
+    with pytest.raises(TypeError, match="at most 2 arguments"):
+        child.pop("new", 1, 2)
+    with pytest.raises(KeyError, match="missing"):
+        child.pop("missing")
+
+    empty = ScopeFrame()
+    with pytest.raises(KeyError, match="dictionary is empty"):
+        empty.popitem()
+
+    reserved_frame = ScopeFrame()
+    reserved_frame.restore_locals(
+        {reserved: object()},
+        {
+            reserved: BindingMetadata(
+                kind="runtime",
+                assignable=False,
+                synthetic=True,
+            )
+        },
+    )
+    with pytest.raises(ValueError, match="reserved CLI binding"):
+        reserved_frame.clear()
+
+
+def test_owned_value_writes_validate_scope_ownership_and_readonly_metadata() -> None:
+    frame = ScopeFrame()
+    with pytest.raises(RuntimeError, match="does not own"):
+        write_owned_value(frame, "missing", 1)
+
+    frame.declare("readonly", 1, BindingMetadata(assignable=False))
+    with pytest.raises(ValueError, match="read-only"):
+        write_owned_value(frame, "readonly", 2)
+
+    plain: dict[str, Any] = {}
+    write_owned_value(plain, "value", 3)
+    assert plain == {"value": 3}
+
+
+def test_python_writeback_ignores_dirty_binding_removed_from_source() -> None:
+    runtime = KediRuntime()
+    owner = {"value": 1}
+    source = KediEnv()
+    source._set_binding("value", 1, owner)
+    source["value"] = 2
+    dict.__delitem__(source, "value")
+
+    runtime.executor._sync_existing_variables(runtime, owner, source)
+
+    assert owner == {"value": 1}
+
+
 def test_reserved_cli_args_cannot_be_overwritten_by_kedi_or_python() -> None:
     cli_args = SimpleNamespace(name="Ada")
 
-    assignment_runtime = compile_kedi_program(
+    initialization_runtime = compile_kedi_program(
         parse_program("[args] = overwritten\n"),
         runtime_globals={"args": cli_args},
     )
     with pytest.raises(Exception, match="Reserved identifier 'args'"):
-        assignment_runtime.run_main()
+        initialization_runtime.run_main()
 
     output_runtime = compile_kedi_program(
         parse_program(">> [args]\n"),
@@ -221,9 +320,14 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
     broken_rt = KediRuntime()
     cast(Any, broken_rt)._current_env = RaisingCurrentEnv()
     assert build_python_env(broken_rt, {"local": 1})["local"] == 1
-    assert "List" in build_type_env(broken_rt, None)
-    assert "Protocol" not in build_type_env(broken_rt, None)
-    assert "Generic" not in build_type_env(broken_rt, None)
+    type_env = build_type_env(broken_rt, None)
+    assert type_env["__builtins__"] is builtins.__dict__
+    assert "builtins" not in type_env
+    assert "typing" not in type_env
+    assert "typing_extensions" not in type_env
+    assert "List" in type_env
+    assert "Protocol" not in type_env
+    assert "Generic" not in type_env
     assert build_type_env(broken_rt, None)["datetime"].__name__ == "datetime"
     assert build_type_env(broken_rt, None)["date"].__name__ == "date"
     assert build_type_env(broken_rt, None)["time"].__name__ == "time"
@@ -247,6 +351,15 @@ def test_environment_lookup_and_type_layers(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(compiler_env, "typing", SimpleNamespace(List=list))
     assert build_type_env(KediRuntime(), None)["List"] is list
+
+    no_globals = KediRuntime()
+    no_globals._globals_env = None
+    assert build_python_env(no_globals, {"local": 1})["local"] == 1
+
+    plain_env: dict[str, Any] = {}
+    no_globals._type_env_stack = [{"Person": Person}]
+    compiler_env._add_type_env(no_globals, plain_env, {})
+    assert plain_env["Person"] is Person
 
 
 def test_runtime_lookup_reads_current_env() -> None:
@@ -338,7 +451,32 @@ def test_proc_wrapper_falls_back_when_generated_source_is_invalid() -> None:
     assert wrapper() == "ok"
 
 
-def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
+def test_statement_compiler_plain_mapping_assignment_helpers() -> None:
+    env: dict[str, Any] = {"value": 1}
+    assert StatementCompiler._assignment_type("value", env) is None
+    StatementCompiler._assign_value("value", 2, env)
+    assert env["value"] == 2
+
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        StatementCompiler._assignment_type("missing", env)
+    with pytest.raises(NameError, match="unknown Kedi binding"):
+        StatementCompiler._assign_value("missing", 1, env)
+
+
+def test_statement_executor_legacy_sync_updates_only_existing_names() -> None:
+    runtime = KediRuntime()
+    current = {"kept": 2, "new": 3}
+    closure = {"kept": 1, "untouched": 4}
+    token = runtime._current_env.set(current)
+    try:
+        StatementExecutor(runtime)._sync_env(closure)
+    finally:
+        runtime._current_env.reset(token)
+
+    assert closure == {"kept": 2, "untouched": 4}
+
+
+def test_prepare_segments_binding_rhs_and_argument_variants() -> None:
     rt = KediRuntime()
 
     @rt.procedure
@@ -358,7 +496,7 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     assert expr == ["Hello ", "!"]
     assert rendered == "Hello Ada!"
 
-    native, rendered_native = evaluate_assignment_rhs(
+    native, rendered_native = evaluate_binding_rhs(
         rt,
         [TextSegment(text=" "), PythonExprNativeSegment(code="x + 1")],
         {"x": 2},
@@ -366,7 +504,7 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     assert native == 3
     assert rendered_native == "3"
 
-    called, rendered_called = evaluate_assignment_rhs(
+    called, rendered_called = evaluate_binding_rhs(
         rt,
         [CallSegment(name="echo", args=[LiteralArg(value="Ada")])],
         {},
@@ -593,32 +731,13 @@ def test_procedure_compiler_type_and_environment_edges() -> None:
     with pytest.raises(TypeError, match="Return value must be str"):
         compiler._enforce_return_type(ProcedureDef(name="ret", params=[]), 1, {})
 
-    setattr(rt, "_import_env", {"imported": "from import"})
-    setattr(rt, "_globals_env", {"global_value": "from global"})
-    token = rt._current_env.set(cast(Any, "not a dict"))
-    try:
-        prepared = compiler._prepare_kwargs(
-            ProcedureDef(name="env", params=[]),
-            {"local": "value"},
-            {"lexical": "parent", "local": "parent local"},
-        )
-    finally:
-        rt._current_env.reset(token)
+    from kedi.lang.compiler.environment import ScopeFrame
 
-    assert prepared == {
-        "lexical": "parent",
-        "local": "value",
-        "imported": "from import",
-        "global_value": "from global",
-    }
-
-    current: dict[str, Any] = {}
-    token = rt._current_env.set(current)
-    try:
-        compiler._prepare_kwargs(ProcedureDef(name="env", params=[]), {}, None)
-    finally:
-        rt._current_env.reset(token)
-    assert current == {"imported": "from import", "global_value": "from global"}
+    parent = ScopeFrame({"lexical": "parent", "local": "parent local"})
+    prepared = ScopeFrame({"local": "value"}, parent=parent)
+    assert prepared["lexical"] == "parent"
+    assert prepared["local"] == "value"
+    assert dict(prepared) == {"local": "value"}
 
 
 def test_nested_procedure_scope_restores_saved_and_new_names() -> None:
@@ -712,7 +831,7 @@ def test_statement_executor_cleanup_skips_missing_new_proc_name() -> None:
     assert "nested_c" not in rt._procedures
 
 
-def test_statement_compiler_assignment_template_and_single_statement_edges(
+def test_statement_compiler_initialization_template_and_single_statement_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.compiler import statement_compiler as statement_compiler_module
@@ -753,15 +872,15 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
     assert recording.expressions == [["better\n\n", "seed"]]
 
     closure: dict[str, Any] = {"x": 1}
-    compiler.execute_assignment(
-        AssignStmt(name="angle", expr=[PythonExprSegment(code="x + 1")]),
+    compiler.execute_variable_init(
+        VariableInitStmt(name="angle", expr=[PythonExprSegment(code="x + 1")]),
         closure,
     )
     assert closure["angle"] == "2"
 
     monkeypatch.setattr(
         statement_compiler_module,
-        "evaluate_assignment_rhs",
+        "evaluate_binding_rhs",
         lambda rt_arg, segments, env_arg: (2, "2"),
     )
     monkeypatch.setattr(
@@ -769,7 +888,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, True, False),
     )
-    compiler.execute_assignment(AssignStmt(name="native_angle", expr=[]), closure)
+    compiler.execute_variable_init(VariableInitStmt(name="native_angle", expr=[]), closure)
     assert closure["native_angle"] == "2"
 
     monkeypatch.setattr(
@@ -777,12 +896,12 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, False, False),
     )
-    compiler.execute_assignment(AssignStmt(name="native_rendered", expr=[]), closure)
+    compiler.execute_variable_init(VariableInitStmt(name="native_rendered", expr=[]), closure)
     assert closure["native_rendered"] == "2"
 
     monkeypatch.setattr(
         statement_compiler_module,
-        "evaluate_assignment_rhs",
+        "evaluate_binding_rhs",
         lambda rt_arg, segments, env_arg: (1, "not-int"),
     )
     monkeypatch.setattr(
@@ -790,9 +909,11 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, False, False),
     )
-    with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
-        compiler.execute_assignment(
-            AssignStmt(
+    with pytest.raises(
+        TypeError, match="Native initialization value does not match annotated type"
+    ):
+        compiler.execute_variable_init(
+            VariableInitStmt(
                 name="bad",
                 expr=[TextSegment(text=" "), PythonExprNativeSegment(code="1")],
                 type_annotation="int",
@@ -848,7 +969,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
 
     single_env: dict[str, Any] = {}
     executor.execute_single_statement(
-        AssignStmt(name="value", expr=[TextSegment(text="ok")]), single_env
+        VariableInitStmt(name="value", expr=[TextSegment(text="ok")]), single_env
     )
     assert single_env["value"] == "ok"
     executor.execute_single_statement(ReturnStmt(segments=[TextSegment(text="ignored")]), {})

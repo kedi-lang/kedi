@@ -18,13 +18,15 @@ from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
 from ..lang.ast import (
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     BacktickLineStmt,
     CallSegment,
+    ConditionalLoopStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
+    IfStmt,
     LiteralArg,
     OutputSegment,
     ProcDefStmt,
@@ -34,6 +36,9 @@ from ..lang.ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Span,
@@ -399,7 +404,7 @@ def _fallback_virtual_document(source: str, ranges: list[dict[str, Any]]) -> dic
 
 
 def _emit_runtime_args_stub(builder: VirtualBuilder) -> None:
-    builder.add("from typing import Generic, TypeAlias, TypeVar, Union, cast")
+    builder.add("from typing import Any, Generic, Iterable, TypeAlias, TypeVar, Union, cast")
     builder.add("_K = TypeVar('_K')")
     builder.add("_V = TypeVar('_V')")
     builder.add("ArgType: TypeAlias = Union[str, bool, None]")
@@ -714,8 +719,24 @@ def _unparse_or_any(expr: Optional[py_ast.AST]) -> str:
 
 def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
     return [
-        stmt.proc for stmt in proc.body if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+        stmt.proc
+        for stmt in _iter_control_statements(proc.body)
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
     ]
+
+
+def _iter_control_statements(statements: Iterable[Stmt]) -> Iterable[Stmt]:
+    for stmt in statements:
+        yield stmt
+        if isinstance(stmt, IfStmt):
+            yield from _iter_control_statements(stmt.body)
+            if stmt.else_body is not None:
+                yield from _iter_control_statements(stmt.else_body)
+        elif isinstance(stmt, LoopStmt):
+            yield from _iter_control_statements(stmt.body)
+            yield from _iter_control_statements(stmt.map_body or [])
+        elif isinstance(stmt, ConditionalLoopStmt):
+            yield from _iter_control_statements(stmt.body)
 
 
 def _all_procedures(procedures: Iterable[ProcedureDef]) -> list[ProcedureDef]:
@@ -904,14 +925,24 @@ def _emit_statements(
     header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
 ) -> None:
     for stmt in statements:
-        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+        if isinstance(stmt, IfStmt):
+            _emit_if_stmt(builder, cursor, stmt, scope, indent, header_ranges)
+        elif isinstance(stmt, LoopStmt):
+            _emit_loop_stmt(builder, cursor, stmt, scope, indent, header_ranges)
+        elif isinstance(stmt, ConditionalLoopStmt):
+            _emit_conditional_loop_stmt(builder, cursor, stmt, scope, indent, header_ranges)
+        elif isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
             _emit_nested_procedure(builder, cursor, stmt.proc, scope, indent, header_ranges)
         elif isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
             _emit_type_stub(builder, stmt.typedef, header_ranges, prefix=indent)
-        elif isinstance(stmt, AssignBlockStmt):
-            _emit_assign_block(builder, cursor, stmt, scope, indent)
-        elif isinstance(stmt, AssignStmt):
-            _emit_assign_stmt(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, VariableInitBlockStmt):
+            _emit_variable_init_block(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, AssignmentBlockStmt):
+            _emit_assignment_block(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, VariableInitStmt):
+            _emit_variable_init_stmt(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, AssignmentStmt):
+            _emit_assignment_stmt(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, RawInvokeStmt):
             _emit_raw_invoke_stmt(builder, stmt, scope, indent)
         elif isinstance(stmt, PythonBlock):
@@ -934,6 +965,143 @@ def _emit_statements(
         _emit_unconsumed_inline_regions(builder, cursor, stmt.loc, indent)
 
 
+def _emit_if_stmt(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: IfStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+    header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
+) -> None:
+    builder.add(f"{indent}if (")
+    condition = cursor.next("inline", stmt.condition_loc)
+    if condition is not None:
+        builder.add_mapped_region(condition, indent + "    ")
+    else:
+        builder.add(f"{indent}    cast(bool, _kedi_placeholder())")
+    builder.add(f"{indent}):")
+
+    consequence_scope = dict(scope)
+    before_body = builder.line
+    _emit_statements(
+        builder,
+        cursor,
+        stmt.body,
+        consequence_scope,
+        indent + "    ",
+        header_ranges,
+    )
+    if builder.line == before_body:
+        builder.add(f"{indent}    pass")
+
+    alternative_scope = dict(scope)
+    if stmt.else_body is not None:
+        builder.add(f"{indent}else:")
+        before_body = builder.line
+        _emit_statements(
+            builder,
+            cursor,
+            stmt.else_body,
+            alternative_scope,
+            indent + "    ",
+            header_ranges,
+        )
+        if builder.line == before_body:
+            builder.add(f"{indent}    pass")
+
+    # Branch-local declarations do not escape their lexical child frames.
+
+
+def _emit_loop_stmt(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: LoopStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+    header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
+) -> None:
+    previous_binder = scope.get(stmt.binder)
+    line = builder.add(f"{indent}for {stmt.binder} in (")
+    builder.add_symbol(
+        kind="local",
+        name=stmt.binder,
+        source_range=_span_range(stmt.binder_loc) if stmt.binder_loc is not None else None,
+        virtual_range=_line_range(line, len(indent) + len("for "), stmt.binder),
+    )
+    iterable = cursor.next("inline", stmt.iterable_loc)
+    if iterable is not None:
+        builder.add_mapped_region(iterable, indent + "    ")
+    else:
+        builder.add(f"{indent}    cast(Iterable[Any], _kedi_placeholder())")
+    builder.add(f"{indent}):")
+
+    body_scope = dict(scope)
+    body_scope[stmt.binder] = ScopeName(
+        typ="Any",
+        source_range=_span_range(stmt.binder_loc) if stmt.binder_loc is not None else None,
+    )
+    before_body = builder.line
+    _emit_statements(
+        builder,
+        cursor,
+        stmt.body,
+        body_scope,
+        indent + "    ",
+        header_ranges,
+    )
+    if stmt.map_body is not None:
+        _emit_statements(
+            builder,
+            cursor,
+            stmt.map_body,
+            body_scope,
+            indent + "    ",
+            header_ranges,
+        )
+    if builder.line == before_body:
+        builder.add(f"{indent}    pass")
+
+    body_scope.pop(stmt.binder, None)
+    if previous_binder is None:
+        builder.add(f"{indent}del {stmt.binder}  # pyright: ignore[reportPossiblyUnboundVariable]")
+    else:
+        builder.add(
+            f"{indent}{stmt.binder}: {previous_binder.typ} = "
+            f"cast({previous_binder.typ}, _kedi_placeholder())"
+        )
+        scope[stmt.binder] = previous_binder
+
+
+def _emit_conditional_loop_stmt(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: ConditionalLoopStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+    header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
+) -> None:
+    builder.add(f"{indent}while (")
+    condition = cursor.next("inline", stmt.condition_loc)
+    if condition is not None:
+        builder.add_mapped_region(condition, indent + "    ")
+    else:
+        builder.add(f"{indent}    cast(bool, _kedi_placeholder())")
+    builder.add(f"{indent}):")
+
+    body_scope = dict(scope)
+    before_body = builder.line
+    _emit_statements(
+        builder,
+        cursor,
+        stmt.body,
+        body_scope,
+        indent + "    ",
+        header_ranges,
+    )
+    if builder.line == before_body:
+        builder.add(f"{indent}    pass")
+
+
 def _emit_unconsumed_inline_regions(
     builder: VirtualBuilder,
     cursor: RegionCursor,
@@ -944,10 +1112,10 @@ def _emit_unconsumed_inline_regions(
         _emit_inline_expression_stub(builder, region, indent)
 
 
-def _emit_assign_block(
+def _emit_variable_init_block(
     builder: VirtualBuilder,
     cursor: RegionCursor,
-    stmt: AssignBlockStmt,
+    stmt: VariableInitBlockStmt,
     scope: dict[str, ScopeName],
     indent: str,
 ) -> None:
@@ -963,7 +1131,7 @@ def _emit_assign_block(
     builder.add(f"{indent}    return cast({typ}, _kedi_placeholder())")
     args = ", ".join(scope.keys())
     line = builder.add(f"{indent}{stmt.name}: {typ} = {helper}({args})")
-    source_range = _assign_name_range(stmt)
+    source_range = _binding_name_range(stmt)
     builder.add_symbol(
         kind="local",
         name=stmt.name,
@@ -973,15 +1141,15 @@ def _emit_assign_block(
     scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
 
 
-def _emit_assign_stmt(
+def _emit_variable_init_stmt(
     builder: VirtualBuilder,
     cursor: RegionCursor,
-    stmt: AssignStmt,
+    stmt: VariableInitStmt,
     scope: dict[str, ScopeName],
     indent: str,
 ) -> None:
     typ = _type_to_python(stmt.type_expr, stmt.type_annotation)
-    source_range = _assign_name_range(stmt)
+    source_range = _binding_name_range(stmt)
     inline = _single_python_segment(stmt.expr)
     if inline is not None:
         line = builder.add(f"{indent}{stmt.name}: {typ} = (")
@@ -1007,6 +1175,65 @@ def _emit_assign_stmt(
         )
         _emit_segments(builder, cursor, stmt, scope, indent)
     scope[stmt.name] = ScopeName(typ=typ, source_range=source_range)
+
+
+def _emit_assignment_block(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: AssignmentBlockStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    info = scope.get(stmt.name, ScopeName(typ="Any", source_range=None))
+    helper = f"__kedi_assign_block_{stmt.name}_{stmt.loc.start_line if stmt.loc else len(scope)}"
+    params = _scope_params(scope)
+    builder.add(f"{indent}def {helper}({params}) -> {info.typ}:")
+    region = cursor.next("fenced", stmt.loc)
+    if region is not None:
+        builder.add_mapped_region(region, indent + "    ")
+    builder.add(f"{indent}    return cast({info.typ}, _kedi_placeholder())")
+    args = ", ".join(scope.keys())
+    line = builder.add(f"{indent}{stmt.name}")
+    result_name = f"__kedi_assigned_{stmt.name}_{stmt.loc.start_line if stmt.loc else builder.line}"
+    builder.add(f"{indent}{result_name}: {info.typ} = {helper}({args})")
+    source_range = _binding_name_range(stmt)
+    builder.add_symbol(
+        kind="reference",
+        name=stmt.name,
+        source_range=source_range,
+        virtual_range=_line_range(line, len(indent), stmt.name),
+    )
+
+
+def _emit_assignment_stmt(
+    builder: VirtualBuilder,
+    cursor: RegionCursor,
+    stmt: AssignmentStmt,
+    scope: dict[str, ScopeName],
+    indent: str,
+) -> None:
+    info = scope.get(stmt.name, ScopeName(typ="Any", source_range=None))
+    source_range = _binding_name_range(stmt)
+    line = builder.add(f"{indent}{stmt.name}")
+    temporary = f"__kedi_assigned_{stmt.name}_{stmt.loc.start_line if stmt.loc else builder.line}"
+    inline = _single_python_segment(stmt.expr)
+    if inline is not None:
+        builder.add(f"{indent}{temporary}: {info.typ} = (")
+        region = cursor.next("inline", inline.loc)
+        if region is not None:
+            builder.add_mapped_region(region, indent + "    ")
+        else:
+            builder.add(f"{indent}    cast({info.typ}, _kedi_placeholder())")
+        builder.add(f"{indent})")
+    else:
+        builder.add(f"{indent}{temporary}: {info.typ} = cast({info.typ}, _kedi_placeholder())")
+        _emit_segments(builder, cursor, stmt, scope, indent)
+    builder.add_symbol(
+        kind="reference",
+        name=stmt.name,
+        source_range=source_range,
+        virtual_range=_line_range(line, len(indent), stmt.name),
+    )
 
 
 def _emit_raw_invoke_stmt(
@@ -1061,8 +1288,10 @@ def _stmt_segments(stmt: Stmt) -> list:
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
-    if isinstance(stmt, AssignStmt):
+    if isinstance(stmt, (VariableInitStmt, AssignmentStmt)):
         return list(stmt.expr)
+    if isinstance(stmt, (IfStmt, ConditionalLoopStmt)):
+        return list(stmt.condition_segments or [])
     return []
 
 
@@ -1218,10 +1447,10 @@ def _scope_params(scope: dict[str, ScopeName]) -> str:
 def _collect_toplevel_scope(statements: Iterable[Stmt]) -> dict[str, ScopeName]:
     scope: dict[str, ScopeName] = {}
     for stmt in statements:
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+        if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)):
             scope[stmt.name] = ScopeName(
                 typ=_type_to_python(stmt.type_expr, stmt.type_annotation),
-                source_range=_assign_name_range(stmt),
+                source_range=_binding_name_range(stmt),
             )
         elif isinstance(stmt, RawInvokeStmt):
             scope[stmt.name] = ScopeName(
@@ -1318,7 +1547,9 @@ def _type_name_range(typedef: TypeDef) -> Optional[Range]:
     return _line_range(line, start, typedef.name)
 
 
-def _assign_name_range(stmt: AssignStmt | AssignBlockStmt) -> Optional[Range]:
+def _binding_name_range(
+    stmt: VariableInitStmt | VariableInitBlockStmt | AssignmentStmt | AssignmentBlockStmt,
+) -> Optional[Range]:
     if stmt.loc is None:
         return None
     line = stmt.loc.start_line - 1
@@ -1608,7 +1839,7 @@ def _iter_type_exprs(program: ProgramWithValidation) -> Iterable[Optional[TypeEx
 
 
 def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
-    if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)):
         yield stmt.type_expr
     if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
         yield stmt.proc.return_type_expr
@@ -1619,6 +1850,19 @@ def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
     for segment in _stmt_segments(stmt):
         if isinstance(segment, OutputSegment):
             yield segment.type_expr
+    if isinstance(stmt, IfStmt):
+        for child in stmt.body:
+            yield from _iter_stmt_type_exprs(child)
+        for child in stmt.else_body or []:
+            yield from _iter_stmt_type_exprs(child)
+    elif isinstance(stmt, LoopStmt):
+        for child in stmt.body:
+            yield from _iter_stmt_type_exprs(child)
+        for child in stmt.map_body or []:
+            yield from _iter_stmt_type_exprs(child)
+    elif isinstance(stmt, ConditionalLoopStmt):
+        for child in stmt.body:
+            yield from _iter_stmt_type_exprs(child)
 
 
 def _typing_symbols_in_type_expr(expr: Optional[TypeExpr]) -> set[tuple[str, str]]:

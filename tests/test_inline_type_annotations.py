@@ -279,7 +279,7 @@ class TestOutputAnnotations:
         # This test expects the LLM to return an integer, but our mock returns strings
         # So we expect this to fail with type validation error
         with pytest.raises(
-            TypeError, match="Native assignment value does not match annotated type"
+            TypeError, match="Native initialization value does not match annotated type"
         ):
             _run(src)
 
@@ -292,7 +292,7 @@ class TestOutputAnnotations:
         # This test expects the LLM to return a list, but our mock returns strings
         # So we expect this to fail with type validation error
         with pytest.raises(
-            TypeError, match="Native assignment value does not match annotated type"
+            TypeError, match="Native initialization value does not match annotated type"
         ):
             _run(src)
 
@@ -351,7 +351,7 @@ class TestErrorCases:
 = <`str(x)`>
 """
         with pytest.raises(
-            TypeError, match="Native assignment value does not match annotated type"
+            TypeError, match="Native initialization value does not match annotated type"
         ):
             _run(src)
 
@@ -362,7 +362,7 @@ class TestErrorCases:
 = <`str(x)`>
 """
         with pytest.raises(
-            TypeError, match="Native assignment value does not match annotated type"
+            TypeError, match="Native initialization value does not match annotated type"
         ):
             _run(src)
 
@@ -373,7 +373,7 @@ class TestErrorCases:
 = <`str(x)`>
 """
         with pytest.raises(
-            TypeError, match="Native assignment value does not match annotated type"
+            TypeError, match="Native initialization value does not match annotated type"
         ):
             _run(src)
 
@@ -432,8 +432,8 @@ class TestInteroperability:
         result = _run(src)
         assert result == "40"
 
-    def test_variable_assignment_interop(self):
-        """Test variable assignment with different annotation styles."""
+    def test_variable_initialization_interop(self):
+        """Test variable initialization with different annotation styles."""
         src = """
 [x: int] = `10`
 [y: `int`] = `20`

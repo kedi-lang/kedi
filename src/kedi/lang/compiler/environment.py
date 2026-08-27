@@ -13,6 +13,7 @@ import linecache
 import re
 import typing
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -30,14 +31,10 @@ KEDI_TYPING_TYPE_NAMES = frozenset(
         "Callable",
         "Dict",
         "FrozenSet",
-        "Iterable",
         "List",
         "Literal",
-        "Mapping",
         "Optional",
-        "Sequence",
         "Set",
-        "Tuple",
         "Type",
         "Union",
     }
@@ -116,6 +113,202 @@ def assert_not_cli_args_identifier(name: str) -> None:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class BindingMetadata:
+    """Semantic metadata owned by one lexical binding."""
+
+    kind: str = "value"
+    type_contract: Any | None = None
+    source: Any | None = None
+    assignable: bool = True
+    synthetic: bool = False
+
+
+class ScopeFrame(dict[str, Any]):
+    """One lexical value scope linked to its containing scope."""
+
+    def __init__(
+        self,
+        initial: Mapping[str, Any] | None = None,
+        *,
+        parent: dict[str, Any] | None = None,
+    ) -> None:
+        dict.__init__(self)
+        self.parent = parent
+        self._binding_metadata: dict[str, BindingMetadata] = {}
+        if initial:
+            for name, value in initial.items():
+                if name == cli_args_identifier():
+                    dict.__setitem__(self, name, value)
+                    self._binding_metadata[name] = BindingMetadata(
+                        kind="runtime",
+                        assignable=False,
+                        synthetic=True,
+                    )
+                else:
+                    self.declare(name, value)
+
+    def declare(
+        self,
+        name: str,
+        value: Any,
+        metadata: BindingMetadata | None = None,
+    ) -> None:
+        """Create or replace a binding owned by this frame."""
+        assert_not_cli_args_identifier(name)
+        dict.__setitem__(self, name, value)
+        self._binding_metadata[name] = metadata or BindingMetadata()
+
+    def declare_synthetic(self, name: str, value: Any) -> None:
+        """Install a runtime-owned local such as a loop binder."""
+        self.declare(name, value, BindingMetadata(kind="synthetic", synthetic=True))
+
+    def owns(self, name: str) -> bool:
+        return dict.__contains__(self, name)
+
+    def resolve_owner(self, name: str) -> dict[str, Any] | None:
+        if self.owns(name):
+            return self
+        parent = self.parent
+        if isinstance(parent, ScopeFrame):
+            return parent.resolve_owner(name)
+        if isinstance(parent, dict) and name in parent:
+            return parent
+        return None
+
+    def binding_metadata(self, name: str) -> BindingMetadata | None:
+        """Return metadata from the nearest frame that owns ``name``."""
+        owner = self.resolve_owner(name)
+        if isinstance(owner, ScopeFrame):
+            return owner._binding_metadata.get(name)
+        return None
+
+    def local_binding_metadata(self) -> dict[str, BindingMetadata]:
+        """Return a copy of metadata owned directly by this frame."""
+        return dict(self._binding_metadata)
+
+    def restore_locals(
+        self,
+        values: Mapping[str, Any],
+        metadata: Mapping[str, BindingMetadata],
+    ) -> None:
+        """Replace local state from a validated persistence snapshot."""
+        if set(values) != set(metadata):
+            raise ValueError("Restored values and binding metadata must contain the same names")
+
+        reserved = cli_args_identifier()
+        dict.clear(self)
+        self._binding_metadata.clear()
+        for name, value in values.items():
+            binding = metadata[name]
+            if name == reserved:
+                if binding.kind != "runtime" or binding.assignable or not binding.synthetic:
+                    raise ValueError(
+                        f"Restored reserved binding {reserved!r} must remain runtime-owned"
+                    )
+                dict.__setitem__(self, name, value)
+                self._binding_metadata[name] = binding
+                continue
+            self.declare(name, value, binding)
+
+    def raw_value(self, name: str) -> Any:
+        owner = self.resolve_owner(name)
+        if owner is None:
+            raise KeyError(name)
+        if isinstance(owner, ScopeFrame):
+            return dict.__getitem__(owner, name)
+        return _raw_mapping_value(owner, name)
+
+    def assign(self, name: str, value: Any) -> None:
+        """Write the nearest existing binding without creating a new one."""
+        assert_not_cli_args_identifier(name)
+        owner = self.resolve_owner(name)
+        if owner is None:
+            raise NameError(f"Cannot assign unknown Kedi binding: {name}")
+        if isinstance(owner, ScopeFrame):
+            metadata = owner._binding_metadata.get(name)
+            if metadata is not None and not metadata.assignable:
+                raise ValueError(f"Kedi binding {name!r} is read-only")
+            dict.__setitem__(owner, name, value)
+            return
+        owner[name] = value
+
+    def visible_bindings(self) -> dict[str, tuple[dict[str, Any], Any]]:
+        """Return visible names paired with their nearest owning mapping."""
+        visible: dict[str, tuple[dict[str, Any], Any]] = {}
+        parent = self.parent
+        if isinstance(parent, ScopeFrame):
+            visible.update(parent.visible_bindings())
+        elif isinstance(parent, dict):
+            visible.update((name, (parent, _raw_mapping_value(parent, name))) for name in parent)
+        visible.update((name, (self, dict.__getitem__(self, name))) for name in dict.keys(self))
+        return visible
+
+    def __contains__(self, name: object) -> bool:
+        if dict.__contains__(self, name):
+            return True
+        parent = self.parent
+        return isinstance(name, str) and isinstance(parent, dict) and name in parent
+
+    def __getitem__(self, name: str) -> Any:
+        return self.raw_value(name)
+
+    def get(self, name: str, default: Any = None) -> Any:
+        try:
+            return self.raw_value(name)
+        except KeyError:
+            return default
+
+    def __setitem__(self, name: str, value: Any) -> None:
+        self.declare(name, value)
+
+    def __delitem__(self, name: str) -> None:
+        assert_not_cli_args_identifier(name)
+        dict.__delitem__(self, name)
+        self._binding_metadata.pop(name, None)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        pending = dict(*args, **kwargs)
+        for name, value in pending.items():
+            self.declare(name, value)
+
+    def setdefault(self, name: str, default: Any = None) -> Any:
+        owner = self.resolve_owner(name)
+        if owner is not None:
+            return self.raw_value(name)
+        self.declare(name, default)
+        return default
+
+    def pop(self, name: str, *default: Any) -> Any:
+        assert_not_cli_args_identifier(name)
+        if len(default) > 1:
+            raise TypeError(f"pop expected at most 2 arguments, got {len(default) + 1}")
+        if not self.owns(name):
+            if default:
+                return default[0]
+            raise KeyError(name)
+        value = dict.pop(self, name)
+        self._binding_metadata.pop(name, None)
+        return value
+
+    def popitem(self) -> tuple[str, Any]:
+        if not dict.__len__(self):
+            raise KeyError("popitem(): dictionary is empty")
+        name = next(reversed(dict.keys(self)))
+        return name, self.pop(name)
+
+    def clear(self) -> None:
+        reserved = cli_args_identifier()
+        if self.owns(reserved):
+            raise ValueError(f"Cannot clear scope containing reserved CLI binding {reserved!r}")
+        dict.clear(self)
+        self._binding_metadata.clear()
+
+    def __ior__(self, other: Any, /) -> ScopeFrame:
+        self.update(other)
+        return self
+
+
 class KediEnv(dict[str, Any]):
     """Exec namespace that resolves ``KediPromise`` values lazily, on lookup.
 
@@ -128,8 +321,34 @@ class KediEnv(dict[str, Any]):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         dict.__init__(self)
+        self._binding_owners: dict[str, dict[str, Any]] = {}
+        self._dirty_bindings: set[str] = set()
         if args or kwargs:
             self.update(*args, **kwargs)
+
+    def _set_binding(self, name: str, value: Any, owner: dict[str, Any]) -> None:
+        """Install a Python-visible value with its Kedi write-back owner."""
+        assert_not_cli_args_identifier(name)
+        dict.__setitem__(self, name, value)
+        self._binding_owners[name] = owner
+        self._dirty_bindings.discard(name)
+
+    def _set_unowned(self, name: str, value: Any) -> None:
+        """Install an internal Python name that must never sync into Kedi."""
+        assert_not_cli_args_identifier(name)
+        dict.__setitem__(self, name, value)
+        self._binding_owners.pop(name, None)
+        self._dirty_bindings.discard(name)
+
+    def binding_owners(self) -> dict[str, dict[str, Any]]:
+        return dict(self._binding_owners)
+
+    def changed_binding_owners(self) -> dict[str, dict[str, Any]]:
+        return {
+            name: self._binding_owners[name]
+            for name in self._dirty_bindings
+            if name in self._binding_owners
+        }
 
     def _set_cli_args(self, value: Any) -> None:
         """Install the runtime-owned CLI binding without exposing an override path."""
@@ -138,12 +357,15 @@ class KediEnv(dict[str, Any]):
     def __setitem__(self, key: str, value: Any) -> None:
         assert_not_cli_args_identifier(key)
         dict.__setitem__(self, key, value)
+        if key in self._binding_owners:
+            self._dirty_bindings.add(key)
 
     def update(self, *args: Any, **kwargs: Any) -> None:
         pending = dict(*args, **kwargs)
         for key in pending:
             assert_not_cli_args_identifier(key)
         dict.update(self, pending)
+        self._dirty_bindings.update(self._binding_owners.keys() & pending.keys())
 
     def setdefault(self, key: str, default: Any = None) -> Any:
         assert_not_cli_args_identifier(key)
@@ -176,15 +398,22 @@ class KediEnv(dict[str, Any]):
     def copy(self) -> "KediEnv":
         copied = KediEnv()
         dict.update(copied, self)
+        copied._binding_owners.update(self._binding_owners)
+        copied._dirty_bindings.update(self._dirty_bindings)
         return copied
 
     def __delitem__(self, key: str) -> None:
         assert_not_cli_args_identifier(key)
         dict.__delitem__(self, key)
+        self._binding_owners.pop(key, None)
+        self._dirty_bindings.discard(key)
 
     def pop(self, key: str, *default: Any) -> Any:
         assert_not_cli_args_identifier(key)
-        return dict.pop(self, key, *default)
+        value = dict.pop(self, key, *default)
+        self._binding_owners.pop(key, None)
+        self._dirty_bindings.discard(key)
+        return value
 
     def popitem(self) -> tuple[str, Any]:
         if cli_args_identifier() in self:
@@ -195,12 +424,16 @@ class KediEnv(dict[str, Any]):
             raise KeyError("popitem(): dictionary is empty") from exc
         value = dict.__getitem__(self, key)
         dict.__delitem__(self, key)
+        self._binding_owners.pop(key, None)
+        self._dirty_bindings.discard(key)
         return key, value
 
     def clear(self) -> None:
         if cli_args_identifier() in self:
             raise ValueError("The reserved CLI argument binding cannot be removed")
         dict.clear(self)
+        self._binding_owners.clear()
+        self._dirty_bindings.clear()
 
     def __getitem__(self, key: str) -> Any:
         return native_value(dict.__getitem__(self, key))
@@ -251,6 +484,11 @@ def assert_kedienv_routing() -> None:
 
 def raw_lookup_value(rt: KediRuntime, name: str, local_env: dict[str, Any]) -> Any:
     """Look up a variable without materializing promises or artifacts."""
+    if isinstance(local_env, ScopeFrame):
+        try:
+            return local_env.raw_value(name)
+        except KeyError:
+            pass
     if name in local_env:
         return _raw_mapping_value(local_env, name)
 
@@ -318,9 +556,63 @@ def model_text(value: Any) -> str:
 
 
 def _raw_mapping_value(mapping: dict[str, Any], key: str) -> Any:
+    if isinstance(mapping, ScopeFrame):
+        return mapping.raw_value(key)
     if isinstance(mapping, KediEnv):
         return mapping.raw_value(key)
     return dict.__getitem__(mapping, key)
+
+
+def visible_bindings(
+    mapping: dict[str, Any],
+) -> dict[str, tuple[dict[str, Any], Any]]:
+    """Return a mapping's Python-visible values and their semantic owners."""
+    if isinstance(mapping, ScopeFrame):
+        return mapping.visible_bindings()
+    return {name: (mapping, _raw_mapping_value(mapping, name)) for name in mapping}
+
+
+def snapshot_visible_values(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Copy every currently visible raw value for deferred read-only execution."""
+    return {name: value for name, (_, value) in visible_bindings(mapping).items()}
+
+
+def write_owned_value(owner: dict[str, Any], name: str, value: Any) -> None:
+    """Update a binding through its recorded owner without redeclaring it."""
+    assert_not_cli_args_identifier(name)
+    if isinstance(owner, ScopeFrame):
+        if not owner.owns(name):
+            raise RuntimeError(f"Scope frame does not own binding {name!r}")
+        metadata = owner._binding_metadata.get(name)
+        if metadata is not None and not metadata.assignable:
+            raise ValueError(f"Kedi binding {name!r} is read-only")
+        dict.__setitem__(owner, name, value)
+        return
+    owner[name] = value
+
+
+def validate_owned_value(
+    rt: KediRuntime,
+    owner: dict[str, Any],
+    name: str,
+    value: Any,
+    local_env: dict[str, Any],
+) -> Any:
+    """Validate one Python write-back against its owner's Kedi type contract."""
+    from .type_system import KediType
+
+    if not isinstance(owner, ScopeFrame):
+        return value
+    metadata = owner._binding_metadata.get(name)
+    contract = metadata.type_contract if metadata is not None else None
+    if not isinstance(contract, KediType) or contract.is_none():
+        return value
+    try:
+        return contract.validate(rt, local_env, value)
+    except Exception as exc:
+        raise TypeError(
+            f"Python write-back for {name!r} does not match its annotated type"
+        ) from exc
 
 
 def _contains_artifact_ref(value: Any, *, seen: set[int] | None = None) -> bool:
@@ -478,7 +770,7 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
     in-flight template's own (still-running) output promise.
     """
     env = KediEnv()
-    env["__builtins__"] = builtins.__dict__
+    env._set_unowned("__builtins__", builtins.__dict__)
 
     identifier = cli_args_identifier()
     missing = object()
@@ -486,46 +778,46 @@ def build_python_env(rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
     if runtime_args is not missing:
         env._set_cli_args(runtime_args)
 
-    def merge(source: dict[str, Any]) -> None:
-        for name, value in source.items():
+    def merge(source: dict[str, Any], *, writable: bool) -> None:
+        for name, (owner, value) in visible_bindings(source).items():
             if name == identifier:
                 if value is runtime_args:
                     continue
                 assert_not_cli_args_identifier(name)
-            env[name] = value
+            if writable:
+                env._set_binding(name, value, owner)
+            else:
+                env._set_unowned(name, value)
 
     # Layer environments: imports -> prelude -> globals -> current -> local
-    for source in (rt._import_env, rt._prelude_env, rt._globals_env):
+    for source in (rt._import_env, rt._prelude_env):
         if source is not None:
-            merge(source)
+            merge(source, writable=False)
+    if rt._globals_env is not None:
+        merge(rt._globals_env, writable=True)
 
     try:
         current = rt._current_env.get()
         if isinstance(current, dict):
-            merge(current)
+            merge(current, writable=True)
     except Exception:
         pass
 
-    merge(local_env)
+    merge(local_env, writable=True)
 
     # Add type environment
     _add_type_env(rt, env, local_env)
 
     # Wrap procedures as callables
     for name, fn in rt._procedures.items():
-        env[name] = _make_proc_wrapper(rt, name, fn, local_env)
+        env._set_unowned(name, _make_proc_wrapper(rt, name, fn, local_env))
 
     return env
 
 
 def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[str, Any]:
     """Build environment for type annotation evaluation."""
-    env: dict[str, Any] = {
-        "__builtins__": builtins.__dict__,
-        "builtins": builtins,
-        "typing": typing,
-        "typing_extensions": typing_extensions,
-    }
+    env: dict[str, Any] = {"__builtins__": builtins.__dict__}
 
     # Import only names that are meaningful as Kedi type annotations.
     for module in (typing, typing_extensions):
@@ -543,17 +835,17 @@ def build_type_env(rt: KediRuntime, local_env: dict[str, Any] | None) -> dict[st
     # Add runtime environments
     for source in (rt._import_env, rt._prelude_env, rt._globals_env):
         if source is not None:
-            env.update(source)
+            env.update((name, value) for name, (_, value) in visible_bindings(source).items())
 
     try:
         current = rt._current_env.get()
         if isinstance(current, dict):
-            env.update(current)
+            env.update((name, value) for name, (_, value) in visible_bindings(current).items())
     except Exception:
         pass
 
     if local_env:
-        env.update(local_env)
+        env.update((name, value) for name, (_, value) in visible_bindings(local_env).items())
 
     return env
 
@@ -567,7 +859,11 @@ def _add_type_env(rt: KediRuntime, env: dict[str, Any], local_env: dict[str, Any
     for layer in rt._type_env_stack:
         type_env.update(layer)
 
-    env.update(type_env)
+    if isinstance(env, KediEnv):
+        for name, value in type_env.items():
+            env._set_unowned(name, value)
+    else:
+        env.update(type_env)
 
     # Coerce string values to models where applicable
     from .type_system import coerce_model_value
@@ -631,26 +927,3 @@ def _make_generic_proc_wrapper(rt: KediRuntime, proc_name: str):
         return rt._invoke_procedure(callee, list(args))
 
     return wrapper
-
-
-class ScopedDict(dict[str, Any]):
-    """Dictionary that propagates changes to parent closure."""
-
-    def __init__(
-        self,
-        initial: dict[str, Any] | None = None,
-        *,
-        closure: dict[str, Any] | None = None,
-        readonly: set[str] | None = None,
-    ) -> None:
-        super().__init__()
-        self._closure = closure
-        self._readonly = readonly or set()
-        if initial:
-            for k, v in initial.items():
-                super().__setitem__(k, v)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        super().__setitem__(key, value)
-        if self._closure is not None and key not in self._readonly:
-            self._closure[key] = value

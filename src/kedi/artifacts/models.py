@@ -33,9 +33,9 @@ class ArtifactRef(BaseModel, Generic[T]):
     expires_at: datetime
     sensitive: bool = False
     usage_hint: str = (
-        "Use read_artifact for a known literal or bounded inspection; use run_artifact_code "
-        "for filtering, aggregation, joins, or multi-artifact transformations. Release when "
-        "done."
+        "Copy this exact ref_id into artifact tools; never use a source or tool name as an ID. "
+        "Use read_artifact for a known literal or bounded inspection; use run_artifact_code for "
+        "filtering, aggregation, joins, or multi-artifact transformations. Release when done."
     )
 
 

@@ -16,6 +16,7 @@ from kedi.app import (
 from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
 from kedi.idle import run_idle
+from kedi._interactive import SessionPersistenceError
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_registry import add_package, install_package
@@ -230,6 +231,18 @@ def _skills_command_help() -> str:
     help="Start an interactive Kedi terminal session",
 )
 @click.option(
+    "--record",
+    "record_idle",
+    is_flag=True,
+    help="Persist an interactive session before exit",
+)
+@click.option(
+    "--load",
+    "load_session_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Resume an interactive session snapshot",
+)
+@click.option(
     "--quiet",
     is_flag=True,
     help="Suppress progress output from codegen and GEPA optimization",
@@ -265,6 +278,8 @@ def main(
     optimizer_fresh: bool = False,
     no_cache: bool = False,
     idle_mode: bool = False,
+    record_idle: bool = False,
+    load_session_path: Path | None = None,
     quiet: bool = False,
     parse_only: bool = False,
     show_help: bool = False,
@@ -277,16 +292,26 @@ def main(
         else:
             click.echo(ctx.get_help())
         return 0
-    if source == "skills" and command_source is None:
-        return _run_skills_command(list(ctx.args))
-    if source in _PACKAGE_COMMANDS and command_source is None:
-        return _run_package_command(source, list(ctx.args))
     if idle_mode:
         if source is not None or command_source is not None:
             raise click.UsageError("--idle does not accept SOURCE or -c/--command.")
         if test or do_eval or optimize or parse_only:
             raise click.UsageError("--idle cannot be combined with execution modes.")
-        return run_idle(adapter=adapter, model=adapter_model)
+        try:
+            return run_idle(
+                adapter=adapter,
+                model=adapter_model,
+                record=record_idle,
+                load_path=load_session_path,
+            )
+        except SessionPersistenceError as exc:
+            raise click.ClickException(str(exc)) from exc
+    if record_idle or load_session_path is not None:
+        raise click.UsageError("--record and --load require --idle.")
+    if source == "skills" and command_source is None:
+        return _run_skills_command(list(ctx.args))
+    if source in _PACKAGE_COMMANDS and command_source is None:
+        return _run_package_command(source, list(ctx.args))
     if source == "parse":
         if command_source is not None:
             parse_only = True

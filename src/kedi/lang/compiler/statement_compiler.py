@@ -27,17 +27,23 @@ from ..ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     BacktickLineStmt,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    IfStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
+    OutputSegment,
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -49,8 +55,20 @@ from ..ast import (
     UseDirectiveStmt,
 )
 from ..parser.escapes import preserve_escaped_whitespace
+from .control_flow import (
+    assert_conditional_loop_capacity,
+    active_scope,
+    branch_trace,
+    child_scope,
+    evaluate_condition,
+    evaluate_iterable,
+    loop_binding,
+    loop_trace,
+    managed_loop_iterator,
+    run_map_continuations,
+)
 from .evaluation import (
-    evaluate_assignment_rhs,
+    evaluate_binding_rhs,
     evaluate_python_inline,
     execute_inline_side_effects,
     execute_python_block,
@@ -58,7 +76,7 @@ from .evaluation import (
     prepare_segments,
     render_expression,
 )
-from .type_system import KediType, assign_value_from_native, detect_rhs_kind
+from .type_system import KediType, detect_rhs_kind, initialize_value_from_native
 
 _NO_RETURN = object()
 
@@ -90,14 +108,28 @@ class StatementCompiler:
             with self.rt.trace_frame(KediTraceFrame(kind="template", label=label, span=stmt.loc)):
                 # If an override is provided, short-circuit LLM invocation and inject values.
                 if stmt.optimized_output_override is not None:
-                    from .environment import assert_not_cli_args_identifier
-
                     env = self.rt._current_env.get()
                     if env is None:
                         raise RuntimeError("Template override requires active runtime environment")
+                    contracts = {
+                        segment.name: KediType.from_node(
+                            segment.type_expr,
+                            segment.type_annotation,
+                        )
+                        for segment in stmt.segments
+                        if isinstance(segment, OutputSegment)
+                    }
                     for key, value in stmt.optimized_output_override.items():
-                        assert_not_cli_args_identifier(key)
-                        env[key] = value
+                        contract = contracts.get(key)
+                        if contract is not None and not contract.is_none():
+                            value = contract.validate(self.rt, env, value)
+                        self._declare_value(
+                            key,
+                            value,
+                            env,
+                            kedi_type=contract,
+                            source=stmt.loc,
+                        )
                         kwargs[key] = value
                     return stmt.optimized_output_override
 
@@ -156,51 +188,33 @@ class StatementCompiler:
                 return execute_python_block(code, self.rt, kwargs, span=stmt.loc)
             return evaluate_python_inline(self.rt, code, kwargs, span=stmt.loc)
 
-    def execute_assignment(self, stmt: AssignStmt, closure_env: dict[str, Any]) -> None:
-        """Execute an assignment statement."""
-        with self.rt.trace_frame(
-            KediTraceFrame(kind="assignment", label=f"assignment {stmt.name}", span=stmt.loc)
-        ):
-            native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
-            is_backtick, is_angle, is_call = detect_rhs_kind(stmt.expr)
-            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
-
-            if native is not None:
-                if is_backtick:
-                    value = assign_value_from_native(
-                        native, kedi_type, self.rt, closure_env, strict_native=True
-                    )
-                elif is_angle:
-                    value = assign_value_from_native(
-                        native, kedi_type, self.rt, closure_env, strict_native=False
-                    )
-                elif is_call:
-                    value = native
-                    if not kedi_type.is_none():
-                        value = kedi_type.validate(self.rt, closure_env, value)
-                else:
-                    value = rendered
-                    if not kedi_type.is_none():
-                        try:
-                            value = kedi_type.validate(self.rt, closure_env, value)
-                        except Exception:
-                            raise TypeError("Native assignment value does not match annotated type")
-            else:
-                value = rendered
-                if not kedi_type.is_none():
-                    try:
-                        value = kedi_type.validate(self.rt, closure_env, value)
-                    except Exception:
-                        raise TypeError("Native assignment value does not match annotated type")
-
-            self._set_value(stmt.name, value, closure_env)
-
-    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
-        """Execute an assignment with Python block RHS."""
+    def execute_variable_init(self, stmt: VariableInitStmt, closure_env: dict[str, Any]) -> None:
+        """Initialize a variable in the active lexical frame."""
         with self.rt.trace_frame(
             KediTraceFrame(
-                kind="assignment_block",
-                label=f"assignment {stmt.name}",
+                kind="variable_init",
+                label=f"variable initialization {stmt.name}",
+                span=stmt.loc,
+            )
+        ):
+            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
+            value = self._evaluate_initialization_value(stmt.expr, kedi_type, closure_env)
+            self._declare_value(
+                stmt.name,
+                value,
+                closure_env,
+                kedi_type=kedi_type,
+                source=stmt.loc,
+            )
+
+    def execute_variable_init_block(
+        self, stmt: VariableInitBlockStmt, closure_env: dict[str, Any]
+    ) -> None:
+        """Initialize a variable from a fenced Python value."""
+        with self.rt.trace_frame(
+            KediTraceFrame(
+                kind="variable_init_block",
+                label=f"variable initialization {stmt.name}",
                 span=stmt.loc,
             )
         ):
@@ -213,14 +227,89 @@ class StatementCompiler:
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception:
-                    raise TypeError("Native assignment value does not match annotated type")
+                    raise TypeError("Native initialization value does not match annotated type")
             else:
                 if not isinstance(value, str):
                     raise TypeError(
-                        "Native non-string assignment requires explicit type annotation"
+                        "Native non-string initialization requires explicit type annotation"
                     )
 
-            self._set_value(stmt.name, value, closure_env)
+            self._declare_value(
+                stmt.name,
+                value,
+                closure_env,
+                kedi_type=kedi_type,
+                source=stmt.loc,
+            )
+
+    def execute_assignment(self, stmt: AssignmentStmt, closure_env: dict[str, Any]) -> None:
+        """Update the nearest existing binding while preserving its type contract."""
+        with self.rt.trace_frame(
+            KediTraceFrame(kind="assignment", label=f"assignment {stmt.name}", span=stmt.loc)
+        ):
+            kedi_type = self._assignment_type(stmt.name, closure_env)
+            native, rendered = evaluate_binding_rhs(self.rt, stmt.expr, closure_env)
+            value = native if native is not None else rendered
+            if kedi_type is not None and not kedi_type.is_none():
+                try:
+                    value = kedi_type.validate(self.rt, closure_env, value)
+                except Exception as exc:
+                    raise TypeError(
+                        "Assigned value does not match the binding's annotated type"
+                    ) from exc
+            self._assign_value(stmt.name, value, closure_env)
+
+    def execute_assignment_block(
+        self, stmt: AssignmentBlockStmt, closure_env: dict[str, Any]
+    ) -> None:
+        """Evaluate a fenced native value and update its nearest binding owner."""
+        with self.rt.trace_frame(
+            KediTraceFrame(
+                kind="assignment_block",
+                label=f"assignment {stmt.name}",
+                span=stmt.loc,
+            )
+        ):
+            value = execute_python_block(stmt.code, self.rt, closure_env, span=stmt.loc)
+            kedi_type = self._assignment_type(stmt.name, closure_env)
+            if kedi_type is not None and not kedi_type.is_none():
+                try:
+                    value = kedi_type.validate(self.rt, closure_env, value)
+                except Exception as exc:
+                    raise TypeError(
+                        "Assigned value does not match the binding's annotated type"
+                    ) from exc
+            self._assign_value(stmt.name, value, closure_env)
+
+    def _evaluate_initialization_value(
+        self,
+        segments: list[Any],
+        kedi_type: KediType,
+        closure_env: dict[str, Any],
+    ) -> Any:
+        native, rendered = evaluate_binding_rhs(self.rt, segments, closure_env)
+        is_backtick, is_angle, is_call = detect_rhs_kind(segments)
+        if native is not None:
+            if is_backtick:
+                return initialize_value_from_native(
+                    native, kedi_type, self.rt, closure_env, strict_native=True
+                )
+            if is_angle:
+                return initialize_value_from_native(
+                    native, kedi_type, self.rt, closure_env, strict_native=False
+                )
+            if is_call:
+                return (
+                    kedi_type.validate(self.rt, closure_env, native)
+                    if not kedi_type.is_none()
+                    else native
+                )
+        if kedi_type.is_none():
+            return rendered
+        try:
+            return kedi_type.validate(self.rt, closure_env, rendered)
+        except Exception as exc:
+            raise TypeError("Native initialization value does not match annotated type") from exc
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
         """Execute a Python block for side effects."""
@@ -236,15 +325,54 @@ class StatementCompiler:
         """Execute a single-line Python statement for side effects."""
         execute_inline_side_effects(self.rt, stmt.code, closure_env, span=stmt.loc)
 
-    def _set_value(self, name: str, value: Any, closure_env: dict[str, Any]) -> None:
-        """Set a value in both closure and runtime environments."""
-        from .environment import assert_not_cli_args_identifier
+    def _declare_value(
+        self,
+        name: str,
+        value: Any,
+        closure_env: dict[str, Any],
+        *,
+        kedi_type: KediType | None = None,
+        source: Any = None,
+    ) -> None:
+        """Declare a value in the active lexical frame."""
+        from .environment import BindingMetadata, ScopeFrame, assert_not_cli_args_identifier
 
         assert_not_cli_args_identifier(name)
+        if isinstance(closure_env, ScopeFrame):
+            closure_env.declare(
+                name,
+                value,
+                BindingMetadata(type_contract=kedi_type, source=source),
+            )
+        else:
+            closure_env[name] = value
+
+    @staticmethod
+    def _assignment_type(name: str, closure_env: dict[str, Any]) -> KediType | None:
+        from .environment import ScopeFrame
+
+        if isinstance(closure_env, ScopeFrame):
+            owner = closure_env.resolve_owner(name)
+            if owner is None:
+                raise NameError(f"Cannot assign unknown Kedi binding: {name}")
+            metadata = closure_env.binding_metadata(name)
+            contract = metadata.type_contract if metadata is not None else None
+            return contract if isinstance(contract, KediType) else None
+        if name not in closure_env:
+            raise NameError(f"Cannot assign unknown Kedi binding: {name}")
+        return None
+
+    @staticmethod
+    def _assign_value(name: str, value: Any, closure_env: dict[str, Any]) -> None:
+        from .environment import ScopeFrame, assert_not_cli_args_identifier
+
+        assert_not_cli_args_identifier(name)
+        if isinstance(closure_env, ScopeFrame):
+            closure_env.assign(name, value)
+            return
+        if name not in closure_env:
+            raise NameError(f"Cannot assign unknown Kedi binding: {name}")
         closure_env[name] = value
-        env = self.rt._current_env.get()
-        if env is not None:
-            env[name] = value
 
 
 class StatementExecutor:
@@ -276,71 +404,19 @@ class StatementExecutor:
         profile_registry = self.rt._profile_registry
 
         try:
-            for stmt in proc.body:
-                if isinstance(stmt, AgentDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
-                    adapter_selection_kind = "agent-harness"
-                    active = active.merge(eval_agent_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, AdapterDirectiveStmt):
-                    _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
-                    adapter_selection_kind = "agent-framework"
-                    active = active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ModelDirectiveStmt):
-                    active = active.merge(eval_model_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, EffortDirectiveStmt):
-                    active = active.merge(eval_effort_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ApprovalDirectiveStmt):
-                    active = active.merge(eval_approval_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, HistoryDirectiveStmt):
-                    active = active.merge(eval_history_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SkillsDirectiveStmt):
-                    active = active.merge(eval_skills_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, CodeModeDirectiveStmt):
-                    active = active.merge(eval_codemode_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SystemDirectiveStmt):
-                    active = active.merge(eval_system_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, McpDirectiveStmt):
-                    active = active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, SettingsDirectiveStmt):
-                    active = active.merge(eval_settings_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, ArtifactsDirectiveStmt):
-                    active = active.merge(eval_artifacts_directive(self.rt, stmt, closure_env))
-                    continue
-                if isinstance(stmt, UseDirectiveStmt):
-                    active = active.merge(
-                        eval_use_directive(
-                            self.rt,
-                            stmt,
-                            profile_registry,
-                            closure_env,
-                            available_procedures=set(self.rt._procedures.keys()),
-                        )
-                    )
-                    continue
-
-                with block_agent_profile_scope(active):
-                    result = self._execute_body_statement(
-                        stmt,
-                        proc,
-                        closure_env,
-                        type_scope,
-                        saved_procs,
-                        new_proc_names,
-                        active,
-                    )
-                    if result is not _NO_RETURN:
-                        last_return = result
+            block_result, _, _ = self._execute_block(
+                proc.body,
+                proc,
+                closure_env,
+                type_scope,
+                saved_procs,
+                new_proc_names,
+                active,
+                adapter_selection_kind,
+                profile_registry,
+            )
+            if block_result is not _NO_RETURN:
+                last_return = block_result
 
         finally:
             pop_type_env(self.rt)
@@ -355,6 +431,128 @@ class StatementExecutor:
 
         return last_return
 
+    def _execute_block(
+        self,
+        statements: list[Stmt],
+        proc: ProcedureDef,
+        closure_env: dict[str, Any],
+        type_scope: dict[str, Any],
+        saved_procs: dict[str, Any],
+        new_proc_names: list[str],
+        active: AgentProfile,
+        adapter_selection_kind: str | None,
+        profile_registry: dict[str, Any],
+    ) -> tuple[Any, AgentProfile, str | None]:
+        """Execute one ordered block while keeping directive state block-local."""
+        last_return: Any = _NO_RETURN
+        for stmt in statements:
+            updated = self._apply_profile_directive(
+                stmt,
+                active,
+                adapter_selection_kind,
+                closure_env,
+                profile_registry,
+            )
+            if updated is not None:
+                active, adapter_selection_kind = updated
+                continue
+
+            with block_agent_profile_scope(active):
+                result = self._execute_body_statement(
+                    stmt,
+                    proc,
+                    closure_env,
+                    type_scope,
+                    saved_procs,
+                    new_proc_names,
+                    active,
+                    adapter_selection_kind,
+                    profile_registry,
+                )
+            if result is not _NO_RETURN:
+                last_return = result
+
+        return last_return, active, adapter_selection_kind
+
+    def _apply_profile_directive(
+        self,
+        stmt: Stmt,
+        active: AgentProfile,
+        adapter_selection_kind: str | None,
+        closure_env: dict[str, Any],
+        profile_registry: dict[str, Any],
+    ) -> tuple[AgentProfile, str | None] | None:
+        if isinstance(stmt, AgentDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
+            return (
+                active.merge(eval_agent_directive(self.rt, stmt, closure_env)),
+                "agent-harness",
+            )
+        if isinstance(stmt, AdapterDirectiveStmt):
+            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
+            return (
+                active.merge(eval_adapter_directive(self.rt, stmt, closure_env)),
+                "agent-framework",
+            )
+        if isinstance(stmt, ModelDirectiveStmt):
+            return active.merge(
+                eval_model_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, EffortDirectiveStmt):
+            return active.merge(
+                eval_effort_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, ApprovalDirectiveStmt):
+            return (
+                active.merge(eval_approval_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, HistoryDirectiveStmt):
+            return active.merge(
+                eval_history_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, SkillsDirectiveStmt):
+            return active.merge(
+                eval_skills_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, CodeModeDirectiveStmt):
+            return (
+                active.merge(eval_codemode_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, SystemDirectiveStmt):
+            return active.merge(
+                eval_system_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, McpDirectiveStmt):
+            return active.merge(
+                eval_mcp_directive(self.rt, stmt, closure_env)
+            ), adapter_selection_kind
+        if isinstance(stmt, SettingsDirectiveStmt):
+            return (
+                active.merge(eval_settings_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, ArtifactsDirectiveStmt):
+            return (
+                active.merge(eval_artifacts_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, UseDirectiveStmt):
+            return (
+                active.merge(
+                    eval_use_directive(
+                        self.rt,
+                        stmt,
+                        profile_registry,
+                        closure_env,
+                        available_procedures=set(self.rt._procedures.keys()),
+                    )
+                ),
+                adapter_selection_kind,
+            )
+        return None
+
     def _execute_body_statement(
         self,
         stmt: Stmt,
@@ -364,10 +562,107 @@ class StatementExecutor:
         saved_procs: dict[str, Any],
         new_proc_names: list[str],
         active: AgentProfile,
+        adapter_selection_kind: str | None = None,
+        profile_registry: dict[str, Any] | None = None,
     ) -> Any:
         from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
+
+        if profile_registry is None:
+            profile_registry = self.rt._profile_registry
+
+        if isinstance(stmt, IfStmt):
+            condition = evaluate_condition(self.rt, stmt, closure_env)
+            body = stmt.body if condition else stmt.else_body
+            if body is None:
+                return _NO_RETURN
+            with branch_trace(self.rt, stmt, alternative=not condition):
+                with child_scope(self.rt, closure_env) as branch_env:
+                    result, _, _ = self._execute_block(
+                        body,
+                        proc,
+                        branch_env,
+                        type_scope,
+                        saved_procs,
+                        new_proc_names,
+                        active,
+                        adapter_selection_kind,
+                        profile_registry,
+                    )
+            return result
+
+        if isinstance(stmt, LoopStmt):
+            last_return: Any = _NO_RETURN
+            with loop_trace(self.rt, stmt):
+                records: list[tuple[Any, AgentProfile, str | None]] = []
+                values = evaluate_iterable(self.rt, stmt, closure_env)
+                with managed_loop_iterator(values):
+                    for value in values:
+                        with loop_binding(
+                            self.rt, closure_env, stmt.binder, value
+                        ) as iteration_env:
+                            result, iteration_active, iteration_adapter_kind = self._execute_block(
+                                stmt.body,
+                                proc,
+                                iteration_env,
+                                type_scope,
+                                saved_procs,
+                                new_proc_names,
+                                active,
+                                adapter_selection_kind,
+                                profile_registry,
+                            )
+                            records.append(
+                                (iteration_env, iteration_active, iteration_adapter_kind)
+                            )
+                        if result is not _NO_RETURN:
+                            last_return = result
+
+                if stmt.map_body is not None:
+                    frames = [record[0] for record in records]
+
+                    def run_map(index: int, frame: Any) -> None:
+                        _, map_active, map_adapter_kind = records[index]
+                        with active_scope(self.rt, frame):
+                            with block_agent_profile_scope(map_active):
+                                self._execute_block(
+                                    stmt.map_body or [],
+                                    proc,
+                                    frame,
+                                    type_scope,
+                                    saved_procs,
+                                    new_proc_names,
+                                    map_active,
+                                    map_adapter_kind,
+                                    profile_registry,
+                                )
+
+                    run_map_continuations(self.rt, stmt, frames, run_map)
+            return last_return
+
+        if isinstance(stmt, ConditionalLoopStmt):
+            conditional_last_return: Any = _NO_RETURN
+            completed_iterations = 0
+            with loop_trace(self.rt, stmt):
+                while evaluate_condition(self.rt, stmt, closure_env):
+                    assert_conditional_loop_capacity(self.rt, completed_iterations)
+                    with child_scope(self.rt, closure_env) as iteration_env:
+                        result, _, _ = self._execute_block(
+                            stmt.body,
+                            proc,
+                            iteration_env,
+                            type_scope,
+                            saved_procs,
+                            new_proc_names,
+                            active,
+                            adapter_selection_kind,
+                            profile_registry,
+                        )
+                    completed_iterations += 1
+                    if result is not _NO_RETURN:
+                        conditional_last_return = result
+            return conditional_last_return
 
         if isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**closure_env)
@@ -412,11 +707,19 @@ class StatementExecutor:
             self.compiler.execute_backtick_line(stmt, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, AssignBlockStmt):
+        if isinstance(stmt, VariableInitBlockStmt):
+            self.compiler.execute_variable_init_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignmentBlockStmt):
             self.compiler.execute_assignment_block(stmt, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, AssignStmt):
+        if isinstance(stmt, VariableInitStmt):
+            self.compiler.execute_variable_init(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignmentStmt):
             self.compiler.execute_assignment(stmt, closure_env)
             return _NO_RETURN
 
@@ -427,7 +730,7 @@ class StatementExecutor:
                 proc.return_type_expr, proc.return_type_annotation
             )
             if not return_kedi_type.is_none():
-                native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
+                native, rendered = evaluate_binding_rhs(self.rt, stmt.segments, closure_env)
                 return native if native is not None else preserve_escaped_whitespace(rendered)
             return self.compiler.compile_return(stmt)(**closure_env)
 
@@ -465,15 +768,23 @@ class StatementExecutor:
         elif isinstance(stmt, BacktickLineStmt):
             self.compiler.execute_backtick_line(stmt, env)
 
-        elif isinstance(stmt, AssignBlockStmt):
+        elif isinstance(stmt, VariableInitBlockStmt):
+            self.compiler.execute_variable_init_block(stmt, env)
+
+        elif isinstance(stmt, AssignmentBlockStmt):
             self.compiler.execute_assignment_block(stmt, env)
 
-        elif isinstance(stmt, AssignStmt):
+        elif isinstance(stmt, VariableInitStmt):
+            self.compiler.execute_variable_init(stmt, env)
+
+        elif isinstance(stmt, AssignmentStmt):
             self.compiler.execute_assignment(stmt, env)
 
     def _sync_env(self, closure_env: dict[str, Any]) -> None:
-        """Sync runtime env changes back to closure."""
+        """Sync only pre-existing names for legacy direct executor calls."""
         env = self.rt._current_env.get()
-        if env:
-            for k, v in env.items():
-                closure_env[k] = v
+        if env is None or env is closure_env:
+            return
+        for name in list(closure_env):
+            if name in env:
+                closure_env[name] = env[name]

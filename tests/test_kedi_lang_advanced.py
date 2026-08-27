@@ -498,7 +498,7 @@ def test_backtick_assignment_list_and_use(monkeypatch: Any) -> None:
     assert out == "6"
 
 
-def test_assignment_then_reassignment(monkeypatch: Any) -> None:
+def test_repeated_initialization_replaces_same_scope_value(monkeypatch: Any) -> None:
     src = "@p():\n  [x] = a\n  [x] = <`x+'b'`>\n  = <x>\n\n= <p()>\n"
     out = _run(monkeypatch, src)
     assert out == "ab"

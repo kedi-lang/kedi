@@ -130,14 +130,14 @@ def test_collect_type_refs_in_expr_stmt_and_type_def(
 
 
 def test_find_local_declaration_in_procedure_body(tmp_path: Path) -> None:
-    from kedi.lang.ast import AssignStmt, OutputSegment, ProcedureDef, TemplateLine
+    from kedi.lang.ast import VariableInitStmt, OutputSegment, ProcedureDef, TemplateLine
 
     assert features._find_local_declaration(None, "x") is None
     local_proc = ProcedureDef(
         "local",
         [],
         body=[
-            AssignStmt(name="x", loc=make_edge_span(tmp_path)),
+            VariableInitStmt(name="x", loc=make_edge_span(tmp_path)),
             TemplateLine(
                 segments=[OutputSegment(name="y", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
@@ -180,7 +180,7 @@ def test_resolve_in_type_expr_and_stmt(
     resolution_pos: lsp.Position,
 ) -> None:
     from kedi.lang.ast import (
-        AssignBlockStmt,
+        VariableInitBlockStmt,
         OutputSegment,
         TypeApply,
         TypeDef,
@@ -214,7 +214,9 @@ def test_resolve_in_type_expr_and_stmt(
     assert (
         features._resolve_in_stmt(
             Program(),
-            AssignBlockStmt(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            VariableInitBlockStmt(
+                name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)
+            ),
             resolution_pos,
             None,
             {},
@@ -277,7 +279,7 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     tmp_path: Path,
     resolution_pos: lsp.Position,
 ) -> None:
-    from kedi.lang.ast import AssignBlockStmt, TypeApply, TypeRef, TypeUnion
+    from kedi.lang.ast import VariableInitBlockStmt, TypeApply, TypeRef, TypeUnion
 
     assert (
         features._resolve_in_type_expr(
@@ -319,7 +321,7 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     assert (
         features._resolve_in_stmt(
             Program(),
-            AssignBlockStmt(
+            VariableInitBlockStmt(
                 name="x",
                 type_expr=TypeRef(
                     name="Other",
@@ -428,7 +430,7 @@ def test_smallest_enclosing_validation_program(
     tmp_path: Path, resolution_pos: lsp.Position
 ) -> None:
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         AutoSpec,
         CallArg,
         CallSegment,
@@ -525,7 +527,7 @@ def test_smallest_enclosing_validation_program(
                 segments=[InputSegment(name="x", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
             ),
-            AssignStmt(
+            VariableInitStmt(
                 name="x",
                 expr=[TextSegment(text="value", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
@@ -541,7 +543,7 @@ def test_find_all_references_for_procedures_and_types(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         CallSegment,
         ProcedureDef,
         ProfileDefStmt,
@@ -570,7 +572,7 @@ def test_find_all_references_for_procedures_and_types(
                 name="typed",
                 params=["x"],
                 body=[
-                    AssignStmt(
+                    VariableInitStmt(
                         name="v",
                         type_expr=person_type_ref,
                         loc=make_edge_span(tmp_path),
@@ -590,7 +592,7 @@ def test_find_all_references_for_procedures_and_types(
                 segments=[CallSegment(name="target", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
             ),
-            AssignStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            VariableInitStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
         ],
         type_defs=[
             TypeDef(
@@ -644,13 +646,20 @@ def test_find_all_references_for_procedures_and_types(
 
 
 def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Path) -> None:
-    from kedi.lang.ast import AssignStmt, CallSegment, InputSegment, LiteralArg, ProcedureDef
+    from kedi.lang.ast import (
+        VariableInitStmt,
+        CallSegment,
+        InputSegment,
+        LiteralArg,
+        ProcedureDef,
+        TextSegment,
+    )
 
     declaration = make_edge_span(tmp_path)
     owner = ProcedureDef(
         name="owner",
         params=[],
-        body=[AssignStmt(name="value", loc=declaration)],
+        body=[VariableInitStmt(name="value", loc=declaration)],
         loc=make_edge_span(tmp_path),
     )
     segment = CallSegment(
@@ -683,6 +692,242 @@ def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Pa
         refs,
     )
     assert len(refs) == 1
+    features._collect_lexical_input_refs(
+        TextSegment(text="literal", loc=make_edge_span(tmp_path)),
+        "value",
+        owner,
+        (),
+        owner,
+        declaration_span,
+        refs,
+    )
+    assert len(refs) == 1
+
+
+def test_scope_path_and_nested_capture_resolution_edges() -> None:
+    from kedi.lang import parse_program
+    from kedi.lang.ast import VariableInitStmt, InputSegment, OutputSegment, AssignmentStmt, Stmt
+
+    source = (
+        "[outer] = root\n"
+        "> if: `True`:\n"
+        "  [branch] = yes\n"
+        "> loop [item]: `[1]`:\n"
+        "  [loop_local] = yes\n"
+        "> loop: `False`:\n"
+        "  [conditional] = yes\n"
+        "@parent(param: str) -> str:\n"
+        "  [captured] = local\n"
+        "  @child() -> str:\n"
+        "    = <captured>-<param>\n"
+        "  = <child()>\n"
+    )
+    program = parse_program(source, source_path="/tmp/scope-path.kedi")
+
+    assert features._direct_statement_declarations(Stmt(loc=None), "x", None) == []
+    assert (
+        features._direct_statement_declarations(VariableInitStmt(name="x", loc=None), "x", None)
+        == []
+    )
+    assert (
+        features._direct_statement_declarations(
+            VariableInitStmt(expr=[OutputSegment(name="x", loc=None)]), "x", None
+        )
+        == []
+    )
+    assert features._declaration_in_scope_path([Stmt(loc=None)], "x", 1, None) is None
+    ended = Stmt(loc=make_edge_span(Path("/tmp"), line=1, start_col=1, end_col=2))
+    another_ended = Stmt(loc=make_edge_span(Path("/tmp"), line=2, start_col=1, end_col=2))
+    assert features._declaration_in_scope_path([ended, another_ended], "x", 100, None) is None
+
+    missing_target = parse_program(
+        "[missing] := value\n",
+        source_path="/tmp/missing-assignment.kedi",
+    ).toplevel_body[0]
+    missing_span = features.binding_name_span(missing_target)
+    assert missing_span is not None
+    missing_ref = features._resolve_in_stmt(
+        parse_program("[missing] := value\n"),
+        missing_target,
+        lsp.Position(line=0, character=2),
+        None,
+        {},
+        {},
+        {},
+    )
+    assert missing_ref is not None and missing_ref.kind == "local"
+    candidates = []
+    features._collect_value_reference_candidates(
+        [AssignmentStmt(name="missing", loc=None)],
+        "missing",
+        candidates,
+    )
+    assert candidates == []
+
+    branch = program.toplevel_body[1]
+    loop = program.toplevel_body[2]
+    conditional = program.toplevel_body[3]
+    assert branch.loc is not None and loop.loc is not None and conditional.loc is not None
+    assert (
+        features._declaration_in_scope_path(
+            program.toplevel_body,
+            "outer",
+            branch.loc.start_byte,
+            None,
+        )
+        is not None
+    )
+    assert (
+        features._declaration_in_scope_path(
+            [branch],
+            "branch",
+            branch.loc.start_byte + 1,
+            None,
+        )
+        is None
+    )
+    assert (
+        features._declaration_in_scope_path(
+            [loop],
+            "loop_local",
+            loop.loc.start_byte + 1,
+            None,
+        )
+        is None
+    )
+    assert (
+        features._declaration_in_scope_path(
+            [conditional],
+            "conditional",
+            conditional.loc.start_byte + 1,
+            None,
+        )
+        is None
+    )
+
+    parent = program.procedures[0]
+    child = features._nested_procedures(parent)[0]
+    return_stmt = child.body[0]
+    captured_segment, param_segment = return_stmt.segments[0], return_stmt.segments[2]
+    captured_span = features._input_name_span(captured_segment)
+    param_span = features._input_name_span(param_segment)
+    assert captured_span is not None and param_span is not None
+    from kedi.lsp.coordinates import source_coordinates
+
+    with source_coordinates(source, "/tmp/scope-path.kedi"):
+        assert features._resolve_lexical_name(parent, (), "param") is not None
+        captured = features._resolve_value_declaration(
+            program,
+            child,
+            (parent,),
+            "captured",
+            captured_span,
+        )
+        parameter = features._resolve_value_declaration(
+            program,
+            child,
+            (parent,),
+            "param",
+            param_span,
+        )
+        legacy_param = features._resolve_in_segment(
+            InputSegment(name="param", loc=param_segment.loc),
+            lsp.Position(
+                line=param_span.start_line - 1,
+                character=param_span.start_col,
+            ),
+            parent,
+            {},
+            {},
+            {},
+        )
+    assert captured is not None and captured.kind == "local"
+    assert parameter is not None and parameter.kind == "parameter"
+    assert legacy_param is not None and legacy_param.kind == "parameter"
+
+    nested_source = (
+        "@grand(grand_param: str) -> str:\n"
+        "  @middle() -> str:\n"
+        "    @leaf() -> str:\n"
+        "      = <grand_param>\n"
+        "    = <leaf()>\n"
+        "  = <middle()>\n"
+    )
+    nested_program = parse_program(
+        nested_source,
+        source_path="/tmp/deep-capture.kedi",
+    )
+    grand = nested_program.procedures[0]
+    middle = features._nested_procedures(grand)[0]
+    leaf = features._nested_procedures(middle)[0]
+    grand_param_segment = leaf.body[0].segments[0]
+    grand_param_span = features._input_name_span(grand_param_segment)
+    assert grand_param_span is not None
+    with source_coordinates(nested_source, "/tmp/deep-capture.kedi"):
+        deep_parameter = features._resolve_value_declaration(
+            nested_program,
+            leaf,
+            (grand, middle),
+            "grand_param",
+            grand_param_span,
+        )
+    assert deep_parameter is not None and deep_parameter.scope_proc is grand
+
+
+def test_collect_loop_binder_refs_respects_nested_shadowing_and_map_scope() -> None:
+    from kedi.lang import parse_program
+
+    source = (
+        "[outside] = value\n"
+        "> loop [item]: `[1]`:\n"
+        "  = <item>\n"
+        "  > if: `True`:\n"
+        "    = <item>\n"
+        "  > loop [item]: `[2]`:\n"
+        "    = <item>\n"
+        "  > loop [other]: `[3]`:\n"
+        "    = <item>\n"
+        "  > loop: `False`:\n"
+        "    = <item>\n"
+        "> map:\n"
+        "  = <item>\n"
+        "@worker() -> str:\n"
+        "  > loop [worker_item]: `[1]`:\n"
+        "    = <worker_item>\n"
+        "  = done\n"
+    )
+    program = parse_program(source)
+    loop = program.toplevel_body[1]
+    target = features.SymbolRef(
+        "loop_binder",
+        "item",
+        loop.binder_loc,
+        None,
+        loop.binder_loc,
+    )
+    refs = []
+
+    features._collect_loop_binder_refs(program, target, refs)
+
+    assert [(span.start_line, span.start_col) for span in refs] == [
+        (3, 6),
+        (5, 8),
+        (9, 8),
+        (11, 8),
+        (13, 6),
+    ]
+
+    worker_loop = program.procedures[0].body[0]
+    worker_target = features.SymbolRef(
+        "loop_binder",
+        "worker_item",
+        worker_loop.binder_loc,
+        program.procedures[0],
+        worker_loop.binder_loc,
+    )
+    worker_refs = []
+    features._collect_loop_binder_refs(program, worker_target, worker_refs)
+    assert [(span.start_line, span.start_col) for span in worker_refs] == [(16, 8)]
 
 
 def test_document_symbol_helpers(tmp_path: Path) -> None:

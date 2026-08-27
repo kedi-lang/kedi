@@ -10,9 +10,9 @@ from __future__ import annotations
 import pytest
 
 from kedi.lang import compile_program, parse_program
-from kedi.lang.ast import TypeRef
+from kedi.lang.ast import TypeApply, TypeRef, TypeUnion
 from kedi.lang.compiler.environment import KediRuntime
-from kedi.lang.compiler.type_system import KediType
+from kedi.lang.compiler.type_system import KediType, UNSUPPORTED_KEDI_TYPE_NAMES
 from kedi.resolved_types import runtime_isinstance
 from tests.utils_llm import run_without_llm
 
@@ -84,6 +84,46 @@ def test_resolve_required_distinguishes_none_from_unresolvable() -> None:
     assert KediType(TypeRef(name="int")).resolve_required(rt, {}) is int
     with pytest.raises(TypeError, match="Unknown type annotation MissingType"):
         KediType(TypeRef(name="MissingType")).resolve_required(rt, {})
+
+
+@pytest.mark.parametrize("name", sorted(UNSUPPORTED_KEDI_TYPE_NAMES))
+def test_unsupported_kedi_type_names_are_rejected_by_type_system(name: str) -> None:
+    rt = KediRuntime()
+
+    assert KediType(TypeRef(name=name)).resolve(rt, {}) is None
+    assert KediType(name).resolve(rt, {}) is None
+    with pytest.raises(TypeError, match=rf"Unsupported type annotation {name}"):
+        KediType(TypeRef(name=name)).resolve_required(rt, {})
+    with pytest.raises(TypeError, match=rf"Unsupported type annotation {name}"):
+        KediType(name).resolve_required(rt, {})
+
+
+def test_unsupported_nested_kedi_type_is_rejected() -> None:
+    annotation = TypeApply(
+        name="list",
+        args=[TypeApply(name="tuple", args=[TypeRef(name="int")])],
+    )
+
+    rt = KediRuntime()
+    assert KediType(annotation).resolve(rt, {}) is None
+    with pytest.raises(TypeError, match="Unsupported type annotation tuple"):
+        KediType(annotation).resolve_required(rt, {})
+
+
+def test_unsupported_union_member_is_rejected() -> None:
+    cases = (
+        (TypeUnion(left=None, right=TypeRef(name="range")), "range"),
+        (TypeUnion(left=TypeRef(name="object"), right=None), "object"),
+    )
+
+    for annotation, name in cases:
+        with pytest.raises(TypeError, match=f"Unsupported type annotation {name}"):
+            KediType(annotation).resolve_required(KediRuntime(), {})
+
+
+def test_malformed_legacy_type_remains_unknown() -> None:
+    with pytest.raises(TypeError, match=r"Unknown type annotation \["):
+        KediType("[").resolve_required(KediRuntime(), {})
 
 
 def test_get_adapter_stays_lenient_for_introspection() -> None:

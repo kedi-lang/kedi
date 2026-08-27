@@ -37,8 +37,9 @@ from kedi.lang import (
     parse_program,
 )
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     BacktickLineStmt,
+    IfStmt,
     InputSegment,
     OutputSegment,
     PythonExprSegment,
@@ -219,6 +220,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
     assert stmt_walker._walk_stmt(_FakeNode("type_def_stmt"), None) is None
     assert stmt_walker._walk_stmt(_FakeNode("auto_directive"), None) is None
     assert stmt_walker._walk_stmt(_FakeNode("optimize_directive"), None) is None
+    assert stmt_walker._walk_stmt(_FakeNode("line_comment"), None) is None
     assert stmt_walker._walk_stmt(_FakeNode("unknown_stmt"), None) is None
     assert len(stmt_walker.diagnostics) >= 4
 
@@ -385,26 +387,42 @@ def test_cst_walker_defensive_edges(monkeypatch):
     )
     assert auto_with_body.prompt == "stmt"
 
-    opt_proc = cst_module.ProcedureDef("proc", [])
-    empty_opt = stmt_walker._walk_optimize_directive(
+    empty_opt, empty_block = stmt_walker._walk_optimize_directive(
         _FakeNode(
             "optimize_directive",
             fields={"name": _FakeNode("identifier", start=0, end=4)},
-        ),
-        opt_proc,
+        )
     )
     assert empty_opt.template_lines == []
-    noisy_opt = stmt_walker._walk_optimize_directive(
+    assert empty_block.lines == []
+    noisy_opt, noisy_block = stmt_walker._walk_optimize_directive(
         _FakeNode(
             "optimize_directive",
             fields={
                 "name": _FakeNode("identifier", start=0, end=4),
                 "body": _FakeNode("body", children=[_FakeNode("line_comment")]),
             },
-        ),
-        opt_proc,
+        )
     )
     assert noisy_opt.template_lines == []
+    assert noisy_block.lines == []
+
+    owner_without_span = IfStmt(condition_code="", body=[])
+    stmt_walker._attach_else_clause(
+        [owner_without_span],
+        _FakeNode("else_clause", fields={"body": _FakeNode("body")}),
+        None,
+    )
+    assert owner_without_span.else_body == []
+    assert owner_without_span.loc is None
+
+    duplicate_owner = IfStmt(condition_code="", body=[], else_body=[])
+    stmt_walker._attach_else_clause(
+        [duplicate_owner],
+        _FakeNode("else_clause", fields={"body": _FakeNode("body")}),
+        None,
+    )
+    assert stmt_walker.diagnostics[-1].code == "K-ELSE-DUP"
 
     backtick_model = stmt_walker._walk_model_directive(
         _FakeNode(
@@ -1010,7 +1028,7 @@ def test_type_union():
 def test_type_python_carries_raw_code():
     prog = parse_program("[x: `Optional[int]`] = `42`\n")
     stmt = prog.toplevel_body[0]
-    assert isinstance(stmt, AssignStmt)
+    assert isinstance(stmt, VariableInitStmt)
     assert isinstance(stmt.type_expr, TypePython)
     assert stmt.type_expr.code == "Optional[int]"
 

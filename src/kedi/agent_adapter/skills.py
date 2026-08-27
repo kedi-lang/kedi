@@ -68,14 +68,16 @@ class SkillStore:
         if limit > MAX_SKILL_LIST_LIMIT:
             raise ValueError(f"skill list limit cannot exceed {MAX_SKILL_LIST_LIMIT}")
         del all  # Source merging is configured by the scoped skills policy.
-        effective_limit = min(self.max_skills, limit)
+        return self._visible_names()[:limit]
+
+    def _visible_names(self) -> list[str]:
         names: dict[str, None] = {}
         for root in self._active_roots():
             for name in self._valid_names(root):
                 names.setdefault(name, None)
             if names and not self.include_all:
                 break
-        return sorted(names)[:effective_limit]
+        return sorted(names)[: self.max_skills]
 
     def read_skill(self, *, skill_name: str) -> str:
         """Read one valid plain ``SKILL.md`` from the configured sources."""
@@ -138,6 +140,9 @@ class SkillStore:
             raise ValueError(
                 f"Skill {skill_name!r} exceeds the {MAX_SKILL_BYTES} byte content limit"
             )
+        self._validate_skill_text(path)
+        if skill_name not in self._visible_names():
+            raise FileNotFoundError(f"Skill {skill_name!r} was not found")
         return path
 
     def _skill_file(self, skill_name: str) -> Path:

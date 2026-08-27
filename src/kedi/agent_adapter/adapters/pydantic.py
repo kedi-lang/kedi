@@ -5,9 +5,17 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Iterator, Literal, Mapping, Sequence, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterator,
+    Literal,
+    Mapping,
+    Sequence,
+    cast,
+    overload,
+)
 
-from pydantic import BaseModel
 from pydantic_ai import Agent, AgentModelSettings, AgentRetries, AgentSpec
 from pydantic_ai.agent.abstract import AgentInstructions, AgentMetadata, RunOutputDataT
 from pydantic_ai.capabilities import (
@@ -48,12 +56,11 @@ from ...agent_profile.settings import (
     PYDANTIC_MODEL_SETTING_KEYS,
     pydantic_model_settings,
 )
-from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_definition
+from .._schema import build_output_model
 from ..approval import (
     ApprovalDecision,
     ApprovalPolicy,
@@ -470,13 +477,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         Returns:
             type: A Pydantic model class based on the provided schema.
         """
-        if not output_schema:
-            raise ValueError("Output schema cannot be empty.")
-        field_definitions = {
-            field: output_field_definition(type_) for field, type_ in output_schema.items()
-        }
-        model = build_dynamic_model("_OutputModel", BaseModel, field_definitions)
-        return cast(type[OutputDataT], model)
+        return cast(
+            type[OutputDataT],
+            build_output_model(output_schema),
+        )
 
     async def produce(
         self,
@@ -492,8 +496,8 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             raise ValueError("Output spec must be provided.")
         if output_schema:
             output_type = self.type_builder(output_schema)
-        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
         agent = self._agent_for_produce()
+        run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
         tool_specs = self._tool_specs_for_run(run_kwargs)
         if agent is not self:
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)

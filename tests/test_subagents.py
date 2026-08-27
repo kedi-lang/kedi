@@ -1574,7 +1574,12 @@ def test_workflow_executor_snapshot_branches(monkeypatch: pytest.MonkeyPatch) ->
         failed_future = Future()
         await failure_executor._resolve(cast(Any, failed_future))
         settled_error = cast(dict[int, Any], failed_future.results)[1]
-        assert isinstance(settled_error["exception"], ValueError)
+        sandbox_error = settled_error["exception"]
+        assert isinstance(sandbox_error, RuntimeError)
+        assert str(sandbox_error) == "child failure"
+        assert sandbox_error.__traceback__ is None
+        assert sandbox_error.__cause__ is None
+        assert sandbox_error.__context__ is None
 
         async def abort() -> None:
             raise WorkflowAbortError("stop")

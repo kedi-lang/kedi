@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from .ast import (
     CallSegment,
+    ConditionalLoopStmt,
+    IfStmt,
     InputSegment,
+    LoopStmt,
     ModuleExport,
     ModuleImport,
     OutputSegment,
@@ -32,6 +35,10 @@ from .ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    VariableInitBlockStmt,
+    VariableInitStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
 )
 from .compiler import compile_program
 from .parser import KediDiagnostic, KediParseError, parse_program
@@ -50,7 +57,14 @@ __all__ = [
     "ProcedureDef",
     "TemplateBlock",
     "TemplateLine",
+    "IfStmt",
+    "ConditionalLoopStmt",
+    "LoopStmt",
     "RawInvokeStmt",
+    "VariableInitBlockStmt",
+    "VariableInitStmt",
+    "AssignmentBlockStmt",
+    "AssignmentStmt",
     "ReturnStmt",
     "Segment",
     "TextSegment",

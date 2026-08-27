@@ -10,6 +10,7 @@ from .debug import ExecutorDebugEvent, ExecutorDebugExporter
 
 if TYPE_CHECKING:
     from ..core import KediRuntime
+    from ..lang.compiler.environment import KediEnv
 
 
 @runtime_checkable
@@ -447,7 +448,7 @@ class DefaultExecutor:
             return 0
         return max(0, resolved.source_line + kedi_line_offset - 1)
 
-    def _build_python_env(self, rt: KediRuntime, local_env: dict[str, Any]) -> dict[str, Any]:
+    def _build_python_env(self, rt: KediRuntime, local_env: dict[str, Any]) -> KediEnv:
         from ..lang.compiler.environment import build_python_env
 
         return build_python_env(rt, local_env)
@@ -473,7 +474,9 @@ class DefaultExecutor:
         CI hardening: a Python 3.11/3.12 matrix to guard the interpreter routing this depends on.
         """
         env = self._build_python_env(rt, local_env)
-        names = list(local_env.keys())
+        owners = env.binding_owners()
+        names = list(owners)
+        original_values = {name: dict.__getitem__(env, name) for name in names if name in env}
         # A function wrapper is needed so ``return`` is legal; declaring the Kedi vars ``global``
         # makes their reads LOAD_GLOBAL (-> KediEnv.__getitem__) and writes STORE_GLOBAL (-> env).
         header = ["def __kedi_wrapper__():"]
@@ -494,10 +497,19 @@ class DefaultExecutor:
         compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
         exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         result = env["__kedi_wrapper__"]()
-        # Sync mutated Kedi vars back, reading raw (no KediEnv resolution) so untouched promises
-        # stay lazy; touched ones were cached concrete by KediEnv on access.
-        updated = {name: dict.__getitem__(env, name) for name in names if name in env}
-        self._sync_existing_variables(rt, local_env, updated)
+        # CPython's STORE_GLOBAL can bypass dict-subclass mutation hooks. Compare raw identities
+        # around the block and feed only actual rebindings through owner-aware validation. In-place
+        # mutations already affect the owned object; untouched lazy values remain promises.
+        rebound = type(env)()
+        for name, owner in owners.items():
+            if name not in env:
+                continue
+            value = dict.__getitem__(env, name)
+            if original_values.get(name) is value:
+                continue
+            rebound._set_binding(name, value, owner)
+            rebound[name] = value
+        self._sync_existing_variables(rt, local_env, rebound)
         return result
 
     def _sync_existing_variables(
@@ -506,6 +518,39 @@ class DefaultExecutor:
         target: dict[str, Any],
         source: dict[str, Any],
     ) -> None:
+        from ..lang.compiler.environment import (
+            KediEnv,
+            ScopeFrame,
+            validate_owned_value,
+            write_owned_value,
+        )
+
+        if isinstance(source, KediEnv):
+            owners = source.changed_binding_owners()
+            if owners:
+                validated: list[tuple[dict[str, Any], str, Any]] = []
+                for var_name, owner in owners.items():
+                    if var_name in source:
+                        value = dict.__getitem__(source, var_name)
+                        validated.append(
+                            (
+                                owner,
+                                var_name,
+                                validate_owned_value(rt, owner, var_name, value, target),
+                            )
+                        )
+                for owner, var_name, value in validated:
+                    write_owned_value(owner, var_name, value)
+                    runtime_env = rt._current_env.get()
+                    if (
+                        not isinstance(target, ScopeFrame)
+                        and isinstance(runtime_env, dict)
+                        and runtime_env is not owner
+                        and var_name in runtime_env
+                    ):
+                        runtime_env[var_name] = value
+            return
+
         runtime_env = rt._current_env.get()
         for var_name in list(target.keys()):
             if var_name in source:

@@ -151,7 +151,7 @@ def test_adaptive_json_adapter_fallbacks(monkeypatch: pytest.MonkeyPatch) -> Non
     assert calls[-1]["response_format"] == {"type": "json_object"}
 
 
-def test_example_formatter_span_slow_paths() -> None:
+def test_example_formatter_span_slow_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     rt = KediRuntime()
     formatter = DSPyExampleFormatter(rt)
     direct_span = make_optimize_span(
@@ -196,6 +196,21 @@ def test_example_formatter_span_slow_paths() -> None:
 
     rt._procedures["none_env"] = none_env
     assert formatter._compute_span_inputs(fallback_span, "none_env", {"x": 1}) == {"x": "1"}
+
+    original_env = rt._current_env.get()
+
+    def invoke_with_replaced_env(_proc: Any, _args: Any) -> None:
+        observer = rt._procedure_env_observer.get()
+        assert observer is not None
+        observer({"computed": 9})
+        rt._current_env.set({"replacement": True})
+
+    monkeypatch.setattr(rt, "_invoke_procedure", invoke_with_replaced_env)
+    rt._procedures["replaced_env"] = cast(Any, object())
+    assert formatter._compute_span_inputs(fallback_span, "replaced_env", {"x": 1}) == {
+        "computed": "9"
+    }
+    assert rt._current_env.get() is original_env
 
 
 def test_module_builder_edges(monkeypatch: pytest.MonkeyPatch) -> None:

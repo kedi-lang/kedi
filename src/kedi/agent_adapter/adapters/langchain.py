@@ -16,7 +16,6 @@ from typing import (
     cast,
 )
 
-from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
 
@@ -28,12 +27,11 @@ from ...agent_profile.settings import (
     LANGCHAIN_MODEL_SETTING_KEYS,
     langchain_model_settings,
 )
-from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_definition
+from .._schema import build_output_model
 from ..approval import ApprovalPolicy, ToolRisk
 from ..codemode import CodeModeError, CodeModeLimits
 from ..codemode.tool_specs import (
@@ -151,12 +149,7 @@ class LangChainAdapter:
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
-        if not output_schema:
-            raise ValueError("Output schema cannot be empty.")
-        field_definitions = {
-            field: output_field_definition(type_) for field, type_ in output_schema.items()
-        }
-        return build_dynamic_model("_OutputModel", BaseModel, field_definitions)
+        return build_output_model(output_schema)
 
     async def produce(
         self,
@@ -427,7 +420,8 @@ class LangChainAdapter:
             from langchain.chat_models import init_chat_model
         except ImportError as exc:
             raise ModuleNotFoundError(
-                "LangChainAdapter requires langchain. Install with: uv add langchain"
+                "LangChainAdapter requires langchain optional dependencies. "
+                "Install with: uv add 'kedi[langchain]'"
             ) from exc
         return init_chat_model(model, **settings)
 
@@ -483,7 +477,8 @@ class LangChainAdapter:
             from langchain.agents import create_agent
         except ImportError as exc:
             raise ModuleNotFoundError(
-                "LangChainAdapter requires langchain. Install with: uv add langchain"
+                "LangChainAdapter requires langchain optional dependencies. "
+                "Install with: uv add 'kedi[langchain]'"
             ) from exc
         kwargs: dict[str, Any] = {
             "model": model,
@@ -569,7 +564,7 @@ class LangChainAdapter:
         except ImportError as exc:
             raise ModuleNotFoundError(
                 "LangChainAdapter MCP support requires langchain-mcp-adapters. "
-                "Install with: uv add langchain-mcp-adapters"
+                "Install with: uv add 'kedi[langchain]'"
             ) from exc
         client = MultiServerMCPClient(cast(Any, _langchain_mcp_server_configs(profile)))
         transports = {server.transport for server in profile.mcp_servers}
@@ -598,6 +593,13 @@ def _langchain_uses_explicit_cache_blocks(model: Any | None) -> bool:
 def _langchain_cache_middleware(model: Any, *, enabled: bool) -> list[Any]:
     if not enabled or langchain_provider_cache_policy(model).backend != "bedrock":
         return []
+    try:
+        from langchain_aws.middleware.prompt_caching import BedrockPromptCachingMiddleware
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "LangChain Bedrock support requires its optional AWS dependencies. "
+            "Install with: uv add 'kedi[langchain-aws]'"
+        ) from exc
     return [BedrockPromptCachingMiddleware()]
 
 
@@ -649,7 +651,8 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         from langchain_core.tools import StructuredTool
     except ImportError as exc:
         raise ModuleNotFoundError(
-            "LangChainAdapter tool support requires langchain-core. Install with: uv add langchain"
+            "LangChainAdapter tool support requires langchain-core. "
+            "Install with: uv add 'kedi[langchain]'"
         ) from exc
 
     description = tool.description or tool.name
@@ -776,7 +779,8 @@ def _langchain_approval_middleware(
         from langchain.agents.middleware import AgentMiddleware
     except ImportError as exc:
         raise ModuleNotFoundError(
-            "LangChainAdapter approval support requires langchain. Install with: uv add langchain"
+            "LangChainAdapter approval support requires langchain. "
+            "Install with: uv add 'kedi[langchain]'"
         ) from exc
 
     known_tools = {tool.name: tool for tool in tools}

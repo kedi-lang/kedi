@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 # Public re-exports for adapter implementations and compatibility helpers.
 from pydantic_ai import Agent
 
 from .._schema import make_repr
 from .._schema import output_field_definition as _output_field_definition
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
-from . import acp, claude, codex, dspy, langchain, lazy, pydantic, webgpu
+from . import acp, claude, codex, langchain, lazy, pydantic, webgpu
 from .acp import ACPAdapter
 from .claude import (
     ClaudeAdapter,
@@ -15,7 +17,6 @@ from .claude import (
     _output_json_schema,
 )
 from .codex import CodexAdapter
-from .dspy import DSPyAdapter
 from .langchain import (
     LangChainAdapter,
     _apply_langchain_effort_settings,
@@ -35,6 +36,20 @@ from .pydantic import (
     pydantic_toolset_from_specs,
 )
 from .webgpu import BrowserModelBridge, WebGPUAdapter
+
+if TYPE_CHECKING:
+    from . import dspy
+    from .dspy import DSPyAdapter
+
+
+def __getattr__(name: str) -> Any:
+    if name == "DSPyAdapter":
+        from .dspy import DSPyAdapter
+
+        globals()[name] = DSPyAdapter
+        return DSPyAdapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "Agent",

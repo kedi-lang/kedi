@@ -50,7 +50,7 @@ A Kedi program consists of:
 - **Imports and exports**: Explicit module boundaries for sharing procedures, types, and values across `.kedi` files
 - **Template blocks** (`>>`): LLM prompts with embedded substitutions and outputs
 - **Procedures**: Reusable named blocks of code
-- **Assignments**: Variable initialization and storage
+- **Variables**: Explicit initialization and assignment
 - **Returns**: Values returned from procedures or top-level
 - **Python blocks**: Embedded Python code for computation
 - **Comments**: Inline and block comments for documentation
@@ -280,25 +280,52 @@ Use backticks only when the type itself must come from runtime Python state:
 >> Extract [value: `output_type`].
 ```
 
-### Variable Assignment
+### Variable Initialization and Assignment
 
-Variables can be assigned using output syntax on the left side:
+Use `=` to initialize a variable in the current lexical scope:
 
 ```kedi
-# Simple assignment
+# Simple initialization
 [prev] = <current>
 
-# Typed assignment
+# Typed initialization
 [count: int] = `5`
 
-# Typed assignment with inline Python type annotation
+# Typed initialization with inline Python type annotation
 [count: `int`] = `5`
 
-# String assignment from expression
+# String initialization from an expression
 [message] = Hello <name>
 
-# Assignment from Python block
+# Initialization from a Python block
 [total: int] = ```
+return sum([1, 2, 3])
+```
+```
+
+`=` declares a value in the current lexical scope. If a containing scope
+already owns the same name, the new declaration shadows it; it does not update
+the outer binding. Branch and loop-iteration declarations disappear when their
+scope finishes.
+
+Use `:=` to assign a new value to the nearest visible Kedi binding:
+
+```kedi
+[count: int] = `0`
+
+> if: `True`:
+  [count] := `count + 1`
+
+= `count`
+```
+
+`:=` does not declare names and does not accept a new type annotation. The
+target must already exist, and the value is validated against the target's
+original type contract. A fenced Python result is also supported:
+
+```kedi
+[total: int] = `0`
+[total] := ```
 return sum([1, 2, 3])
 ```
 ```
@@ -328,6 +355,175 @@ You can use backtick-wrapped Python expressions in type annotations:
 ```
 
 Backtick type annotations are evaluated at runtime with full access to prelude, globals, and local scope. They work identically to regular type annotations.
+
+## Native Control Flow
+
+Kedi provides deterministic and model-classified conditionals, conditional
+loops, and sequential iterable loops. A trailing `:` after an inline Python
+header selects deterministic evaluation. A condition without that trailing
+colon is a Kedi template claim evaluated by the active agent adapter.
+
+### Conditional branches
+
+```kedi
+[score: int] = `72`
+[result] = pending
+
+> if: `score >= 60`:
+  [result] := passed
+> else:
+  [result] := failed
+
+= <result>
+```
+
+The condition is evaluated exactly once and must return an exact Python
+`bool`. Kedi does not apply truthiness to integers, strings, containers, or
+other objects. The closing `:` after the embedded Python expression is required.
+Only the selected body executes. Each selected branch receives a child value
+scope: Kedi initializations remain branch-local, while embedded Python may
+update a binding that already exists in a containing scope. Python-only names
+never become Kedi bindings. `> else:` is optional. There is no
+`elif`; use a nested `> if:` when another condition is required.
+
+Directives selected inside a branch apply only within that branch. Existing
+Kedi return behavior remains unchanged: a return in a selected body contributes
+to the scope's last return value; it does not introduce Python-style early
+return.
+
+### Template conditions
+
+```kedi
+[city] = Ankara
+[minimum_population: int] = `5_000_000`
+[result] = unknown
+
+> if: <city> has more than `minimum_population` residents
+  [result] := major city
+> else:
+  [result] := smaller city
+
+= <result>
+```
+
+A template condition has no trailing `:` after its claim. Plain text,
+`<name>` substitutions, procedure calls, and inline Python values are rendered
+with the same native Kedi semantics used by other templates. Output fields such
+as `[answer]` are invalid because a condition does not produce a user-visible
+binding.
+
+Kedi evaluates the rendered claim using the current agent profile and its
+available context. A claim that cannot be established is treated as `false`.
+The evaluation does not create a Kedi binding.
+
+The trailing colon is the unambiguous boundary between both forms:
+
+```kedi
+> if: `is_ready`:
+  # Deterministic: evaluate is_ready as an exact Python bool.
+  [mode] = deterministic
+
+> if: `is_ready`
+  # Model-classified: render the Python value into the claim.
+  [mode] = classified
+```
+
+### Conditional loops
+
+```kedi
+[remaining: int] = `3`
+
+> loop: `remaining > 0`:
+  `remaining -= 1`
+
+= `remaining`
+```
+
+The deterministic condition is re-evaluated before every iteration and must
+return an exact `bool`. A false first result runs zero iterations. Every body
+execution receives a fresh child value scope. State needed by the next
+condition must update an existing outer binding through Python write-back or
+`:=`; a body-local Kedi initialization is discarded after that iteration.
+
+Template claims use the same no-trailing-colon form and are re-rendered and
+classified before every iteration:
+
+```kedi
+> loop: <work> remains unfinished
+  >> Continue the unfinished work.
+```
+
+Conditional loops allow 10,000 body iterations by default. If the condition is
+still true after exactly that many completed iterations, Kedi raises
+`LoopIterationLimitError` before starting another body. Each nested or dynamic
+loop owns an independent counter. Python callers can set the positive
+`loop_iteration_limit` through `compile_program()`, `configure()`, `context()`,
+or `interactive()`.
+
+### Sequential loops
+
+```kedi
+[items: list[int]] = `[1, 2, 3, 4, 5]`
+[total: int] = `0`
+
+> loop [n]: `items`:
+  `total += n`
+
+= `total`
+```
+
+The header expression is evaluated exactly once and must return an `Iterable`.
+Iterations run sequentially in source order. Kedi does not materialize the
+iterable or introduce implicit parallelism, so lists, tuples, dictionaries,
+strings, generators, ranges, and custom iterables preserve their native
+iteration behavior. If the iterator exposes `close()`, Kedi calls it when
+traversal finishes or exits early because the loop body failed.
+
+The binder receives each yielded value without coercion. Every iteration owns
+a fresh child scope containing its binder and body-local Kedi declarations.
+That scope is discarded after the iteration unless an attached map stage still
+needs it. Outer values change only through `:=` or owner-aware Python
+write-back; mutating an outer object, such as appending to a list, naturally
+updates that object.
+
+### Map continuations
+
+An iterable loop may be followed immediately by one sibling `> map:` clause:
+
+```kedi
+[selected: list[str]] = `[]`
+
+> loop [candidate]: `candidates`:
+  >> Determine whether <candidate> qualifies as [qualified: bool] and extract [email].
+> map:
+  > if: `qualified`:
+    `selected.append(email)`
+
+= `selected`
+```
+
+`map` is a continuation stage, not Python's collection-producing `map()`.
+Kedi first traverses the iterable and starts every loop-body job. It then
+schedules one map continuation for each retained iteration scope. A
+continuation sees that iteration's binder, declarations, template outputs, and
+the containing scopes; values from different iterations cannot overwrite one
+another.
+
+The stage uses the configured execution engine. In sequential mode,
+continuations complete in source order. With a parallel engine, independent
+records may finish out of order, and each continuation waits for the promises
+owned by its own record. Kedi joins the full map stage before continuing after
+the loop and drains all scheduled continuations before surfacing the first
+failure.
+
+Parallel map continuations may overlap. Source-order side effects and atomic
+read-modify-write operations are not implied: shared aggregates must use
+operations or synchronization appropriate for the active execution engine.
+
+V1 permits one map clause, attached only to an immediately preceding
+binder-based iterable loop. It has no binder and creates no implicit result
+collection. An orphan map, a map after a conditional loop, or a second chained
+map is a parse error.
 
 ## Procedures
 
@@ -465,7 +661,7 @@ result = math.pi * x  # WRONG: fences not indented
 Rules:
 - Opening/closing fences must be alone on their lines (no inline `` ```python code``` ``)
 - Code must match the surrounding Kedi indentation level
-- Variables in scope are injected, and reassignments to those **existing** Kedi variables reflect back. New names created inside the block stay local to the block and do **not** leak into Kedi scope — assign to an existing Kedi variable (or use a value-returning block) to surface a result.
+- Variables in scope are injected, and assignments to those **existing** Kedi variables reflect back to their nearest lexical owner after all changed values pass their Kedi type contracts. New names created inside the block stay local to the block and do **not** leak into Kedi scope — assign to an existing Kedi variable (or use a value-returning block) to surface a result.
 - The code is dedented relative to its indentation level before execution
 
 #### Kedi variables are Python *globals*
@@ -580,7 +776,7 @@ return Person(name="Bob", age=25, email="bob@example.com")
 [team: `Team`] = `Team(name="Eagles", scores=[10, 20, 30], members={"Alice": 10, "Bob": 20})`
 ````
 
-Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable assignments. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
+Fields without type annotations default to `str`. You can use backtick-wrapped type expressions in field definitions, parameters, returns, and variable initializations. The expressions are evaluated at runtime with access to prelude, globals, and local scope.
 
 Kedi's built-in type namespace includes common Python and typing types such as `str`,
 `int`, `list`, `dict`, `Union`, `Optional`, `Literal`, `Annotated`, plus
@@ -595,6 +791,12 @@ contacting Codex. When plain text with semantic guidance is enough, use a type
 such as `Annotated[str, "Exact URL pointing to the file"]` instead. Its
 description is included in the generated provider schema while its wire type
 remains `string`. Claude currently accepts all of the formats listed above.
+
+Native Kedi annotations reject `tuple`, `Tuple`, `Sequence`, `Mapping`,
+`Iterable`, `object`, `bytearray`, `slice`, and `range`. These names remain
+ordinary Python values inside Python expressions and blocks; the restriction
+applies only when they are used as Kedi type contracts. Prefer `list`, `dict`,
+or a named custom type for model-facing schemas.
 
 Type fields can also have single-line inline Python defaults:
 
@@ -990,7 +1192,7 @@ enable scoped skill discovery.
   DeepSeek, Z.AI, and xAI require no request flag for their implicit cache.
   Moonshot and Azure receive only their supported stable routing key. Bedrock
   receives explicit framework-native cache points; with LangChain this requires
-  the provider's `langchain-aws` integration package. Preconstructed LangChain
+  the `kedi[langchain-aws]` optional dependency group. Preconstructed LangChain
   `ChatOpenAI` models using the official Moonshot, Alibaba, DeepSeek, or Z.AI
   base URLs are recognized without changing their configured endpoint.
 
@@ -1467,6 +1669,9 @@ This registers two read-only agent tools:
 - `read_skill(skill_name: str)` returns the exact UTF-8 `SKILL.md` content for
   one listed identifier.
 
+Names outside the active scope's deterministic `max_skills` set cannot be read
+by guessing their identifiers.
+
 Skill instructions are never inserted into the model context automatically.
 The agent must first list relevant skills, then explicitly read the one it
 needs. Skill names are limited to one directory name; path traversal, absolute
@@ -1893,6 +2098,42 @@ def extract_output(*, text: str, output_type: type[T]) -> T:
     ...
 ```
 
+Low-level adapters expose the same structured-output operation directly through
+`produce()` / `produce_sync()`. Here, `template` is ordinary prompt text; it does
+not need to contain Kedi output placeholders. Pass either a field mapping through
+`output_schema` or one prebuilt Python type through `output_type`:
+
+```python
+from typing import Annotated
+
+from pydantic import BaseModel
+
+
+class Review(BaseModel):
+    accepted: bool
+    reason: str
+
+
+fields = await adapter.produce(
+    template="Evaluate whether this proposal is safe.",
+    output_schema={
+        "accepted": Annotated[bool, "Whether the proposal is safe"],
+        "reason": Annotated[str, "Short justification for the decision"],
+    },
+)
+review = await adapter.produce(
+    template="Evaluate whether this proposal is safe.",
+    output_type=Review,
+)
+```
+
+For `output_schema`, `Annotated[type, "description"]` keeps `type` as the field
+type and publishes the second argument as the model-facing field description.
+Adapters with structured-output support accept both forms; supplying a schema
+takes precedence over a prebuilt type. An adapter must receive at least one output
+specification. ACP currently advertises no structured-output capability, so its
+`produce()` surface raises `NotImplementedError` for either form.
+
 ### `@kedi.bind`
 
 Use `bind` when the Kedi implementation should live in a `.kedi` file while
@@ -2251,11 +2492,87 @@ with kedi.interactive(cwd="examples/cells") as session:
     )
 ```
 
-The initial execution model is synchronous, non-durable, and intentionally
-non-transactional. State and external side effects completed before an error
-remain visible, while the failed fragment is never retried automatically. A
-session rejects concurrent or re-entrant `execute()` calls and cannot execute
-after `close()`.
+The execution model is synchronous and intentionally non-transactional. State
+and external side effects completed before an error remain visible, while the
+failed fragment is never retried automatically. A session rejects concurrent
+or re-entrant `execute()` calls and cannot execute after `close()`.
+
+#### Durable Session Snapshots
+
+`kedi.dump_session(session, path)` persists a complete, pickle-free snapshot
+when every part of the logical session state can be restored without replaying
+executable fragments. `kedi.load_session(path)` recompiles source-backed
+declarations, restores their native values, and continues with the next cell.
+The corresponding `InteractiveSession.dump()` and
+`InteractiveSession.load()` methods expose the same operations:
+
+```python
+from pathlib import Path
+
+import kedi
+
+
+snapshot = Path("work.kedi-state")
+with kedi.interactive() as session:
+    session.execute("[base: int] = `40`")
+    session.execute(
+        """
+@add_two() -> int:
+    = `base + 2`
+""".strip()
+    )
+    kedi.dump_session(session, snapshot)
+
+with kedi.load_session(snapshot) as session:
+    assert session.execute("= `add_two()`") == 42
+```
+
+Snapshots are strict and all-or-nothing. Before touching the destination,
+`dump()` validates every fragment, environment binding, active profile,
+conversation, and artifact boundary. If any value is not portable,
+`SessionDumpError` lists the rejected state and no partial snapshot is
+published. An existing destination remains unchanged. Successful writes use a
+same-directory temporary file, `fsync`, and atomic replacement with mode
+`0600`.
+
+The value codec preserves scalar values, bytes, complex and decimal numbers,
+UUIDs, dates and times, paths, regular expressions, lists, tuples, sets,
+frozen sets, dictionaries with typed keys, and instances of source-backed Kedi
+types. Procedure, type, and profile definitions are rebuilt from the source
+stored in the snapshot. Fragment source digests and a document integrity hash
+are verified during load. Snapshot format and Kedi versions must match.
+
+The following state is rejected rather than silently dropped or changed:
+
+- arbitrary Python callables, classes, generators, file/socket handles,
+  threads, locks, tasks, futures, and unknown object instances;
+- shared or cyclic mutable object graphs whose identity would be lost;
+- dynamic approval handlers, process-bound tool/profile bindings, active
+  artifacts, conversation turns, and adapter-native continuation state;
+- imports and inline Python preludes, because rebuilding them would rerun
+  module or Python initialization;
+- runtime-scoped procedure/type declarations and type defaults that require
+  Python execution.
+
+Adapters and executors are infrastructure rather than serialized state. Pass
+them explicitly when restoring a snapshot that needs them:
+
+```python
+session = kedi.load_session(
+    "work.kedi-state",
+    adapter=adapter,
+    executor=executor,
+)
+```
+
+`load_session()` also accepts a keyword-only `session_type=` factory, which
+defaults to `InteractiveSession`. Pass an `InteractiveSession` subclass when
+the restored object needs application-specific session behavior.
+
+`dump()` also rejects an executing or closed session. Loading never executes
+the old top-level initializations, template calls, tool calls, or other side
+effects; only source-backed declarations are compiled before saved values are
+installed.
 
 Interactive fragments do not accept package metadata, export directives, or
 `@test`/`@eval` suites. Those constructs describe whole files or package/test
@@ -2273,7 +2590,7 @@ $ kedi --idle
 ( o.o )
  > ^ <
 Kedi 0.4.0 on darwin
-Type "help" for interactive help, ":show" to inspect a value, or ":exit" to leave.
+Type "help" for interactive help, ":show" to inspect a value, ":dump" to save, or ":exit" to leave.
 +++ [base: int] = `40`
 +++ @add_two() -> int:
 ...     = `base + 2`
@@ -2295,6 +2612,26 @@ prints its value. For example, `:show <name>` renders a substitution, while
 ``:show `value` `` inspects a native Python/Kedi value. This keeps forbidden
 top-level substitutions out of normal `.kedi` files.
 
+`:dump` atomically saves the current interactive session. The first dump uses
+an automatically generated path under `~/.kedi/sessions`; later dumps in the
+same process update that path. On success the REPL prints the exact command for
+resuming the snapshot:
+
+```console
+To resume session, run -- kedi --idle --load <session_path>
+```
+
+Start with `--record` to dump automatically before the process leaves through
+`:exit`, `Ctrl+C`, `Ctrl+D`, or a `SystemExit` raised by inline Python. The dump
+happens before session resources close, and a `SystemExit` status is preserved.
+`--load <session_path>` restores the session and keeps recording subsequent
+changes back to the same snapshot:
+
+```bash
+kedi --idle --record
+kedi --idle --load ~/.kedi/sessions/idle-20260826T120000-ab12cd34.kedi-state
+```
+
 Top-level results use `repr()` so native values remain visible without changing
 their runtime semantics. `:exit` is the only textual exit command; Python's
 `exit()` and `quit()` calls have no special meaning. `Ctrl+C` exits silently,
@@ -2303,6 +2640,7 @@ Readline history is stored in `~/.kedi_history`; set `KEDI_HISTORY` to
 choose another path. Adapter selection remains available through
 `--adapter` and `--adapter-model`. Interactive mode does not accept a source
 file, `-c/--command`, program arguments, or test/eval/optimization modes.
+`--record` and `--load` are valid only with `--idle`.
 
 For a dynamic policy, decorate a Python handler and return one explicit
 decision. The decorator registers it as the default policy. Kedi passes an
@@ -2511,7 +2849,7 @@ def format_result(value):
     return f"==> {value} <=="
 ```
 
-# Top-level typed variable assignments
+# Top-level typed variable initializations
 [threshold: float] = `0.5`
 [max_items: int] = `10`
 

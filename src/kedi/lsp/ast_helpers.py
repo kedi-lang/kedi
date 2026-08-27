@@ -4,18 +4,26 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..lang.ast import AssignBlockStmt, AssignStmt, Span
+from ..lang.ast import (
+    VariableInitBlockStmt,
+    VariableInitStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
+    Span,
+)
 from ..lang.parser.parser import parse as _ts_parse
 from .ast_spans import name_token_span
 
 __all__ = [
-    "assignment_name_span",
+    "binding_name_span",
     "extract_module_docstring",
     "is_public_export_name",
 ]
 
 
-def assignment_name_span(stmt: AssignStmt | AssignBlockStmt) -> Optional[Span]:
+def binding_name_span(
+    stmt: VariableInitStmt | VariableInitBlockStmt | AssignmentStmt | AssignmentBlockStmt,
+) -> Optional[Span]:
     if stmt.loc is None:
         return None
     return name_token_span(stmt.loc, stmt.name, prefix_len=1)

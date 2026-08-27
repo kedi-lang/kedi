@@ -4,6 +4,7 @@ import asyncio
 import builtins
 import inspect
 import json
+import subprocess
 import sys
 import threading
 from contextvars import ContextVar
@@ -11,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from re import Pattern
 from types import ModuleType, SimpleNamespace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -30,6 +31,7 @@ from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
+from kedi.agent_adapter._schema import _portable_output_json_schema, output_field_metadata
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
@@ -51,7 +53,7 @@ from kedi.agent_adapter.events import (
     AgentRunStateEvent,
     observe_agent_events,
 )
-from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
+from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations, report_invocation
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
@@ -176,6 +178,15 @@ def test_make_repr_uses_class_name_for_standard_class_repr() -> None:
     assert make_repr(Custom) == "Custom"
 
 
+def test_output_field_metadata_uses_first_annotated_string_as_description() -> None:
+    assert output_field_metadata(int) == (int, None)
+    assert output_field_metadata(Annotated[str, "Documented answer", "ignored"]) == (
+        str,
+        "Documented answer",
+    )
+    assert output_field_metadata(Annotated[str, 1]) == (str, None)
+
+
 def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     expected = [
         (PydanticAdapter, ExportedPydanticAdapter, "pydantic"),
@@ -218,6 +229,26 @@ def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:
     assert not DSPyAdapter.capabilities.supports("codemode")
     assert not DSPyAdapter.capabilities.supports("stream_events")
     assert not WebGPUAdapter.capabilities.supports("stream_events")
+
+
+@pytest.mark.parametrize(
+    "adapter_type",
+    [
+        PydanticAdapter,
+        LangChainAdapter,
+        DSPyAdapter,
+        ClaudeAdapter,
+        CodexAdapter,
+        WebGPUAdapter,
+    ],
+)
+def test_structured_output_adapters_accept_schema_and_prebuilt_type(
+    adapter_type: type[Any],
+) -> None:
+    for method_name in ("produce", "produce_sync"):
+        parameters = inspect.signature(getattr(adapter_type, method_name)).parameters
+        assert parameters["output_schema"].default is None
+        assert parameters["output_type"].default is None
 
 
 def test_adapter_capabilities_support_boolean_fields() -> None:
@@ -334,6 +365,47 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
         PydanticAdapter.type_builder({})
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("template"))
+
+
+@pytest.mark.parametrize(
+    "builder",
+    (
+        PydanticAdapter.type_builder,
+        LangChainAdapter.type_builder,
+        ClaudeAdapter.type_builder,
+        CodexAdapter.type_builder,
+    ),
+)
+def test_adapter_output_models_use_portable_fixed_tuple_schema(builder: Any) -> None:
+    model = builder({"pair": tuple[int, int]})
+    pair_schema = model.model_json_schema()["properties"]["pair"]
+
+    assert "prefixItems" not in pair_schema
+    assert pair_schema["items"] == {"type": "integer"}
+    assert pair_schema["minItems"] == pair_schema["maxItems"] == 2
+    assert model.model_validate({"pair": [3, 5]}).pair == (3, 5)
+
+    mixed_schema = builder({"pair": tuple[int, str]}).model_json_schema()["properties"]["pair"]
+    assert mixed_schema["items"] == {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+    empty_schema = builder({"pair": tuple[()]}).model_json_schema()["properties"]["pair"]
+    assert "prefixItems" not in empty_schema
+    assert empty_schema["minItems"] == empty_schema["maxItems"] == 0
+
+
+def test_portable_output_schema_handles_empty_and_predefined_tuple_items() -> None:
+    schema = {
+        "empty": {"prefixItems": []},
+        "predefined": {
+            "prefixItems": [{"type": "integer"}],
+            "items": {"type": "number"},
+        },
+    }
+
+    _portable_output_json_schema(schema)
+
+    assert schema["empty"] == {"items": {}}
+    assert schema["predefined"] == {"items": {"type": "number"}}
 
 
 def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
@@ -1639,6 +1711,66 @@ def test_langchain_adapter_dependency_errors(monkeypatch: pytest.MonkeyPatch) ->
             )
 
     assert asyncio.run(adapter._mcp_tools_for_profile(AgentProfile.empty())) == []
+
+
+def test_langchain_aws_dependency_is_loaded_only_for_enabled_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bedrock = type(
+        "ChatBedrockConverse",
+        (),
+        {"__module__": "langchain_aws.chat_models"},
+    )()
+
+    with monkeypatch.context() as blocked:
+        _block_import(blocked, "langchain_aws.middleware.prompt_caching")
+        assert adapters_module.langchain._langchain_cache_middleware(bedrock, enabled=False) == []
+        assert adapters_module.langchain._langchain_cache_middleware(object(), enabled=True) == []
+        with pytest.raises(ModuleNotFoundError, match=r"kedi\[langchain-aws\]"):
+            adapters_module.langchain._langchain_cache_middleware(bedrock, enabled=True)
+
+
+def test_core_import_does_not_load_optional_backend_packages() -> None:
+    code = """
+import builtins
+import sys
+
+blocked = {
+    "dspy",
+    "groq",
+    "langchain",
+    "langchain_aws",
+    "langchain_mcp_adapters",
+    "langchain_openai",
+    "langchain_openrouter",
+    "openinference",
+}
+real_import = builtins.__import__
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if level == 0 and name.split(".", 1)[0] in blocked:
+        raise ModuleNotFoundError(f"blocked optional dependency: {name}")
+    return real_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = guarded_import
+import kedi
+from kedi.agent_adapter import PydanticAdapter
+
+assert PydanticAdapter.__name__ == "PydanticAdapter"
+assert not blocked.intersection(sys.modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_adapter_exports_reject_unknown_lazy_attribute() -> None:
+    with pytest.raises(AttributeError, match="missing_adapter"):
+        adapters_module.__getattr__("missing_adapter")
 
 
 def _install_fake_claude_sdk(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -2987,9 +3119,37 @@ def test_dspy_adapter_configures_lm_and_builds_signature(
 
     signature = DSPyAdapter.type_builder({"answer": int})
     assert issubclass(signature, dspy_adapter_module.dspy.Signature)
+    typed_signature = DSPyAdapter.output_type_builder(bool)
+    assert typed_signature.model_fields["result"].annotation is bool
+
+    documented = DSPyAdapter.type_builder({"answer": Annotated[str, "Documented answer"]})
+    answer_field = documented.model_fields["answer"]
+    assert answer_field.annotation is str
+    assert answer_field.json_schema_extra["desc"] == "Documented answer"
 
     with pytest.raises(ValueError, match="Output schema must be provided"):
         DSPyAdapter.type_builder({})
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        PydanticAdapter.type_builder,
+        LangChainAdapter.type_builder,
+        ClaudeAdapter.type_builder,
+        CodexAdapter.type_builder,
+    ],
+)
+def test_structured_output_builders_only_use_explicit_annotated_descriptions(
+    builder: Any,
+) -> None:
+    output_type = builder({"answer": Annotated[str, "Documented answer"]})
+    undocumented_output_type = builder({"answer": str})
+
+    assert output_type.model_json_schema()["properties"]["answer"]["description"] == (
+        "Documented answer"
+    )
+    assert "description" not in undocumented_output_type.model_json_schema()["properties"]["answer"]
 
 
 def test_dspy_adapter_reuses_existing_global_lm(
@@ -3087,6 +3247,50 @@ def test_dspy_adapter_produce_and_sync_use_predict(
 
     with pytest.raises(ValueError, match="Output spec must be provided"):
         asyncio.run(adapter.produce("prompt", {}))
+
+
+def test_dspy_adapter_supports_prebuilt_output_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Review(BaseModel):
+        accepted: bool
+        reason: str
+
+    class FakeSignature:
+        def with_instructions(self, instructions: str | None) -> "FakeSignature":
+            assert instructions == "Judge carefully."
+            return self
+
+    class FakePredict:
+        def __init__(self, signature: FakeSignature) -> None:
+            assert isinstance(signature, FakeSignature)
+
+        def __call__(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs == {"user_prompt": "Evaluate this proposal."}
+            return {"result": {"accepted": True, "reason": "Safe"}}
+
+    def fake_output_type_builder(output_type: type[Any]) -> FakeSignature:
+        assert output_type is Review
+        return FakeSignature()
+
+    monkeypatch.setattr(dspy_adapter_module.dspy, "Predict", FakePredict)
+    monkeypatch.setattr(
+        DSPyAdapter,
+        "output_type_builder",
+        staticmethod(fake_output_type_builder),
+    )
+
+    adapter = object.__new__(DSPyAdapter)
+    adapter._lm_model = None
+    _set_profile_stack(adapter)
+
+    result = adapter.produce_sync(
+        "Evaluate this proposal.",
+        output_type=Review,
+        instructions="Judge carefully.",
+    )
+
+    assert result == Review(accepted=True, reason="Safe")
 
 
 def test_dspy_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3444,6 +3648,21 @@ def test_dspy_sync_tool_function_reports_tool_usage() -> None:
         assert wrapped("kedi") == "KEDI"
 
     assert usages == [InvocationUsage(tool_calls=1)]
+
+
+def test_nested_invocation_observers_compose_and_restore() -> None:
+    outer: list[InvocationUsage] = []
+    inner: list[InvocationUsage] = []
+    nested_usage = InvocationUsage(requests=1, total_tokens=3)
+    restored_usage = InvocationUsage(tool_calls=1)
+
+    with observe_invocations(outer.append):
+        with observe_invocations(inner.append):
+            report_invocation(nested_usage)
+        report_invocation(restored_usage)
+
+    assert inner == [nested_usage]
+    assert outer == [nested_usage, restored_usage]
 
 
 def test_dspy_invocation_usage_reads_tracked_tokens() -> None:

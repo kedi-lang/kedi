@@ -85,6 +85,16 @@ def test_block_mutation_syncs_runtime_env() -> None:
     assert runtime_env == {"count": 42}
 
 
+def test_block_cannot_delete_an_existing_kedi_binding() -> None:
+    executor = DefaultExecutor()
+    runtime = KediRuntime()
+    local_env = {"value": 1}
+
+    executor.execute_block(runtime, "del value", local_env)
+
+    assert local_env == {"value": 1}
+
+
 def test_python_trace_maps_to_first_snippet_in_same_file(tmp_path: Path) -> None:
     # the first embedded snippet raising must map to its own line, not a later snippet's.
     srcp = tmp_path / "two_snippets.kedi"

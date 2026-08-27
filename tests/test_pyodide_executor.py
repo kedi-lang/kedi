@@ -22,6 +22,7 @@ from kedi.executors.pyodide import (
 )
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import TypeRef
+from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
 from kedi.lang.compiler.type_system import KediType
 from kedi.promise import KediPromise
 
@@ -116,6 +117,39 @@ def test_pyodide_execution_layers_runtime_environment_without_syncing_it_back() 
     }
     assert bridge.requests[0]["syncNames"] == ["local"]
     assert local_env == {"local": "updated"}
+
+
+def test_pyodide_writeback_updates_nearest_owner_and_validates_atomically() -> None:
+    bridge = QueueBridge(
+        {"ok": True, "result": None, "env": {"count": 2, "name": "updated"}},
+        {"ok": True, "result": None, "env": {"count": "invalid", "name": "broken"}},
+    )
+    executor = PyodideExecutor(bridge)
+    runtime = KediRuntime()
+    outer = ScopeFrame()
+    outer.declare(
+        "count",
+        1,
+        BindingMetadata(type_contract=KediType(TypeRef(name="int"))),
+    )
+    outer.declare("name", "original")
+    inner = ScopeFrame(parent=outer)
+    runtime._globals_env = outer
+    token = runtime._current_env.set(inner)
+    try:
+        executor.execute_side_effects(runtime, 'count = 2\nname = "updated"', inner)
+        assert outer.raw_value("count") == 2
+        assert outer.raw_value("name") == "updated"
+        assert not inner.owns("count")
+
+        with pytest.raises(TypeError, match="annotated type"):
+            executor.execute_side_effects(runtime, 'count = "invalid"\nname = "broken"', inner)
+        assert outer.raw_value("count") == 2
+        assert outer.raw_value("name") == "updated"
+    finally:
+        runtime._current_env.reset(token)
+
+    assert bridge.requests[0]["syncNames"] == ["count", "name"]
 
 
 def test_pyodide_executor_surfaces_bridge_and_response_errors() -> None:

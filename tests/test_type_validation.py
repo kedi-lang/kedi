@@ -180,7 +180,7 @@ class TestVariableTypeValidation:
 """
         with pytest.raises(
             TypeError,
-            match="Native non-string assignment requires explicit type annotation",
+            match="Native non-string initialization requires explicit type annotation",
         ):
             _run(src)
 

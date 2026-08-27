@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import kedi.agent_adapter.adapters as adapters_module
 from kedi import app
 from kedi.lang.ast import (
     EvalDataset,
@@ -120,7 +121,7 @@ def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
         def produce_sync(self) -> None:
             return None
 
-    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setattr(app, "PydanticAdapter", FakePydanticAdapter)
     monkeypatch.setattr(app, "LangChainAdapter", FakeLangChainAdapter)
 
@@ -376,7 +377,7 @@ def test_run_optimization_cli_validation_adapter_and_fresh_paths(
         def __init__(self, *, model: str) -> None:
             raise ImportError("dspy unavailable")
 
-    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
     _patch_optimizer_services(monkeypatch)
     assert (
         "DSPy is required for dspy adapter"
@@ -460,14 +461,14 @@ def test_dspy_adapter_error_paths(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
     )
-    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
     assert (
         "DSPy is required for GEPA optimizer"
         in app.run_optimization_cli(str(source), optimizer="gepa")[1]
     )
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(app, "DSPyAdapter", FailingDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FailingDSPyAdapter)
     assert (
         "DSPy is required for dspy adapter"
         in app.run_optimization_cli(str(source), optimizer="mock", adapter="dspy")[1]
@@ -515,7 +516,7 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
     monkeypatch.setattr(
         dspy_config_module, "DSPyConfigurationService", FakeDSPyConfigurationService
     )
-    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     monkeypatch.setitem(
         __import__("sys").modules,
         "kedi.optimization.gepa",
@@ -527,7 +528,7 @@ def test_run_optimization_cli_gepa_and_dspy_success_edges(
     assert "gepa prompt" in msg
 
     _patch_optimizer_services(monkeypatch)
-    monkeypatch.setattr(app, "DSPyAdapter", FakeDSPyAdapter)
+    monkeypatch.setattr(adapters_module, "DSPyAdapter", FakeDSPyAdapter)
     code, msg = app.run_optimization_cli(
         str(source),
         optimizer="mock",

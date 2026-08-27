@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from re import Pattern
 from threading import Thread, current_thread
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
@@ -953,10 +953,28 @@ def test_codex_tool_schema_validation_and_result_helpers() -> None:
     }
     assert spec["description"] == "empty"
 
-    assert codex_adapter_module._output_json_schema(str) == {"type": "string"}
-    assert codex_adapter_module._output_json_schema(int) == {"type": "integer"}
-    assert codex_adapter_module._output_json_schema(float) == {"type": "number"}
-    assert codex_adapter_module._output_json_schema(bool) == {"type": "boolean"}
+    def scalar_output_schema(value_schema: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {"response": value_schema},
+            "required": ["response"],
+            "additionalProperties": False,
+        }
+
+    assert codex_adapter_module._output_json_schema(str) == scalar_output_schema({"type": "string"})
+    assert codex_adapter_module._output_json_schema(int) == scalar_output_schema(
+        {"type": "integer"}
+    )
+    assert codex_adapter_module._output_json_schema(float) == scalar_output_schema(
+        {"type": "number"}
+    )
+    assert codex_adapter_module._output_json_schema(bool) == scalar_output_schema(
+        {"type": "boolean"}
+    )
+    documented_bool = Annotated[bool, "Whether the claim is established"]
+    assert codex_adapter_module._output_json_schema(documented_bool) == scalar_output_schema(
+        {"type": "boolean"}
+    )
     assert codex_adapter_module._output_json_schema(dict) == {
         "type": "object",
         "additionalProperties": False,
@@ -974,9 +992,23 @@ def test_codex_tool_schema_validation_and_result_helpers() -> None:
     ):
         codex_adapter_module._output_json_schema(UnsupportedFormattedOutput)
     assert (
-        codex_adapter_module._parse_structured_result(CodexTurnResult(text='"plain"', turn={}), str)
+        codex_adapter_module._parse_structured_result(
+            CodexTurnResult(text='{"response":"plain"}', turn={}), str
+        )
         == "plain"
     )
+    assert (
+        codex_adapter_module._parse_structured_result(
+            CodexTurnResult(text='{"response":true}', turn={}),
+            documented_bool,
+        )
+        is True
+    )
+    with pytest.raises(CodexAppServerProtocolError, match="'response' field"):
+        codex_adapter_module._parse_structured_result(
+            CodexTurnResult(text='{"value":true}', turn={}),
+            bool,
+        )
     assert (
         codex_adapter_module._dynamic_tool_spec(ToolSpec(fn=unannotated, name="unannotated"))[
             "inputSchema"

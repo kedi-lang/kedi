@@ -14,11 +14,10 @@ from pydantic import BaseModel
 
 from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.settings import CLAUDE_AGENT_SETTING_KEYS, claude_agent_settings
-from ...dynamic_models import build_dynamic_model
 from ...effort import pydantic_effort_value
 from ...errors import KediExecutionError
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_definition
+from .._schema import build_output_model
 from ..approval import ApprovalPolicy, ToolRisk
 from ..codemode import CodeModeLimits, materialize_mcp_tool_specs
 from ..codemode.tool_specs import (
@@ -135,12 +134,7 @@ class ClaudeAdapter:
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type:
-        if not output_schema:
-            raise ValueError("Output schema cannot be empty.")
-        field_definitions = {
-            field: output_field_definition(type_) for field, type_ in output_schema.items()
-        }
-        return build_dynamic_model("_OutputModel", BaseModel, field_definitions)
+        return build_output_model(output_schema)
 
     async def produce(
         self,

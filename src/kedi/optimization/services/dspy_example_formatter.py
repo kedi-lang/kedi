@@ -141,41 +141,40 @@ class DSPyExampleFormatter:
                 # Fallback: return proc_inputs as strings
                 return {k: str(v) for k, v in list(proc_inputs.items())[: len(span_input_names)]}
 
-            # Create environment with procedure inputs
-            env = dict(proc_inputs)
-
             # Execute the procedure to populate the environment
             # This will compute all the intermediate values including span inputs
             args = list(proc_inputs.values())
+            captured_env: dict[str, Any] | None = None
+
+            def capture_environment(env: dict[str, Any]) -> None:
+                nonlocal captured_env
+                if any(name in env for name in span_input_names):
+                    captured_env = env
 
             # Call the procedure - this will populate the runtime environment
             # We need to intercept the environment at the point of the span
+            capture_token = self.runtime._procedure_env_observer.set(capture_environment)
             try:
-                # Set our environment
-                self.runtime._current_env.set(env)
-
                 # Execute procedure
-                proc(*args)
-
-                # Get the populated environment
-                final_env = self.runtime._current_env.get()
+                self.runtime._invoke_procedure(proc, args)
 
                 # Extract span input values from environment
                 span_input_values = {}
-                if final_env is not None:
+                if captured_env is not None:
                     for input_name in span_input_names:
-                        if input_name in final_env:
+                        if input_name in captured_env:
                             # force(): in parallel mode a template output is a KediPromise; resolve
                             # it instead of letting str() raise KediPromiseLeak into the except below
                             # (which would silently optimize against the truncated proc_inputs).
-                            span_input_values[input_name] = str(force(final_env[input_name]))
+                            span_input_values[input_name] = str(force(captured_env[input_name]))
 
                 if span_input_values:
                     return span_input_values
 
             finally:
-                # Restore original environment
-                self.runtime._current_env.set(original_env)
+                self.runtime._procedure_env_observer.reset(capture_token)
+                if self.runtime._current_env.get() is not original_env:
+                    self.runtime._current_env.set(original_env)
 
         except Exception:
             # Fallback on error

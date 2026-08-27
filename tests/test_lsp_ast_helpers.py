@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from kedi.lang.ast import AssignStmt, Span
+from kedi.lang.ast import VariableInitStmt, Span
 from kedi.lsp import ast_helpers
 
 
 def test_ast_helpers_cover_assignment_and_docstring_edges() -> None:
-    assert ast_helpers.assignment_name_span(AssignStmt(name="missing")) is None
+    assert ast_helpers.binding_name_span(VariableInitStmt(name="missing")) is None
 
     loc = Span(
         start_byte=0,
@@ -16,7 +16,7 @@ def test_ast_helpers_cover_assignment_and_docstring_edges() -> None:
         end_col=11,
         source_path="mod.kedi",
     )
-    span = ast_helpers.assignment_name_span(AssignStmt(name="value", loc=loc))
+    span = ast_helpers.binding_name_span(VariableInitStmt(name="value", loc=loc))
     assert span is not None
     assert span.start_col == 2
 

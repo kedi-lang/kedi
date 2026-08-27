@@ -11,6 +11,7 @@ from threading import Lock, get_ident
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     Callable,
     Dict,
@@ -49,6 +50,14 @@ _SHARED_PARALLEL_LOCK = Lock()
 
 _PARALLEL_TRUE = frozenset({"1", "true", "yes", "on"})
 _PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
+DEFAULT_LOOP_ITERATION_LIMIT = 10_000
+_CLAIM_OUTPUT_DESCRIPTION = (
+    "Whether the claim can be established as true from the available context."
+)
+_CLAIM_INSTRUCTION = (
+    "Return true only if the following claim can be established as true from the available "
+    "context; otherwise return false."
+)
 
 
 def shared_thread_engine(max_workers: int = 8) -> Any:
@@ -130,6 +139,7 @@ class InputExpr:
 class OutputExpr:
     key: str
     pytype: Optional[Any] = None
+    binding_contract: Optional[Any] = None
 
 
 @dataclass
@@ -145,8 +155,13 @@ def i(key: str) -> InputExpr:
     return InputExpr(key)
 
 
-def o(key: str, pytype: Optional[Any] = None) -> OutputExpr:
-    return OutputExpr(key, pytype)
+def o(
+    key: str,
+    pytype: Optional[Any] = None,
+    *,
+    binding_contract: Optional[Any] = None,
+) -> OutputExpr:
+    return OutputExpr(key, pytype, binding_contract)
 
 
 def c(func_name: str, *args: Any) -> CallExpr:
@@ -181,6 +196,7 @@ class KediRuntime:
         subagent_usage_limits: "SubagentUsageLimits | None" = None,
         subagent_state_path: str | Path | None = None,
         conversation_state: "ConversationState | None" = None,
+        loop_iteration_limit: int = DEFAULT_LOOP_ITERATION_LIMIT,
     ) -> None:
         from .agent_profile import AgentProfile
         from .artifacts import ArtifactManager
@@ -202,6 +218,10 @@ class KediRuntime:
         self._import_env: ValueEnv = {}
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
             "kedi_current_env", default=None
+        )
+        self._procedure_env_observer: ContextVar[Callable[[ValueEnv], None] | None] = ContextVar(
+            "kedi_procedure_env_observer",
+            default=None,
         )
         self._trace_stack: ContextVar[Tuple[KediTraceFrame, ...]] = ContextVar(
             "kedi_trace_stack", default=()
@@ -241,6 +261,9 @@ class KediRuntime:
         self._validation_tests: list[TestSuite] = []
         self._validation_evals: list[EvalSuite] = []
         self.conversation_state = conversation_state
+        if isinstance(loop_iteration_limit, bool) or loop_iteration_limit <= 0:
+            raise ValueError("loop_iteration_limit must be a positive integer")
+        self.loop_iteration_limit = loop_iteration_limit
         self._implicit_conversation_state: ConversationState | None = None
         self.artifacts = (
             conversation_state.artifacts if conversation_state is not None else ArtifactManager()
@@ -279,8 +302,14 @@ class KediRuntime:
     def i(self, key: str) -> InputExpr:
         return i(key)
 
-    def o(self, key: str, pytype: Optional[Any] = None) -> OutputExpr:
-        return o(key, pytype)
+    def o(
+        self,
+        key: str,
+        pytype: Optional[Any] = None,
+        *,
+        binding_contract: Optional[Any] = None,
+    ) -> OutputExpr:
+        return o(key, pytype, binding_contract=binding_contract)
 
     def c(self, func_name: str, *args: Any) -> CallExpr:
         return c(func_name, *args)
@@ -531,6 +560,10 @@ class KediRuntime:
                 )
                 with frame_ctx:
                     result = fn(*args)
+                observer = self._procedure_env_observer.get()
+                observed_env = self._current_env.get()
+                if observer is not None and observed_env is not None:
+                    observer(observed_env)
                 final = (
                     self._evaluate_value(result, local_env)
                     if isinstance(result, (InputExpr, CallExpr))
@@ -781,7 +814,9 @@ class KediRuntime:
             env[capture_key] = response
             return {capture_key: response}
 
-        env_snapshot = dict(env)
+        from .lang.compiler.environment import snapshot_visible_values
+
+        env_snapshot = snapshot_visible_values(env)
 
         def _job() -> Dict[str, Any]:
             token = self._current_env.set(env_snapshot)
@@ -802,6 +837,72 @@ class KediRuntime:
         view = KediPromise(future, capture_key)
         env[capture_key] = view
         return {capture_key: view}
+
+    def _evaluate_claim(self, claim: str) -> bool:
+        """Classify a rendered control-flow claim through the active agent lane."""
+        from .agent_adapter.profile_override import SupportsProfileOverride
+        from .agent_adapter.tool_override import SupportsToolRegistration
+        from .agent_profile import current_block_agent_profile
+
+        profile = current_block_agent_profile()
+        adapter = self._resolve_adapter(profile)
+        captured_tool_specs = self._resolve_agent_tool_specs(profile, adapter)
+        self._assert_profile_override_supported(profile, adapter)
+        question = f"{_CLAIM_INSTRUCTION}\nClaim: {claim}"
+
+        override_ctx = nullcontext()
+        if isinstance(adapter, SupportsProfileOverride):
+            override_ctx = adapter.profile_override(profile)
+
+        tool_adapter: Any = None
+        tool_ctx: Any = nullcontext()
+        if isinstance(adapter, SupportsToolRegistration):
+            tool_adapter = adapter
+            tool_ctx = tool_adapter.tool_scope()
+
+        with tool_ctx:
+            if tool_adapter is not None:
+                for spec in captured_tool_specs:
+                    tool_adapter.register_tool(spec)
+            run_kwargs: dict[str, Any] = {}
+            instructions = self._agent_instructions(profile, adapter)
+            if instructions is not None:
+                run_kwargs["instructions"] = instructions
+
+            def produce_claim(active_question: str) -> bool:
+                claim_output_type = cast(
+                    type[Any],
+                    Annotated[bool, _CLAIM_OUTPUT_DESCRIPTION],
+                )
+                result = adapter.produce_sync(
+                    template=active_question,
+                    output_type=claim_output_type,
+                    **run_kwargs,
+                )
+                if type(result) is not bool:
+                    raise TypeError(
+                        "Kedi template condition must return an exact bool; "
+                        f"received {type(result).__name__}"
+                    )
+                return result
+
+            with override_ctx:
+                return self._run_conversation_call(
+                    adapter,
+                    question,
+                    produce_claim,
+                    context=(
+                        instructions,
+                        _tool_request_context(captured_tool_specs),
+                        {"result": "bool"},
+                    ),
+                    instructions=instructions,
+                    tools=captured_tool_specs,
+                    profile=profile,
+                    call_kind="produce",
+                    output_field_count=1,
+                    output_schema={"result": "bool"},
+                )
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
@@ -836,6 +937,20 @@ class KediRuntime:
             out.key: (out.pytype if out.pytype is not None else str) for out in outputs
         }
         explicit_typed_fields = {out.key for out in outputs if out.pytype is not None}
+        binding_contracts = {out.key: out.binding_contract for out in outputs}
+
+        def declare_output(key: str, value: Any) -> None:
+            from .lang.compiler.environment import BindingMetadata, ScopeFrame
+
+            if isinstance(env, ScopeFrame):
+                env.declare(
+                    key,
+                    value,
+                    BindingMetadata(type_contract=binding_contracts[key]),
+                )
+            else:
+                env[key] = value
+
         # Keep question format stable for tests; append description after to preserve key parsing
         prompt_template = (
             "Fields to be substituted into the template string for final construction: ({})."
@@ -868,8 +983,14 @@ class KediRuntime:
             # model + validate — all inside the captured context so profile/tools are correct.
             resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
             instruction = (
-                "The template string must maintain grammatical and semantic integrity once the output fields are substituted into"
-                " their corresponding locations in the template after the final construction.\n"
+                "Fill each unescaped [name] or [name: type] output field with only that field's "
+                "replacement value; never return the completed template as a field value. "
+                "Escaped square brackets are literal text, not output fields; for example, "
+                "\\[ok\\] represents the literal text [ok]. "
+                "A replacement value may itself contain delimiters; include them when the template "
+                "explicitly requests them. Preserve literal values already present in the template "
+                "exactly; do not replace or invent them. The template must remain grammatically "
+                "and semantically coherent after substitution.\n"
             )
             question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
@@ -952,7 +1073,7 @@ class KediRuntime:
         if not parallel:
             result_map = _produce()  # raises on the main thread, wrapped by the trace frame
             for key in required:
-                env[key] = result_map[key]
+                declare_output(key, result_map[key])
             return {k: env[k] for k in required}
 
         # Parallel path. Snapshot the value-env by VALUE so the deferred worker sees the env as of
@@ -960,7 +1081,9 @@ class KediRuntime:
         # shared by reference, which would let later main-thread writes leak into a scheduled job.
         # Every per-call adapter scope (tool/profile ContextVars) is isolated per worker by the
         # copy_context() snapshot, so even tool-using templates pipeline safely.
-        env_snapshot = dict(env)
+        from .lang.compiler.environment import snapshot_visible_values
+
+        env_snapshot = snapshot_visible_values(env)
 
         def _job() -> Dict[str, Any]:
             # The job runs on a worker AFTER the originating template's trace frame has exited on the
@@ -983,7 +1106,7 @@ class KediRuntime:
         self._register_outstanding(future)
         views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
         for key in required:
-            env[key] = views[key]
+            declare_output(key, views[key])
         return dict(views)
 
     def _run_conversation_call(

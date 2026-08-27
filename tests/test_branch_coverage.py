@@ -43,7 +43,7 @@ def test_smallest_enclosing_visits_toplevel_return() -> None:
     assert features._smallest_enclosing(prog, pos) is not None
 
 
-def test_smallest_enclosing_visits_assign_stmt_expression() -> None:
+def test_smallest_enclosing_visits_variable_init_stmt_expression() -> None:
     from kedi.lang.parser import parse_program
 
     src = "@p():\n  [x] = <y>\n\n= ok\n"

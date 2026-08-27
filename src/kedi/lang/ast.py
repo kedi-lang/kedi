@@ -234,7 +234,7 @@ class BacktickLineStmt(Stmt):
 
 
 @dataclass
-class AssignBlockStmt(Stmt):
+class VariableInitBlockStmt(Stmt):
     name: str = ""
     code: str = ""
     type_annotation: Optional[str] = None
@@ -247,11 +247,51 @@ class ReturnBlockStmt(Stmt):
 
 
 @dataclass
-class AssignStmt(Stmt):
+class VariableInitStmt(Stmt):
     name: str = ""
     expr: Expr = field(default_factory=list)
     type_annotation: Optional[str] = None
     type_expr: Optional[TypeExpr] = None
+
+
+@dataclass
+class AssignmentBlockStmt(Stmt):
+    name: str = ""
+    code: str = ""
+
+
+@dataclass
+class AssignmentStmt(Stmt):
+    name: str = ""
+    expr: Expr = field(default_factory=list)
+
+
+@dataclass
+class IfStmt(Stmt):
+    condition_code: str = ""
+    body: List[Stmt] = field(default_factory=list)
+    else_body: Optional[List[Stmt]] = None
+    condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    condition_segments: Optional[Expr] = None
+
+
+@dataclass
+class LoopStmt(Stmt):
+    binder: str = ""
+    iterable_code: str = ""
+    body: List[Stmt] = field(default_factory=list)
+    map_body: Optional[List[Stmt]] = None
+    binder_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    iterable_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    map_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ConditionalLoopStmt(Stmt):
+    condition_code: str = ""
+    condition_segments: Optional[Expr] = None
+    body: List[Stmt] = field(default_factory=list)
+    condition_loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

@@ -5,7 +5,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Tuple
 
-from .agent_adapter.adapters import ACPAdapter, DSPyAdapter, LangChainAdapter, PydanticAdapter
+from .agent_adapter.adapters import ACPAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
 from .agent_adapter.approval import ApprovalPolicy
 from .agent_adapter.cli_approval import CliApprovalHandler
@@ -33,6 +33,8 @@ def _build_runtime_adapter(
     if adapter == "pydantic":
         return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
     if adapter == "dspy":
+        from .agent_adapter.adapters import DSPyAdapter
+
         return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
     if adapter == "langchain":
         return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
@@ -181,7 +183,7 @@ def run_optimization_cli(
         except ImportError:
             return (
                 1,
-                "DSPy is required for GEPA optimizer. Install with: uv add dspy-ai",
+                "DSPy is required for GEPA optimizer. Install with: uv add 'kedi[dspy]'",
             )
     else:
         model = adapter_model or "groq:qwen/qwen3-32b"
@@ -191,7 +193,7 @@ def run_optimization_cli(
             except ImportError:
                 return (
                     1,
-                    "DSPy is required for dspy adapter. Install with: uv add dspy-ai",
+                    "DSPy is required for dspy adapter. Install with: uv add 'kedi[dspy]'",
                 )
         else:
             adapter_for_runtime = _build_runtime_adapter(adapter, model)

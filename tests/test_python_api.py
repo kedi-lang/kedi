@@ -1016,9 +1016,14 @@ def test_bind_file_exposes_kedi_source_as_python_callable(
 
     assert summarize("Kedi") == "short summary"
     assert adapter.templates == [
-        "The template string must maintain grammatical and semantic integrity once the output "
-        "fields are substituted into their corresponding locations in the template after the "
-        "final construction.\n"
+        "Fill each unescaped [name] or [name: type] output field with only that field's "
+        "replacement value; never return the completed template as a field value. "
+        "Escaped square brackets are literal text, not output fields; for example, "
+        "\\[ok\\] represents the literal text [ok]. "
+        "A replacement value may itself contain delimiters; include them when the template "
+        "explicitly requests them. Preserve literal values already present in the template "
+        "exactly; do not replace or invent them. The template must remain grammatically "
+        "and semantically coherent after substitution.\n"
         "Fields to be substituted into the template string for final construction: (summary).\n\n"
         "The template string:\n"
         "Summarize Kedi. Return [summary]."

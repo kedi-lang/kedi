@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Optional, TypeVar
 
 from ..lang.ast import (
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     ModuleImport,
     ProcedureDef,
     ProfileDefStmt,
@@ -22,7 +22,7 @@ from ..module_registry import find_module_path, resolve_module_path
 from ..package_registry import CorruptInstalledPackageError
 from ..source_loading import load_kedi_source_bundle
 from .ast_helpers import (
-    assignment_name_span,
+    binding_name_span,
     extract_module_docstring,
     is_public_export_name,
 )
@@ -33,7 +33,7 @@ __all__ = [
     "ImportedModuleInfo",
     "ImportedSurface",
     "ImportedValueInfo",
-    "assignment_name_span",
+    "binding_name_span",
     "extract_module_docstring",
     "import_resolution_error",
     "imported_surface_for_program",
@@ -190,8 +190,8 @@ def top_level_value_infos(
             type_expr=stmt.type_expr,
         )
         for stmt in prog.toplevel_body
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt))
-        for span in [assignment_name_span(stmt)]
+        if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt))
+        for span in [binding_name_span(stmt)]
         if span is not None
     }
 
@@ -220,11 +220,11 @@ def _ordered_toplevel_items(prog: Program | ProgramWithValidation) -> list[objec
 
 
 def _top_level_value_info(
-    stmt: AssignStmt | AssignBlockStmt,
+    stmt: VariableInitStmt | VariableInitBlockStmt,
     *,
     module_name: str | None,
 ) -> ImportedValueInfo | None:
-    span = assignment_name_span(stmt)
+    span = binding_name_span(stmt)
     if span is None:
         return None
     return ImportedValueInfo(
@@ -267,7 +267,7 @@ def _binding_surface_for_program(
             bindings.publish_type(item)
         elif isinstance(item, ProfileDefStmt):
             bindings.publish_profile(item)
-        elif isinstance(item, (AssignStmt, AssignBlockStmt)):
+        elif isinstance(item, (VariableInitStmt, VariableInitBlockStmt)):
             value = _top_level_value_info(item, module_name=module_name)
             if value is not None:
                 bindings.publish_value(value)

@@ -32,7 +32,7 @@ from __future__ import annotations
 import ast as py_ast
 import re
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from tree_sitter import Node, Tree
 
@@ -56,18 +56,20 @@ from ..ast import (
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     ArtifactsField,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     AutoSpec,
     BacktickLineStmt,
     CallArg,
     CallSegment,
     CodeModeDirectiveStmt,
+    ConditionalLoopStmt,
     EffortDirectiveStmt,
     EvalDataset,
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    IfStmt,
     InputSegment,
     LiteralArg,
     McpDirectiveStmt,
@@ -103,6 +105,9 @@ from ..ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
+    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
@@ -329,8 +334,21 @@ class _Walker:
         prog.loc = self._span(root)
 
         prelude_consumed = False
+        pending_else_owner: Optional[IfStmt] = None
         for child in children:
             t = child.type
+            if t in ("block_comment", "line_comment"):
+                continue
+            if t == "else_clause":
+                owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
+                self._attach_else_clause(owners, child, None)
+                pending_else_owner = None
+                continue
+            if t == "map_clause":
+                self._attach_map_clause(prog.ordered_toplevel, child, None)
+                pending_else_owner = None
+                continue
+            pending_else_owner = None
             if t == "python_block":
                 # The first top-level python_block, IF it appears before
                 # any other top-level content, becomes the prelude
@@ -456,12 +474,33 @@ class _Walker:
                     prog.tests.append(suite)
                 elif isinstance(suite, EvalSuite):
                     prog.evals.append(suite)
-            elif t == "assign_stmt":
-                stmt = self._walk_assign_stmt(child)
+            elif t == "variable_init_stmt":
+                stmt = self._walk_variable_init_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t == "assign_block_stmt":
-                stmt = self._walk_assign_block_stmt(child)
+            elif t == "assignment_stmt":
+                stmt = self._walk_assignment_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "if_stmt":
+                stmt = self._walk_if_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+                pending_else_owner = stmt
+            elif t == "loop_stmt":
+                stmt = self._walk_loop_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "conditional_loop_stmt":
+                stmt = self._walk_conditional_loop_stmt(child, None)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "variable_init_block_stmt":
+                stmt = self._walk_variable_init_block_stmt(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "assignment_block_stmt":
+                stmt = self._walk_assignment_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "raw_invoke_stmt":
@@ -484,10 +523,6 @@ class _Walker:
                 stmt = self._walk_template_line(child, deprecated=True)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t in ("block_comment", "line_comment"):
-                # Extras — not part of the AST. Already handled by
-                # tree-sitter; we skip them here.
-                continue
             elif t == "ERROR" or child.is_error:
                 self._error(
                     child, self._parse_error_message(child, "unexpected source at top level")
@@ -939,14 +974,34 @@ class _Walker:
         return proc
 
     def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
+        proc.body.extend(self._walk_block_statements(block_node, proc))
+
+    def _walk_block_statements(self, block_node: Node, proc: Optional[ProcedureDef]) -> List[Stmt]:
+        statements: List[Stmt] = []
+        pending_else_owner: Optional[IfStmt] = None
         for child in _named_children(block_node):
+            if child.type in ("block_comment", "line_comment"):
+                continue
+            if child.type == "else_clause":
+                owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
+                self._attach_else_clause(owners, child, proc)
+                pending_else_owner = None
+                continue
+            if child.type == "map_clause":
+                self._attach_map_clause(statements, child, proc)
+                pending_else_owner = None
+                continue
+            pending_else_owner = None
             if child.type == "template_block_stmt":
-                proc.body.extend(self._walk_template_block_statements(child))
+                statements.extend(self._walk_template_block_statements(child))
                 continue
             stmt = self._walk_stmt(child, proc)
             if stmt is None:
                 continue
-            proc.body.append(stmt)
+            statements.append(stmt)
+            if isinstance(stmt, IfStmt):
+                pending_else_owner = stmt
+        return statements
 
     # =================================================================
     # Statements
@@ -974,9 +1029,9 @@ class _Walker:
             if proc is None:
                 self._error(node, "'> optimize:' is only valid inside a procedure body")
                 return None
-            span = self._walk_optimize_directive(node, proc)
+            span, block = self._walk_optimize_directive(node)
             proc.optimize_spans.append(span)
-            return None
+            return block
         if t == "model_directive":
             return self._walk_model_directive(node)
         if t == "agent_directive":
@@ -1006,10 +1061,20 @@ class _Walker:
         if t == "profile_directive":
             self._error(node, "'> profile:' is only valid at top level", code="K-PROFILE-SCOPE")
             return None
-        if t == "assign_stmt":
-            return self._walk_assign_stmt(node)
-        if t == "assign_block_stmt":
-            return self._walk_assign_block_stmt(node)
+        if t == "variable_init_stmt":
+            return self._walk_variable_init_stmt(node)
+        if t == "assignment_stmt":
+            return self._walk_assignment_stmt(node)
+        if t == "if_stmt":
+            return self._walk_if_stmt(node, proc)
+        if t == "loop_stmt":
+            return self._walk_loop_stmt(node, proc)
+        if t == "conditional_loop_stmt":
+            return self._walk_conditional_loop_stmt(node, proc)
+        if t == "variable_init_block_stmt":
+            return self._walk_variable_init_block_stmt(node)
+        if t == "assignment_block_stmt":
+            return self._walk_assignment_block_stmt(node)
         if t == "raw_invoke_stmt":
             return self._walk_raw_invoke_stmt(node)
         if t == "return_stmt":
@@ -1052,9 +1117,171 @@ class _Walker:
         self._error(node, f"unexpected statement node {t!r}")
         return None
 
-    def _walk_assign_stmt(self, node: Node) -> AssignStmt:
+    def _walk_if_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> IfStmt:
+        condition = _field(node, "condition")
+        consequence = _field(node, "consequence")
+        assert condition is not None
+        assert consequence is not None
+
+        condition_code, condition_segments = self._walk_control_condition(condition)
+        return IfStmt(
+            condition_code=condition_code,
+            condition_segments=condition_segments,
+            body=self._walk_block_statements(consequence, proc),
+            else_body=None,
+            condition_loc=self._span(condition),
+            loc=self._span(node),
+        )
+
+    def _attach_else_clause(
+        self,
+        statements: List[Any],
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> None:
+        if not statements or not isinstance(statements[-1], IfStmt):
+            self._error(node, "'> else:' must immediately follow an if block", code="K-ELSE-ORPHAN")
+            return
+
+        owner = statements[-1]
+        if owner.else_body is not None:
+            self._error(node, "an if block can have only one else block", code="K-ELSE-DUP")
+            return
+
+        body = _field(node, "body")
+        assert body is not None
+        owner.else_body = self._walk_block_statements(body, proc)
+
+        end = self._span(node)
+        start = owner.loc
+        if start is not None:
+            owner.loc = Span(
+                start_byte=start.start_byte,
+                end_byte=end.end_byte,
+                start_line=start.start_line,
+                start_col=start.start_col,
+                end_line=end.end_line,
+                end_col=end.end_col,
+                source_path=start.source_path,
+                source_id=start.source_id,
+            )
+
+    def _attach_map_clause(
+        self,
+        statements: List[Any],
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> None:
+        if not statements or not isinstance(statements[-1], LoopStmt):
+            self._error(
+                node,
+                "'> map:' must immediately follow a binder loop",
+                code="K-MAP-ORPHAN",
+            )
+            return
+
+        owner = statements[-1]
+        if owner.map_body is not None:
+            self._error(node, "a loop can have only one map stage", code="K-MAP-DUP")
+            return
+
+        body = _field(node, "body")
+        assert body is not None
+        owner.map_body = self._walk_block_statements(body, proc)
+        owner.map_loc = self._span(node)
+
+        end = owner.map_loc
+        start = owner.loc
+        assert start is not None
+        owner.loc = Span(
+            start_byte=start.start_byte,
+            end_byte=end.end_byte,
+            start_line=start.start_line,
+            start_col=start.start_col,
+            end_line=end.end_line,
+            end_col=end.end_col,
+            source_path=start.source_path,
+            source_id=start.source_id,
+        )
+
+    def _walk_loop_stmt(self, node: Node, proc: Optional[ProcedureDef]) -> LoopStmt:
+        binder = _field(node, "binder")
+        iterable = _field(node, "iterable")
+        body = _field(node, "body")
+        assert binder is not None
+        assert iterable is not None
+        assert body is not None
+        return LoopStmt(
+            binder=_identifier_name(self.source, binder),
+            iterable_code=self._walk_inline_python_expr(iterable),
+            body=self._walk_block_statements(body, proc),
+            binder_loc=self._span(binder),
+            iterable_loc=self._span(iterable),
+            loc=self._span(node),
+        )
+
+    def _walk_conditional_loop_stmt(
+        self,
+        node: Node,
+        proc: Optional[ProcedureDef],
+    ) -> ConditionalLoopStmt:
+        condition = _field(node, "condition")
+        body = _field(node, "body")
+        assert condition is not None
+        assert body is not None
+        condition_code, condition_segments = self._walk_control_condition(condition)
+        return ConditionalLoopStmt(
+            condition_code=condition_code,
+            condition_segments=condition_segments,
+            body=self._walk_block_statements(body, proc),
+            condition_loc=self._span(condition),
+            loc=self._span(node),
+        )
+
+    def _walk_control_condition(self, node: Node) -> tuple[str, Optional[List[Segment]]]:
+        if node.type == "inline_python_expr":
+            return self._walk_inline_python_expr(node), None
+
+        segments = self._walk_template_expr(node)
+        for output in self._condition_outputs(segments):
+            self.diagnostics.append(
+                KediDiagnostic(
+                    severity="error",
+                    message=(
+                        "Template conditions cannot declare output fields; use plain text, "
+                        "<substitutions>, or inline Python values"
+                    ),
+                    span=output.loc or self._span(node),
+                    code="K-CONDITION-OUTPUT",
+                )
+            )
+        return "", segments
+
+    @staticmethod
+    def _condition_outputs(segments: List[Segment]) -> List[OutputSegment]:
+        outputs: List[OutputSegment] = []
+
+        def visit(segment: Segment) -> None:
+            if isinstance(segment, OutputSegment):
+                outputs.append(segment)
+                return
+            if not isinstance(segment, CallSegment):
+                return
+            for argument in segment.args:
+                if not isinstance(argument, LiteralArg):
+                    continue
+                for nested in argument.render_segments:
+                    visit(nested)
+                if argument.call_segment is not None:
+                    visit(argument.call_segment)
+
+        for segment in segments:
+            visit(segment)
+        return outputs
+
+    def _walk_variable_init_stmt(self, node: Node) -> VariableInitStmt:
         target = _named_children(node)[0]
-        assert target.type == "assign_target"
+        assert target.type == "binding_target"
         name_node = _field(target, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -1066,12 +1293,12 @@ class _Walker:
         # A sole backtick RHS preserves its native Python value. The
         # tree-sitter grammar also admits inline expressions as template
         # segments, so accept either CST shape here without changing the
-        # long-standing native assignment semantics.
+        # long-standing native initialization semantics.
         native_expr = self._sole_inline_python_expr(rhs_node)
         if native_expr is not None:
             code = self._walk_inline_python_expr(native_expr)
             seg = PythonExprNativeSegment(code=code, loc=self._span(native_expr))
-            return AssignStmt(
+            return VariableInitStmt(
                 name=name,
                 expr=[seg],
                 type_annotation=type_anno,
@@ -1080,7 +1307,7 @@ class _Walker:
             )
         # template_expr
         segs = self._walk_template_expr(rhs_node) if rhs_node is not None else []
-        return AssignStmt(
+        return VariableInitStmt(
             name=name,
             expr=segs,
             type_annotation=type_anno,
@@ -1088,7 +1315,7 @@ class _Walker:
             loc=self._span(node),
         )
 
-    def _walk_assign_block_stmt(self, node: Node) -> AssignBlockStmt:
+    def _walk_variable_init_block_stmt(self, node: Node) -> VariableInitBlockStmt:
         target = _named_children(node)[0]
         name_node = _field(target, "name")
         assert name_node is not None
@@ -1098,7 +1325,7 @@ class _Walker:
         type_expr = self._walk_type_expr(type_node) if type_node is not None else None
         code_node = _field(node, "code")
         code = self._dedent_fenced(code_node) if code_node is not None else ""
-        return AssignBlockStmt(
+        return VariableInitBlockStmt(
             name=name,
             code=code,
             type_annotation=type_anno,
@@ -1106,9 +1333,34 @@ class _Walker:
             loc=self._span(node),
         )
 
+    def _walk_assignment_stmt(self, node: Node) -> AssignmentStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        name = _identifier_name(self.source, name_node)
+        rhs_node = _field(node, "rhs")
+        native_expr = self._sole_inline_python_expr(rhs_node)
+        if native_expr is not None:
+            code = self._walk_inline_python_expr(native_expr)
+            segments: List[Segment] = [
+                PythonExprNativeSegment(code=code, loc=self._span(native_expr))
+            ]
+        else:
+            segments = self._walk_template_expr(rhs_node) if rhs_node is not None else []
+        return AssignmentStmt(name=name, expr=segments, loc=self._span(node))
+
+    def _walk_assignment_block_stmt(self, node: Node) -> AssignmentBlockStmt:
+        name_node = _field(node, "name")
+        assert name_node is not None
+        code_node = _field(node, "code")
+        return AssignmentBlockStmt(
+            name=_identifier_name(self.source, name_node),
+            code=self._dedent_fenced(code_node) if code_node is not None else "",
+            loc=self._span(node),
+        )
+
     def _walk_raw_invoke_stmt(self, node: Node) -> RawInvokeStmt:
         target = _field(node, "target")
-        assert target is not None and target.type == "assign_target"
+        assert target is not None and target.type == "binding_target"
         name_node = _field(target, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -1291,7 +1543,23 @@ class _Walker:
 
     def _validate_template_block_scope(self, lines: List[TemplateLine]) -> None:
         produced_names: set[str] = set()
+        seen_output_names: set[str] = set()
         for line in lines:
+            for output in self._condition_outputs(line.segments):
+                if output.name in seen_output_names:
+                    self.diagnostics.append(
+                        KediDiagnostic(
+                            severity="error",
+                            message=(
+                                f"Template block declares output field {output.name!r} "
+                                "more than once."
+                            ),
+                            span=output.loc or line.loc or Span(0, 0, 1, 1, 1, 1),
+                            code="K-TEMPLATE-DUPLICATE-OUTPUT",
+                        )
+                    )
+                else:
+                    seen_output_names.add(output.name)
             for seg in line.segments:
                 if isinstance(seg, InputSegment) and seg.name in produced_names:
                     self.diagnostics.append(
@@ -1479,7 +1747,7 @@ class _Walker:
 
     @staticmethod
     def _sole_inline_python_expr(node: Node | None) -> Node | None:
-        """Return the sole inline expression in a native assignment/return RHS."""
+        """Return the sole inline expression in an initialization, assignment, or return RHS."""
         if node is None:
             return None
         if node.type == "inline_python_expr":
@@ -1521,7 +1789,7 @@ class _Walker:
 
     def _walk_segment(self, node: Node) -> Segment:
         t = node.type
-        if t == "text_segment":
+        if t in ("text_segment", "condition_text_segment"):
             raw = _src_text(self.source, node)
             # NOTE: do NOT strip leading/trailing whitespace here. The
             # runtime in `compiler/evaluation.py:prepare_segments`
@@ -2525,7 +2793,7 @@ class _Walker:
             loc=self._span(node),
         )
 
-    def _walk_optimize_directive(self, node: Node, proc: ProcedureDef) -> OptimizeSpan:
+    def _walk_optimize_directive(self, node: Node) -> tuple[OptimizeSpan, TemplateBlock]:
         name_node = _field(node, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -2539,6 +2807,7 @@ class _Walker:
             )
             if block_node is not None:
                 template_lines = self._walk_template_block_stmt(block_node).lines
+                self._validate_template_block_scope(template_lines)
             else:
                 for tline in body_children:
                     if tline.type != "template_line":
@@ -2558,11 +2827,10 @@ class _Walker:
         # Keep them in one TemplateBlock so the whole span is one LLM call,
         # matching ordinary `>>` continuation semantics. The optimizer still
         # owns the individual line objects and mutates them in place.
-        proc.body.append(TemplateBlock(lines=template_lines, loc=self._span(node)))
-        return OptimizeSpan(
-            name=name,
-            template_lines=template_lines,
-            loc=self._span(node),
+        loc = self._span(node)
+        return (
+            OptimizeSpan(name=name, template_lines=template_lines, loc=loc),
+            TemplateBlock(lines=template_lines, loc=loc),
         )
 
     # =================================================================

@@ -136,7 +136,7 @@ def test_python_interop_wrapper_preserves_procedure_metadata() -> None:
     src = (
         "@kedi_proc(x: str) -> str:\n"
         "  = <x>\n\n"
-        "[wrapped: object] = ```\n"
+        "[wrapped: Callable] = ```\n"
         "return kedi_proc\n"
         "```\n"
         "= ok\n"

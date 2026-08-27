@@ -10,7 +10,7 @@ from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     InputSegment,
     OutputSegment,
     RawInvokeStmt,
@@ -392,6 +392,44 @@ def test_template_block_single_agent_run() -> None:
     assert "Bar baz [foo]" in calls[0]
 
 
+@pytest.mark.parametrize(
+    "declarations",
+    (
+        "[value] and [value]",
+        "[value: str] and [value]",
+        "[value] and [value: str]",
+        "[value: str] and [value: int]",
+        "[value]\nrepeat [value]",
+    ),
+)
+def test_template_block_rejects_duplicate_output_fields(declarations: str) -> None:
+    source = f">> {declarations}\n= ok\n"
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(source)
+
+    assert any(
+        diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in exc.value.diagnostics
+    )
+    diagnostics = compute_diagnostics(source, "/tmp/duplicate-output.kedi")
+    assert any(diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in diagnostics)
+
+
+def test_separate_template_blocks_may_reuse_an_output_name() -> None:
+    parse_program(">> First [value].\n>> Second [value].\n= ok\n")
+
+
+def test_optimize_template_rejects_duplicate_output_fields() -> None:
+    source = "@p():\n  > optimize: prompt:\n    >> Put [value] and [value: str].\n  = ok\n= <p()>\n"
+
+    with pytest.raises(KediParseError) as exc:
+        parse_program(source)
+
+    assert any(
+        diagnostic.code == "K-TEMPLATE-DUPLICATE-OUTPUT" for diagnostic in exc.value.diagnostics
+    )
+
+
 def test_template_block_stateful_run(monkeypatch: Any) -> None:
     src = (
         "@p():\n"
@@ -444,14 +482,14 @@ def test_template_block_hover_and_diagnostics() -> None:
     assert "Output" in hover_value(capital_hover)
 
 
-def test_template_block_disambiguates_assign_stmt() -> None:
+def test_template_block_disambiguates_variable_init_stmt() -> None:
     src = "@p():\n  >> line one [x]\n  [y: int] = `1`\n  = <y>\n\n= <p()>\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
     assert isinstance(proc.body[0], TemplateBlock)
     assert len(proc.body[0].lines) == 1
     assign = proc.body[1]
-    assert isinstance(assign, AssignStmt)
+    assert isinstance(assign, VariableInitStmt)
     assert assign.name == "y"
 
 

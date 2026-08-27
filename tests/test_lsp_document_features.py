@@ -50,6 +50,146 @@ def test_package_manifest_hover_handles_minimal_metadata() -> None:
     assert hover.contents.value == "**Kedi package** `kedi_http`"
 
 
+def test_control_flow_hover_describes_kedi_headers_and_defers_python() -> None:
+    source = (
+        "> if: `ready`:\n  [status] = yes\n> else:\n  > loop [n]: `range(3)`:\n    [value] = <n>\n"
+    )
+
+    if_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
+    loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(3, 3))
+    python_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 8))
+
+    assert if_hover is not None
+    assert "Conditional branch" in if_hover.contents.value
+    assert "> if: `condition`:" in if_hover.contents.value
+    assert loop_hover is not None
+    assert "Iterable loop" in loop_hover.contents.value
+    assert python_hover is None
+
+
+def test_template_condition_diagnostic_and_control_hover() -> None:
+    invalid = "> if: [answer] is correct\n  [result] = yes\n"
+    diagnostics = features.compute_diagnostics(invalid, "/tmp/control.kedi")
+
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-CONDITION-OUTPUT"
+    assert "cannot declare output fields" in diagnostics[0].message
+
+    source = (
+        "> if: <city> is in Turkey\n  [result] = yes\n"
+        "> loop: `remaining > 0`:\n  `remaining -= 1`\n"
+        "> loop: <city> remains available\n  [seen] = <city>\n"
+    )
+    if_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
+    loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(2, 3))
+    model_loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(4, 3))
+    city_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(4, 10))
+
+    assert if_hover is not None
+    assert "Model-classified condition" in if_hover.contents.value
+    assert loop_hover is not None
+    assert "Conditional loop" in loop_hover.contents.value
+    assert model_loop_hover is not None
+    assert "Model-classified loop" in model_loop_hover.contents.value
+    assert city_hover is not None
+
+
+def test_loop_binder_definition_and_references_respect_nested_shadowing() -> None:
+    source = (
+        "> loop [n]: `range(2)`:\n"
+        "  [first] = <n>\n"
+        "  > loop [n]: `range(1)`:\n"
+        "    [inner] = <n>\n"
+        "  > loop: `False`:\n"
+        "    [conditional] = <n>\n"
+        "  [last] = <n>\n"
+    )
+    uri = "file:///tmp/control.kedi"
+
+    definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/control.kedi",
+        lsp.Position(line=1, character=13),
+    )
+    references = features.compute_references(
+        source,
+        uri,
+        "/tmp/control.kedi",
+        lsp.Position(line=0, character=8),
+        include_declaration=True,
+    )
+
+    assert definition is not None
+    assert definition.range.start == lsp.Position(line=0, character=8)
+    assert {(item.range.start.line, item.range.start.character) for item in references} == {
+        (0, 8),
+        (1, 13),
+        (5, 21),
+        (6, 12),
+    }
+
+
+def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None:
+    source = (
+        "~Item(value: int)\n"
+        "[outer: Item] = `Item(value=1)`\n"
+        "> loop [n]: `range(2)`:\n"
+        "  [copy: Item] = <outer>\n"
+        "  > loop [m]: `range(1)`:\n"
+        "    > if: `True`:\n"
+        "      [text] = <n>-<m>\n"
+        "\n"
+        "@collect():\n"
+        "  > loop [p]: `range(1)`:\n"
+        "    [value] = <p>\n"
+    )
+    lines = source.splitlines()
+    path = "/tmp/control-symbols.kedi"
+    uri = "file:///tmp/control-symbols.kedi"
+
+    binder_hover = features.compute_hover(source, path, lsp.Position(2, lines[2].index("n")))
+    assert binder_hover is not None
+    assert "Loop binder" in binder_hover.contents.value
+
+    outer_hover = features.compute_hover(
+        source,
+        path,
+        lsp.Position(3, lines[3].index("outer")),
+    )
+    assert outer_hover is not None
+    assert "Module value" in outer_hover.contents.value
+
+    outer_binder_refs = features.compute_references(
+        source,
+        uri,
+        path,
+        lsp.Position(2, lines[2].index("n")),
+        include_declaration=True,
+    )
+    assert {item.range.start.line for item in outer_binder_refs} == {2, 6}
+
+    procedure_binder_refs = features.compute_references(
+        source,
+        uri,
+        path,
+        lsp.Position(9, lines[9].index("[p]") + 1),
+        include_declaration=True,
+    )
+    assert {item.range.start.line for item in procedure_binder_refs} == {9, 10}
+
+    type_refs = features.compute_references(
+        source,
+        uri,
+        path,
+        lsp.Position(0, lines[0].index("Item")),
+        include_declaration=True,
+    )
+    assert {item.range.start.line for item in type_refs} >= {0, 1, 3}
+
+    assert features.compute_diagnostics(source, path) == []
+
+
 def test_generic_hover_visits_legacy_top_level_body() -> None:
     program = features.parse_program("[value: str] = done\n", source_path="/tmp/x.kedi")
     program.ordered_toplevel.clear()
@@ -511,6 +651,105 @@ def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
         (0, 7),
         (2, 7),
     ]
+
+
+def test_assignment_and_map_references_resolve_to_iteration_owners() -> None:
+    from kedi.lang import parse_program
+
+    source = (
+        "[count: int] = `0`\n"
+        "> loop [item]: `[1, 2]`:\n"
+        "  [label] = item-<item>\n"
+        "> map:\n"
+        "  [count] := <label>\n"
+        "  = <item>\n"
+        "= <count>\n"
+    )
+    uri = "file:///tmp/map.kedi"
+
+    count_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=3),
+    )
+    label_definition = features.compute_definition(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=14),
+    )
+    binder_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=1, character=8),
+        include_declaration=True,
+    )
+    count_references = features.compute_references(
+        source,
+        uri,
+        "/tmp/map.kedi",
+        lsp.Position(line=0, character=2),
+        include_declaration=True,
+    )
+    map_hover = features.compute_hover(
+        source,
+        "/tmp/map.kedi",
+        lsp.Position(line=4, character=9),
+    )
+
+    assert count_definition is not None
+    assert (count_definition.range.start.line, count_definition.range.start.character) == (0, 1)
+    assert label_definition is not None
+    assert (label_definition.range.start.line, label_definition.range.start.character) == (2, 3)
+    assert [
+        (location.range.start.line, location.range.start.character)
+        for location in binder_references
+    ] == [(1, 8), (2, 18), (5, 5)]
+    assert [
+        (location.range.start.line, location.range.start.character) for location in count_references
+    ] == [(0, 1), (4, 3), (6, 3)]
+    assert map_hover is not None
+    assert (
+        features._generic_hover(
+            parse_program(source),
+            lsp.Position(line=4, character=9),
+        )
+        is not None
+    )
+
+
+def test_imported_assignment_target_resolves_to_exported_declaration(tmp_path: Path) -> None:
+    module = tmp_path / "values.kedi"
+    module.write_text("> export:\n  value\n\n[value] = original\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    source = "> import: values:\n  value\n\n[value] := replacement\n"
+    main.write_text(source, encoding="utf-8")
+
+    definition = features.compute_definition(
+        source,
+        main.as_uri(),
+        str(main),
+        lsp.Position(line=3, character=2),
+    )
+
+    assert definition is not None
+    assert definition.uri == module.as_uri()
+    assert (definition.range.start.line, definition.range.start.character) == (3, 1)
+
+
+def test_control_flow_declaration_does_not_resolve_outside_its_child_scope() -> None:
+    source = "> if: `True`:\n  [branch_only] = yes\n= <branch_only>\n"
+
+    definition = features.compute_definition(
+        source,
+        "file:///tmp/scope.kedi",
+        "/tmp/scope.kedi",
+        lsp.Position(line=2, character=3),
+    )
+
+    assert definition is None
 
 
 # ---------------------------------------------------------------------

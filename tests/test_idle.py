@@ -261,6 +261,82 @@ def test_idle_console_show_requires_an_expression() -> None:
     assert stderr.getvalue() == "Usage: :show <expression>\n"
 
 
+def test_idle_console_dump_persists_and_prints_resume_command(tmp_path: Path) -> None:
+    snapshot = tmp_path / "session state.kedi-state"
+    seen: list[Path] = []
+
+    class Session:
+        def dump(self, path: str | Path) -> Path:
+            resolved = Path(path)
+            seen.append(resolved)
+            return resolved
+
+    stdout = StringIO()
+    console = IdleConsole(
+        Session(),  # type: ignore[arg-type]
+        stdout=stdout,
+        stderr=StringIO(),
+        session_path=snapshot,
+    )
+
+    assert console.push(":dump") is False
+    assert seen == [snapshot.resolve()]
+    assert stdout.getvalue() == (
+        f"Session dumped to {snapshot.resolve()}\n"
+        "To resume session, run -- "
+        f"kedi --idle --load '{snapshot.resolve()}'\n"
+    )
+
+
+def test_idle_console_dump_reports_failure_and_rejects_arguments(tmp_path: Path) -> None:
+    class Session:
+        def dump(self, _path: str | Path) -> Path:
+            raise kedi.SessionDumpError(["unsupported value"])
+
+    stderr = StringIO()
+    console = IdleConsole(
+        Session(),  # type: ignore[arg-type]
+        stdout=StringIO(),
+        stderr=stderr,
+        session_path=tmp_path / "session.kedi-state",
+    )
+
+    assert console.push(":dump") is False
+    assert console.push(":dump elsewhere") is False
+    assert "Session dump failed:" in stderr.getvalue()
+    assert "unsupported value" in stderr.getvalue()
+    assert stderr.getvalue().endswith("Usage: :dump\n")
+
+
+def test_idle_console_propagates_system_exit_from_kedi_execution() -> None:
+    class Session:
+        def execute(self, _source: str) -> None:
+            raise SystemExit(7)
+
+    console = IdleConsole(
+        Session(),  # type: ignore[arg-type]
+        stdout=StringIO(),
+        stderr=StringIO(),
+    )
+
+    with pytest.raises(SystemExit) as info:
+        console.push("= `exit_now()`")
+    assert info.value.code == 7
+
+
+def test_idle_default_session_path_uses_private_registry_directory(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(idle_module.Path, "home", lambda: tmp_path)
+
+    path = idle_module._default_session_path()
+
+    assert path.parent == tmp_path / ".kedi" / "sessions"
+    assert path.name.startswith("idle-")
+    assert path.suffix == ".kedi-state"
+
+
 @pytest.mark.parametrize(
     "source, expected",
     [
@@ -382,7 +458,8 @@ def test_run_idle_owns_session_and_saves_history(monkeypatch: Any) -> None:
             events.append("exit")
 
     class Console:
-        def __init__(self, _session: object) -> None:
+        def __init__(self, _session: object, *, session_path: object = None) -> None:
+            assert session_path is None
             events.append("console")
 
         def interact(self) -> None:
@@ -396,11 +473,181 @@ def test_run_idle_owns_session_and_saves_history(monkeypatch: Any) -> None:
     assert events == ["enter", "console", "interact", "exit", "save"]
 
 
-def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
-    received: dict[str, str] = {}
+def test_run_idle_records_before_close_and_preserves_system_exit(monkeypatch: Any) -> None:
+    events: list[str] = []
 
-    def fake_run_idle(*, adapter: str, model: str) -> int:
-        received.update(adapter=adapter, model=model)
+    class Session:
+        def __enter__(self) -> Session:
+            events.append("enter")
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            events.append("exit")
+
+    class Console:
+        def __init__(self, session: object, *, session_path: object = None) -> None:
+            assert isinstance(session, Session)
+            assert session_path is None
+
+        def interact(self) -> None:
+            events.append("interact")
+            raise SystemExit(9)
+
+        def dump(self) -> None:
+            events.append("dump")
+
+    monkeypatch.setattr(kedi.api, "interactive", lambda **_kwargs: Session())
+    monkeypatch.setattr(idle_module, "IdleConsole", Console)
+    monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: events.append("save"))
+
+    with pytest.raises(SystemExit) as info:
+        idle_module.run_idle(adapter="pydantic", model="test", record=True)
+
+    assert info.value.code == 9
+    assert events == ["enter", "interact", "dump", "exit", "save"]
+
+
+def test_run_idle_loads_and_continues_recording_same_snapshot(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    snapshot = tmp_path / "loaded.kedi-state"
+    events: list[tuple[str, object]] = []
+
+    class Session:
+        def __enter__(self) -> Session:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            events.append(("close", args))
+
+    class Console:
+        def __init__(self, session: object, *, session_path: object = None) -> None:
+            assert isinstance(session, Session)
+            events.append(("path", session_path))
+
+        def interact(self) -> None:
+            events.append(("interact", None))
+
+        def dump(self) -> None:
+            events.append(("dump", None))
+
+    monkeypatch.setattr(
+        kedi.interactive_session,
+        "load_session",
+        lambda path: events.append(("load", path)) or Session(),
+    )
+    monkeypatch.setattr(idle_module, "IdleConsole", Console)
+    monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: None)
+
+    assert (
+        idle_module.run_idle(
+            adapter="pydantic",
+            model="test",
+            load_path=snapshot,
+        )
+        == 0
+    )
+    assert events == [
+        ("load", snapshot),
+        ("path", snapshot),
+        ("interact", None),
+        ("dump", None),
+        ("close", (None, None, None)),
+    ]
+
+
+def test_run_idle_record_and_load_round_trip_real_session(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    snapshot = tmp_path / "recorded.kedi-state"
+    inputs = iter(["[value: int] = `40`", ":exit"])
+    monkeypatch.setattr(builtins, "input", lambda _prompt: next(inputs))
+    monkeypatch.setattr(idle_module, "_default_session_path", lambda: snapshot)
+    monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: None)
+
+    assert (
+        idle_module.run_idle(
+            adapter="pydantic",
+            model="test-model",
+            record=True,
+        )
+        == 0
+    )
+
+    resumed_inputs = iter(["[value: int] = `42`", ":exit"])
+    monkeypatch.setattr(builtins, "input", lambda _prompt: next(resumed_inputs))
+    assert (
+        idle_module.run_idle(
+            adapter="pydantic",
+            model="ignored-after-load",
+            load_path=snapshot,
+        )
+        == 0
+    )
+
+    with kedi.load_session(snapshot) as restored:
+        assert restored.execute("= `value`") == 42
+
+
+def test_run_idle_records_before_propagating_real_system_exit(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    snapshot = tmp_path / "system-exit.kedi-state"
+    inputs = iter(["`raise SystemExit(5)`"])
+    monkeypatch.setattr(builtins, "input", lambda _prompt: next(inputs))
+    monkeypatch.setattr(idle_module, "_default_session_path", lambda: snapshot)
+    monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: None)
+
+    with pytest.raises(SystemExit) as info:
+        idle_module.run_idle(
+            adapter="pydantic",
+            model="test-model",
+            record=True,
+        )
+
+    assert info.value.code == 5
+    with kedi.load_session(snapshot) as restored:
+        assert restored.execute("= `42`") == 42
+
+
+def test_run_idle_records_after_prompt_keyboard_interrupt(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    snapshot = tmp_path / "keyboard-interrupt.kedi-state"
+
+    def interrupt(_prompt: str) -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(builtins, "input", interrupt)
+    monkeypatch.setattr(idle_module, "_default_session_path", lambda: snapshot)
+    monkeypatch.setattr(idle_module, "_configure_readline", lambda: lambda: None)
+
+    assert (
+        idle_module.run_idle(
+            adapter="pydantic",
+            model="test-model",
+            record=True,
+        )
+        == 0
+    )
+    with kedi.load_session(snapshot) as restored:
+        assert restored.execute("= `42`") == 42
+
+
+def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
+    received: dict[str, object] = {}
+
+    def fake_run_idle(*, adapter: str, model: str, record: bool, load_path: Path | None) -> int:
+        received.update(
+            adapter=adapter,
+            model=model,
+            record=record,
+            load_path=load_path,
+        )
         return 0
 
     monkeypatch.setattr(cli_module, "run_idle", fake_run_idle)
@@ -410,7 +657,45 @@ def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
     )
 
     assert result.exit_code == 0
-    assert received == {"adapter": "langchain", "model": "openai:gpt-test"}
+    assert received == {
+        "adapter": "langchain",
+        "model": "openai:gpt-test",
+        "record": False,
+        "load_path": None,
+    }
+
+
+def test_cli_idle_forwards_record_and_load(tmp_path: Path, monkeypatch: Any) -> None:
+    snapshot = tmp_path / "session.kedi-state"
+    received: dict[str, object] = {}
+
+    def fake_run_idle(**kwargs: object) -> int:
+        received.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_module, "run_idle", fake_run_idle)
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["--idle", "--record", "--load", str(snapshot)],
+    )
+
+    assert result.exit_code == 0
+    assert received["record"] is True
+    assert received["load_path"] == snapshot
+
+
+def test_cli_idle_renders_snapshot_load_failure(monkeypatch: Any) -> None:
+    def fail_run(**_kwargs: object) -> int:
+        raise kedi.SessionLoadError("invalid snapshot")
+
+    monkeypatch.setattr(cli_module, "run_idle", fail_run)
+    result = CliRunner().invoke(
+        cli_module.main,
+        ["--idle", "--load", "missing.kedi-state"],
+    )
+
+    assert result.exit_code == 1
+    assert "Error: invalid snapshot" in result.output
 
 
 @pytest.mark.parametrize(
@@ -423,6 +708,11 @@ def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
         (["--idle", "--optimize"], "cannot be combined"),
         (["--idle", "--parse"], "cannot be combined"),
         (["--idle", "--name", "Ada"], "does not accept SOURCE"),
+        (["program.kedi", "--record"], "require --idle"),
+        (["program.kedi", "--load", "session.kedi-state"], "require --idle"),
+        (["install", "--record"], "require --idle"),
+        (["skills", "--load", "session.kedi-state"], "require --idle"),
+        (["--idle", "install"], "does not accept SOURCE"),
     ],
 )
 def test_cli_idle_rejects_conflicting_modes(arguments: list[str], message: str) -> None:
@@ -437,3 +727,5 @@ def test_cli_help_lists_idle_mode() -> None:
 
     assert result.exit_code == 0
     assert "--idle" in result.output
+    assert "--record" in result.output
+    assert "--load" in result.output

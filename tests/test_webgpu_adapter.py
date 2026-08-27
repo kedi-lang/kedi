@@ -4,7 +4,7 @@ import asyncio
 import sys
 from contextlib import AbstractAsyncContextManager, contextmanager
 from types import ModuleType, SimpleNamespace
-from typing import Any, Iterator
+from typing import Annotated, Any, Iterator
 
 import pytest
 from mcp.types import CallToolResult, TextContent
@@ -40,12 +40,18 @@ def test_webgpu_adapter_produces_schema_and_output_type() -> None:
     adapter = WebGPUAdapter(bridge, model="bonsai", supported_models=("bonsai",))
 
     assert adapter.default_model() == "bonsai"
-    dynamic = adapter.produce_sync(template="answer", output_schema={"answer": int})
+    dynamic = adapter.produce_sync(
+        template="answer",
+        output_schema={"answer": Annotated[int, "Computed answer"]},
+    )
     typed = asyncio.run(adapter.produce(template="answer", output_type=NamedOutput))
 
     assert dynamic.answer == 42
     assert typed == NamedOutput(answer="done")
     assert bridge.payloads[0]["outputSchema"]["properties"]["answer"]["type"] == "integer"
+    assert bridge.payloads[0]["outputSchema"]["properties"]["answer"]["description"] == (
+        "Computed answer"
+    )
     output_prompt = bridge.payloads[0]["outputPrompt"]
     assert "<name>answer</name>" in output_prompt
     assert "<type>integer</type>" in output_prompt
