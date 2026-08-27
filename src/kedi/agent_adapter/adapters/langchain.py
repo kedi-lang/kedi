@@ -4,6 +4,7 @@ import inspect
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from functools import wraps
+from time import monotonic
 from typing import (
     Any,
     AsyncIterator,
@@ -32,7 +33,7 @@ from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import build_output_model
-from ..approval import ApprovalPolicy, ToolRisk
+from ..approval import ApprovalPolicy, ToolApprovalDenied, ToolRisk
 from ..codemode import CodeModeError, CodeModeLimits
 from ..codemode.tool_specs import (
     CodeModeProjection,
@@ -42,8 +43,21 @@ from ..codemode.tool_specs import (
 )
 from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
+from ..hooks import (
+    HookDeniedError,
+    HookHandler,
+    HookRegistrationMixin,
+    ToolOrigin,
+    current_hook_dispatcher,
+    dispatch_post_tool_use,
+    dispatch_post_tool_use_failure,
+    dispatch_pre_tool_use,
+    hooked_agent_run,
+    is_tool_execution_interrupted,
+    new_tool_call_id,
+)
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..native_compaction import langchain_settings_with_native_compaction
 from ..prefix_cache import langchain_cache_settings, langchain_provider_cache_policy
 from ..subagents import SubagentExecutionRequest
@@ -59,7 +73,7 @@ from ..tool_override import (
 )
 
 
-class LangChainAdapter:
+class LangChainAdapter(HookRegistrationMixin):
     """Adapter to use LangChain agents through Kedi's uniform adapter contract."""
 
     kind: AgentAdapterKind = "agent-framework"
@@ -83,6 +97,10 @@ class LangChainAdapter:
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
+        hooks=HookCapabilities.full(
+            tool_bridge="native",
+            tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
+        ),
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 
@@ -93,8 +111,10 @@ class LangChainAdapter:
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = normalize_for_langchain(model) if isinstance(model, str) else model
@@ -151,6 +171,7 @@ class LangChainAdapter:
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
         return build_output_model(output_schema)
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         template: str,
@@ -187,6 +208,7 @@ class LangChainAdapter:
             result = await self._invoke_agent(agent, payload, emit_final=False)
             return cast(OutputDataT, _langchain_structured_response(result))
 
+    @hooked_agent_run("template")
     async def produce_subagent(
         self,
         *,
@@ -223,6 +245,7 @@ class LangChainAdapter:
                 raise TypeError("LangChain subagent structured output must be an object")
             return result
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         instructions = cast(str | None, kwargs.pop("instructions", None))
         model = self._chat_model_for_run()
@@ -496,14 +519,33 @@ class LangChainAdapter:
             *await self._mcp_tools_for_profile(self.active_profile),
         ]
 
-    def _approval_middleware_for_run(self, tools: Sequence[Any]) -> list[Any]:
+    def _approval_middleware_for_run(
+        self,
+        tools: Sequence[Any],
+        *,
+        approval_enabled: bool = True,
+    ) -> list[Any]:
         if not tools:
             return []
+        dispatcher = current_hook_dispatcher()
+        has_tool_hooks = dispatcher is not None and any(
+            dispatcher.handlers_for(event)
+            for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+        )
+        if not approval_enabled and not has_tool_hooks:
+            return []
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
+        tool_specs = list(known_specs.values())
+        for tool in tools:
+            name = getattr(tool, "name", None)
+            if isinstance(name, str) and name not in known_specs:
+                tool_specs.append(_langchain_tool_spec_from_native(tool))
         return [
             _langchain_approval_middleware(
                 profile=self.active_profile,
-                tools=self.scoped_tool_specs,
+                tools=tool_specs,
                 approval_ceiling=self._approval_ceiling_var.get(),
+                approval_enabled=approval_enabled,
             )
         ]
 
@@ -519,7 +561,10 @@ class LangChainAdapter:
                 model,
                 enabled=self._conversation_var.get() is not None,
             ),
-            *([] if codemode_enabled else self._approval_middleware_for_run(tools)),
+            *self._approval_middleware_for_run(
+                tools,
+                approval_enabled=not codemode_enabled,
+            ),
         ]
 
     @asynccontextmanager
@@ -576,6 +621,14 @@ class LangChainAdapter:
             server_count=len(profile.mcp_servers),
         ) as active:
             tools = list(await client.get_tools())
+            for tool in tools:
+                if not hasattr(tool, "metadata"):
+                    continue
+                metadata = getattr(tool, "metadata", None)
+                tool.metadata = {
+                    **(dict(metadata) if isinstance(metadata, Mapping) else {}),
+                    "kedi_origin": "mcp",
+                }
             active.set_attribute("kedi.mcp.tool_count", len(tools))
             active.add_event(
                 "mcp tools discovered",
@@ -772,8 +825,9 @@ def _langchain_approval_middleware(
     profile: AgentProfile,
     tools: Sequence[ToolSpec],
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
+    approval_enabled: bool = True,
 ) -> Any:
-    """Bridge Kedi approval decisions into LangChain's native tool-call hook."""
+    """Bridge Kedi hook and approval semantics into LangChain's tool lifecycle."""
 
     try:
         from langchain.agents.middleware import AgentMiddleware
@@ -785,7 +839,7 @@ def _langchain_approval_middleware(
 
     known_tools = {tool.name: tool for tool in tools}
 
-    class KediApprovalMiddleware(AgentMiddleware):
+    class KediToolLifecycleMiddleware(AgentMiddleware):
         async def awrap_tool_call(self, request: Any, handler: Any) -> Any:
             tool_call = request.tool_call
             tool_name = tool_call.get("name") if isinstance(tool_call, Mapping) else None
@@ -799,31 +853,89 @@ def _langchain_approval_middleware(
                 )
 
             tool = known_tools.get(tool_name, _langchain_external_tool_spec(tool_name))
+            call_id = str(tool_call_id or new_tool_call_id())
+            origin = _langchain_hook_origin(tool, getattr(request, "tool", None))
             try:
-                final_arguments = _validated_tool_arguments(tool, arguments)
-                policies = tuple(approval_ceiling)
-                if profile.approval is not None or not policies:
-                    policies = (*policies, profile.approval)
-                for policy in policies:
-                    final_arguments = await resolve_tool_arguments_async(
-                        tool,
-                        final_arguments,
-                        policy=policy,
-                        adapter_shortname="langchain",
-                    )
+                final_arguments = await dispatch_pre_tool_use(
+                    tool,
+                    arguments,
+                    adapter_shortname="langchain",
+                    tool_call_id=call_id,
+                    origin=origin,
+                    native_tool_name=tool_name,
+                )
+                if approval_enabled:
+                    policies = tuple(approval_ceiling)
+                    if profile.approval is not None or not policies:
+                        policies = (*policies, profile.approval)
+                    for policy in policies:
+                        final_arguments = await resolve_tool_arguments_async(
+                            tool,
+                            final_arguments,
+                            policy=policy,
+                            adapter_shortname="langchain",
+                        )
+            except (HookDeniedError, ToolApprovalDenied) as exc:
+                return _langchain_tool_error(tool_name, tool_call_id, str(exc))
             except Exception as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))
 
-            return await handler(
-                request.override(
-                    tool_call={
-                        **dict(tool_call),
-                        "args": final_arguments,
-                    }
-                )
+            final_request = request.override(
+                tool_call={
+                    **dict(tool_call),
+                    "args": final_arguments,
+                }
             )
+            started = monotonic()
+            try:
+                result = await handler(final_request)
+            except BaseException as exc:
+                await dispatch_post_tool_use_failure(
+                    tool,
+                    final_arguments,
+                    exc,
+                    adapter_shortname="langchain",
+                    tool_call_id=call_id,
+                    origin=origin,
+                    native_tool_name=tool_name,
+                    duration_seconds=monotonic() - started,
+                    interrupted=is_tool_execution_interrupted(exc),
+                )
+                raise
+            if getattr(result, "status", None) == "error":
+                error = RuntimeError(str(getattr(result, "content", "Tool execution failed")))
+                await dispatch_post_tool_use_failure(
+                    tool,
+                    final_arguments,
+                    error,
+                    adapter_shortname="langchain",
+                    tool_call_id=call_id,
+                    origin=origin,
+                    native_tool_name=tool_name,
+                    duration_seconds=monotonic() - started,
+                )
+                return result
+            await dispatch_post_tool_use(
+                tool,
+                final_arguments,
+                result,
+                adapter_shortname="langchain",
+                tool_call_id=call_id,
+                origin=origin,
+                native_tool_name=tool_name,
+            )
+            return result
 
-    return KediApprovalMiddleware()
+    return KediToolLifecycleMiddleware()
+
+
+def _langchain_hook_origin(tool: ToolSpec, native_tool: Any) -> ToolOrigin:
+    if (tool.metadata or {}).get("source") != "langchain-external":
+        return "kedi"
+    metadata = getattr(native_tool, "metadata", None)
+    if isinstance(metadata, Mapping) and metadata.get("kedi_origin") == "mcp":
+        return "mcp"
+    return "adapter_native"
 
 
 def _raise_langchain_subagent_error(tool: ToolSpec, exc: KediExecutionError) -> None:

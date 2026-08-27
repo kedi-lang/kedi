@@ -12,6 +12,7 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
+    ProfileHooksMember,
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
         ProfileDefStmt,
         ProfileEffortEntry,
         ProfileHistoryEntry,
+        ProfileHooksEntry,
         ProfileMcpEntry,
         ProfileModelEntry,
         ProfileOutputEntry,
@@ -53,6 +55,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileModelMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHooksMember
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
@@ -78,6 +81,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_effort_entry_to_member(entry))
     for entry in stmt.approval_members:
         members.append(_approval_entry_to_member(entry))
+    for entry in stmt.hooks_members:
+        members.append(_hooks_entry_to_member(entry))
     for entry in stmt.history_members:
         members.append(_history_entry_to_member(entry))
     for entry in stmt.skills_members:
@@ -149,6 +154,10 @@ def _approval_entry_to_member(entry: ProfileApprovalEntry) -> ProfileApprovalMem
         plain_value=entry.plain_value,
         backtick_code=entry.backtick_code,
     )
+
+
+def _hooks_entry_to_member(entry: ProfileHooksEntry) -> ProfileHooksMember:
+    return ProfileHooksMember(enabled=entry.enabled, fields=tuple(entry.fields))
 
 
 def _history_entry_to_member(entry: ProfileHistoryEntry) -> ProfileHistoryMember:
@@ -271,6 +280,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         CodeModeDirectiveStmt,
         EffortDirectiveStmt,
         HistoryDirectiveStmt,
+        HooksDirectiveStmt,
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
@@ -288,6 +298,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_codemode_directive,
         eval_effort_directive,
         eval_history_directive,
+        eval_hooks_directive,
         eval_mcp_directive,
         eval_model_directive,
         eval_settings_directive,
@@ -320,6 +331,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_effort_directive(rt, item, env))
         elif isinstance(item, ApprovalDirectiveStmt):
             active = active.merge(eval_approval_directive(rt, item, env))
+        elif isinstance(item, HooksDirectiveStmt):
+            active = active.merge(eval_hooks_directive(rt, item, env).with_hook_enforcement())
         elif isinstance(item, HistoryDirectiveStmt):
             active = active.merge(eval_history_directive(rt, item, env))
         elif isinstance(item, SkillsDirectiveStmt):

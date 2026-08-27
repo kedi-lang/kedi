@@ -4,11 +4,12 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from threading import Lock
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, TypeVar
 
 from typing_extensions import runtime_checkable
 
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
+from kedi.agent_adapter.hooks import HookEventName, HookHandler, HookRegistrationMixin
 from kedi.agent_adapter.subagents import SupportsSubagentExecution
 from kedi.telemetry import add_counter, record_histogram, span
 
@@ -30,7 +31,7 @@ class _SupportsTelemetryModelName(Protocol):
     def telemetry_model_name(self) -> str | None: ...
 
 
-class LazyAdapter:
+class LazyAdapter(HookRegistrationMixin):
     """Builds the real adapter on first LLM use so the program runs exactly once.
 
     Programs fully covered by generated/native code never construct an adapter (no
@@ -46,7 +47,9 @@ class LazyAdapter:
         kind: AgentAdapterKind = "agent-framework",
         shortname: str = "lazy",
         capabilities: AdapterCapabilities | None = None,
+        hook_handler: HookHandler | None = None,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         self._factory = factory
         self.kind = kind
         self.shortname = shortname
@@ -72,6 +75,8 @@ class LazyAdapter:
                     ) as active:
                         try:
                             self._real = self._factory()
+                            if isinstance(self._real, HookRegistrationMixin):
+                                self._real._prepend_hook_snapshot(self.hook_snapshot())
                         except BaseException as exc:
                             outcome = "error"
                             active.set_attribute("error.type", type(exc).__name__)
@@ -97,6 +102,21 @@ class LazyAdapter:
                                 attributes=dimensions,
                             )
         return self._real
+
+    def on(
+        self,
+        events: HookEventName | str | Sequence[HookEventName | str],
+    ) -> Callable[[_HandlerT], _HandlerT]:
+        register_outer = super().on(events)
+
+        def register(handler: _HandlerT) -> _HandlerT:
+            with self._lock:
+                register_outer(handler)
+                if isinstance(self._real, HookRegistrationMixin):
+                    self._real.on(events)(handler)
+            return handler
+
+        return register
 
     @property
     def is_initialized(self) -> bool:
@@ -183,3 +203,6 @@ class LazyAdapter:
     @property
     def scoped_tools(self) -> tuple[Any, ...]:
         return self._ensure().scoped_tools
+
+
+_HandlerT = TypeVar("_HandlerT", bound=Callable[..., Any])

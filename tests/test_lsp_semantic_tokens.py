@@ -244,6 +244,23 @@ def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
     )
 
 
+def test_semantic_tokens_cover_hooks_directive_fields_and_python_values() -> None:
+    src = "> hooks:\n  pre_tool_use: `[validate_path, audit_call]`\n"
+    tokens = decode_semantic_tokens(
+        features.compute_semantic_tokens_full(src, "/tmp/hooks.kedi").data
+    )
+    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+
+    assert (0, 2, len("hooks"), keyword_type) in [token[:4] for token in tokens]
+    assert (1, 2, len("pre_tool_use"), property_type) in [token[:4] for token in tokens]
+    assert any(
+        line == 1 and col > len("  pre_tool_use: `[") and token_type == variable_type
+        for line, col, _, token_type, _ in tokens
+    )
+
+
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
     tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)

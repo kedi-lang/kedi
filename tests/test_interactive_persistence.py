@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import operator
 import re
 from concurrent.futures import Future
 from datetime import date, datetime, time, timedelta, timezone
@@ -26,9 +27,10 @@ from kedi._interactive.persistence import (
 from kedi._interactive.state import ExecutedFragment
 from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import ConversationState
+from kedi.agent_adapter.hooks import HookHandler
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import ToolSpec
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import AgentProfile, HookSettings
 from kedi.agent_profile.codemode import CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings
 from kedi.agent_profile.mcp import McpServerSpec
@@ -683,6 +685,120 @@ def test_session_dump_reports_unsupported_active_profile(tmp_path: Path) -> None
         )
         with pytest.raises(SessionDumpError, match="active_profile.approval"):
             session.dump(tmp_path / "rejected.kedi-state")
+
+
+def test_session_dump_load_restores_import_addressable_hook_handlers(tmp_path: Path) -> None:
+    snapshot = tmp_path / "hooks.kedi-state"
+    with kedi.InteractiveSession() as session:
+        session._top_level_state.active_profile = AgentProfile(
+            hooks=HookSettings(pre_tool_use=(cast(HookHandler, operator.neg),)),
+        )
+        session.dump(snapshot)
+
+    with kedi.load_session(snapshot) as restored:
+        hooks = restored._top_level_state.active_profile.hooks
+        assert hooks is not None
+        assert hooks.pre_tool_use == (operator.neg,)
+
+
+def test_session_dump_rejects_non_importable_hook_handlers(tmp_path: Path) -> None:
+    def local_handler(_event: object) -> None:
+        return None
+
+    with kedi.InteractiveSession() as session:
+        session._top_level_state.active_profile = AgentProfile(
+            hooks=HookSettings(pre_tool_use=(local_handler,)),
+        )
+        with pytest.raises(SessionDumpError, match="local functions and lambdas"):
+            session.dump(tmp_path / "rejected.kedi-state")
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (42, "profile.hooks must be an object"),
+        ({"enabled": "yes"}, "profile.hooks.enabled must be a boolean"),
+        ({"pre_tool_use": "handler"}, "profile.hooks.pre_tool_use must be a list"),
+    ],
+)
+def test_session_hook_decoder_rejects_malformed_settings(value: Any, message: str) -> None:
+    with pytest.raises(SessionLoadError, match=message):
+        persistence._decode_hooks(value)
+
+
+def test_session_hook_callable_encoder_rejects_nonportable_addresses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Handler:
+        def bound(self, _event: object) -> None:
+            return None
+
+        def __call__(self, _event: object) -> None:
+            return None
+
+    handler = Handler()
+    with pytest.raises(UnsupportedSessionValue, match="bound callables"):
+        persistence._encode_importable_callable(handler.bound, path="handler")
+    with pytest.raises(UnsupportedSessionValue, match="no import address"):
+        persistence._encode_importable_callable(handler, path="handler")
+
+    def main_handler(_event: object) -> None:
+        return None
+
+    monkeypatch.setattr(main_handler, "__module__", "__main__")
+    monkeypatch.setattr(main_handler, "__qualname__", "main_handler")
+    with pytest.raises(UnsupportedSessionValue, match="__main__"):
+        persistence._encode_importable_callable(main_handler, path="handler")
+
+    def missing_handler(_event: object) -> None:
+        return None
+
+    monkeypatch.setattr(missing_handler, "__module__", "missing_hook_module")
+    monkeypatch.setattr(missing_handler, "__qualname__", "handler")
+    with pytest.raises(UnsupportedSessionValue, match="cannot resolve callable"):
+        persistence._encode_importable_callable(missing_handler, path="handler")
+
+    def impostor(_event: object) -> None:
+        return None
+
+    monkeypatch.setattr(impostor, "__module__", "operator")
+    monkeypatch.setattr(impostor, "__qualname__", "neg")
+    with pytest.raises(UnsupportedSessionValue, match="same callable"):
+        persistence._encode_importable_callable(impostor, path="handler")
+
+
+@pytest.mark.parametrize(
+    ("descriptor", "message"),
+    [
+        (42, "callable descriptor must be an object"),
+        ({"module": "operator"}, "requires module and qualname"),
+        ({"module": "__main__", "qualname": "handler"}, "unsafe callable"),
+        ({"module": "operator", "qualname": "<locals>"}, "unsafe callable"),
+    ],
+)
+def test_session_hook_callable_decoder_rejects_malformed_descriptors(
+    descriptor: Any,
+    message: str,
+) -> None:
+    with pytest.raises(SessionLoadError, match=message):
+        persistence._decode_importable_callable(descriptor, path="handler")
+
+
+@pytest.mark.parametrize(
+    ("module", "qualname", "message"),
+    [
+        ("operator", ".neg", "cannot resolve callable"),
+        ("operator", "missing", "cannot resolve callable"),
+        ("math", "pi", "not callable"),
+    ],
+)
+def test_session_hook_callable_resolution_rejects_invalid_targets(
+    module: str,
+    qualname: str,
+    message: str,
+) -> None:
+    with pytest.raises(SessionLoadError, match=message):
+        persistence._resolve_importable_callable(module, qualname, path="handler")
 
 
 def test_session_dump_wraps_late_value_encoding_failure(

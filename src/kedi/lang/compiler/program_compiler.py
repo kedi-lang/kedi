@@ -21,6 +21,7 @@ from ...agent_profile.model import (
     eval_codemode_directive,
     eval_effort_directive,
     eval_history_directive,
+    eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -45,6 +46,7 @@ from ..ast import (
     ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    HooksDirectiveStmt,
     IfStmt,
     LoopStmt,
     McpDirectiveStmt,
@@ -1164,6 +1166,10 @@ class ProgramCompiler:
                 state.active_profile = state.active_profile.merge(
                     eval_approval_directive(self.rt, item, env)
                 )
+                continue
+            if isinstance(item, HooksDirectiveStmt):
+                hook_patch = eval_hooks_directive(self.rt, item, env).with_hook_enforcement()
+                state.active_profile = state.active_profile.merge(hook_patch)
                 continue
             if isinstance(item, HistoryDirectiveStmt):
                 state.active_profile = state.active_profile.merge(

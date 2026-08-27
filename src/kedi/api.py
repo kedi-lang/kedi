@@ -41,6 +41,7 @@ from .agent_adapter.approval import (
     ApprovalRequest,
     ToolRisk,
 )
+from .agent_adapter.hooks import HookEventName, HookHandler, validate_hook_event_names
 from .agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,
@@ -48,7 +49,15 @@ from .agent_adapter.registry import (
     known_adapter_shortnames,
 )
 from .agent_adapter.subagents.limits import SubagentUsageLimits
-from .agent_profile import AgentProfile, McpServerSpec, SkillsSettings, block_agent_profile_scope
+from .agent_profile import (
+    AgentProfile,
+    HookInput,
+    HookSettings,
+    McpServerSpec,
+    SkillsSettings,
+    block_agent_profile_scope,
+    normalize_hook_settings,
+)
 from .artifacts import ArtifactPolicyInput, normalize_artifact_policy
 from .effort import EffortValue
 from .errors import KediExecutionError
@@ -252,9 +261,38 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         tuple(profile.tools),
         tuple(_stable_repr(server) for server in profile.mcp_servers),
         _approval_identity(profile.approval),
+        _hooks_identity(profile.hooks),
         profile.skills,
         profile.codemode,
         profile.artifacts.as_cache_key() if profile.artifacts is not None else None,
+    )
+
+
+def _hooks_identity(settings: HookSettings | None) -> tuple[Any, ...] | None:
+    if settings is None:
+        return None
+    return (
+        settings.enabled,
+        tuple(
+            (
+                event,
+                tuple(
+                    (
+                        getattr(handler, "__module__", None),
+                        getattr(handler, "__qualname__", None),
+                    )
+                    for handler in (getattr(settings, event) or ())
+                ),
+            )
+            for event in validate_hook_event_names(
+                (
+                    "user_prompt_submit",
+                    "pre_tool_use",
+                    "post_tool_use",
+                    "post_tool_use_failure",
+                )
+            )
+        ),
     )
 
 
@@ -318,10 +356,12 @@ def _agent_profile_overrides(
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
     approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    hooks: HookSettings | HookInput,
     skills: SkillsSettings | bool | None,
     artifacts: ArtifactPolicyInput,
 ) -> tuple[dict[str, Callable[..., Any]], AgentProfile]:
     tool_map = _tool_mapping(tools)
+    hook_settings = normalize_hook_settings(hooks)
     return tool_map, AgentProfile(
         model=None if model is _UNSET else cast(str | None, model),
         adapter_kind=adapter_kind,
@@ -332,6 +372,8 @@ def _agent_profile_overrides(
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval_policy),
+        hooks=hook_settings,
+        _hook_enforcement=hook_settings,
         skills=skills,
         artifacts=normalize_artifact_policy(artifacts),
     )
@@ -685,6 +727,7 @@ def _build_config(
     env: Mapping[str, Any] | None,
     mcp_servers: Sequence[McpServerSpec],
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
+    hooks: HookSettings | HookInput,
     skills: SkillsSettings | bool | None,
     artifacts: ArtifactPolicyInput,
     conversation: ConversationState | None | object,
@@ -760,6 +803,7 @@ def _build_config(
 
     tool_map = {**dict(base_tools), **_tool_mapping(tools)}
     merged_env = {**dict(base_env), **dict(env or {})}
+    hook_settings = normalize_hook_settings(hooks)
     profile_patch = AgentProfile(
         model=cast(str | None, model_default),
         adapter_kind=kind,
@@ -770,6 +814,8 @@ def _build_config(
         tools=tuple(_tool_mapping(tools)),
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval),
+        hooks=hook_settings,
+        _hook_enforcement=hook_settings,
         skills=skills,
         artifacts=normalize_artifact_policy(artifacts),
     )
@@ -808,6 +854,7 @@ def configure(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -835,6 +882,7 @@ def configure(
             env=env,
             mcp_servers=mcp_servers,
             approval=approval,
+            hooks=hooks,
             skills=skills,
             artifacts=artifacts,
             conversation=conversation,
@@ -866,6 +914,36 @@ def approval(handler: ApprovalHandler) -> ApprovalHandler:
         )
     )
     return handler
+
+
+def on(
+    events: HookEventName | str | Sequence[HookEventName | str],
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Register a hook handler in the current Python API configuration."""
+
+    event_names = validate_hook_event_names(events)
+
+    def register(handler: Callable[..., Any]) -> Callable[..., Any]:
+        if not callable(handler):
+            raise TypeError("Kedi hook handler must be callable")
+        config = _config_var.get()
+        settings = HookSettings()
+        for event in event_names:
+            settings = settings.append(event, cast(HookHandler, handler))
+        _config_var.set(
+            dataclasses.replace(
+                config,
+                profile=config.profile.merge(
+                    AgentProfile(
+                        hooks=settings,
+                        _hook_enforcement=settings,
+                    )
+                ),
+            )
+        )
+        return handler
+
+    return register
 
 
 class _KediContext:
@@ -902,6 +980,7 @@ def context(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -924,6 +1003,7 @@ def context(
             env=env,
             mcp_servers=mcp_servers,
             approval=approval,
+            hooks=hooks,
             skills=skills,
             artifacts=artifacts,
             conversation=conversation,
@@ -977,6 +1057,7 @@ def interactive(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -1010,6 +1091,7 @@ def interactive(
         env=env,
         mcp_servers=mcp_servers,
         approval=approval,
+        hooks=hooks,
         skills=skills,
         artifacts=artifacts,
         conversation=conversation,
@@ -1172,6 +1254,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -1192,6 +1275,7 @@ def query(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -1211,6 +1295,7 @@ def query(
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
+        hooks=hooks,
         skills=skills,
         artifacts=artifacts,
     )
@@ -1253,6 +1338,7 @@ def bind(
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
     approval: ApprovalPolicy | ApprovalMode | ApprovalHandler | None = None,
+    hooks: HookSettings | HookInput = None,
     skills: SkillsSettings | bool | None = None,
     artifacts: ArtifactPolicyInput = None,
     conversation: ConversationState | None | object = _UNSET,
@@ -1273,6 +1359,7 @@ def bind(
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
+        hooks=hooks,
         skills=skills,
         artifacts=artifacts,
     )
@@ -1321,6 +1408,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "on",
     "parallel",
     "query",
     "reset_config",

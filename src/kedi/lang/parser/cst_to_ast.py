@@ -36,6 +36,7 @@ from typing import Any, List, Optional, Union
 
 from tree_sitter import Node, Tree
 
+from ...agent_adapter.hooks import HOOK_EVENT_NAMES
 from ...agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from ...agent_profile.settings import (
     MODEL_SETTING_KEYS,
@@ -69,6 +70,7 @@ from ..ast import (
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    HooksDirectiveStmt,
     IfStmt,
     InputSegment,
     LiteralArg,
@@ -91,6 +93,7 @@ from ..ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
+    ProfileHooksEntry,
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
@@ -391,6 +394,10 @@ class _Walker:
                 prog.ordered_toplevel.append(stmt)
             elif t == "approval_directive":
                 stmt = self._walk_approval_directive(child)
+                prog.toplevel_body.append(stmt)
+                prog.ordered_toplevel.append(stmt)
+            elif t == "hooks_directive":
+                stmt = self._walk_hooks_directive(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "history_directive":
@@ -1042,6 +1049,8 @@ class _Walker:
             return self._walk_effort_directive(node)
         if t == "approval_directive":
             return self._walk_approval_directive(node)
+        if t == "hooks_directive":
+            return self._walk_hooks_directive(node)
         if t == "history_directive":
             return self._walk_history_directive(node)
         if t == "skills_directive":
@@ -2051,6 +2060,36 @@ class _Walker:
             self._validate_approval_plain_value(value_node, plain)
         return ApprovalDirectiveStmt(plain_value=plain, backtick_code=code, loc=self._span(node))
 
+    def _walk_hooks_directive(self, node: Node) -> HooksDirectiveStmt:
+        value_node = _field(node, "value")
+        if value_node is not None:
+            value = _src_text(self.source, value_node).strip()
+            if value not in {"enabled", "disabled"}:
+                self._error(
+                    value_node,
+                    "hooks directive must be 'enabled' or 'disabled'",
+                    code="K-HOOKS-VALUE",
+                )
+            return HooksDirectiveStmt(enabled=value == "enabled", loc=self._span(node))
+
+        body_node = _field(node, "body")
+        assert body_node is not None
+        fields: list[SettingsField] = []
+        for child in _named_children(body_node):
+            if child.type in ("line_comment", "block_comment"):
+                continue
+            field = self._walk_settings_value_field(child)
+            if field.name not in HOOK_EVENT_NAMES:
+                expected = ", ".join(HOOK_EVENT_NAMES)
+                self._error(
+                    child,
+                    f"Unknown hook event {field.name!r}; expected one of: {expected}",
+                    code="K-HOOKS-EVENT",
+                )
+                continue
+            fields.append(field)
+        return HooksDirectiveStmt(enabled=True, fields=fields, loc=self._span(node))
+
     def _walk_history_directive(self, node: Node) -> HistoryDirectiveStmt:
         value_node = _field(node, "value")
         if value_node is not None:
@@ -2479,6 +2518,7 @@ class _Walker:
         adapter_members: list[ProfileAdapterEntry] = []
         effort_members: list[ProfileEffortEntry] = []
         approval_members: list[ProfileApprovalEntry] = []
+        hooks_members: list[ProfileHooksEntry] = []
         history_members: list[ProfileHistoryEntry] = []
         skills_members: list[ProfileSkillsEntry] = []
         codemode_members: list[ProfileCodeModeEntry] = []
@@ -2571,6 +2611,15 @@ class _Walker:
                         ProfileApprovalEntry(
                             plain_value=approval_stmt.plain_value,
                             backtick_code=approval_stmt.backtick_code,
+                            loc=self._span(child),
+                        )
+                    )
+                elif child.type == "hooks_directive":
+                    hooks_stmt = self._walk_hooks_directive(child)
+                    hooks_members.append(
+                        ProfileHooksEntry(
+                            enabled=hooks_stmt.enabled,
+                            fields=hooks_stmt.fields,
                             loc=self._span(child),
                         )
                     )
@@ -2749,6 +2798,7 @@ class _Walker:
             and not adapter_members
             and not effort_members
             and not approval_members
+            and not hooks_members
             and not history_members
             and not skills_members
             and not codemode_members
@@ -2765,7 +2815,7 @@ class _Walker:
         ):
             self._error(
                 node,
-                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> history:', '> skills:', '> codemode:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+                f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> hooks:', '> history:', '> skills:', '> codemode:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
                 code="K-PROFILE-EMPTY",
             )
         return ProfileDefStmt(
@@ -2775,6 +2825,7 @@ class _Walker:
             model_members=members,
             effort_members=effort_members,
             approval_members=approval_members,
+            hooks_members=hooks_members,
             history_members=history_members,
             skills_members=skills_members,
             codemode_members=codemode_members,

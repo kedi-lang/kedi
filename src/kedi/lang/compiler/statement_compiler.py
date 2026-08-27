@@ -13,6 +13,7 @@ from ...agent_profile.model import (
     eval_codemode_directive,
     eval_effort_directive,
     eval_history_directive,
+    eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
     eval_settings_directive,
@@ -34,6 +35,7 @@ from ..ast import (
     ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
+    HooksDirectiveStmt,
     IfStmt,
     LoopStmt,
     McpDirectiveStmt,
@@ -505,6 +507,16 @@ class StatementExecutor:
         if isinstance(stmt, ApprovalDirectiveStmt):
             return (
                 active.merge(eval_approval_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, HooksDirectiveStmt):
+            hook_patch = eval_hooks_directive(
+                self.rt,
+                stmt,
+                closure_env,
+            ).with_hook_enforcement()
+            return (
+                active.merge(hook_patch),
                 adapter_selection_kind,
             )
         if isinstance(stmt, HistoryDirectiveStmt):

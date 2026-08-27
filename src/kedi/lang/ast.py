@@ -327,6 +327,12 @@ class ApprovalDirectiveStmt(Stmt):
 
 
 @dataclass
+class HooksDirectiveStmt(Stmt):
+    enabled: bool | None = None
+    fields: List["SettingsField"] = field(default_factory=list)
+
+
+@dataclass
 class HistoryDirectiveStmt(Stmt):
     enabled: bool = False
     fields: List["SettingsField"] = field(default_factory=list)
@@ -415,6 +421,7 @@ class ProfileDefStmt(Stmt):
     model_members: List["ProfileModelEntry"] = field(default_factory=list)
     effort_members: List["ProfileEffortEntry"] = field(default_factory=list)
     approval_members: List["ProfileApprovalEntry"] = field(default_factory=list)
+    hooks_members: List["ProfileHooksEntry"] = field(default_factory=list)
     history_members: List["ProfileHistoryEntry"] = field(default_factory=list)
     skills_members: List["ProfileSkillsEntry"] = field(default_factory=list)
     codemode_members: List["ProfileCodeModeEntry"] = field(default_factory=list)
@@ -466,6 +473,13 @@ class ProfileEffortEntry:
 class ProfileApprovalEntry:
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileHooksEntry:
+    enabled: bool | None = None
+    fields: List[SettingsField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

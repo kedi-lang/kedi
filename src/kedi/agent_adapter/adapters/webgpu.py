@@ -13,6 +13,7 @@ from contextlib import (
 from contextvars import ContextVar
 from dataclasses import dataclass
 from textwrap import indent
+from time import monotonic
 from typing import Any, Callable, Collection, Iterator, Mapping, Protocol, Sequence
 from uuid import uuid4
 
@@ -25,7 +26,20 @@ from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ...dynamic_models import build_dynamic_model
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_definition
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..approval import ToolApprovalDenied
+from ..hooks import (
+    HookDeniedError,
+    HookExecutionError,
+    HookHandler,
+    HookRegistrationMixin,
+    ToolOrigin,
+    dispatch_post_tool_use,
+    dispatch_post_tool_use_failure,
+    dispatch_pre_tool_use,
+    hooked_agent_run,
+    is_tool_execution_interrupted,
+)
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..telemetry import (
     mcp_initialization_span,
     mcp_server_name,
@@ -86,7 +100,7 @@ class _McpRuntimeTool:
 BrowserTool = _RuntimeTool | _McpRuntimeTool
 
 
-class WebGPUAdapter:
+class WebGPUAdapter(HookRegistrationMixin):
     kind: AgentAdapterKind = "agent-framework"
     shortname = "webgpu"
     capabilities = AdapterCapabilities(
@@ -101,6 +115,10 @@ class WebGPUAdapter:
         supports_stateful_history=False,
         supports_history_replay=False,
         supports_stream_events=False,
+        hooks=HookCapabilities.full(
+            tool_bridge="kedi",
+            tool_origins=frozenset({"kedi", "mcp"}),
+        ),
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 
@@ -128,7 +146,9 @@ class WebGPUAdapter:
         max_tool_steps: int = 8,
         allowed_mcp_transports: Collection[McpTransport] | None = None,
         instrumentation: WebGPUInstrumentation | None = None,
+        hook_handler: HookHandler | None = None,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         if max_tool_steps < 1:
             raise ValueError("max_tool_steps must be at least 1")
         self._bridge = bridge
@@ -176,6 +196,7 @@ class WebGPUAdapter:
     def scoped_tools(self) -> tuple[Any, ...]:
         return self._tool_scope.scoped_tools
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         *,
@@ -191,9 +212,11 @@ class WebGPUAdapter:
             instructions=instructions,
         )
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, instructions: str | None = None, **_: Any) -> str:
         return await self._run(prompt=prompt, output_adapter=None, instructions=instructions)
 
+    @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, instructions: str | None = None, **kwargs: Any) -> str:
         from ..utils import run_sync
 
@@ -380,19 +403,77 @@ class WebGPUAdapter:
         tool = next((candidate for candidate in tools if candidate.name == name), None)
         if tool is None:
             raise ValueError(f"Browser model requested unknown tool: {name!r}")
-        try:
-            span = (
-                self._instrumentation.tool_span(name, str(call_id), arguments)
-                if self._instrumentation is not None
-                else nullcontext(lambda _: None)
+        spec = next(
+            (
+                candidate
+                for candidate in self.scoped_tools
+                if isinstance(candidate, ToolSpec) and candidate.name == name
+            ),
+            None,
+        )
+        origin: ToolOrigin = "kedi" if spec is not None else "mcp"
+        if spec is None:
+            spec = ToolSpec(
+                fn=lambda **_kwargs: None,
+                name=name,
+                description=tool.description,
+                json_schema=tool.input_schema,
+                metadata={"source": "mcp"},
             )
-            with span as finish:
-                result = await tool.call(arguments)
-                result = to_jsonable_python(result, fallback=str)
-                finish(result)
-            content = {"ok": True, "result": result}
-        except Exception as exc:  # noqa: BLE001 - tool failures are returned to the model.
+        final_arguments = arguments
+        try:
+            final_arguments = await dispatch_pre_tool_use(
+                spec,
+                arguments,
+                adapter_shortname=self.shortname,
+                tool_call_id=str(call_id),
+                origin=origin,
+                native_tool_name=name,
+            )
+        except (HookDeniedError, ToolApprovalDenied) as exc:
             content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        except HookExecutionError:
+            raise
+        except Exception as exc:  # argument validation is not tool execution
+            content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        else:
+            started = monotonic()
+            try:
+                span = (
+                    self._instrumentation.tool_span(name, str(call_id), final_arguments)
+                    if self._instrumentation is not None
+                    else nullcontext(lambda _: None)
+                )
+                with span as finish:
+                    result = await tool.call(final_arguments)
+                    result = to_jsonable_python(result, fallback=str)
+                    finish(result)
+            except BaseException as exc:
+                await dispatch_post_tool_use_failure(
+                    spec,
+                    final_arguments,
+                    exc,
+                    adapter_shortname=self.shortname,
+                    tool_call_id=str(call_id),
+                    origin=origin,
+                    native_tool_name=name,
+                    duration_seconds=monotonic() - started,
+                    interrupted=is_tool_execution_interrupted(exc),
+                )
+                if not isinstance(exc, Exception):
+                    raise
+                content = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            else:
+                await dispatch_post_tool_use(
+                    spec,
+                    final_arguments,
+                    result,
+                    adapter_shortname=self.shortname,
+                    tool_call_id=str(call_id),
+                    origin=origin,
+                    native_tool_name=name,
+                )
+                content = {"ok": True, "result": result}
         return (
             name,
             content["ok"] is True,
@@ -404,7 +485,7 @@ class WebGPUAdapter:
                             "action": "call_tool",
                             "callId": call_id,
                             "name": name,
-                            "arguments": arguments,
+                            "arguments": final_arguments,
                         },
                         ensure_ascii=False,
                     ),

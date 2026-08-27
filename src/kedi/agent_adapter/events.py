@@ -221,6 +221,10 @@ def current_agent_run_identity() -> AgentRunIdentity | None:
     return _ACTIVE_RUN_IDENTITY.get()
 
 
+def current_bound_agent_run_identity() -> AgentRunIdentity | None:
+    return _BOUND_RUN_IDENTITY.get()
+
+
 @contextmanager
 def bind_agent_run(
     run_id: str,

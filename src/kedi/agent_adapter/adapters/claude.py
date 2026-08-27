@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from hashlib import sha256
 from importlib.util import find_spec
+from time import monotonic
 from typing import Any, Coroutine, Iterator, Mapping, Sequence, cast
 
 from pydantic import BaseModel
@@ -29,8 +30,22 @@ from ..codemode.tool_specs import (
 )
 from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
+from ..hooks import (
+    HookDeniedError,
+    HookHandler,
+    HookRegistrationMixin,
+    ToolOrigin,
+    current_hook_dispatcher,
+    dispatch_post_tool_use,
+    dispatch_post_tool_use_failure,
+    dispatch_pre_tool_use,
+    handler_identity,
+    hooked_agent_run,
+    is_tool_execution_interrupted,
+    new_tool_call_id,
+)
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..native_compaction import validate_claude_native_compaction
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
@@ -57,7 +72,7 @@ _CLAUDE_READ_ONLY_TOOLS = frozenset({"Read", "Glob", "Grep", "WebFetch", "WebSea
 _CLAUDE_KEDI_MCP_TOOL_PREFIX = "mcp__kedi__"
 
 
-class ClaudeAdapter:
+class ClaudeAdapter(HookRegistrationMixin):
     """Adapter for Anthropic's Claude Agent SDK harness."""
 
     kind: AgentAdapterKind = "agent-harness"
@@ -82,6 +97,10 @@ class ClaudeAdapter:
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
+        hooks=HookCapabilities.full(
+            tool_bridge="native",
+            tool_origins=frozenset({"kedi", "mcp", "provider_builtin"}),
+        ),
         settings=CLAUDE_AGENT_SETTING_KEYS,
     )
 
@@ -92,8 +111,10 @@ class ClaudeAdapter:
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = model
@@ -136,6 +157,7 @@ class ClaudeAdapter:
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type:
         return build_output_model(output_schema)
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         template: str,
@@ -161,6 +183,7 @@ class ClaudeAdapter:
             raise ValueError("Claude Agent SDK did not return structured_output.")
         return _structured_output_value(structured_output, resolved_output_type)
 
+    @hooked_agent_run("template")
     async def produce_subagent(
         self,
         *,
@@ -180,6 +203,7 @@ class ClaudeAdapter:
             raise TypeError("Claude subagent structured output must be an object")
         return structured_output
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         result = await self._query_result(
             prompt=prompt,
@@ -395,6 +419,7 @@ class ClaudeAdapter:
             options_kwargs,
             tools=run_tools,
             codemode_settings=codemode_settings,
+            hook_identities=_active_claude_hook_identities(),
         )
         conversation = self._conversation_var.get()
         if conversation is not None:
@@ -482,6 +507,7 @@ def _claude_session_fingerprint(
     *,
     tools: Sequence[ToolSpec],
     codemode_settings: CodeModeSettings | None = None,
+    hook_identities: Mapping[str, Sequence[str]] | None = None,
 ) -> str:
     payload = {
         "options": dict(options),
@@ -499,6 +525,7 @@ def _claude_session_fingerprint(
             for tool in tools
         ],
         "codemode": codemode_settings,
+        "kedi_hooks": hook_identities or {},
     }
     encoded = json.dumps(
         payload,
@@ -508,6 +535,16 @@ def _claude_session_fingerprint(
         default=_claude_fingerprint_default,
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
+
+
+def _active_claude_hook_identities() -> dict[str, tuple[str, ...]]:
+    dispatcher = current_hook_dispatcher()
+    if dispatcher is None:
+        return {}
+    return {
+        event: tuple(handler_identity(handler) for handler in handlers)
+        for event, handlers in dispatcher.snapshot.handlers.items()
+    }
 
 
 def _claude_fingerprint_default(value: Any) -> Any:
@@ -726,7 +763,7 @@ def _with_kedi_approval_hook(
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
     passthrough_tool_names: frozenset[str] = frozenset(),
 ) -> dict[str, list[Any]]:
-    """Append a PreToolUse policy bridge without discarding caller-provided hooks."""
+    """Append Kedi lifecycle bridges without discarding caller-provided hooks."""
 
     if existing_hooks is None:
         hooks: dict[str, list[Any]] = {}
@@ -740,6 +777,12 @@ def _with_kedi_approval_hook(
         raise TypeError("Claude hooks must be a mapping of hook events to matcher lists.")
 
     matcher_cls = _claude_hook_matcher_class(sdk)
+    dispatcher = current_hook_dispatcher()
+    post_enabled = dispatcher is not None and bool(dispatcher.handlers_for("post_tool_use"))
+    failure_enabled = dispatcher is not None and bool(
+        dispatcher.handlers_for("post_tool_use_failure")
+    )
+    started_at: dict[str, float] | None = {} if failure_enabled else None
     hooks.setdefault("PreToolUse", []).append(
         matcher_cls(
             matcher=None,
@@ -749,10 +792,30 @@ def _with_kedi_approval_hook(
                     tools=tools,
                     approval_ceiling=approval_ceiling,
                     passthrough_tool_names=passthrough_tool_names,
+                    started_at=started_at,
                 )
             ],
         )
     )
+    if post_enabled or failure_enabled:
+        hooks.setdefault("PostToolUse", []).append(
+            matcher_cls(
+                matcher=None,
+                hooks=[_claude_post_tool_use_hook(tools=tools, started_at=started_at)],
+            )
+        )
+    if failure_enabled:
+        hooks.setdefault("PostToolUseFailure", []).append(
+            matcher_cls(
+                matcher=None,
+                hooks=[
+                    _claude_post_tool_use_failure_hook(
+                        tools=tools,
+                        started_at=started_at,
+                    )
+                ],
+            )
+        )
     return hooks
 
 
@@ -771,12 +834,13 @@ def _claude_pre_tool_use_hook(
     tools: Sequence[ToolSpec],
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
     passthrough_tool_names: frozenset[str] = frozenset(),
+    started_at: dict[str, float] | None = None,
 ) -> Any:
     """Build a Claude hook that applies Kedi policy to every native tool call."""
 
     known_tools = _claude_tool_specs_by_native_name(tools)
 
-    async def decide(hook_input: Any, _tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+    async def decide(hook_input: Any, tool_use_id: str | None, _context: Any) -> dict[str, Any]:
         if not isinstance(hook_input, Mapping):
             return _claude_hook_deny("Claude supplied invalid PreToolUse hook input.")
         tool_name = hook_input.get("tool_name")
@@ -784,32 +848,35 @@ def _claude_pre_tool_use_hook(
         if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
             return _claude_hook_deny("Claude supplied an incomplete tool permission request.")
 
-        if tool_name in passthrough_tool_names:
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "updatedInput": dict(arguments),
-                }
-            }
-
-        tool = known_tools.get(tool_name, _claude_native_tool_spec(tool_name))
+        tool, origin = _claude_hook_tool(tool_name, known_tools)
+        call_id = tool_use_id or new_tool_call_id()
         try:
-            original_arguments = _validated_tool_arguments(tool, arguments)
-            policies = tuple(approval_ceiling)
-            if profile.approval is not None or not policies:
-                policies = (*policies, profile.approval)
-            final_arguments = original_arguments
-            for policy in policies:
-                final_arguments = await resolve_tool_arguments_async(
-                    tool,
-                    final_arguments,
-                    policy=policy,
-                    adapter_shortname="claude",
-                )
+            final_arguments = await dispatch_pre_tool_use(
+                tool,
+                arguments,
+                adapter_shortname="claude",
+                tool_call_id=call_id,
+                origin=origin,
+                native_tool_name=tool_name,
+            )
+            if tool_name not in passthrough_tool_names:
+                policies = tuple(approval_ceiling)
+                if profile.approval is not None or not policies:
+                    policies = (*policies, profile.approval)
+                for policy in policies:
+                    final_arguments = await resolve_tool_arguments_async(
+                        tool,
+                        final_arguments,
+                        policy=policy,
+                        adapter_shortname="claude",
+                    )
+        except HookDeniedError as exc:
+            return _claude_hook_deny(str(exc))
         except Exception as exc:
             return _claude_hook_deny(f"Kedi rejected tool {tool.name!r}: {exc}")
 
+        if started_at is not None:
+            started_at[call_id] = monotonic()
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -819,6 +886,88 @@ def _claude_pre_tool_use_hook(
         }
 
     return decide
+
+
+def _claude_post_tool_use_hook(
+    *,
+    tools: Sequence[ToolSpec],
+    started_at: dict[str, float] | None = None,
+) -> Any:
+    known_tools = _claude_tool_specs_by_native_name(tools)
+
+    async def observe(hook_input: Any, tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        tool_name, arguments = _claude_tool_call_input(hook_input, "PostToolUse")
+        tool, origin = _claude_hook_tool(tool_name, known_tools)
+        call_id = tool_use_id or new_tool_call_id()
+        if started_at is not None:
+            started_at.pop(call_id, None)
+        await dispatch_post_tool_use(
+            tool,
+            arguments,
+            hook_input.get("tool_response"),
+            adapter_shortname="claude",
+            tool_call_id=call_id,
+            origin=origin,
+            native_tool_name=tool_name,
+        )
+        return {}
+
+    return observe
+
+
+def _claude_post_tool_use_failure_hook(
+    *,
+    tools: Sequence[ToolSpec],
+    started_at: dict[str, float] | None = None,
+) -> Any:
+    known_tools = _claude_tool_specs_by_native_name(tools)
+
+    async def observe(hook_input: Any, tool_use_id: str | None, _context: Any) -> dict[str, Any]:
+        tool_name, arguments = _claude_tool_call_input(hook_input, "PostToolUseFailure")
+        tool, origin = _claude_hook_tool(tool_name, known_tools)
+        error = RuntimeError(str(hook_input.get("error", "Claude tool execution failed")))
+        call_id = tool_use_id or new_tool_call_id()
+        started = None if started_at is None else started_at.pop(call_id, None)
+        await dispatch_post_tool_use_failure(
+            tool,
+            arguments,
+            error,
+            adapter_shortname="claude",
+            tool_call_id=call_id,
+            origin=origin,
+            native_tool_name=tool_name,
+            duration_seconds=(None if started is None else max(monotonic() - started, 0.0)),
+            interrupted=(
+                hook_input.get("is_interrupt") is True or is_tool_execution_interrupted(error)
+            ),
+        )
+        return {}
+
+    return observe
+
+
+def _claude_tool_call_input(
+    hook_input: Any,
+    event: str,
+) -> tuple[str, Mapping[str, Any]]:
+    if not isinstance(hook_input, Mapping):
+        raise TypeError(f"Claude supplied invalid {event} hook input")
+    tool_name = hook_input.get("tool_name")
+    arguments = hook_input.get("tool_input")
+    if not isinstance(tool_name, str) or not isinstance(arguments, Mapping):
+        raise TypeError(f"Claude supplied incomplete {event} hook input")
+    return tool_name, arguments
+
+
+def _claude_hook_tool(
+    native_name: str,
+    known_tools: Mapping[str, ToolSpec],
+) -> tuple[ToolSpec, ToolOrigin]:
+    tool = known_tools.get(native_name)
+    if tool is not None:
+        return tool, "kedi"
+    origin: ToolOrigin = "mcp" if native_name.startswith("mcp__") else "provider_builtin"
+    return _claude_native_tool_spec(native_name), origin
 
 
 def _claude_invocation_usage(result: Any) -> InvocationUsage:

@@ -35,7 +35,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, cast
 
 from lsprotocol import types as lsp
 from tree_sitter import Language as _TSLanguage
@@ -58,7 +58,12 @@ except Exception:  # pragma: no cover — degraded mode if the wheel is missing
     _PY_LANGUAGE = None
     _PY_HIGHLIGHTS_QUERY = None
 
-from ..agent_adapter.meta import AdapterCapabilities, AdapterCapability, AgentAdapterKind
+from ..agent_adapter.meta import (
+    AdapterCapabilities,
+    AdapterCapability,
+    AgentAdapterKind,
+    HookCapabilityEvent,
+)
 from ..agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,
@@ -92,6 +97,7 @@ from ..lang.ast import (
     EvalMetric,
     EvalSuite,
     HistoryDirectiveStmt,
+    HooksDirectiveStmt,
     IfStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
@@ -112,6 +118,7 @@ from ..lang.ast import (
     ProfileDefStmt,
     ProfileEffortEntry,
     ProfileHistoryEntry,
+    ProfileHooksEntry,
     ProfileMaxAgentsEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
@@ -953,6 +960,10 @@ class _AdapterDiagnosticState:
     kind: AgentAdapterKind | None = None
     approval_loc: Span | None = None
     approval_plain_value: str | None = None
+    hooks_loc: Span | None = None
+    hooks_enabled: bool | None = None
+    hook_events: frozenset[HookCapabilityEvent] = frozenset()
+    cleared_hook_events: frozenset[HookCapabilityEvent] = frozenset()
     history_loc: Span | None = None
     history_enabled: bool | None = None
     codemode_loc: Span | None = None
@@ -1032,6 +1043,12 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
         selected = _adapter_state_from_plain_value(shortname, expected_kind)
         if selected is not None:
             state = _merge_adapter_state(state, selected)
+    hooks_members = sorted(
+        (member for member in profile.hooks_members if member.loc is not None),
+        key=lambda member: member.loc.start_byte if member.loc is not None else -1,
+    )
+    for member in hooks_members:
+        state = _with_hooks_state(state, member)
     history_members = [member for member in profile.history_members if member.loc is not None]
     if history_members:
         latest = max(
@@ -1078,6 +1095,12 @@ def _merge_adapter_state(
 ) -> _AdapterDiagnosticState:
     selected = inner if inner.shortname is not None else outer
     approval_owner = inner if inner.approval_loc is not None else outer
+    hooks_owner = inner if inner.hooks_enabled is not None else outer
+    hook_events = outer.hook_events
+    cleared_hook_events = outer.cleared_hook_events
+    if inner.hooks_enabled is not None:
+        hook_events = (hook_events - inner.cleared_hook_events) | inner.hook_events
+        cleared_hook_events = (cleared_hook_events | inner.cleared_hook_events) - inner.hook_events
     history_owner = inner if inner.history_enabled is not None else outer
     codemode_owner = inner if inner.codemode_enabled is not None else outer
     return _AdapterDiagnosticState(
@@ -1085,6 +1108,10 @@ def _merge_adapter_state(
         kind=selected.kind,
         approval_loc=approval_owner.approval_loc,
         approval_plain_value=approval_owner.approval_plain_value,
+        hooks_loc=hooks_owner.hooks_loc,
+        hooks_enabled=hooks_owner.hooks_enabled,
+        hook_events=hook_events,
+        cleared_hook_events=cleared_hook_events,
         history_loc=history_owner.history_loc,
         history_enabled=history_owner.history_enabled,
         codemode_loc=codemode_owner.codemode_loc,
@@ -1103,6 +1130,43 @@ def _adapter_supports(
     except Exception:  # pragma: no cover - keep LSP diagnostics resilient
         capabilities = AdapterCapabilities()
     return capabilities.supports(feature)
+
+
+def _hook_event_changes(
+    fields: Sequence[SettingsField],
+) -> tuple[frozenset[HookCapabilityEvent], frozenset[HookCapabilityEvent]]:
+    enabled: set[HookCapabilityEvent] = set()
+    cleared: set[HookCapabilityEvent] = set()
+    for field in fields:
+        if field.name not in {
+            "user_prompt_submit",
+            "pre_tool_use",
+            "post_tool_use",
+            "post_tool_use_failure",
+        }:
+            continue
+        event = cast(HookCapabilityEvent, field.name)
+        if (field.backtick_code or "").strip() == "[]":
+            enabled.discard(event)
+            cleared.add(event)
+        else:
+            enabled.add(event)
+            cleared.discard(event)
+    return frozenset(enabled), frozenset(cleared)
+
+
+def _with_hooks_state(
+    state: _AdapterDiagnosticState,
+    directive: HooksDirectiveStmt | ProfileHooksEntry,
+) -> _AdapterDiagnosticState:
+    enabled, cleared = _hook_event_changes(directive.fields)
+    return replace(
+        state,
+        hooks_loc=directive.loc,
+        hooks_enabled=directive.enabled,
+        hook_events=(state.hook_events - cleared) | enabled,
+        cleared_hook_events=(state.cleared_hook_events | cleared) - enabled,
+    )
 
 
 def _profile_capability_diagnostics(
@@ -1160,6 +1224,7 @@ def _profile_capability_diagnostics(
                     code="K-ADAPTER-CODEMODE",
                 )
             )
+    diagnostics.extend(_hooks_capability_diagnostics(state))
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
         diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
@@ -1220,6 +1285,7 @@ def _scan_capability_scope(
                 )
                 diagnostics.extend(_history_capability_diagnostics(active))
                 diagnostics.extend(_codemode_capability_diagnostics(active))
+                diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
             diagnostics.extend(
@@ -1242,6 +1308,7 @@ def _scan_capability_scope(
                 )
                 diagnostics.extend(_history_capability_diagnostics(active))
                 diagnostics.extend(_codemode_capability_diagnostics(active))
+                diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, ApprovalDirectiveStmt):
             active = replace(
@@ -1256,6 +1323,10 @@ def _scan_capability_scope(
                     warned_approval_spans,
                 )
             )
+            continue
+        if isinstance(stmt, HooksDirectiveStmt):
+            active = _with_hooks_state(active, stmt)
+            diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, HistoryDirectiveStmt):
             active = replace(
@@ -1483,6 +1554,45 @@ def _codemode_capability_diagnostics(
     )
 
 
+def _hooks_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    *,
+    span: Span | None = None,
+) -> list[lsp.Diagnostic]:
+    if state.hooks_enabled is False or state.hooks_loc is None:
+        return []
+    diagnostic_span = span or state.hooks_loc
+    generic = _unsupported_capability_diagnostics(
+        state,
+        "hooks",
+        [diagnostic_span],
+        "agent lifecycle hooks",
+        severity=lsp.DiagnosticSeverity.Error,
+        code="K-ADAPTER-HOOKS",
+    )
+    if generic or state.shortname is None or not state.hook_events:
+        return generic
+    try:
+        hook_capabilities = adapter_capabilities(state.shortname).hooks
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        hook_capabilities = None
+    if hook_capabilities is None:
+        return generic
+    unsupported = hook_capabilities.unsupported(state.hook_events)
+    if not unsupported:
+        return []
+    names = ", ".join(unsupported)
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(diagnostic_span),
+            severity=lsp.DiagnosticSeverity.Error,
+            code="K-ADAPTER-HOOKS",
+            source="kedi",
+            message=(f"Adapter '{state.shortname}' does not support agent hook events: {names}."),
+        )
+    ]
+
+
 def _adapter_selection_diagnostics(
     prog: Program | ProgramWithValidation,
     *,
@@ -1628,6 +1738,8 @@ def _use_capability_diagnostics(
                 code="K-ADAPTER-CODEMODE",
             )
         )
+    if "hooks" in capabilities:
+        diagnostics.extend(_hooks_capability_diagnostics(merged, span=target_span))
     return diagnostics
 
 
@@ -1653,6 +1765,8 @@ def _profile_capability_usage(
         capabilities.add("tool_registration")
     if any(member.enabled for member in profile.codemode_members):
         capabilities.add("codemode")
+    if any(member.enabled is not False for member in profile.hooks_members):
+        capabilities.add("hooks")
 
     nested_active = active | {profile.name}
     for target in profile.use_targets:
@@ -3256,6 +3370,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(member)
             for member in node.approval_members:
                 visit(member)
+            for member in node.hooks_members:
+                visit(member)
             for member in node.history_members:
                 visit(member)
             for member in node.skills_members:
@@ -3284,6 +3400,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(line)
             return
         if isinstance(node, HistoryDirectiveStmt):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, HooksDirectiveStmt):
             for field in node.fields:
                 visit(field)
             return
@@ -3316,6 +3436,10 @@ def _smallest_enclosing(prog, pos: lsp.Position):
                 visit(field)
             return
         if isinstance(node, ProfileHistoryEntry):
+            for field in node.fields:
+                visit(field)
+            return
+        if isinstance(node, ProfileHooksEntry):
             for field in node.fields:
                 visit(field)
             return
@@ -3548,6 +3672,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _effort_directive_markdown(node)
     if isinstance(node, ApprovalDirectiveStmt):
         return _approval_directive_markdown(node)
+    if isinstance(node, HooksDirectiveStmt):
+        return _hooks_directive_markdown(node)
     if isinstance(node, HistoryDirectiveStmt):
         return _history_directive_markdown(node)
     if isinstance(node, SkillsDirectiveStmt):
@@ -3578,6 +3704,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _profile_effort_entry_markdown(node)
     if isinstance(node, ProfileApprovalEntry):
         return _profile_approval_entry_markdown(node)
+    if isinstance(node, ProfileHooksEntry):
+        return _profile_hooks_entry_markdown(node)
     if isinstance(node, ProfileHistoryEntry):
         return _profile_history_entry_markdown(node)
     if isinstance(node, ProfileSkillsEntry):
@@ -3719,6 +3847,21 @@ def _approval_directive_markdown(stmt: ApprovalDirectiveStmt) -> str:
     )
 
 
+def _hooks_directive_markdown(stmt: HooksDirectiveStmt) -> str:
+    if stmt.enabled is False:
+        value = "disabled"
+    elif stmt.fields:
+        value = ", ".join(f"`{field.name}`" for field in stmt.fields)
+    else:
+        value = "enabled"
+    return (
+        f"`> hooks:` {value}\n\n"
+        "Registers ordered agent lifecycle handlers in the current scope. "
+        "Handlers may inspect prompt submission and tool execution, edit prompts or tool "
+        "arguments before transport, deny requests, and observe tool success or failure."
+    )
+
+
 def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
     value = "enabled" if stmt.enabled else "disabled"
     compaction = next(
@@ -3811,6 +3954,14 @@ def _settings_directive_markdown(stmt: SettingsDirectiveStmt) -> str:
 
 def _settings_field_markdown(field: SettingsField) -> str:
     value = _settings_field_value_preview(field)
+    hook_descriptions = {
+        "user_prompt_submit": "Runs before the rendered user prompt crosses the model transport boundary.",
+        "pre_tool_use": "Runs before approval and tool execution; it may edit or deny canonical arguments.",
+        "post_tool_use": "Observes the final model-visible result after successful tool execution.",
+        "post_tool_use_failure": "Observes execution failures, excluding hook and approval denials.",
+    }
+    if field.name in hook_descriptions:
+        return f"`{field.name}` = {value}\n\n{hook_descriptions[field.name]}"
     skill_descriptions = {
         "max_skills": "Maximum number of skill names exposed by `list_skills` in this scope.",
         "include_registry": "Include the user Kedi skill registry as the highest-priority source.",
@@ -3952,6 +4103,19 @@ def _profile_approval_entry_markdown(entry: ProfileApprovalEntry) -> str:
     return (
         f"`> approval:` {value}\n\n"
         "Tool-call approval policy stored in this profile. Applied when the profile is used."
+    )
+
+
+def _profile_hooks_entry_markdown(entry: ProfileHooksEntry) -> str:
+    if entry.enabled is False:
+        value = "disabled"
+    elif entry.fields:
+        value = ", ".join(f"`{field.name}`" for field in entry.fields)
+    else:
+        value = "enabled"
+    return (
+        f"`> hooks:` {value}\n\n"
+        "Ordered agent lifecycle handlers stored in this profile. Applied when the profile is used."
     )
 
 
