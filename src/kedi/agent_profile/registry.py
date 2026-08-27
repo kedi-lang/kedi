@@ -48,6 +48,13 @@ class ProfileApprovalMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileHooksMember:
+    kind: Literal["hooks"] = "hooks"
+    enabled: bool | None = None
+    fields: tuple["SettingsField", ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileHistoryMember:
     kind: Literal["history"] = "history"
     enabled: bool
@@ -147,6 +154,7 @@ class ProfileDefinition:
         | ProfileModelMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHooksMember
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember

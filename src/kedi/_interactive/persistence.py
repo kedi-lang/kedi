@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib
+import inspect
 import json
 import math
 import os
@@ -25,6 +27,7 @@ from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings
 from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings
+from ..agent_profile.hooks import HookSettings
 from ..artifacts import ArtifactPolicy
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"
@@ -328,6 +331,11 @@ def encode_profile(
             for server in profile.mcp_servers
         ],
         "approval": None if profile.approval is None else {"mode": profile.approval.mode},
+        "hooks": _encode_hooks(profile.hooks, path=path + ".hooks"),
+        "hook_enforcement": _encode_hooks(
+            profile._hook_enforcement,
+            path=path + ".hook_enforcement",
+        ),
         "skills": _encode_skills(profile.skills),
         "subagents": list(profile.subagents),
         "max_agents": profile.max_agents,
@@ -394,6 +402,8 @@ def decode_profile(
         tools=tuple(encoded.get("tools", ())),
         mcp_servers=tuple(_decode_mcp_server(item) for item in encoded.get("mcp_servers", ())),
         approval=approval,
+        hooks=_decode_hooks(encoded.get("hooks")),
+        _hook_enforcement=_decode_hooks(encoded.get("hook_enforcement")),
         skills=_decode_skills(encoded.get("skills")),
         subagents=tuple(encoded.get("subagents", ())),
         max_agents=encoded.get("max_agents"),
@@ -404,6 +414,109 @@ def decode_profile(
         output_type=output_type,
         artifacts=_decode_artifact_policy(encoded.get("artifacts")),
     )
+
+
+def _encode_hooks(value: HookSettings | None, *, path: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    encoded: dict[str, Any] = {"enabled": value.enabled}
+    for event in (
+        "user_prompt_submit",
+        "pre_tool_use",
+        "post_tool_use",
+        "post_tool_use_failure",
+    ):
+        handlers = getattr(value, event)
+        encoded[event] = (
+            None
+            if handlers is None
+            else [
+                _encode_importable_callable(handler, path=f"{path}.{event}[{index}]")
+                for index, handler in enumerate(handlers)
+            ]
+        )
+    return encoded
+
+
+def _decode_hooks(value: Any) -> HookSettings | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise SessionLoadError("profile.hooks must be an object")
+    enabled = value.get("enabled")
+    if enabled is not None and type(enabled) is not bool:
+        raise SessionLoadError("profile.hooks.enabled must be a boolean or null")
+    decoded: dict[str, tuple[Any, ...] | None] = {}
+    for event in (
+        "user_prompt_submit",
+        "pre_tool_use",
+        "post_tool_use",
+        "post_tool_use_failure",
+    ):
+        handlers = value.get(event)
+        if handlers is None:
+            decoded[event] = None
+            continue
+        if not isinstance(handlers, list):
+            raise SessionLoadError(f"profile.hooks.{event} must be a list or null")
+        decoded[event] = tuple(
+            _decode_importable_callable(
+                descriptor,
+                path=f"profile.hooks.{event}[{index}]",
+            )
+            for index, descriptor in enumerate(handlers)
+        )
+    return HookSettings(enabled=enabled, **decoded)
+
+
+def _encode_importable_callable(value: Any, *, path: str) -> dict[str, str]:
+    module = getattr(value, "__module__", None)
+    qualname = getattr(value, "__qualname__", None)
+    if inspect.ismethod(value) and value.__self__ is not None:
+        raise UnsupportedSessionValue(path, value, "bound callables are not restorable")
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        raise UnsupportedSessionValue(path, value, "callable has no import address")
+    if module == "__main__":
+        raise UnsupportedSessionValue(path, value, "__main__ callables are not restorable")
+    if "<locals>" in qualname or "<lambda>" in qualname:
+        raise UnsupportedSessionValue(path, value, "local functions and lambdas are not restorable")
+    try:
+        resolved = _resolve_importable_callable(module, qualname, path=path)
+    except SessionLoadError as exc:
+        raise UnsupportedSessionValue(path, value, str(exc)) from exc
+    if resolved is not value:
+        raise UnsupportedSessionValue(
+            path,
+            value,
+            "import address does not resolve to the same callable",
+        )
+    return {"module": module, "qualname": qualname}
+
+
+def _decode_importable_callable(value: Any, *, path: str) -> Any:
+    if not isinstance(value, Mapping):
+        raise SessionLoadError(f"{path}: callable descriptor must be an object")
+    module = value.get("module")
+    qualname = value.get("qualname")
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        raise SessionLoadError(f"{path}: callable descriptor requires module and qualname")
+    if module == "__main__" or "<locals>" in qualname or "<lambda>" in qualname:
+        raise SessionLoadError(f"{path}: unsafe callable import address")
+    return _resolve_importable_callable(module, qualname, path=path)
+
+
+def _resolve_importable_callable(module: str, qualname: str, *, path: str) -> Any:
+    try:
+        resolved: Any = importlib.import_module(module)
+        for part in qualname.split("."):
+            if not part or part.startswith("<"):
+                raise AttributeError(part)
+            resolved = getattr(resolved, part)
+    except (ImportError, AttributeError) as exc:
+        raise SessionLoadError(f"{path}: cannot resolve callable {module}.{qualname}") from exc
+    if not callable(resolved):
+        raise SessionLoadError(f"{path}: resolved object is not callable")
+    return resolved
 
 
 def write_snapshot(path: str | Path, payload: Mapping[str, Any]) -> Path:

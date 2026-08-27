@@ -10,6 +10,7 @@ from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
+from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec
 from .skills import SkillsSettings, skills_settings
 
@@ -39,6 +40,8 @@ class AgentProfile:
     tool_bindings: Mapping[str, ToolSpec] = field(default_factory=dict)
     mcp_servers: tuple[McpServerSpec, ...] = ()
     approval: ApprovalPolicy | None = None
+    hooks: HookSettings | None = None
+    _hook_enforcement: HookSettings | None = field(default=None, repr=False)
     skills: SkillsSettings | bool | None = None
     subagents: tuple[str, ...] = ()
     subagent_bindings: Mapping[str, ProfileDefinition] = field(default_factory=dict)
@@ -53,6 +56,12 @@ class AgentProfile:
     def __post_init__(self) -> None:
         object.__setattr__(self, "skills", skills_settings(self.skills))
         object.__setattr__(self, "codemode", normalize_codemode_settings(self.codemode))
+        object.__setattr__(self, "hooks", normalize_hook_settings(self.hooks))
+        object.__setattr__(
+            self,
+            "_hook_enforcement",
+            normalize_hook_settings(self._hook_enforcement),
+        )
 
     @classmethod
     def empty(cls) -> AgentProfile:
@@ -89,6 +98,14 @@ class AgentProfile:
             updates["mcp_servers"] = self.mcp_servers + other.mcp_servers
         if other.approval is not None:
             updates["approval"] = other.approval
+        if other.hooks is not None:
+            updates["hooks"] = other.hooks if self.hooks is None else self.hooks.merge(other.hooks)
+        if other._hook_enforcement is not None:
+            updates["_hook_enforcement"] = (
+                other._hook_enforcement
+                if self._hook_enforcement is None
+                else self._hook_enforcement.merge(other._hook_enforcement)
+            )
         if other.skills is not None:
             updates["skills"] = other.skills
         if other.subagents or other.subagent_bindings:
@@ -120,6 +137,13 @@ class AgentProfile:
         if not updates:
             return self
         return replace(self, **updates)
+
+    def with_hook_enforcement(self) -> AgentProfile:
+        """Mark this profile's hooks as inherited runtime policy for child agents."""
+
+        if self.hooks is None:
+            return self
+        return replace(self, _hook_enforcement=self.hooks)
 
     def frozen_copy(self) -> AgentProfile:
         return replace(

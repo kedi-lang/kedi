@@ -91,6 +91,43 @@ def test_hover_on_profile_codemode_directive_and_limit() -> None:
     assert "Maximum host tool calls" in limit
 
 
+def test_hover_on_hooks_directive_and_profile_handler() -> None:
+    source = """
+> hooks:
+    pre_tool_use: `validate_path`
+> profile: guarded:
+    > hooks:
+        post_tool_use_failure: `audit_failure`
+"""
+
+    directive = hover_text_at(source, "example.kedi", "hooks")
+    field = hover_text_at(source, "example.kedi", "pre_tool_use")
+    profile_directive = hover_text_at(
+        source,
+        "example.kedi",
+        "hooks",
+        occurrence=2,
+    )
+
+    assert "agent lifecycle handlers" in directive
+    assert "before approval" in field
+    assert "stored in this profile" in profile_directive
+
+
+def test_hover_on_short_hook_directives_reports_enabled_state() -> None:
+    source = """
+> hooks: disabled
+> hooks: enabled
+> profile: guarded:
+    > hooks: disabled
+    > hooks: enabled
+"""
+    assert "disabled" in hover_text_at(source, "example.kedi", "hooks", occurrence=1)
+    assert "enabled" in hover_text_at(source, "example.kedi", "hooks", occurrence=2)
+    assert "disabled" in hover_text_at(source, "example.kedi", "hooks", occurrence=3)
+    assert "enabled" in hover_text_at(source, "example.kedi", "hooks", occurrence=4)
+
+
 def test_hover_on_defaulted_procedure_header_shows_defaults():
     src = '@translate(text: str, style = `"brief"`) -> str:\n  = <text>\n'
     body = hover_text_at(src, "example.kedi", "translate")

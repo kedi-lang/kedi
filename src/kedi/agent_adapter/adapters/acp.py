@@ -18,7 +18,8 @@ from ...agent_profile import AgentProfile
 from ...agent_profile.settings import ACP_AGENT_SETTING_KEYS, acp_agent_settings
 from ...resolved_types import ResolvedKediType
 from ..events import AgentMessageResolver, agent_event_run
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..hooks import HookHandler, HookRegistrationMixin, hooked_agent_run
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 
 JsonObject = dict[str, Any]
 
@@ -303,7 +304,7 @@ class ACPClient:
         return "ACP agent process disconnected."
 
 
-class ACPAdapter:
+class ACPAdapter(HookRegistrationMixin):
     """Kedi adapter for generic Agent Client Protocol harnesses."""
 
     kind: AgentAdapterKind = "agent-harness"
@@ -321,6 +322,7 @@ class ACPAdapter:
         supports_stateful_history=False,
         supports_history_replay=False,
         supports_stream_events=True,
+        hooks=HookCapabilities.prompt_only(),
         settings=ACP_AGENT_SETTING_KEYS,
     )
 
@@ -332,8 +334,10 @@ class ACPAdapter:
         model_settings: Mapping[str, Any] | None = None,
         request_timeout: float = 30,
         client: ACPClient | None = None,
+        hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         self._model = model
         self._command = _normalize_optional_command(command)
         self._settings = {
@@ -389,6 +393,7 @@ class ACPAdapter:
             "Use raw invoke or an adapter with structured output support."
         )
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
         with agent_event_run(self.shortname) as resolver:
@@ -403,6 +408,7 @@ class ACPAdapter:
                 resolver.complete_run(final_text=result)
             return result
 
+    @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         client, cwd, timeout = self._client_for_run(kwargs)
         with agent_event_run(self.shortname) as resolver:

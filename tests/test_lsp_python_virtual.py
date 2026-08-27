@@ -1744,3 +1744,21 @@ def test_python_virtual_helper_edges(monkeypatch):
 # ---------------------------------------------------------------------
 # Server construction smoke
 # ---------------------------------------------------------------------
+def test_hook_handler_expressions_are_mapped_into_virtual_python() -> None:
+    source = """
+```
+def redact(event):
+    return None
+```
+> hooks:
+    user_prompt_submit: `redact`
+    pre_tool_use: `[redact]`
+"""
+
+    virtual = compute_python_virtual_document(source, "/tmp/hooks.kedi")
+
+    assert "def redact(event):" in virtual["text"]
+    assert "        redact" in virtual["text"]
+    assert "        [redact]" in virtual["text"]
+    inline = [region for region in virtual["ranges"] if region["kind"] == "inline"]
+    assert [region["text"] for region in inline] == ["redact", "[redact]"]

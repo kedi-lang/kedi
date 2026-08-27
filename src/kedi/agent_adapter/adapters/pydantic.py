@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import wraps
+from time import monotonic
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,17 +17,25 @@ from typing import (
     overload,
 )
 
-from pydantic_ai import Agent, AgentModelSettings, AgentRetries, AgentSpec
+from pydantic_ai import Agent, AgentModelSettings, AgentRetries, AgentSpec, ModelRetry
 from pydantic_ai.agent.abstract import AgentInstructions, AgentMetadata, RunOutputDataT
 from pydantic_ai.capabilities import (
     AbstractCapability,
     AgentCapability,
+    CapabilityOrdering,
     HandleDeferredToolCalls,
     ValidatedToolArgs,
     WrapRunHandler,
     WrapToolExecuteHandler,
 )
-from pydantic_ai.exceptions import ApprovalRequired
+from pydantic_ai.exceptions import (
+    ApprovalRequired,
+    CallDeferred,
+    SkipToolExecution,
+    ToolFailed,
+    ToolFailedError,
+    ToolRetryError,
+)
 from pydantic_ai.messages import (
     CompactionPart,
     ModelMessage,
@@ -49,6 +58,7 @@ from pydantic_ai.tools import (
     ToolDenied,
 )
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
+from pydantic_ai.toolsets.approval_required import ApprovalRequiredToolset
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
@@ -72,8 +82,21 @@ from ..codemode import CodeModeLimits
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
 from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run, current_agent_run_identity
+from ..hooks import (
+    HookDeniedError,
+    HookHandler,
+    HookRegistrationMixin,
+    ToolOrigin,
+    current_hook_dispatcher,
+    dispatch_post_tool_use,
+    dispatch_post_tool_use_failure,
+    dispatch_pre_tool_use,
+    hooked_agent_run,
+    is_tool_execution_interrupted,
+    native_agent_hook_run,
+)
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..models import codex_responses_model, is_codex_model_id
 from ..native_compaction import with_pydantic_native_compaction
 from ..prefix_cache import has_response_cache_settings, pydantic_cache_settings
@@ -132,7 +155,7 @@ class _KediTelemetryCapability(AbstractCapability[Any]):
         args: ValidatedToolArgs,
         handler: WrapToolExecuteHandler,
     ) -> Any:
-        del ctx, tool_def
+        del ctx
         with native_tool_span_scope(call.tool_name):
             return await handler(args)
 
@@ -197,15 +220,188 @@ class _KediExternalApprovalCapability(AbstractCapability[Any]):
         args: ValidatedToolArgs,
         handler: WrapToolExecuteHandler,
     ) -> Any:
-        del ctx, tool_def
+        del ctx
         try:
             return await handler(args)
         except ApprovalRequired as exc:
-            request = self.adapter._approval_request_for_call(call.tool_name, args)
+            tool, _origin = self.adapter._hook_tool_for_call_id(
+                call.tool_call_id,
+                self.adapter._hook_tool_for_call(call.tool_name, tool_def),
+            )
+            request = approval_request_for_tool(
+                tool,
+                self.adapter._hook_arguments_for_call(call.tool_call_id, args),
+                self.adapter.shortname,
+            )
             call.args = dict(request.arguments)
             metadata = dict(exc.metadata or {})
             metadata[KEDI_APPROVAL_METADATA_KEY] = _approval_request_payload(request)
             raise ApprovalRequired(metadata) from exc
+
+
+class _KediHookCapability(AbstractCapability[Any]):
+    """Project Kedi's tool lifecycle onto Pydantic AI's public capability hooks."""
+
+    def __init__(self, adapter: PydanticAdapter[Any, Any]) -> None:
+        self.adapter = adapter
+
+    def get_ordering(self) -> CapabilityOrdering:
+        return CapabilityOrdering(
+            wraps=(
+                PydanticCodeModeCapability,
+                _KediDeferredApprovalCapability,
+                _KediExternalApprovalCapability,
+                _KediRequiredToolCapability,
+                _KediTelemetryCapability,
+            )
+        )
+
+    async def before_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+    ) -> ValidatedToolArgs:
+        if ctx.tool_call_approved:
+            tool, origin = self.adapter._hook_tool_for_call(call.tool_name, tool_def)
+            self.adapter._remember_hook_tool(call.tool_call_id, tool, origin)
+            self.adapter._remember_hook_arguments(call.tool_call_id, args)
+            return args
+        tool, origin = self.adapter._hook_tool_for_call(call.tool_name, tool_def)
+        self.adapter._remember_hook_tool(call.tool_call_id, tool, origin)
+        try:
+            final_arguments = await dispatch_pre_tool_use(
+                tool,
+                args,
+                adapter_shortname=self.adapter.shortname,
+                tool_call_id=call.tool_call_id,
+                origin=origin,
+                native_tool_name=call.tool_name,
+            )
+        except HookDeniedError as exc:
+            raise ModelRetry(str(exc)) from exc
+        self.adapter._remember_hook_arguments(call.tool_call_id, final_arguments)
+        return final_arguments
+
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        handler: WrapToolExecuteHandler,
+    ) -> Any:
+        del ctx
+        self.adapter._remember_hook_started(call.tool_call_id)
+        try:
+            return await handler(args)
+        except (
+            ApprovalRequired,
+            CallDeferred,
+            SkipToolExecution,
+            ToolRetryError,
+            ToolFailedError,
+            ToolFailed,
+            ModelRetry,
+        ):
+            self.adapter._consume_hook_started(call.tool_call_id)
+            raise
+        except BaseException as exc:
+            if isinstance(exc, Exception):
+                raise
+            tool, origin = self.adapter._hook_tool_for_call_id(
+                call.tool_call_id,
+                self.adapter._hook_tool_for_call(call.tool_name, tool_def),
+                consume=True,
+            )
+            duration = self.adapter._consume_hook_started(call.tool_call_id)
+            await dispatch_post_tool_use_failure(
+                tool,
+                self.adapter._hook_arguments_for_call(
+                    call.tool_call_id,
+                    args,
+                    consume=True,
+                ),
+                exc,
+                adapter_shortname=self.adapter.shortname,
+                tool_call_id=call.tool_call_id,
+                origin=origin,
+                native_tool_name=call.tool_name,
+                duration_seconds=duration,
+                interrupted=is_tool_execution_interrupted(exc),
+            )
+            raise
+
+    async def after_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        result: Any,
+    ) -> Any:
+        del ctx
+        tool, origin = self.adapter._hook_tool_for_call_id(
+            call.tool_call_id,
+            self.adapter._hook_tool_for_call(call.tool_name, tool_def),
+            consume=True,
+        )
+        final_arguments = self.adapter._hook_arguments_for_call(
+            call.tool_call_id,
+            args,
+            consume=True,
+        )
+        self.adapter._consume_hook_started(call.tool_call_id)
+        await dispatch_post_tool_use(
+            tool,
+            final_arguments,
+            result,
+            adapter_shortname=self.adapter.shortname,
+            tool_call_id=call.tool_call_id,
+            origin=origin,
+            native_tool_name=call.tool_name,
+        )
+        return result
+
+    async def on_tool_execute_error(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        error: Exception,
+    ) -> Any:
+        del ctx
+        if isinstance(error, (ApprovalRequired, HookDeniedError, ToolApprovalDenied)):
+            raise error
+        tool, origin = self.adapter._hook_tool_for_call_id(
+            call.tool_call_id,
+            self.adapter._hook_tool_for_call(call.tool_name, tool_def),
+            consume=True,
+        )
+        final_arguments = self.adapter._hook_arguments_for_call(
+            call.tool_call_id,
+            args,
+            consume=True,
+        )
+        duration = self.adapter._consume_hook_started(call.tool_call_id)
+        await dispatch_post_tool_use_failure(
+            tool,
+            final_arguments,
+            error,
+            adapter_shortname=self.adapter.shortname,
+            tool_call_id=call.tool_call_id,
+            origin=origin,
+            native_tool_name=call.tool_name,
+            duration_seconds=duration,
+            interrupted=is_tool_execution_interrupted(error),
+        )
+        raise error
 
 
 PydanticApprovalResolution = Literal["kedi", "external"]
@@ -227,7 +423,7 @@ def _mcp_toolset_from_config(name: str, server_config: dict[str, object]) -> Any
     return MCPToolset(cast(Any, config))
 
 
-class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
+class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     """
     Adapter to use Pydantic AI agents.
     """
@@ -256,6 +452,10 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
+        hooks=HookCapabilities.full(
+            tool_bridge="native",
+            tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
+        ),
         settings=PYDANTIC_MODEL_SETTING_KEYS,
     )
 
@@ -273,6 +473,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         subagent_approval_resolution: PydanticApprovalResolution | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -282,6 +483,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         calls with the active Kedi policy. ``'external'`` keeps those calls
         deferred for an outer controller such as an ACP runtime.
         """
+        self._init_hook_registration(hook_handler)
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
@@ -303,6 +505,18 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         self._run_tool_specs_var: ContextVar[tuple[ToolSpec, ...] | None] = ContextVar(
             f"kedi_pydantic_run_tool_specs_{id(self)}",
             default=None,
+        )
+        self._hook_arguments_var: ContextVar[dict[str, dict[str, Any]]] = ContextVar(
+            f"kedi_pydantic_hook_arguments_{id(self)}",
+            default={},
+        )
+        self._hook_tools_var: ContextVar[dict[str, tuple[ToolSpec, ToolOrigin]]] = ContextVar(
+            f"kedi_pydantic_hook_tools_{id(self)}",
+            default={},
+        )
+        self._hook_started_var: ContextVar[dict[str, float]] = ContextVar(
+            f"kedi_pydantic_hook_started_{id(self)}",
+            default={},
         )
         self._subagent_conversation_var: ContextVar[
             AdapterConversationContext | SubagentConversationContext | None
@@ -432,6 +646,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
         return {"usage_limits": limits.to_pydantic()}
 
+    @hooked_agent_run("template")
     async def produce_subagent(
         self,
         *,
@@ -443,7 +658,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
 
         result = await self.produce(
             template=template,
-            output_type=StructuredDict(output_schema),
+            output_type=cast(Any, StructuredDict(output_schema)),
             **kwargs,
         )
         if not isinstance(result, Mapping):
@@ -482,6 +697,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             build_output_model(output_schema),
         )
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         template: str,
@@ -513,6 +729,7 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             )
         ).output
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run_kwargs: dict[str, object] = dict(kwargs)
         agent = self._agent_for_produce()
@@ -636,30 +853,31 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
         user_prompt: str | Sequence[UserContent] | None,
         kwargs: Mapping[str, Any],
     ) -> AsyncGenerator[AgentRun[AgentDepsT, Any]]:
-        tool_specs = self._tool_specs_for_run(kwargs)
-        run_kwargs = self._run_kwargs(kwargs, tool_specs=tool_specs)
-        conversation = self._subagent_conversation_var.get()
-        event_scope = (
-            nullcontext(None)
-            if current_agent_run_identity() is not None
-            else agent_event_run(self.shortname)
-        )
-        with (
-            self._run_tool_spec_scope(tool_specs),
-            delegation_scope(self._subagent_failure_policy),
-            event_scope as event_resolver,
-        ):
-            if event_resolver is not None:
-                capabilities = run_kwargs.get("capabilities")
-                capability_list = list(cast("Sequence[Any]", capabilities or ()))
-                capability_list.append(_KediAgentEventCapability(event_resolver))
-                run_kwargs["capabilities"] = capability_list
-            async with super().iter(user_prompt, **cast(Any, run_kwargs)) as agent_run:
-                yield agent_run
-                if agent_run.result is not None:
-                    self._capture_conversation_messages(conversation, agent_run)
-                    if event_resolver is not None:
-                        event_resolver.complete_run(final_text=str(agent_run.result.output))
+        async with native_agent_hook_run(self, user_prompt) as hooked_prompt:
+            tool_specs = self._tool_specs_for_run(kwargs)
+            run_kwargs = self._run_kwargs(kwargs, tool_specs=tool_specs)
+            conversation = self._subagent_conversation_var.get()
+            event_scope = (
+                nullcontext(None)
+                if current_agent_run_identity() is not None
+                else agent_event_run(self.shortname)
+            )
+            with (
+                self._run_tool_spec_scope(tool_specs),
+                delegation_scope(self._subagent_failure_policy),
+                event_scope as event_resolver,
+            ):
+                if event_resolver is not None:
+                    capabilities = run_kwargs.get("capabilities")
+                    capability_list = list(cast("Sequence[Any]", capabilities or ()))
+                    capability_list.append(_KediAgentEventCapability(event_resolver))
+                    run_kwargs["capabilities"] = capability_list
+                async with super().iter(hooked_prompt, **cast(Any, run_kwargs)) as agent_run:
+                    yield agent_run
+                    if agent_run.result is not None:
+                        self._capture_conversation_messages(conversation, agent_run)
+                        if event_resolver is not None:
+                            event_resolver.complete_run(final_text=str(agent_run.result.output))
 
     async def _run_agent(
         self,
@@ -732,10 +950,19 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
     @contextmanager
     def _run_tool_spec_scope(self, tool_specs: Sequence[ToolSpec]) -> Iterator[None]:
         token = self._run_tool_specs_var.set(tuple(tool_specs))
+        hook_arguments_var = self._hook_arguments_for_current_adapter()
+        hook_arguments_token = hook_arguments_var.set({})
+        hook_tools_var = self._hook_tools_for_current_adapter()
+        hook_tools_token = hook_tools_var.set({})
+        hook_started_var = self._hook_started_for_current_adapter()
+        hook_started_token = hook_started_var.set({})
         try:
             with self._required_tool_call_scope():
                 yield
         finally:
+            hook_started_var.reset(hook_started_token)
+            hook_tools_var.reset(hook_tools_token)
+            hook_arguments_var.reset(hook_arguments_token)
             self._run_tool_specs_var.reset(token)
 
     @staticmethod
@@ -868,6 +1095,16 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             ]
         capabilities = run_kwargs.get("capabilities")
         approval_resolution = self.active_approval_resolution
+        dispatcher = current_hook_dispatcher()
+        if dispatcher is not None and any(
+            dispatcher.handlers_for(event)
+            for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+        ):
+            capabilities = _with_capability(
+                capabilities,
+                _KediHookCapability,
+                lambda: _KediHookCapability(self),
+            )
         codemode = normalize_codemode_settings(
             self.active_profile.codemode or getattr(self, "codemode", None)
         )
@@ -1052,14 +1289,6 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             lambda: _KediExternalApprovalCapability(self),
         )
 
-    def _approval_request_for_call(
-        self,
-        tool_name: str,
-        arguments: Mapping[str, Any],
-    ) -> ApprovalRequest:
-        tool = self._tool_spec_for_call(tool_name)
-        return approval_request_for_tool(tool, arguments, self.shortname)
-
     def _tool_spec_for_call(self, tool_name: str) -> ToolSpec:
         active_tool_specs = self._run_tool_specs_var.get()
         known_tools = {
@@ -1067,6 +1296,102 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
             for tool in (self.scoped_tool_specs if active_tool_specs is None else active_tool_specs)
         }
         return known_tools.get(tool_name, _external_tool_spec(tool_name))
+
+    def _hook_tool_for_call(
+        self,
+        tool_name: str,
+        tool_def: ToolDefinition,
+    ) -> tuple[ToolSpec, ToolOrigin]:
+        tool = self._tool_spec_for_call(tool_name)
+        if (tool.metadata or {}).get("source") != "external":
+            return tool, "kedi"
+        toolset_id = tool_def.toolset_id or ""
+        origin: ToolOrigin = "mcp" if "mcp" in toolset_id.lower() else "adapter_native"
+        return _external_tool_spec(tool_name, tool_def), origin
+
+    def _remember_hook_tool(
+        self,
+        tool_call_id: str,
+        tool: ToolSpec,
+        origin: ToolOrigin,
+    ) -> None:
+        self._hook_tools_for_current_adapter().get()[tool_call_id] = (tool, origin)
+
+    def _hook_tool_for_call_id(
+        self,
+        tool_call_id: str,
+        fallback: tuple[ToolSpec, ToolOrigin],
+        *,
+        consume: bool = False,
+    ) -> tuple[ToolSpec, ToolOrigin]:
+        tools = self._hook_tools_for_current_adapter().get()
+        value = tools.pop(tool_call_id, None) if consume else tools.get(tool_call_id)
+        return fallback if value is None else value
+
+    def _hook_tools_for_current_adapter(
+        self,
+    ) -> ContextVar[dict[str, tuple[ToolSpec, ToolOrigin]]]:
+        try:
+            return self._hook_tools_var
+        except AttributeError:
+            tools: ContextVar[dict[str, tuple[ToolSpec, ToolOrigin]]] = ContextVar(
+                f"kedi_pydantic_hook_tools_{id(self)}",
+                default={},
+            )
+            self._hook_tools_var = tools
+            return tools
+
+    def _remember_hook_arguments(
+        self,
+        tool_call_id: str,
+        arguments: Mapping[str, Any],
+    ) -> None:
+        self._hook_arguments_for_current_adapter().get()[tool_call_id] = dict(arguments)
+
+    def _hook_arguments_for_call(
+        self,
+        tool_call_id: str,
+        fallback: Mapping[str, Any],
+        *,
+        consume: bool = False,
+    ) -> dict[str, Any]:
+        arguments = self._hook_arguments_for_current_adapter().get()
+        value = arguments.pop(tool_call_id, None) if consume else arguments.get(tool_call_id)
+        return dict(fallback) if value is None else dict(value)
+
+    def _hook_arguments_for_current_adapter(
+        self,
+    ) -> ContextVar[dict[str, dict[str, Any]]]:
+        try:
+            return self._hook_arguments_var
+        except AttributeError:
+            arguments: ContextVar[dict[str, dict[str, Any]]] = ContextVar(
+                f"kedi_pydantic_hook_arguments_{id(self)}",
+                default={},
+            )
+            self._hook_arguments_var = arguments
+            return arguments
+
+    def _remember_hook_started(self, tool_call_id: str) -> None:
+        dispatcher = current_hook_dispatcher()
+        if dispatcher is None or not dispatcher.handlers_for("post_tool_use_failure"):
+            return
+        self._hook_started_for_current_adapter().get()[tool_call_id] = monotonic()
+
+    def _consume_hook_started(self, tool_call_id: str) -> float | None:
+        started = self._hook_started_for_current_adapter().get().pop(tool_call_id, None)
+        return None if started is None else max(monotonic() - started, 0.0)
+
+    def _hook_started_for_current_adapter(self) -> ContextVar[dict[str, float]]:
+        try:
+            return self._hook_started_var
+        except AttributeError:
+            started: ContextVar[dict[str, float]] = ContextVar(
+                f"kedi_pydantic_hook_started_{id(self)}",
+                default={},
+            )
+            self._hook_started_var = started
+            return started
 
     async def _handle_deferred_tool_calls(self, _context: Any, requests: Any) -> Any:
         approvals: dict[str, ToolApproved | ToolDenied] = {}
@@ -1079,7 +1404,11 @@ class PydanticAdapter(Agent[AgentDepsT, OutputDataT]):
                 )
                 continue
 
-            tool = self._tool_spec_for_call(call.tool_name)
+            tool, _origin = self._hook_tool_for_call_id(
+                call.tool_call_id,
+                (self._tool_spec_for_call(call.tool_name), "adapter_native"),
+            )
+            arguments = self._hook_arguments_for_call(call.tool_call_id, arguments)
             policies = self._approval_ceiling_for_current_adapter().get()
             local_policy = self.active_profile.approval
             if local_policy is not None or not policies:
@@ -1515,16 +1844,34 @@ def _is_async_callable(fn: Any) -> bool:
     )
 
 
-def _external_tool_spec(name: str) -> ToolSpec:
+def _external_tool_spec(
+    name: str,
+    tool_def: ToolDefinition | None = None,
+) -> ToolSpec:
     """Describe an MCP/external tool whose implementation stays inside Pydantic AI."""
 
+    metadata = dict(tool_def.metadata or {}) if tool_def is not None else {}
+    metadata["source"] = "external"
     return ToolSpec(
         fn=lambda **_kwargs: None,
         name=name,
-        description="External Pydantic AI tool",
-        metadata={"source": "external"},
+        description=(
+            tool_def.description
+            if tool_def is not None and tool_def.description is not None
+            else "External Pydantic AI tool"
+        ),
+        json_schema=(
+            dict(tool_def.parameters_json_schema) if tool_def is not None else {"type": "object"}
+        ),
+        return_schema=(
+            None
+            if tool_def is None or tool_def.return_schema is None
+            else dict(tool_def.return_schema)
+        ),
+        metadata=metadata,
         risk="mutating",
         risk_resolver=_external_tool_risk,
+        sequential=False if tool_def is None else tool_def.sequential,
     )
 
 
@@ -1533,8 +1880,6 @@ def _approval_required_toolset(
     *,
     adapter_shortname: str = "pydantic",
 ) -> Any:
-    from pydantic_ai.toolsets.approval_required import ApprovalRequiredToolset
-
     if isinstance(toolset, ApprovalRequiredToolset):
         return toolset
     if not hasattr(toolset, "apply"):

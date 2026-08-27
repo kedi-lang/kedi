@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from contextlib import AbstractContextManager, nullcontext
 from contextvars import Context, ContextVar, copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Lock
 from typing import Any, cast
@@ -318,6 +318,7 @@ class SubagentCoordinator:
                 subagent=subagent,
                 task=task,
                 final_schema=final_schema,
+                parent_profile=parent_profile,
                 parent_ceiling=parent_ceiling,
                 budgets=budgets,
                 concurrency=concurrency,
@@ -623,6 +624,7 @@ class SubagentCoordinator:
         subagent: str,
         task: str,
         final_schema: dict[str, Any] | None,
+        parent_profile: Any,
         parent_ceiling: SubagentSafetyCeiling,
         budgets: tuple[DelegationBudget, ...],
         concurrency: DelegationConcurrency,
@@ -650,6 +652,14 @@ class SubagentCoordinator:
                 span.set_attribute("kedi.subagent.parent_run_id", parent_run_id)
             try:
                 child_profile = self._deps.evaluate_profile(definition)
+                enforcement = getattr(parent_profile, "_hook_enforcement", None)
+                if enforcement is not None and enforcement.active:
+                    child_hooks = getattr(child_profile, "hooks", None)
+                    child_profile = replace(
+                        child_profile,
+                        hooks=enforcement.compose_enforced(child_hooks),
+                        _hook_enforcement=enforcement,
+                    )
                 child_profile, child_ceiling = parent_ceiling.constrain_child(child_profile)
                 final_schema = effective_final_schema(child_profile, final_schema)
                 span.set_attribute(

@@ -32,8 +32,15 @@ from ..codemode.tool_specs import (
 )
 from ..conversation import AdapterConversationContext
 from ..events import agent_event_run
+from ..hooks import (
+    HookHandler,
+    HookRegistrationMixin,
+    current_hook_dispatcher,
+    hooked_agent_run,
+    with_hook_lifecycle,
+)
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..native_compaction import codex_thread_params_with_native_compaction
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
@@ -71,7 +78,7 @@ class _CodexRun:
     codemode_bridge: CodeModeToolSpecBridge | None = None
 
 
-class CodexAdapter:
+class CodexAdapter(HookRegistrationMixin):
     """Kedi adapter backed directly by Codex App Server JSON-RPC."""
 
     kind: AgentAdapterKind = "agent-harness"
@@ -95,6 +102,10 @@ class CodexAdapter:
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
+        hooks=HookCapabilities.full(
+            tool_bridge="kedi",
+            tool_origins=frozenset({"kedi"}),
+        ),
         supported_json_schema_formats=CODEX_SUPPORTED_STRING_FORMATS,
         settings=CODEX_AGENT_SETTING_KEYS,
     )
@@ -111,8 +122,10 @@ class CodexAdapter:
         client: CodexAppServerClient | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
+        self._init_hook_registration(hook_handler)
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = model
@@ -161,6 +174,7 @@ class CodexAdapter:
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[Any]:
         return build_output_model(output_schema)
 
+    @hooked_agent_run("template")
     async def produce(
         self,
         template: str,
@@ -172,11 +186,13 @@ class CodexAdapter:
         result = await self._run_async(run, emit_final=False)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
+    @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run = self._prepare_invoke(prompt, kwargs)
         result = await self._run_async(run, emit_final=True)
         return result.text
 
+    @hooked_agent_run("template")
     async def produce_subagent(
         self,
         *,
@@ -194,6 +210,7 @@ class CodexAdapter:
         value = _json_object_result(result)
         return value
 
+    @hooked_agent_run("template")
     def produce_sync(
         self,
         template: str,
@@ -216,6 +233,7 @@ class CodexAdapter:
         result = self._run_sync(run, emit_final=False)
         return _parse_structured_result(result, cast(type[Any], run.output_type))
 
+    @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         if self._codemode_settings() is not None:
             from ..utils import run_sync
@@ -444,6 +462,15 @@ class CodexAdapter:
             projected_tools = tuple(
                 _tool_with_approval_policies(tool, policies, self.shortname)
                 for tool in self.scoped_tools
+            )
+        dispatcher = current_hook_dispatcher()
+        if dispatcher is not None and any(
+            dispatcher.handlers_for(event)
+            for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+        ):
+            projected_tools = tuple(
+                with_hook_lifecycle(tool, adapter_shortname=self.shortname)
+                for tool in projected_tools
             )
         tools = {tool.name: tool.fn for tool in projected_tools}
         dynamic_tools = [_dynamic_tool_spec(tool) for tool in projected_tools]

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, TypeVar
 
@@ -7,6 +9,14 @@ from ..resolved_types import ResolvedKediType
 
 T = TypeVar("T", covariant=True)
 AgentAdapterKind = Literal["agent-framework", "agent-harness"]
+HookBridge = Literal["native", "kedi"]
+HookToolOrigin = Literal["kedi", "mcp", "adapter_native", "provider_builtin"]
+HookCapabilityEvent = Literal[
+    "user_prompt_submit",
+    "pre_tool_use",
+    "post_tool_use",
+    "post_tool_use_failure",
+]
 AdapterCapability = Literal[
     "structured_output",
     "tool_registration",
@@ -26,7 +36,68 @@ AdapterCapability = Literal[
     "history_replay",
     "native_compaction",
     "stream_events",
+    "hooks",
 ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HookEventCapability:
+    bridge: HookBridge
+    origins: frozenset[HookToolOrigin] = frozenset()
+    supports_mutation: bool = False
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class HookCapabilities:
+    user_prompt_submit: HookEventCapability | None = None
+    pre_tool_use: HookEventCapability | None = None
+    post_tool_use: HookEventCapability | None = None
+    post_tool_use_failure: HookEventCapability | None = None
+
+    @classmethod
+    def full(
+        cls,
+        *,
+        tool_bridge: HookBridge,
+        tool_origins: frozenset[HookToolOrigin],
+    ) -> HookCapabilities:
+        return cls(
+            user_prompt_submit=HookEventCapability(
+                bridge="kedi",
+                supports_mutation=True,
+            ),
+            pre_tool_use=HookEventCapability(
+                bridge=tool_bridge,
+                origins=tool_origins,
+                supports_mutation=True,
+            ),
+            post_tool_use=HookEventCapability(
+                bridge=tool_bridge,
+                origins=tool_origins,
+            ),
+            post_tool_use_failure=HookEventCapability(
+                bridge=tool_bridge,
+                origins=tool_origins,
+            ),
+        )
+
+    @classmethod
+    def prompt_only(cls) -> HookCapabilities:
+        return cls(
+            user_prompt_submit=HookEventCapability(
+                bridge="kedi",
+                supports_mutation=True,
+            )
+        )
+
+    def supports(self, event: HookCapabilityEvent) -> bool:
+        return getattr(self, event) is not None
+
+    def unsupported(
+        self,
+        events: frozenset[HookCapabilityEvent] | tuple[HookCapabilityEvent, ...],
+    ) -> tuple[HookCapabilityEvent, ...]:
+        return tuple(event for event in events if not self.supports(event))
 
 
 @dataclass(frozen=True)
@@ -49,6 +120,7 @@ class AdapterCapabilities:
     supports_history_replay: bool | None = None
     supports_native_compaction: bool | None = None
     supports_stream_events: bool | None = None
+    hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
 
@@ -82,6 +154,7 @@ class AdapterCapabilities:
             "history_replay": self.supports_history_replay,
             "native_compaction": self.supports_native_compaction,
             "stream_events": self.supports_stream_events,
+            "hooks": self.hooks is not None,
         }
         return bool(values[feature])
 

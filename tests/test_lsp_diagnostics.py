@@ -10,12 +10,15 @@ import pytest
 from lsprotocol import types as lsp
 
 from kedi.agent_adapter import AdapterCapabilities
+from kedi.agent_adapter.meta import HookCapabilities
 from kedi.lang.ast import (
     OutputSegment,
     ProfileCodeModeEntry,
     ProfileDefStmt,
+    ProfileHooksEntry,
     ProfileSkillsEntry,
     Program,
+    SettingsField,
     Span,
     TemplateLine,
     TypeApply,
@@ -667,6 +670,143 @@ def test_codemode_directive_uses_dedicated_adapter_capability(
             "main.kedi",
         )
         == []
+    )
+
+
+def test_hooks_directive_uses_dedicated_adapter_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(),
+    )
+
+    diagnostics = features.compute_diagnostics(
+        "> adapter: pydantic\n> hooks: enabled\n",
+        "main.kedi",
+    )
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-HOOKS"
+    assert "agent lifecycle hooks" in diagnostics[0].message
+    assert (
+        features.compute_diagnostics(
+            "> adapter: pydantic\n> hooks: disabled\n",
+            "main.kedi",
+        )
+        == []
+    )
+
+
+def test_hooks_directive_validates_event_level_adapter_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(hooks=HookCapabilities.prompt_only()),
+    )
+
+    supported = features.compute_diagnostics(
+        "> adapter: pydantic\n> hooks:\n    user_prompt_submit: `handler`\n",
+        "main.kedi",
+    )
+    assert supported == []
+
+    diagnostics = features.compute_diagnostics(
+        "> adapter: pydantic\n> hooks:\n    pre_tool_use: `handler`\n",
+        "main.kedi",
+    )
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "K-ADAPTER-HOOKS"
+    assert "pre_tool_use" in diagnostics[0].message
+
+    cleared = features.compute_diagnostics(
+        "> hooks:\n    pre_tool_use: `handler`\n    pre_tool_use: `[]`\n> adapter: pydantic\n",
+        "main.kedi",
+    )
+    assert cleared == []
+
+
+def test_profile_hook_members_use_source_order_and_event_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(hooks=HookCapabilities.prompt_only()),
+    )
+    source = """
+> profile: guarded:
+    > adapter: pydantic
+    > hooks:
+        pre_tool_use: `handler`
+> use: guarded
+"""
+    diagnostics = features.compute_diagnostics(source, "main.kedi")
+    assert len(diagnostics) == 2
+    assert all(diagnostic.code == "K-ADAPTER-HOOKS" for diagnostic in diagnostics)
+    assert all("pre_tool_use" in diagnostic.message for diagnostic in diagnostics)
+
+
+def test_hook_capability_state_merge_tracks_clears_and_unknown_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outer = features._AdapterDiagnosticState(
+        hook_events=frozenset({"pre_tool_use"}),
+        cleared_hook_events=frozenset({"post_tool_use"}),
+    )
+    inner = features._AdapterDiagnosticState(
+        hooks_enabled=True,
+        hook_events=frozenset({"post_tool_use"}),
+        cleared_hook_events=frozenset({"pre_tool_use"}),
+    )
+    merged = features._merge_adapter_state(outer, inner)
+    assert merged.hook_events == frozenset({"post_tool_use"})
+    assert merged.cleared_hook_events == frozenset({"pre_tool_use"})
+    assert features._hook_event_changes([SettingsField(name="unknown")]) == (
+        frozenset(),
+        frozenset(),
+    )
+
+    monkeypatch.setattr(
+        features,
+        "adapter_capabilities",
+        lambda _name: AdapterCapabilities(),
+    )
+    monkeypatch.setattr(features, "_unsupported_capability_diagnostics", lambda *args, **kwargs: [])
+    state = features._AdapterDiagnosticState(
+        shortname="unknown",
+        kind=None,
+        hooks_loc=Span(0, 1, 1, 1, 1, 2, "main.kedi"),
+        hooks_enabled=True,
+        hook_events=frozenset({"pre_tool_use"}),
+    )
+    assert features._hooks_capability_diagnostics(state) == []
+
+
+def test_profile_hooks_participate_in_capability_analysis() -> None:
+    enabled = ProfileDefStmt(
+        name="enabled",
+        hooks_members=[ProfileHooksEntry(enabled=True)],
+    )
+    disabled = ProfileDefStmt(
+        name="disabled",
+        hooks_members=[ProfileHooksEntry(enabled=False)],
+    )
+
+    assert features._profile_capability_usage(
+        enabled,
+        profile_defs={},
+        proc_names=set(),
+    ) == {"hooks"}
+    assert (
+        features._profile_capability_usage(
+            disabled,
+            profile_defs={},
+            proc_names=set(),
+        )
+        == set()
     )
 
 

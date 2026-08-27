@@ -1272,6 +1272,7 @@ class KediRuntime:
         only has to enter the override scope, never re-validate (which would defer the error to a
         worker in parallel mode).
         """
+        from .agent_adapter.hooks import HOOK_EVENT_NAMES
         from .agent_adapter.meta import AdapterCapabilities
         from .agent_adapter.profile_override import SupportsProfileOverride
         from .agent_profile import AgentProfileOverrideUnsupported
@@ -1299,6 +1300,23 @@ class KediRuntime:
                 shortname = getattr(adapter, "shortname", type(adapter).__name__)
                 raise AgentProfileOverrideUnsupported(
                     f"CodeMode is not supported by adapter {shortname!r}"
+                )
+
+        hooks = profile.hooks
+        if hooks is not None and hooks.active:
+            capabilities = getattr(adapter, "capabilities", None)
+            shortname = getattr(adapter, "shortname", type(adapter).__name__)
+            if not isinstance(capabilities, AdapterCapabilities) or capabilities.hooks is None:
+                raise AgentProfileOverrideUnsupported(
+                    f"Agent hooks are not supported by adapter {shortname!r}"
+                )
+            unsupported = capabilities.hooks.unsupported(
+                tuple(event for event in HOOK_EVENT_NAMES if hooks.handlers_for(event))
+            )
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise AgentProfileOverrideUnsupported(
+                    f"Agent hook events {names} are not supported by adapter {shortname!r}"
                 )
 
         if isinstance(adapter, SupportsProfileOverride):

@@ -11,6 +11,7 @@ from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .codemode import normalize_codemode_settings
 from .compaction import CompactionSettings, normalize_compaction_settings
+from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec, mcp_spec_from_mapping
 from .profile import AgentCommand, AgentProfile
 from .registry import (
@@ -22,6 +23,7 @@ from .registry import (
     ProfileDefinition,
     ProfileEffortMember,
     ProfileHistoryMember,
+    ProfileHooksMember,
     ProfileMaxAgentsMember,
     ProfileMcpMember,
     ProfileModelMember,
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
         CodeModeDirectiveStmt,
         EffortDirectiveStmt,
         HistoryDirectiveStmt,
+        HooksDirectiveStmt,
         McpDirectiveStmt,
         McpField,
         ModelDirectiveStmt,
@@ -276,6 +279,32 @@ def eval_approval_directive(
     raise ValueError("approval directive must be 'allow', 'deny', or an inline Python handler")
 
 
+def eval_hooks_directive(
+    rt: KediRuntime,
+    stmt: HooksDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    return _eval_hooks_settings(rt, enabled=stmt.enabled, fields=stmt.fields, env=env)
+
+
+def _eval_hooks_settings(
+    rt: KediRuntime,
+    *,
+    enabled: bool | None,
+    fields: list[SettingsField] | tuple[SettingsField, ...],
+    env: dict[str, Any],
+) -> AgentProfile:
+    settings = HookSettings(enabled=enabled)
+    for field in fields:
+        if field.backtick_code is None:
+            raise TypeError(f"Hook event {field.name!r} requires an inline Python value")
+        value = rt.executor.evaluate_inline(rt, field.backtick_code, env)
+        patch = normalize_hook_settings({field.name: value})
+        assert patch is not None
+        settings = settings.merge(patch)
+    return AgentProfile(hooks=settings)
+
+
 def eval_system_directive(
     rt: KediRuntime,
     stmt: SystemDirectiveStmt,
@@ -436,6 +465,7 @@ def _member_to_patch(
         | ProfileAdapterMember
         | ProfileEffortMember
         | ProfileApprovalMember
+        | ProfileHooksMember
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
@@ -502,6 +532,13 @@ def _member_to_patch(
         if member.plain_value == "deny":
             return AgentProfile(approval=ApprovalPolicy.deny())
         raise ValueError("profile approval must be 'allow' or 'deny'")
+    if member.kind == "hooks":
+        return _eval_hooks_settings(
+            rt,
+            enabled=member.enabled,
+            fields=member.fields,
+            env=env,
+        )
     if member.kind == "history":
         return AgentProfile(
             history=member.enabled,
