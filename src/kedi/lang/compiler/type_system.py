@@ -120,8 +120,8 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         # running arbitrary Python here. A failing eval (undefined
         # name, syntax error, or a value that isn't a real type)
         # raises a structured ``TypeError`` so the caller's
-        # try/except in ``assign_value_from_native`` produces the
-        # legacy "Native assignment value does not match annotated
+        # try/except in ``initialize_value_from_native`` produces the
+        # language-level "Native initialization value does not match annotated
         # type" diagnostic.
         try:
             result = rt.executor.evaluate_type_expression(rt, expr.code, type_env)
@@ -505,7 +505,7 @@ def _is_immutable_default(value: Any) -> bool:
     return False
 
 
-def assign_value_from_native(
+def initialize_value_from_native(
     native: Any,
     kedi_type: KediType,
     rt: KediRuntime,
@@ -518,7 +518,7 @@ def assign_value_from_native(
             if isinstance(native, str):
                 return native
             raise KediTypeExecutionError(
-                "Native non-string assignment requires explicit type annotation"
+                "Native non-string initialization requires explicit type annotation"
             )
         # Resolve up front so a bare unknown type name raises "Unknown type annotation X"
         # rather than silently bypassing validation (backtick type exprs keep the
@@ -535,7 +535,9 @@ def assign_value_from_native(
         try:
             return kedi_type.validate(rt, env, native)
         except Exception:
-            raise KediTypeExecutionError("Native assignment value does not match annotated type")
+            raise KediTypeExecutionError(
+                "Native initialization value does not match annotated type"
+            )
     else:
         if not kedi_type.is_none():
             raise KediTypeExecutionError(

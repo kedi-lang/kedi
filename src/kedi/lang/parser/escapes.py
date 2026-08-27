@@ -73,7 +73,7 @@ def unescape_text_with_tracking(text: str) -> Tuple[str, set[int]]:
             # Legacy ``segment_parser`` rejects a bare `=` inside a
             # template body; users must escape it as `\=` for a
             # literal. The grammar already routes line-start `=` to
-            # ``return_stmt`` and bracketed `=` to ``assign_stmt``, so
+            # ``return_stmt`` and bracketed `=` to ``variable_init_stmt``, so
             # anything reaching here is a mid-text raw `=`.
             raise ValueError("Literal '=' must be escaped as '\\='")
 

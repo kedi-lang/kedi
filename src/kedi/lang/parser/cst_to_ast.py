@@ -56,8 +56,8 @@ from ..ast import (
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     ArtifactsField,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     AutoSpec,
     BacktickLineStmt,
     CallArg,
@@ -105,8 +105,8 @@ from ..ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
-    ReassignBlockStmt,
-    ReassignStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
     LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
@@ -474,12 +474,12 @@ class _Walker:
                     prog.tests.append(suite)
                 elif isinstance(suite, EvalSuite):
                     prog.evals.append(suite)
-            elif t == "assign_stmt":
-                stmt = self._walk_assign_stmt(child)
+            elif t == "variable_init_stmt":
+                stmt = self._walk_variable_init_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t == "reassign_stmt":
-                stmt = self._walk_reassign_stmt(child)
+            elif t == "assignment_stmt":
+                stmt = self._walk_assignment_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "if_stmt":
@@ -495,12 +495,12 @@ class _Walker:
                 stmt = self._walk_conditional_loop_stmt(child, None)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t == "assign_block_stmt":
-                stmt = self._walk_assign_block_stmt(child)
+            elif t == "variable_init_block_stmt":
+                stmt = self._walk_variable_init_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
-            elif t == "reassign_block_stmt":
-                stmt = self._walk_reassign_block_stmt(child)
+            elif t == "assignment_block_stmt":
+                stmt = self._walk_assignment_block_stmt(child)
                 prog.toplevel_body.append(stmt)
                 prog.ordered_toplevel.append(stmt)
             elif t == "raw_invoke_stmt":
@@ -1061,20 +1061,20 @@ class _Walker:
         if t == "profile_directive":
             self._error(node, "'> profile:' is only valid at top level", code="K-PROFILE-SCOPE")
             return None
-        if t == "assign_stmt":
-            return self._walk_assign_stmt(node)
-        if t == "reassign_stmt":
-            return self._walk_reassign_stmt(node)
+        if t == "variable_init_stmt":
+            return self._walk_variable_init_stmt(node)
+        if t == "assignment_stmt":
+            return self._walk_assignment_stmt(node)
         if t == "if_stmt":
             return self._walk_if_stmt(node, proc)
         if t == "loop_stmt":
             return self._walk_loop_stmt(node, proc)
         if t == "conditional_loop_stmt":
             return self._walk_conditional_loop_stmt(node, proc)
-        if t == "assign_block_stmt":
-            return self._walk_assign_block_stmt(node)
-        if t == "reassign_block_stmt":
-            return self._walk_reassign_block_stmt(node)
+        if t == "variable_init_block_stmt":
+            return self._walk_variable_init_block_stmt(node)
+        if t == "assignment_block_stmt":
+            return self._walk_assignment_block_stmt(node)
         if t == "raw_invoke_stmt":
             return self._walk_raw_invoke_stmt(node)
         if t == "return_stmt":
@@ -1279,9 +1279,9 @@ class _Walker:
             visit(segment)
         return outputs
 
-    def _walk_assign_stmt(self, node: Node) -> AssignStmt:
+    def _walk_variable_init_stmt(self, node: Node) -> VariableInitStmt:
         target = _named_children(node)[0]
-        assert target.type == "assign_target"
+        assert target.type == "binding_target"
         name_node = _field(target, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -1293,12 +1293,12 @@ class _Walker:
         # A sole backtick RHS preserves its native Python value. The
         # tree-sitter grammar also admits inline expressions as template
         # segments, so accept either CST shape here without changing the
-        # long-standing native assignment semantics.
+        # long-standing native initialization semantics.
         native_expr = self._sole_inline_python_expr(rhs_node)
         if native_expr is not None:
             code = self._walk_inline_python_expr(native_expr)
             seg = PythonExprNativeSegment(code=code, loc=self._span(native_expr))
-            return AssignStmt(
+            return VariableInitStmt(
                 name=name,
                 expr=[seg],
                 type_annotation=type_anno,
@@ -1307,7 +1307,7 @@ class _Walker:
             )
         # template_expr
         segs = self._walk_template_expr(rhs_node) if rhs_node is not None else []
-        return AssignStmt(
+        return VariableInitStmt(
             name=name,
             expr=segs,
             type_annotation=type_anno,
@@ -1315,7 +1315,7 @@ class _Walker:
             loc=self._span(node),
         )
 
-    def _walk_assign_block_stmt(self, node: Node) -> AssignBlockStmt:
+    def _walk_variable_init_block_stmt(self, node: Node) -> VariableInitBlockStmt:
         target = _named_children(node)[0]
         name_node = _field(target, "name")
         assert name_node is not None
@@ -1325,7 +1325,7 @@ class _Walker:
         type_expr = self._walk_type_expr(type_node) if type_node is not None else None
         code_node = _field(node, "code")
         code = self._dedent_fenced(code_node) if code_node is not None else ""
-        return AssignBlockStmt(
+        return VariableInitBlockStmt(
             name=name,
             code=code,
             type_annotation=type_anno,
@@ -1333,7 +1333,7 @@ class _Walker:
             loc=self._span(node),
         )
 
-    def _walk_reassign_stmt(self, node: Node) -> ReassignStmt:
+    def _walk_assignment_stmt(self, node: Node) -> AssignmentStmt:
         name_node = _field(node, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -1346,13 +1346,13 @@ class _Walker:
             ]
         else:
             segments = self._walk_template_expr(rhs_node) if rhs_node is not None else []
-        return ReassignStmt(name=name, expr=segments, loc=self._span(node))
+        return AssignmentStmt(name=name, expr=segments, loc=self._span(node))
 
-    def _walk_reassign_block_stmt(self, node: Node) -> ReassignBlockStmt:
+    def _walk_assignment_block_stmt(self, node: Node) -> AssignmentBlockStmt:
         name_node = _field(node, "name")
         assert name_node is not None
         code_node = _field(node, "code")
-        return ReassignBlockStmt(
+        return AssignmentBlockStmt(
             name=_identifier_name(self.source, name_node),
             code=self._dedent_fenced(code_node) if code_node is not None else "",
             loc=self._span(node),
@@ -1360,7 +1360,7 @@ class _Walker:
 
     def _walk_raw_invoke_stmt(self, node: Node) -> RawInvokeStmt:
         target = _field(node, "target")
-        assert target is not None and target.type == "assign_target"
+        assert target is not None and target.type == "binding_target"
         name_node = _field(target, "name")
         assert name_node is not None
         name = _identifier_name(self.source, name_node)
@@ -1747,7 +1747,7 @@ class _Walker:
 
     @staticmethod
     def _sole_inline_python_expr(node: Node | None) -> Node | None:
-        """Return the sole inline expression in a native assignment/return RHS."""
+        """Return the sole inline expression in an initialization, assignment, or return RHS."""
         if node is None:
             return None
         if node.type == "inline_python_expr":

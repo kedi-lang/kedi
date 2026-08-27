@@ -198,6 +198,8 @@ def frame_label(kind: str, procedure_name: str | None = None) -> str:
         "program": "top-level program",
         "procedure": f"procedure {procedure_name}" if procedure_name else "procedure",
         "template": "template line",
+        "variable_init": "variable initialization",
+        "variable_init_block": "variable initialization block",
         "assignment": "assignment",
         "assignment_block": "assignment block",
         "return": "return",

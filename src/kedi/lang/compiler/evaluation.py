@@ -207,10 +207,10 @@ def render_expression(
     return _stringify_segments(rt, segments, kwargs, context=context)
 
 
-def evaluate_assignment_rhs(
+def evaluate_binding_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
 ) -> tuple[Any | None, str]:
-    """Evaluate assignment RHS, returning native value if pure expression."""
+    """Evaluate a binding RHS, returning its native value when it is pure."""
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
 
     # Single native expression or call

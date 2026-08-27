@@ -19,14 +19,14 @@ def test_lsp_type_registry_includes_builtins(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_program_path_and_export_name_rules(tmp_path: Path) -> None:
-    from kedi.lang.ast import AssignStmt, Program
+    from kedi.lang.ast import VariableInitStmt, Program
 
     assert module_surface.program_path(Program(source_map=SimpleNamespace(documents=[]))) is None
     mapped_prog = Program(
         source_map=SimpleNamespace(documents=[SimpleNamespace(path=str(tmp_path / "m.kedi"))])
     )
     assert module_surface.program_path(mapped_prog) == (tmp_path / "m.kedi").resolve()
-    assert module_surface.assignment_name_span(AssignStmt(name="x")) is None
+    assert module_surface.binding_name_span(VariableInitStmt(name="x")) is None
     assert module_surface.is_public_export_name("public")
     assert not module_surface.is_public_export_name("")
     assert not module_surface.is_public_export_name("_private")

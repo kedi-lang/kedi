@@ -41,8 +41,8 @@ from ..ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     EffortDirectiveStmt,
@@ -625,7 +625,7 @@ class ProgramCompiler:
             complete = prelude_complete
 
         for stmt in prog.toplevel_body:
-            if isinstance(stmt, (AssignStmt, AssignBlockStmt, RawInvokeStmt)):
+            if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt, RawInvokeStmt)):
                 names.add(stmt.name)
             elif isinstance(stmt, TemplateBlock):
                 names.update(self._template_output_names(stmt.lines))

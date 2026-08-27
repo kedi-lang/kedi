@@ -27,8 +27,8 @@ from ..ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     BacktickLineStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
@@ -41,8 +41,8 @@ from ..ast import (
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
-    ReassignBlockStmt,
-    ReassignStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
     LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
@@ -68,7 +68,7 @@ from .control_flow import (
     run_map_continuations,
 )
 from .evaluation import (
-    evaluate_assignment_rhs,
+    evaluate_binding_rhs,
     evaluate_python_inline,
     execute_inline_side_effects,
     execute_python_block,
@@ -76,7 +76,7 @@ from .evaluation import (
     prepare_segments,
     render_expression,
 )
-from .type_system import KediType, assign_value_from_native, detect_rhs_kind
+from .type_system import KediType, detect_rhs_kind, initialize_value_from_native
 
 _NO_RETURN = object()
 
@@ -123,7 +123,7 @@ class StatementCompiler:
                         contract = contracts.get(key)
                         if contract is not None and not contract.is_none():
                             value = contract.validate(self.rt, env, value)
-                        self._set_value(
+                        self._declare_value(
                             key,
                             value,
                             env,
@@ -188,21 +188,33 @@ class StatementCompiler:
                 return execute_python_block(code, self.rt, kwargs, span=stmt.loc)
             return evaluate_python_inline(self.rt, code, kwargs, span=stmt.loc)
 
-    def execute_assignment(self, stmt: AssignStmt, closure_env: dict[str, Any]) -> None:
-        """Execute an assignment statement."""
-        with self.rt.trace_frame(
-            KediTraceFrame(kind="assignment", label=f"assignment {stmt.name}", span=stmt.loc)
-        ):
-            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
-            value = self._evaluate_initial_value(stmt.expr, kedi_type, closure_env)
-            self._set_value(stmt.name, value, closure_env, kedi_type=kedi_type, source=stmt.loc)
-
-    def execute_assignment_block(self, stmt: AssignBlockStmt, closure_env: dict[str, Any]) -> None:
-        """Execute an assignment with Python block RHS."""
+    def execute_variable_init(self, stmt: VariableInitStmt, closure_env: dict[str, Any]) -> None:
+        """Initialize a variable in the active lexical frame."""
         with self.rt.trace_frame(
             KediTraceFrame(
-                kind="assignment_block",
-                label=f"assignment {stmt.name}",
+                kind="variable_init",
+                label=f"variable initialization {stmt.name}",
+                span=stmt.loc,
+            )
+        ):
+            kedi_type = KediType.from_node(stmt.type_expr, stmt.type_annotation)
+            value = self._evaluate_initialization_value(stmt.expr, kedi_type, closure_env)
+            self._declare_value(
+                stmt.name,
+                value,
+                closure_env,
+                kedi_type=kedi_type,
+                source=stmt.loc,
+            )
+
+    def execute_variable_init_block(
+        self, stmt: VariableInitBlockStmt, closure_env: dict[str, Any]
+    ) -> None:
+        """Initialize a variable from a fenced Python value."""
+        with self.rt.trace_frame(
+            KediTraceFrame(
+                kind="variable_init_block",
+                label=f"variable initialization {stmt.name}",
                 span=stmt.loc,
             )
         ):
@@ -215,65 +227,75 @@ class StatementCompiler:
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception:
-                    raise TypeError("Native assignment value does not match annotated type")
+                    raise TypeError("Native initialization value does not match annotated type")
             else:
                 if not isinstance(value, str):
                     raise TypeError(
-                        "Native non-string assignment requires explicit type annotation"
+                        "Native non-string initialization requires explicit type annotation"
                     )
 
-            self._set_value(stmt.name, value, closure_env, kedi_type=kedi_type, source=stmt.loc)
+            self._declare_value(
+                stmt.name,
+                value,
+                closure_env,
+                kedi_type=kedi_type,
+                source=stmt.loc,
+            )
 
-    def execute_reassignment(self, stmt: ReassignStmt, closure_env: dict[str, Any]) -> None:
+    def execute_assignment(self, stmt: AssignmentStmt, closure_env: dict[str, Any]) -> None:
         """Update the nearest existing binding while preserving its type contract."""
         with self.rt.trace_frame(
-            KediTraceFrame(kind="reassignment", label=f"reassignment {stmt.name}", span=stmt.loc)
+            KediTraceFrame(kind="assignment", label=f"assignment {stmt.name}", span=stmt.loc)
         ):
-            kedi_type = self._reassignment_type(stmt.name, closure_env)
-            native, rendered = evaluate_assignment_rhs(self.rt, stmt.expr, closure_env)
+            kedi_type = self._assignment_type(stmt.name, closure_env)
+            native, rendered = evaluate_binding_rhs(self.rt, stmt.expr, closure_env)
             value = native if native is not None else rendered
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception as exc:
                     raise TypeError(
-                        "Reassigned value does not match the binding's annotated type"
+                        "Assigned value does not match the binding's annotated type"
                     ) from exc
-            self._reassign_value(stmt.name, value, closure_env)
+            self._assign_value(stmt.name, value, closure_env)
 
-    def execute_reassignment_block(
-        self, stmt: ReassignBlockStmt, closure_env: dict[str, Any]
+    def execute_assignment_block(
+        self, stmt: AssignmentBlockStmt, closure_env: dict[str, Any]
     ) -> None:
         """Evaluate a fenced native value and update its nearest binding owner."""
         with self.rt.trace_frame(
-            KediTraceFrame(kind="reassignment", label=f"reassignment {stmt.name}", span=stmt.loc)
+            KediTraceFrame(
+                kind="assignment_block",
+                label=f"assignment {stmt.name}",
+                span=stmt.loc,
+            )
         ):
             value = execute_python_block(stmt.code, self.rt, closure_env, span=stmt.loc)
-            kedi_type = self._reassignment_type(stmt.name, closure_env)
+            kedi_type = self._assignment_type(stmt.name, closure_env)
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
                 except Exception as exc:
                     raise TypeError(
-                        "Reassigned value does not match the binding's annotated type"
+                        "Assigned value does not match the binding's annotated type"
                     ) from exc
-            self._reassign_value(stmt.name, value, closure_env)
+            self._assign_value(stmt.name, value, closure_env)
 
-    def _evaluate_initial_value(
+    def _evaluate_initialization_value(
         self,
         segments: list[Any],
         kedi_type: KediType,
         closure_env: dict[str, Any],
     ) -> Any:
-        native, rendered = evaluate_assignment_rhs(self.rt, segments, closure_env)
+        native, rendered = evaluate_binding_rhs(self.rt, segments, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(segments)
         if native is not None:
             if is_backtick:
-                return assign_value_from_native(
+                return initialize_value_from_native(
                     native, kedi_type, self.rt, closure_env, strict_native=True
                 )
             if is_angle:
-                return assign_value_from_native(
+                return initialize_value_from_native(
                     native, kedi_type, self.rt, closure_env, strict_native=False
                 )
             if is_call:
@@ -287,7 +309,7 @@ class StatementCompiler:
         try:
             return kedi_type.validate(self.rt, closure_env, rendered)
         except Exception as exc:
-            raise TypeError("Native assignment value does not match annotated type") from exc
+            raise TypeError("Native initialization value does not match annotated type") from exc
 
     def execute_python_block(self, stmt: PythonBlock, closure_env: dict[str, Any]) -> None:
         """Execute a Python block for side effects."""
@@ -303,7 +325,7 @@ class StatementCompiler:
         """Execute a single-line Python statement for side effects."""
         execute_inline_side_effects(self.rt, stmt.code, closure_env, span=stmt.loc)
 
-    def _set_value(
+    def _declare_value(
         self,
         name: str,
         value: Any,
@@ -326,22 +348,22 @@ class StatementCompiler:
             closure_env[name] = value
 
     @staticmethod
-    def _reassignment_type(name: str, closure_env: dict[str, Any]) -> KediType | None:
+    def _assignment_type(name: str, closure_env: dict[str, Any]) -> KediType | None:
         from .environment import ScopeFrame
 
         if isinstance(closure_env, ScopeFrame):
             owner = closure_env.resolve_owner(name)
             if owner is None:
-                raise NameError(f"Cannot reassign unknown Kedi binding: {name}")
+                raise NameError(f"Cannot assign unknown Kedi binding: {name}")
             metadata = closure_env.binding_metadata(name)
             contract = metadata.type_contract if metadata is not None else None
             return contract if isinstance(contract, KediType) else None
         if name not in closure_env:
-            raise NameError(f"Cannot reassign unknown Kedi binding: {name}")
+            raise NameError(f"Cannot assign unknown Kedi binding: {name}")
         return None
 
     @staticmethod
-    def _reassign_value(name: str, value: Any, closure_env: dict[str, Any]) -> None:
+    def _assign_value(name: str, value: Any, closure_env: dict[str, Any]) -> None:
         from .environment import ScopeFrame, assert_not_cli_args_identifier
 
         assert_not_cli_args_identifier(name)
@@ -349,7 +371,7 @@ class StatementCompiler:
             closure_env.assign(name, value)
             return
         if name not in closure_env:
-            raise NameError(f"Cannot reassign unknown Kedi binding: {name}")
+            raise NameError(f"Cannot assign unknown Kedi binding: {name}")
         closure_env[name] = value
 
 
@@ -685,20 +707,20 @@ class StatementExecutor:
             self.compiler.execute_backtick_line(stmt, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, AssignBlockStmt):
+        if isinstance(stmt, VariableInitBlockStmt):
+            self.compiler.execute_variable_init_block(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, AssignmentBlockStmt):
             self.compiler.execute_assignment_block(stmt, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, ReassignBlockStmt):
-            self.compiler.execute_reassignment_block(stmt, closure_env)
+        if isinstance(stmt, VariableInitStmt):
+            self.compiler.execute_variable_init(stmt, closure_env)
             return _NO_RETURN
 
-        if isinstance(stmt, AssignStmt):
+        if isinstance(stmt, AssignmentStmt):
             self.compiler.execute_assignment(stmt, closure_env)
-            return _NO_RETURN
-
-        if isinstance(stmt, ReassignStmt):
-            self.compiler.execute_reassignment(stmt, closure_env)
             return _NO_RETURN
 
         if isinstance(stmt, ReturnStmt):
@@ -708,7 +730,7 @@ class StatementExecutor:
                 proc.return_type_expr, proc.return_type_annotation
             )
             if not return_kedi_type.is_none():
-                native, rendered = evaluate_assignment_rhs(self.rt, stmt.segments, closure_env)
+                native, rendered = evaluate_binding_rhs(self.rt, stmt.segments, closure_env)
                 return native if native is not None else preserve_escaped_whitespace(rendered)
             return self.compiler.compile_return(stmt)(**closure_env)
 
@@ -746,17 +768,17 @@ class StatementExecutor:
         elif isinstance(stmt, BacktickLineStmt):
             self.compiler.execute_backtick_line(stmt, env)
 
-        elif isinstance(stmt, AssignBlockStmt):
+        elif isinstance(stmt, VariableInitBlockStmt):
+            self.compiler.execute_variable_init_block(stmt, env)
+
+        elif isinstance(stmt, AssignmentBlockStmt):
             self.compiler.execute_assignment_block(stmt, env)
 
-        elif isinstance(stmt, ReassignBlockStmt):
-            self.compiler.execute_reassignment_block(stmt, env)
+        elif isinstance(stmt, VariableInitStmt):
+            self.compiler.execute_variable_init(stmt, env)
 
-        elif isinstance(stmt, AssignStmt):
+        elif isinstance(stmt, AssignmentStmt):
             self.compiler.execute_assignment(stmt, env)
-
-        elif isinstance(stmt, ReassignStmt):
-            self.compiler.execute_reassignment(stmt, env)
 
     def _sync_env(self, closure_env: dict[str, Any]) -> None:
         """Sync only pre-existing names for legacy direct executor calls."""

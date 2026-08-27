@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kedi.lang.ast import AssignStmt, Program, Span
+from kedi.lang.ast import VariableInitStmt, Program, Span
 from kedi.lang.parser import parse_program
 from kedi.lsp import module_surface
 
@@ -68,7 +68,7 @@ def test_module_surface_program_path_and_value_helpers(tmp_path) -> None:
     prog = Program(source_map=SimpleNamespace(documents=[SimpleNamespace(path=str(source_path))]))
     assert module_surface.program_path(prog) == source_path.resolve()
 
-    stmt = AssignStmt(
+    stmt = VariableInitStmt(
         name="value",
         loc=Span(
             start_byte=0,
@@ -80,8 +80,8 @@ def test_module_surface_program_path_and_value_helpers(tmp_path) -> None:
             source_path=str(source_path),
         ),
     )
-    second_stmt = AssignStmt(name="later", loc=stmt.loc)
-    value_prog = Program(toplevel_body=[AssignStmt(name="missing"), stmt, second_stmt])
+    second_stmt = VariableInitStmt(name="later", loc=stmt.loc)
+    value_prog = Program(toplevel_body=[VariableInitStmt(name="missing"), stmt, second_stmt])
     values = module_surface.top_level_value_infos(value_prog)
     bindings = module_surface._binding_surface_for_program(
         value_prog,
@@ -93,9 +93,10 @@ def test_module_surface_program_path_and_value_helpers(tmp_path) -> None:
     assert values["value"].declaration_span.start_col == 2
     assert "value" in bindings.surface.values
     assert "later" in bindings.surface.values
-    assert module_surface.assignment_name_span(AssignStmt(name="missing")) is None
+    assert module_surface.binding_name_span(VariableInitStmt(name="missing")) is None
     assert (
-        module_surface._top_level_value_info(AssignStmt(name="missing"), module_name=None) is None
+        module_surface._top_level_value_info(VariableInitStmt(name="missing"), module_name=None)
+        is None
     )
     assert module_surface.is_public_export_name("public")
     assert not module_surface.is_public_export_name("_private")

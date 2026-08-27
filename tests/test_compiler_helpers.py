@@ -13,7 +13,7 @@ from kedi.errors import KediTraceFrame
 from kedi.lang import compile_program as compile_kedi_program
 from kedi.lang import parse_program
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     CallArg,
     CallSegment,
     InputSegment,
@@ -50,7 +50,7 @@ from kedi.lang.compiler.environment import (
 from kedi.lang.compiler.evaluation import (
     _evaluate_arg,
     _stringify_segments,
-    evaluate_assignment_rhs,
+    evaluate_binding_rhs,
     prepare_segments,
     render_expression,
 )
@@ -242,12 +242,12 @@ def test_python_writeback_ignores_dirty_binding_removed_from_source() -> None:
 def test_reserved_cli_args_cannot_be_overwritten_by_kedi_or_python() -> None:
     cli_args = SimpleNamespace(name="Ada")
 
-    assignment_runtime = compile_kedi_program(
+    initialization_runtime = compile_kedi_program(
         parse_program("[args] = overwritten\n"),
         runtime_globals={"args": cli_args},
     )
     with pytest.raises(Exception, match="Reserved identifier 'args'"):
-        assignment_runtime.run_main()
+        initialization_runtime.run_main()
 
     output_runtime = compile_kedi_program(
         parse_program(">> [args]\n"),
@@ -451,16 +451,16 @@ def test_proc_wrapper_falls_back_when_generated_source_is_invalid() -> None:
     assert wrapper() == "ok"
 
 
-def test_statement_compiler_plain_mapping_reassignment_helpers() -> None:
+def test_statement_compiler_plain_mapping_assignment_helpers() -> None:
     env: dict[str, Any] = {"value": 1}
-    assert StatementCompiler._reassignment_type("value", env) is None
-    StatementCompiler._reassign_value("value", 2, env)
+    assert StatementCompiler._assignment_type("value", env) is None
+    StatementCompiler._assign_value("value", 2, env)
     assert env["value"] == 2
 
     with pytest.raises(NameError, match="unknown Kedi binding"):
-        StatementCompiler._reassignment_type("missing", env)
+        StatementCompiler._assignment_type("missing", env)
     with pytest.raises(NameError, match="unknown Kedi binding"):
-        StatementCompiler._reassign_value("missing", 1, env)
+        StatementCompiler._assign_value("missing", 1, env)
 
 
 def test_statement_executor_legacy_sync_updates_only_existing_names() -> None:
@@ -476,7 +476,7 @@ def test_statement_executor_legacy_sync_updates_only_existing_names() -> None:
     assert closure == {"kept": 2, "untouched": 4}
 
 
-def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
+def test_prepare_segments_binding_rhs_and_argument_variants() -> None:
     rt = KediRuntime()
 
     @rt.procedure
@@ -496,7 +496,7 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     assert expr == ["Hello ", "!"]
     assert rendered == "Hello Ada!"
 
-    native, rendered_native = evaluate_assignment_rhs(
+    native, rendered_native = evaluate_binding_rhs(
         rt,
         [TextSegment(text=" "), PythonExprNativeSegment(code="x + 1")],
         {"x": 2},
@@ -504,7 +504,7 @@ def test_prepare_segments_assignment_rhs_and_argument_variants() -> None:
     assert native == 3
     assert rendered_native == "3"
 
-    called, rendered_called = evaluate_assignment_rhs(
+    called, rendered_called = evaluate_binding_rhs(
         rt,
         [CallSegment(name="echo", args=[LiteralArg(value="Ada")])],
         {},
@@ -831,7 +831,7 @@ def test_statement_executor_cleanup_skips_missing_new_proc_name() -> None:
     assert "nested_c" not in rt._procedures
 
 
-def test_statement_compiler_assignment_template_and_single_statement_edges(
+def test_statement_compiler_initialization_template_and_single_statement_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.compiler import statement_compiler as statement_compiler_module
@@ -872,15 +872,15 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
     assert recording.expressions == [["better\n\n", "seed"]]
 
     closure: dict[str, Any] = {"x": 1}
-    compiler.execute_assignment(
-        AssignStmt(name="angle", expr=[PythonExprSegment(code="x + 1")]),
+    compiler.execute_variable_init(
+        VariableInitStmt(name="angle", expr=[PythonExprSegment(code="x + 1")]),
         closure,
     )
     assert closure["angle"] == "2"
 
     monkeypatch.setattr(
         statement_compiler_module,
-        "evaluate_assignment_rhs",
+        "evaluate_binding_rhs",
         lambda rt_arg, segments, env_arg: (2, "2"),
     )
     monkeypatch.setattr(
@@ -888,7 +888,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, True, False),
     )
-    compiler.execute_assignment(AssignStmt(name="native_angle", expr=[]), closure)
+    compiler.execute_variable_init(VariableInitStmt(name="native_angle", expr=[]), closure)
     assert closure["native_angle"] == "2"
 
     monkeypatch.setattr(
@@ -896,12 +896,12 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, False, False),
     )
-    compiler.execute_assignment(AssignStmt(name="native_rendered", expr=[]), closure)
+    compiler.execute_variable_init(VariableInitStmt(name="native_rendered", expr=[]), closure)
     assert closure["native_rendered"] == "2"
 
     monkeypatch.setattr(
         statement_compiler_module,
-        "evaluate_assignment_rhs",
+        "evaluate_binding_rhs",
         lambda rt_arg, segments, env_arg: (1, "not-int"),
     )
     monkeypatch.setattr(
@@ -909,9 +909,11 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
         "detect_rhs_kind",
         lambda segments: (False, False, False),
     )
-    with pytest.raises(TypeError, match="Native assignment value does not match annotated type"):
-        compiler.execute_assignment(
-            AssignStmt(
+    with pytest.raises(
+        TypeError, match="Native initialization value does not match annotated type"
+    ):
+        compiler.execute_variable_init(
+            VariableInitStmt(
                 name="bad",
                 expr=[TextSegment(text=" "), PythonExprNativeSegment(code="1")],
                 type_annotation="int",
@@ -967,7 +969,7 @@ def test_statement_compiler_assignment_template_and_single_statement_edges(
 
     single_env: dict[str, Any] = {}
     executor.execute_single_statement(
-        AssignStmt(name="value", expr=[TextSegment(text="ok")]), single_env
+        VariableInitStmt(name="value", expr=[TextSegment(text="ok")]), single_env
     )
     assert single_env["value"] == "ok"
     executor.execute_single_statement(ReturnStmt(segments=[TextSegment(text="ignored")]), {})

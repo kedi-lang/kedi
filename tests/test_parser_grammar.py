@@ -37,7 +37,7 @@ from kedi.lang import (
     parse_program,
 )
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     BacktickLineStmt,
     IfStmt,
     InputSegment,
@@ -1028,7 +1028,7 @@ def test_type_union():
 def test_type_python_carries_raw_code():
     prog = parse_program("[x: `Optional[int]`] = `42`\n")
     stmt = prog.toplevel_body[0]
-    assert isinstance(stmt, AssignStmt)
+    assert isinstance(stmt, VariableInitStmt)
     assert isinstance(stmt.type_expr, TypePython)
     assert stmt.type_expr.code == "Optional[int]"
 

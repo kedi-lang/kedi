@@ -1148,28 +1148,28 @@ def test_missing_import_diagnostics_ignore_corrupt_import_without_a_span(
     assert features._missing_import_diagnostics(program) == []
 
 
-def test_reassignment_diagnostics_require_a_visible_binding() -> None:
+def test_assignment_diagnostics_require_a_visible_binding() -> None:
     valid = "[count: int] = `0`\n> if: `True`:\n  [count] := `1`\n"
     unknown = "> if: `True`:\n  [missing] := value\n"
 
     assert features.compute_diagnostics(valid, "valid.kedi") == []
     diagnostics = features.compute_diagnostics(unknown, "unknown.kedi")
 
-    assert [diagnostic.code for diagnostic in diagnostics] == ["K-REASSIGN-UNKNOWN"]
+    assert [diagnostic.code for diagnostic in diagnostics] == ["K-ASSIGN-UNKNOWN"]
     assert "missing" in diagnostics[0].message
 
 
-def test_reassignment_diagnostics_cover_reserved_missing_span_and_imported_values(
+def test_assignment_diagnostics_cover_reserved_missing_span_and_imported_values(
     tmp_path: Path,
 ) -> None:
-    from kedi.lang.ast import Program, ReassignStmt
+    from kedi.lang.ast import Program, AssignmentStmt
 
     reserved = features.compute_diagnostics("[args] := value\n", str(tmp_path / "reserved.kedi"))
-    assert [diagnostic.code for diagnostic in reserved] == ["K-REASSIGN-RESERVED"]
+    assert [diagnostic.code for diagnostic in reserved] == ["K-ASSIGN-RESERVED"]
 
     assert (
-        features._reassignment_diagnostics(
-            Program(toplevel_body=[ReassignStmt(name="missing", loc=None)])
+        features._assignment_diagnostics(
+            Program(toplevel_body=[AssignmentStmt(name="missing", loc=None)])
         )
         == []
     )

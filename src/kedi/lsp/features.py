@@ -79,8 +79,8 @@ from ..lang.ast import (
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     ArtifactsField,
-    AssignBlockStmt,
-    AssignStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
     AutoSpec,
     BacktickLineStmt,
     CallArg,
@@ -124,8 +124,8 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
-    ReassignBlockStmt,
-    ReassignStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
     LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
@@ -162,7 +162,7 @@ from ..lang.parser import KediDiagnostic, KediParseError, parse_program
 from ..lang.parser.parser import get_language as _get_kedi_language
 from ..lang.parser.parser import parse as _ts_parse
 from ..module_registry import describe_module_search_paths, module_search_paths
-from .ast_helpers import assignment_name_span
+from .ast_helpers import binding_name_span
 from .ast_spans import name_token_span
 from .coordinates import (
     byte_column_to_utf16,
@@ -259,7 +259,7 @@ def _segments_of(stmt) -> list:
         return list(stmt.segments)
     if isinstance(stmt, ReturnStmt):
         return list(stmt.segments)
-    if isinstance(stmt, (AssignStmt, ReassignStmt)):
+    if isinstance(stmt, (VariableInitStmt, AssignmentStmt)):
         return list(stmt.expr)
     if isinstance(stmt, (IfStmt, ConditionalLoopStmt)):
         return list(stmt.condition_segments or [])
@@ -296,7 +296,7 @@ def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Dia
         out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
-        out.extend(_reassignment_diagnostics(prog))
+        out.extend(_assignment_diagnostics(prog))
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -326,7 +326,7 @@ def _annotated_type_diagnostics(
     return out
 
 
-def _reassignment_diagnostics(
+def _assignment_diagnostics(
     prog: Program | ProgramWithValidation,
 ) -> List[lsp.Diagnostic]:
     imported_values = imported_surface_for_program(prog).values
@@ -338,17 +338,17 @@ def _reassignment_diagnostics(
         ancestors: tuple[ProcedureDef, ...],
     ) -> None:
         for stmt in _iter_control_statements(statements):
-            if not isinstance(stmt, (ReassignStmt, ReassignBlockStmt)):
+            if not isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)):
                 continue
-            target_span = assignment_name_span(stmt)
+            target_span = binding_name_span(stmt)
             if target_span is None:
                 continue
             if stmt.name == CLI_ARGS_IDENTIFIER:
                 out.append(
                     _error(
                         target_span,
-                        "K-REASSIGN-RESERVED",
-                        f"Reserved CLI argument binding '{CLI_ARGS_IDENTIFIER}' cannot be reassigned.",
+                        "K-ASSIGN-RESERVED",
+                        f"Reserved CLI argument binding '{CLI_ARGS_IDENTIFIER}' cannot be assigned.",
                     )
                 )
                 continue
@@ -367,8 +367,8 @@ def _reassignment_diagnostics(
                 out.append(
                     _error(
                         target_span,
-                        "K-REASSIGN-UNKNOWN",
-                        f"Cannot reassign unknown Kedi binding '{stmt.name}'.",
+                        "K-ASSIGN-UNKNOWN",
+                        f"Cannot assign unknown Kedi binding '{stmt.name}'.",
                     )
                 )
 
@@ -398,7 +398,7 @@ def _iter_type_exprs(prog: Union[Program, ProgramWithValidation]):
 
 
 def _iter_stmt_type_exprs(stmt):
-    if isinstance(stmt, (AssignStmt, AssignBlockStmt)):
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)):
         yield stmt.type_expr
     for segment in _segments_of(stmt):
         if isinstance(segment, OutputSegment):
@@ -2355,8 +2355,8 @@ def _direct_statement_declarations(
     proc: Optional[ProcedureDef],
 ) -> list[_ValueDeclaration]:
     declarations: list[_ValueDeclaration] = []
-    if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
-        span = assignment_name_span(stmt)
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.name == name:
+        span = binding_name_span(stmt)
         if span is not None:
             declarations.append(
                 _ValueDeclaration(
@@ -2551,9 +2551,9 @@ def _resolve_in_stmt(
         )
     if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
         return _resolve_in_type_def(stmt.typedef, pos, type_by_name, imported_values)
-    # AssignStmt / AssignBlockStmt target name
-    if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.loc is not None:
-        name_span = assignment_name_span(stmt)
+    # VariableInitStmt / VariableInitBlockStmt target name
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.loc is not None:
+        name_span = binding_name_span(stmt)
         if name_span is not None and _position_inside(pos, name_span):
             return SymbolRef(
                 kind=(
@@ -2566,8 +2566,8 @@ def _resolve_in_stmt(
                 scope_proc=proc,
                 cursor_span=name_span,
             )
-    if isinstance(stmt, (ReassignStmt, ReassignBlockStmt)) and stmt.loc is not None:
-        name_span = assignment_name_span(stmt)
+    if isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)) and stmt.loc is not None:
+        name_span = binding_name_span(stmt)
         if name_span is not None and _position_inside(pos, name_span):
             declaration = _resolve_value_declaration(
                 prog,
@@ -2599,11 +2599,11 @@ def _resolve_in_stmt(
                 scope_proc=proc,
                 cursor_span=name_span,
             )
-    if isinstance(stmt, AssignStmt) and stmt.type_expr is not None:
+    if isinstance(stmt, VariableInitStmt) and stmt.type_expr is not None:
         r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
-    if isinstance(stmt, AssignBlockStmt) and stmt.type_expr is not None:
+    if isinstance(stmt, VariableInitBlockStmt) and stmt.type_expr is not None:
         r = _resolve_in_type_expr(stmt.type_expr, pos, type_by_name, imported_values)
         if r is not None:
             return r
@@ -2902,8 +2902,8 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
     if proc is None:
         return None
     for stmt in _iter_control_statements(proc.body):
-        if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.name == name:
-            return assignment_name_span(stmt)
+        if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.name == name:
+            return binding_name_span(stmt)
         for seg in _segments_of(stmt):
             if isinstance(seg, OutputSegment) and seg.name == name:
                 return _output_name_span(seg)
@@ -3076,7 +3076,7 @@ def compute_hover(
     elif sym.kind == "local":
         text = (
             f"**Local** `{sym.name}`\n\n"
-            "Local value produced by an assignment or template output in this scope."
+            "Local value produced by an initialization or template output in this scope."
         )
     elif sym.kind == "runtime_value":
         text = (
@@ -3375,7 +3375,7 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for seg in node.segments:
                 visit(seg)
             return
-        if isinstance(node, (AssignStmt, ReassignStmt)):
+        if isinstance(node, (VariableInitStmt, AssignmentStmt)):
             for seg in node.expr:
                 visit(seg)
             return
@@ -3469,23 +3469,23 @@ def _describe_ast_node(node) -> Optional[str]:
             f"**Raw model invoke** `{node.name}: str`\n\n"
             "Raw model response from the active adapter. No structured output schema is used."
         )
-    if isinstance(node, AssignStmt):
+    if isinstance(node, VariableInitStmt):
         ann = node.type_annotation or "str"
-        return f"`{node.name}: {ann}`\n\nLocal assignment for later use in this scope."
-    if isinstance(node, AssignBlockStmt):
+        return f"`{node.name}: {ann}`\n\nVariable initialized in the current scope."
+    if isinstance(node, VariableInitBlockStmt):
         ann = node.type_annotation or "str"
         return (
             f"`{node.name}: {ann}`\n\n"
-            "Value returned by this Python block and assigned in the current scope."
+            "The Python block result initializes this variable in the current scope."
         )
-    if isinstance(node, ReassignStmt):
+    if isinstance(node, AssignmentStmt):
         return (
-            f"**Reassignment** `{node.name}`\n\n"
+            f"**Assignment** `{node.name}`\n\n"
             "Updates the nearest visible Kedi binding while preserving its declared type."
         )
-    if isinstance(node, ReassignBlockStmt):
+    if isinstance(node, AssignmentBlockStmt):
         return (
-            f"**Python reassignment** `{node.name}`\n\n"
+            f"**Python assignment** `{node.name}`\n\n"
             "The Python block result updates the nearest visible Kedi binding."
         )
     if isinstance(node, ReturnStmt):
@@ -4511,8 +4511,8 @@ def _collect_value_reference_candidates(
     out: List[Span],
 ) -> None:
     for stmt in _iter_control_statements(statements):
-        if isinstance(stmt, (ReassignStmt, ReassignBlockStmt)) and stmt.name == name:
-            target_span = assignment_name_span(stmt)
+        if isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)) and stmt.name == name:
+            target_span = binding_name_span(stmt)
             if target_span is not None:
                 out.append(target_span)
         for segment in _segments_of(stmt):
@@ -4593,7 +4593,7 @@ def _collect_loop_binder_refs(
 
 
 def _collect_type_refs_in_stmt(stmt, name: str, out: List[Span]) -> None:
-    if isinstance(stmt, (AssignStmt, AssignBlockStmt)) and stmt.type_expr is not None:
+    if isinstance(stmt, (VariableInitStmt, VariableInitBlockStmt)) and stmt.type_expr is not None:
         _collect_type_refs_in_expr(stmt.type_expr, name, out)
     for seg in _segments_of(stmt):
         if isinstance(seg, OutputSegment) and seg.type_expr is not None:

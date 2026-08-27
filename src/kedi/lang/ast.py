@@ -234,7 +234,7 @@ class BacktickLineStmt(Stmt):
 
 
 @dataclass
-class AssignBlockStmt(Stmt):
+class VariableInitBlockStmt(Stmt):
     name: str = ""
     code: str = ""
     type_annotation: Optional[str] = None
@@ -247,7 +247,7 @@ class ReturnBlockStmt(Stmt):
 
 
 @dataclass
-class AssignStmt(Stmt):
+class VariableInitStmt(Stmt):
     name: str = ""
     expr: Expr = field(default_factory=list)
     type_annotation: Optional[str] = None
@@ -255,13 +255,13 @@ class AssignStmt(Stmt):
 
 
 @dataclass
-class ReassignBlockStmt(Stmt):
+class AssignmentBlockStmt(Stmt):
     name: str = ""
     code: str = ""
 
 
 @dataclass
-class ReassignStmt(Stmt):
+class AssignmentStmt(Stmt):
     name: str = ""
     expr: Expr = field(default_factory=list)
 

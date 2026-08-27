@@ -130,14 +130,14 @@ def test_collect_type_refs_in_expr_stmt_and_type_def(
 
 
 def test_find_local_declaration_in_procedure_body(tmp_path: Path) -> None:
-    from kedi.lang.ast import AssignStmt, OutputSegment, ProcedureDef, TemplateLine
+    from kedi.lang.ast import VariableInitStmt, OutputSegment, ProcedureDef, TemplateLine
 
     assert features._find_local_declaration(None, "x") is None
     local_proc = ProcedureDef(
         "local",
         [],
         body=[
-            AssignStmt(name="x", loc=make_edge_span(tmp_path)),
+            VariableInitStmt(name="x", loc=make_edge_span(tmp_path)),
             TemplateLine(
                 segments=[OutputSegment(name="y", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
@@ -180,7 +180,7 @@ def test_resolve_in_type_expr_and_stmt(
     resolution_pos: lsp.Position,
 ) -> None:
     from kedi.lang.ast import (
-        AssignBlockStmt,
+        VariableInitBlockStmt,
         OutputSegment,
         TypeApply,
         TypeDef,
@@ -214,7 +214,9 @@ def test_resolve_in_type_expr_and_stmt(
     assert (
         features._resolve_in_stmt(
             Program(),
-            AssignBlockStmt(name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            VariableInitBlockStmt(
+                name="x", type_expr=person_type_ref, loc=make_edge_span(tmp_path)
+            ),
             resolution_pos,
             None,
             {},
@@ -277,7 +279,7 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     tmp_path: Path,
     resolution_pos: lsp.Position,
 ) -> None:
-    from kedi.lang.ast import AssignBlockStmt, TypeApply, TypeRef, TypeUnion
+    from kedi.lang.ast import VariableInitBlockStmt, TypeApply, TypeRef, TypeUnion
 
     assert (
         features._resolve_in_type_expr(
@@ -319,7 +321,7 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     assert (
         features._resolve_in_stmt(
             Program(),
-            AssignBlockStmt(
+            VariableInitBlockStmt(
                 name="x",
                 type_expr=TypeRef(
                     name="Other",
@@ -428,7 +430,7 @@ def test_smallest_enclosing_validation_program(
     tmp_path: Path, resolution_pos: lsp.Position
 ) -> None:
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         AutoSpec,
         CallArg,
         CallSegment,
@@ -525,7 +527,7 @@ def test_smallest_enclosing_validation_program(
                 segments=[InputSegment(name="x", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
             ),
-            AssignStmt(
+            VariableInitStmt(
                 name="x",
                 expr=[TextSegment(text="value", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
@@ -541,7 +543,7 @@ def test_find_all_references_for_procedures_and_types(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         CallSegment,
         ProcedureDef,
         ProfileDefStmt,
@@ -570,7 +572,7 @@ def test_find_all_references_for_procedures_and_types(
                 name="typed",
                 params=["x"],
                 body=[
-                    AssignStmt(
+                    VariableInitStmt(
                         name="v",
                         type_expr=person_type_ref,
                         loc=make_edge_span(tmp_path),
@@ -590,7 +592,7 @@ def test_find_all_references_for_procedures_and_types(
                 segments=[CallSegment(name="target", loc=make_edge_span(tmp_path))],
                 loc=make_edge_span(tmp_path),
             ),
-            AssignStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
+            VariableInitStmt(name="v", type_expr=person_type_ref, loc=make_edge_span(tmp_path)),
         ],
         type_defs=[
             TypeDef(
@@ -645,7 +647,7 @@ def test_find_all_references_for_procedures_and_types(
 
 def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Path) -> None:
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         CallSegment,
         InputSegment,
         LiteralArg,
@@ -657,7 +659,7 @@ def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Pa
     owner = ProcedureDef(
         name="owner",
         params=[],
-        body=[AssignStmt(name="value", loc=declaration)],
+        body=[VariableInitStmt(name="value", loc=declaration)],
         loc=make_edge_span(tmp_path),
     )
     segment = CallSegment(
@@ -704,7 +706,7 @@ def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Pa
 
 def test_scope_path_and_nested_capture_resolution_edges() -> None:
     from kedi.lang import parse_program
-    from kedi.lang.ast import AssignStmt, InputSegment, OutputSegment, ReassignStmt, Stmt
+    from kedi.lang.ast import VariableInitStmt, InputSegment, OutputSegment, AssignmentStmt, Stmt
 
     source = (
         "[outer] = root\n"
@@ -723,10 +725,13 @@ def test_scope_path_and_nested_capture_resolution_edges() -> None:
     program = parse_program(source, source_path="/tmp/scope-path.kedi")
 
     assert features._direct_statement_declarations(Stmt(loc=None), "x", None) == []
-    assert features._direct_statement_declarations(AssignStmt(name="x", loc=None), "x", None) == []
+    assert (
+        features._direct_statement_declarations(VariableInitStmt(name="x", loc=None), "x", None)
+        == []
+    )
     assert (
         features._direct_statement_declarations(
-            AssignStmt(expr=[OutputSegment(name="x", loc=None)]), "x", None
+            VariableInitStmt(expr=[OutputSegment(name="x", loc=None)]), "x", None
         )
         == []
     )
@@ -737,9 +742,9 @@ def test_scope_path_and_nested_capture_resolution_edges() -> None:
 
     missing_target = parse_program(
         "[missing] := value\n",
-        source_path="/tmp/missing-reassign.kedi",
+        source_path="/tmp/missing-assignment.kedi",
     ).toplevel_body[0]
-    missing_span = features.assignment_name_span(missing_target)
+    missing_span = features.binding_name_span(missing_target)
     assert missing_span is not None
     missing_ref = features._resolve_in_stmt(
         parse_program("[missing] := value\n"),
@@ -753,7 +758,7 @@ def test_scope_path_and_nested_capture_resolution_edges() -> None:
     assert missing_ref is not None and missing_ref.kind == "local"
     candidates = []
     features._collect_value_reference_candidates(
-        [ReassignStmt(name="missing", loc=None)],
+        [AssignmentStmt(name="missing", loc=None)],
         "missing",
         candidates,
     )

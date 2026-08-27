@@ -10,7 +10,7 @@ from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
-    AssignStmt,
+    VariableInitStmt,
     InputSegment,
     OutputSegment,
     RawInvokeStmt,
@@ -482,14 +482,14 @@ def test_template_block_hover_and_diagnostics() -> None:
     assert "Output" in hover_value(capital_hover)
 
 
-def test_template_block_disambiguates_assign_stmt() -> None:
+def test_template_block_disambiguates_variable_init_stmt() -> None:
     src = "@p():\n  >> line one [x]\n  [y: int] = `1`\n  = <y>\n\n= <p()>\n"
     prog = parse_program(src)
     proc = prog.procedures[0]
     assert isinstance(proc.body[0], TemplateBlock)
     assert len(proc.body[0].lines) == 1
     assign = proc.body[1]
-    assert isinstance(assign, AssignStmt)
+    assert isinstance(assign, VariableInitStmt)
     assert assign.name == "y"
 
 

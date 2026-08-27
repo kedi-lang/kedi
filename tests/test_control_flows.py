@@ -17,8 +17,9 @@ from kedi.lang import (
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
-    ReassignStmt,
+    AssignmentStmt,
     TextSegment,
+    VariableInitStmt,
     compile_program,
     parse_program,
 )
@@ -117,15 +118,18 @@ def test_parse_loop_preserves_binder_iterable_and_body() -> None:
     assert loop.iterable_loc is not None
 
 
-def test_parse_reassignment_is_distinct_from_initialization() -> None:
+def test_parse_assignment_is_distinct_from_variable_initialization() -> None:
     program = parse_program("[value: int] = `1`\n[value] := `2`\n")
 
-    reassign = program.ordered_toplevel[1]
-    assert isinstance(reassign, ReassignStmt)
-    assert reassign.name == "value"
+    initialization = program.ordered_toplevel[0]
+    assignment = program.ordered_toplevel[1]
+    assert isinstance(initialization, VariableInitStmt)
+    assert initialization.name == "value"
+    assert isinstance(assignment, AssignmentStmt)
+    assert assignment.name == "value"
 
 
-def test_reassignment_updates_nearest_owner_and_preserves_type() -> None:
+def test_assignment_updates_nearest_owner_and_preserves_type() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -140,7 +144,7 @@ def test_reassignment_updates_nearest_owner_and_preserves_type() -> None:
     assert runtime.run_main() == 2
 
 
-def test_reassignment_targets_child_shadow_without_leaking() -> None:
+def test_assignment_targets_child_shadow_without_leaking() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -156,7 +160,7 @@ def test_reassignment_targets_child_shadow_without_leaking() -> None:
     assert runtime.run_main() == 1
 
 
-def test_reassignment_rejects_unknown_and_type_mismatched_targets() -> None:
+def test_assignment_rejects_unknown_and_type_mismatched_targets() -> None:
     unknown = compile_program(parse_program("[missing] := value\n"))
     with pytest.raises(NameError, match="unknown Kedi binding"):
         unknown.run_main()
@@ -166,7 +170,7 @@ def test_reassignment_rejects_unknown_and_type_mismatched_targets() -> None:
         mismatched.run_main()
 
 
-def test_fenced_reassignment_preserves_native_value() -> None:
+def test_fenced_assignment_preserves_native_value() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -182,7 +186,7 @@ return 4
     assert runtime.run_main() == 4
 
 
-def test_untyped_fenced_reassignment_preserves_native_value() -> None:
+def test_untyped_fenced_assignment_preserves_native_value() -> None:
     runtime = compile_program(
         parse_program(
             "[value] = initial\n[value] := ```\nreturn {'native': True}\n```\n= `value`\n"
@@ -192,7 +196,7 @@ def test_untyped_fenced_reassignment_preserves_native_value() -> None:
     assert runtime.run_main() == {"native": True}
 
 
-def test_fenced_reassignment_preserves_type_contract() -> None:
+def test_fenced_assignment_preserves_type_contract() -> None:
     runtime = compile_program(
         parse_program("[value: int] = `1`\n[value] := ```\nreturn 'invalid'\n```\n")
     )
@@ -201,7 +205,7 @@ def test_fenced_reassignment_preserves_type_contract() -> None:
         runtime.run_main()
 
 
-def test_reassignment_preserves_template_output_type_contract() -> None:
+def test_assignment_preserves_template_output_type_contract() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -1131,7 +1135,7 @@ def test_procedure_range_without_body_return_runs_every_iteration() -> None:
     assert runtime.run_main() == 6
 
 
-def test_procedure_map_and_both_reassignment_forms_share_iteration_scope() -> None:
+def test_procedure_map_and_both_assignment_forms_share_iteration_scope() -> None:
     runtime = compile_program(
         parse_program(
             "@collect() -> list[int]:\n"

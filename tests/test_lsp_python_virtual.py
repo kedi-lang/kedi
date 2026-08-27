@@ -162,7 +162,7 @@ def test_python_virtual_document_includes_procedure_docstring():
     assert "Reuses Python locals below." in text
 
 
-def test_python_virtual_document_wraps_template_python_substitutions_in_assignments():
+def test_python_virtual_document_wraps_template_python_substitutions_in_initializations():
     src = "@greet(name: str) -> str:\n  [upper: str] = `name.upper()`\n  = Hello <`upper`>\n"
 
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
@@ -624,7 +624,7 @@ def test_python_virtual_document_maps_template_and_conditional_loop_headers() ->
     assert virtual["text"].count("while (") == 2
 
 
-def test_python_virtual_map_scope_and_reassignment_do_not_leak_or_shadow() -> None:
+def test_python_virtual_map_scope_and_assignment_do_not_leak_or_shadow() -> None:
     src = (
         "[total: int] = `0`\n"
         "> loop [item]: `[1, 2]`:\n"
@@ -640,11 +640,11 @@ def test_python_virtual_map_scope_and_reassignment_do_not_leak_or_shadow() -> No
     ast.parse(text)
     assert "double:" not in module_stubs
     assert "        total\n" in text
-    assert "__kedi_reassigned_total_5: int = (" in text
+    assert "__kedi_assigned_total_5: int = (" in text
     assert "            total + double" in text
 
 
-def test_python_virtual_emits_procedure_map_and_reassignment_variants() -> None:
+def test_python_virtual_emits_procedure_map_and_assignment_variants() -> None:
     src = (
         "@collect() -> int:\n"
         "  [total: int] = `0`\n"
@@ -666,8 +666,8 @@ def test_python_virtual_emits_procedure_map_and_reassignment_variants() -> None:
     virtual = compute_python_virtual_document(src, "/tmp/procedure-map.kedi")
 
     ast.parse(virtual["text"])
-    assert "def __kedi_reassign_block_total_11" in virtual["text"]
-    assert "__kedi_reassigned_total_14: int" in virtual["text"]
+    assert "def __kedi_assign_block_total_11" in virtual["text"]
+    assert "__kedi_assigned_total_14: int" in virtual["text"]
     assert "def identity() -> int:" in virtual["text"]
 
 
@@ -679,8 +679,8 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
         ProcDefStmt,
         ProcedureDef,
         PythonExprNativeSegment,
-        ReassignBlockStmt,
-        ReassignStmt,
+        AssignmentBlockStmt,
+        AssignmentStmt,
         TextSegment,
     )
     from kedi.lsp import python_virtual as pv
@@ -727,7 +727,7 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
     nested_loop = LoopStmt(
         binder="item",
         body=[ProcDefStmt(proc=nested)],
-        map_body=[ReassignStmt(name="value", expr=[TextSegment(text="x")])],
+        map_body=[AssignmentStmt(name="value", expr=[TextSegment(text="x")])],
     )
     conditional = ConditionalLoopStmt(
         condition_code="",
@@ -740,17 +740,17 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
 
     fallback_builder = pv.VirtualBuilder("", None)
     fallback_cursor = pv.RegionCursor([])
-    pv._emit_reassign_block(
+    pv._emit_assignment_block(
         fallback_builder,
         fallback_cursor,
-        ReassignBlockStmt(name="value", code="return 1"),
+        AssignmentBlockStmt(name="value", code="return 1"),
         {"value": pv.ScopeName(typ="int", source_range=None)},
         "",
     )
-    pv._emit_reassign_stmt(
+    pv._emit_assignment_stmt(
         fallback_builder,
         fallback_cursor,
-        ReassignStmt(
+        AssignmentStmt(
             name="value",
             expr=[PythonExprNativeSegment(code="1")],
         ),
@@ -1022,7 +1022,7 @@ def test_python_virtual_document_models_metric_scope_params_as_any():
 
 def test_python_virtual_helper_edges(monkeypatch):
     from kedi.lang.ast import (
-        AssignStmt,
+        VariableInitStmt,
         BacktickLineStmt,
         CallSegment,
         EvalMetric,
@@ -1235,20 +1235,20 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert "        return cast(str, _kedi_placeholder())" in nested_builder.finish()
     assert pv._docstring_lines("one line", "  ") == ['  """one line"""']
 
-    assign = AssignStmt(
+    assign = VariableInitStmt(
         name="x",
         expr=[PythonExprNativeSegment(code="1", loc=Span(0, 1, 1, 12, 1, 13))],
         loc=Span(0, 1, 1, 2, 1, 3),
     )
     emit_builder = pv.VirtualBuilder("[x: int] = `1`\n", None)
-    pv._emit_assign_stmt(emit_builder, pv.RegionCursor([]), assign, {}, "    ")
+    pv._emit_variable_init_stmt(emit_builder, pv.RegionCursor([]), assign, {}, "    ")
     assert "x: str = (" in emit_builder.finish()
-    plain_assign = AssignStmt(
+    plain_assign = VariableInitStmt(
         name="y",
         expr=[TextSegment(text="hello")],
         loc=Span(0, 1, 1, 2, 1, 3),
     )
-    pv._emit_assign_stmt(emit_builder, pv.RegionCursor([]), plain_assign, {}, "    ")
+    pv._emit_variable_init_stmt(emit_builder, pv.RegionCursor([]), plain_assign, {}, "    ")
     assert "y: str = cast(str, _kedi_placeholder())" in emit_builder.finish()
     region_for_assign = {
         "kind": "inline",
@@ -1258,7 +1258,9 @@ def test_python_virtual_helper_edges(monkeypatch):
         },
         "text": "1",
     }
-    pv._emit_assign_stmt(emit_builder, pv.RegionCursor([region_for_assign]), assign, {}, "    ")
+    pv._emit_variable_init_stmt(
+        emit_builder, pv.RegionCursor([region_for_assign]), assign, {}, "    "
+    )
 
     import_builder = pv.VirtualBuilder("", None)
     assert pv._emit_python_stub_stmt(import_builder, ast.parse("import typing").body[0])
@@ -1272,13 +1274,13 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert "import typing" in import_builder.finish()
     assert pv._checker_safe_value_stub("not valid Python !") == "not valid Python !"
 
-    no_region_block = pv.AssignBlockStmt(
+    no_region_block = pv.VariableInitBlockStmt(
         name="blocked",
         code="return 1",
         type_annotation="int",
         loc=Span(0, 1, 1, 1, 1, 10),
     )
-    pv._emit_assign_block(
+    pv._emit_variable_init_block(
         emit_builder,
         pv.RegionCursor([]),
         no_region_block,
@@ -1362,7 +1364,7 @@ def test_python_virtual_helper_edges(monkeypatch):
             ]
         ),
         [
-            AssignStmt(name="a", expr=[TextSegment(text="ok")], loc=Span(0, 1, 1, 2, 1, 3)),
+            VariableInitStmt(name="a", expr=[TextSegment(text="ok")], loc=Span(0, 1, 1, 2, 1, 3)),
             pv.TemplateLine(
                 segments=[OutputSegment(name="template_output", type_annotation="int")],
                 loc=Span(0, 1, 1, 1, 1, 1),
@@ -1474,7 +1476,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     )
     assert pv._proc_name_range(ProcedureDef(name="p", params=[])) is None
     assert pv._type_name_range(TypeDef(name="T", fields=[])) is None
-    assert pv._assign_name_range(AssignStmt(name="x")) is None
+    assert pv._binding_name_range(VariableInitStmt(name="x")) is None
     assert pv._output_name_range(OutputSegment(name="x")) is None
     assert (
         pv._param_name_range(

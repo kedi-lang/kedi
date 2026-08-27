@@ -120,7 +120,7 @@ def test_semantic_tokens_cover_assignment_targets_and_args():
     )
 
 
-def test_semantic_tokens_cover_reassignment_and_map_syntax() -> None:
+def test_semantic_tokens_cover_assignment_and_map_syntax() -> None:
     src = (
         "[value: int] = `1`\n"
         "[value] := `2`\n"

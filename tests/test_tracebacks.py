@@ -236,13 +236,13 @@ def test_cli_renders_toplevel_body_error_without_return(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "Kedi stack trace:" in result.output
-    assert f'File "{srcp}", line 1, in assignment x' in result.output
+    assert f'File "{srcp}", line 1, in variable initialization x' in result.output
     assert "in inline python" in result.output
     assert "Inline Python error: ZeroDivisionError" in result.output
     assert "1 / 0" in result.output
 
 
-def test_cli_renders_embedded_python_trace_once_for_assignment_block(
+def test_cli_renders_embedded_python_trace_once_for_variable_initialization_block(
     tmp_path: Path,
 ) -> None:
     srcp = tmp_path / "sample.kedi"
@@ -255,7 +255,7 @@ def test_cli_renders_embedded_python_trace_once_for_assignment_block(
     result = runner.invoke(cli_main, [str(srcp)])
 
     assert result.exit_code == 1
-    assert f'File "{srcp}", line 1, in assignment x' in result.output
+    assert f'File "{srcp}", line 1, in variable initialization x' in result.output
     assert f'File "{srcp}", line 3, in python block' in result.output
     assert result.output.count("embedded Python line") == 1
     assert result.output.count('return "value') == 1

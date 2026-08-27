@@ -653,7 +653,7 @@ def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
     ]
 
 
-def test_reassignment_and_map_references_resolve_to_iteration_owners() -> None:
+def test_assignment_and_map_references_resolve_to_iteration_owners() -> None:
     from kedi.lang import parse_program
 
     source = (
@@ -720,7 +720,7 @@ def test_reassignment_and_map_references_resolve_to_iteration_owners() -> None:
     )
 
 
-def test_imported_reassignment_target_resolves_to_exported_declaration(tmp_path: Path) -> None:
+def test_imported_assignment_target_resolves_to_exported_declaration(tmp_path: Path) -> None:
     module = tmp_path / "values.kedi"
     module.write_text("> export:\n  value\n\n[value] = original\n", encoding="utf-8")
     main = tmp_path / "main.kedi"
