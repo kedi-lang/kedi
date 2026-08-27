@@ -18,8 +18,8 @@ from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
 from ..lang.ast import (
-    VariableInitBlockStmt,
-    VariableInitStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -28,6 +28,7 @@ from ..lang.ast import (
     EvalSuite,
     IfStmt,
     LiteralArg,
+    LoopStmt,
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
@@ -36,9 +37,6 @@ from ..lang.ast import (
     PythonExprNativeSegment,
     PythonExprSegment,
     RawInvokeStmt,
-    AssignmentBlockStmt,
-    AssignmentStmt,
-    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Span,
@@ -54,6 +52,8 @@ from ..lang.ast import (
     TypePython,
     TypeRef,
     TypeUnion,
+    VariableInitBlockStmt,
+    VariableInitStmt,
 )
 from ..lang.parser import KediParseError, parse_program
 from ..lang.type_render import type_expr_to_python

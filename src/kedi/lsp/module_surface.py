@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Optional, TypeVar
 
 from ..lang.ast import (
-    VariableInitBlockStmt,
-    VariableInitStmt,
     ModuleImport,
     ProcedureDef,
     ProfileDefStmt,
@@ -16,6 +14,8 @@ from ..lang.ast import (
     Span,
     TypeDef,
     TypeExpr,
+    VariableInitBlockStmt,
+    VariableInitStmt,
 )
 from ..lang.parser import parse_program
 from ..module_registry import find_module_path, resolve_module_path

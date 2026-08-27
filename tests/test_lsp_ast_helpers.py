@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kedi.lang.ast import VariableInitStmt, Span
+from kedi.lang.ast import Span, VariableInitStmt
 from kedi.lsp import ast_helpers
 
 

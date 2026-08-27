@@ -1162,7 +1162,7 @@ def test_assignment_diagnostics_require_a_visible_binding() -> None:
 def test_assignment_diagnostics_cover_reserved_missing_span_and_imported_values(
     tmp_path: Path,
 ) -> None:
-    from kedi.lang.ast import Program, AssignmentStmt
+    from kedi.lang.ast import AssignmentStmt, Program
 
     reserved = features.compute_diagnostics("[args] := value\n", str(tmp_path / "reserved.kedi"))
     assert [diagnostic.code for diagnostic in reserved] == ["K-ASSIGN-RESERVED"]

@@ -10,6 +10,8 @@ regex-parse.
 from __future__ import annotations
 
 from .ast import (
+    AssignmentBlockStmt,
+    AssignmentStmt,
     CallSegment,
     ConditionalLoopStmt,
     IfStmt,
@@ -37,8 +39,6 @@ from .ast import (
     TypeUnion,
     VariableInitBlockStmt,
     VariableInitStmt,
-    AssignmentBlockStmt,
-    AssignmentStmt,
 )
 from .compiler import compile_program
 from .parser import KediDiagnostic, KediParseError, parse_program

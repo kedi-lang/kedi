@@ -10,7 +10,6 @@ from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
-    VariableInitStmt,
     InputSegment,
     OutputSegment,
     RawInvokeStmt,
@@ -18,6 +17,7 @@ from kedi.lang.ast import (
     TemplateBlock,
     TemplateLine,
     TextSegment,
+    VariableInitStmt,
 )
 from kedi.lang.compiler.evaluation import merge_template_block_lines
 from kedi.lang.parser.diagnostics import KediParseError

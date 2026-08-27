@@ -13,7 +13,6 @@ from kedi.errors import KediTraceFrame
 from kedi.lang import compile_program as compile_kedi_program
 from kedi.lang import parse_program
 from kedi.lang.ast import (
-    VariableInitStmt,
     CallArg,
     CallSegment,
     InputSegment,
@@ -34,6 +33,7 @@ from kedi.lang.ast import (
     TextSegment,
     TypeDefStmt,
     VarArg,
+    VariableInitStmt,
 )
 from kedi.lang.compiler import environment as compiler_env
 from kedi.lang.compiler.environment import (

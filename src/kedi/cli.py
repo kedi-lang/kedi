@@ -5,6 +5,7 @@ from pathlib import Path
 
 import click
 
+from kedi._interactive import SessionPersistenceError
 from kedi.app import (
     maybe_run_codegen,
     run_evals_cli,
@@ -16,7 +17,6 @@ from kedi.app import (
 from kedi.error_rendering import render_execution_error, render_parse_error
 from kedi.errors import KediExecutionError
 from kedi.idle import run_idle
-from kedi._interactive import SessionPersistenceError
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
 from kedi.package_registry import add_package, install_package

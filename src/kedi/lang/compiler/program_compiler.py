@@ -41,13 +41,12 @@ from ..ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
-    VariableInitBlockStmt,
-    VariableInitStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
     IfStmt,
+    LoopStmt,
     McpDirectiveStmt,
     ModelDirectiveStmt,
     ModuleImport,
@@ -58,7 +57,6 @@ from ..ast import (
     Program,
     ProgramWithValidation,
     RawInvokeStmt,
-    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -69,11 +67,12 @@ from ..ast import (
     TypeDef,
     TypeDefStmt,
     UseDirectiveStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
 )
-from .evaluation import evaluate_python_inline, execute_python_block
 from .control_flow import (
-    assert_conditional_loop_capacity,
     active_scope,
+    assert_conditional_loop_capacity,
     branch_trace,
     child_scope,
     evaluate_condition,
@@ -83,6 +82,7 @@ from .control_flow import (
     managed_loop_iterator,
     run_map_continuations,
 )
+from .evaluation import evaluate_python_inline, execute_python_block
 from .procedure_compiler import ProcedureCompiler
 from .statement_compiler import StatementCompiler, StatementExecutor
 from .type_system import register_type

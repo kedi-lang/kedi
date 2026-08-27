@@ -130,7 +130,7 @@ def test_collect_type_refs_in_expr_stmt_and_type_def(
 
 
 def test_find_local_declaration_in_procedure_body(tmp_path: Path) -> None:
-    from kedi.lang.ast import VariableInitStmt, OutputSegment, ProcedureDef, TemplateLine
+    from kedi.lang.ast import OutputSegment, ProcedureDef, TemplateLine, VariableInitStmt
 
     assert features._find_local_declaration(None, "x") is None
     local_proc = ProcedureDef(
@@ -180,12 +180,12 @@ def test_resolve_in_type_expr_and_stmt(
     resolution_pos: lsp.Position,
 ) -> None:
     from kedi.lang.ast import (
-        VariableInitBlockStmt,
         OutputSegment,
         TypeApply,
         TypeDef,
         TypeRef,
         TypeUnion,
+        VariableInitBlockStmt,
     )
 
     person_def = {"Person": TypeDef("Person", [], loc=make_edge_span(tmp_path))}
@@ -279,7 +279,7 @@ def test_resolve_in_type_expr_and_stmt_miss_unknown_types(
     tmp_path: Path,
     resolution_pos: lsp.Position,
 ) -> None:
-    from kedi.lang.ast import VariableInitBlockStmt, TypeApply, TypeRef, TypeUnion
+    from kedi.lang.ast import TypeApply, TypeRef, TypeUnion, VariableInitBlockStmt
 
     assert (
         features._resolve_in_type_expr(
@@ -430,7 +430,6 @@ def test_smallest_enclosing_validation_program(
     tmp_path: Path, resolution_pos: lsp.Position
 ) -> None:
     from kedi.lang.ast import (
-        VariableInitStmt,
         AutoSpec,
         CallArg,
         CallSegment,
@@ -448,6 +447,7 @@ def test_smallest_enclosing_validation_program(
         TextSegment,
         TypeDef,
         TypeField,
+        VariableInitStmt,
     )
 
     nested_arg = CallArg(loc=make_edge_span(tmp_path))
@@ -543,7 +543,6 @@ def test_find_all_references_for_procedures_and_types(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from kedi.lang.ast import (
-        VariableInitStmt,
         CallSegment,
         ProcedureDef,
         ProfileDefStmt,
@@ -553,6 +552,7 @@ def test_find_all_references_for_procedures_and_types(
         TestSuite,
         TypeDef,
         TypeField,
+        VariableInitStmt,
     )
 
     ref_prog = Program(
@@ -647,12 +647,12 @@ def test_find_all_references_for_procedures_and_types(
 
 def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Path) -> None:
     from kedi.lang.ast import (
-        VariableInitStmt,
         CallSegment,
         InputSegment,
         LiteralArg,
         ProcedureDef,
         TextSegment,
+        VariableInitStmt,
     )
 
     declaration = make_edge_span(tmp_path)
@@ -706,7 +706,7 @@ def test_collect_lexical_input_refs_recurses_through_call_arguments(tmp_path: Pa
 
 def test_scope_path_and_nested_capture_resolution_edges() -> None:
     from kedi.lang import parse_program
-    from kedi.lang.ast import VariableInitStmt, InputSegment, OutputSegment, AssignmentStmt, Stmt
+    from kedi.lang.ast import AssignmentStmt, InputSegment, OutputSegment, Stmt, VariableInitStmt
 
     source = (
         "[outer] = root\n"

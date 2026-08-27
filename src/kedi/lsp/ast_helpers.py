@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Optional
 
 from ..lang.ast import (
-    VariableInitBlockStmt,
-    VariableInitStmt,
     AssignmentBlockStmt,
     AssignmentStmt,
     Span,
+    VariableInitBlockStmt,
+    VariableInitStmt,
 )
 from ..lang.parser.parser import parse as _ts_parse
 from .ast_spans import name_token_span

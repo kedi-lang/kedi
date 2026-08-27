@@ -79,8 +79,8 @@ from ..lang.ast import (
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     ArtifactsField,
-    VariableInitBlockStmt,
-    VariableInitStmt,
+    AssignmentBlockStmt,
+    AssignmentStmt,
     AutoSpec,
     BacktickLineStmt,
     CallArg,
@@ -95,6 +95,7 @@ from ..lang.ast import (
     IfStmt,
     InputSegment,
     LiteralArg,  # noqa: F401
+    LoopStmt,
     McpDirectiveStmt,
     McpField,
     ModelDirectiveStmt,
@@ -124,9 +125,6 @@ from ..lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
-    AssignmentBlockStmt,
-    AssignmentStmt,
-    LoopStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -149,6 +147,8 @@ from ..lang.ast import (
     TypeRef,
     TypeUnion,
     UseDirectiveStmt,
+    VariableInitBlockStmt,
+    VariableInitStmt,
 )
 from ..lang.call_arg_access import iter_call_arg_nested
 from ..lang.compiler.environment import (

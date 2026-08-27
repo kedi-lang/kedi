@@ -12,7 +12,7 @@ import pytest
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import TypeApply, TypeRef, TypeUnion
 from kedi.lang.compiler.environment import KediRuntime
-from kedi.lang.compiler.type_system import KediType, UNSUPPORTED_KEDI_TYPE_NAMES
+from kedi.lang.compiler.type_system import UNSUPPORTED_KEDI_TYPE_NAMES, KediType
 from kedi.resolved_types import runtime_isinstance
 from tests.utils_llm import run_without_llm
 

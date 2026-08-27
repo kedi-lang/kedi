@@ -37,7 +37,6 @@ from kedi.lang import (
     parse_program,
 )
 from kedi.lang.ast import (
-    VariableInitStmt,
     BacktickLineStmt,
     IfStmt,
     InputSegment,
@@ -50,6 +49,7 @@ from kedi.lang.ast import (
     TemplateLine,
     TextSegment,
     UseDirectiveStmt,
+    VariableInitStmt,
 )
 
 cst_module = importlib.import_module("kedi.lang.parser.cst_to_ast")

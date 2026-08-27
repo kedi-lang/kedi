@@ -102,8 +102,8 @@ def test_proc_signature_markdown_variants(tmp_path: Path) -> None:
 
 def test_describe_ast_node_covers_supported_nodes(tmp_path: Path) -> None:
     from kedi.lang.ast import (
-        VariableInitBlockStmt,
-        VariableInitStmt,
+        AssignmentBlockStmt,
+        AssignmentStmt,
         AutoSpec,
         BacktickLineStmt,
         CallSegment,
@@ -116,8 +116,6 @@ def test_describe_ast_node_covers_supported_nodes(tmp_path: Path) -> None:
         ProcedureDef,
         PythonBlock,
         PythonExprSegment,
-        AssignmentBlockStmt,
-        AssignmentStmt,
         ReturnBlockStmt,
         ReturnStmt,
         Stmt,
@@ -126,6 +124,8 @@ def test_describe_ast_node_covers_supported_nodes(tmp_path: Path) -> None:
         TextSegment,
         TypeDef,
         TypeField,
+        VariableInitBlockStmt,
+        VariableInitStmt,
     )
 
     proc = ProcedureDef(name="p", params=["x"], body=[], loc=make_edge_span(tmp_path))

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from concurrent.futures import Future
+from pathlib import Path
 from threading import Barrier, Lock
 from typing import Annotated, Any, get_args, get_origin
 
@@ -14,10 +14,10 @@ from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import current_block_agent_profile
 from kedi.engine import ThreadEngine
 from kedi.lang import (
+    AssignmentStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
-    AssignmentStmt,
     TextSegment,
     VariableInitStmt,
     compile_program,
@@ -30,9 +30,9 @@ from kedi.lang.compiler.control_flow import (
     run_map_continuations,
 )
 from kedi.lang.compiler.environment import ScopeFrame
-from kedi.promise import KediPromise
 from kedi.lang.parser import KediParseError
 from kedi.lang.parser.cst_to_ast import _Walker
+from kedi.promise import KediPromise
 from kedi.utils import AttrDict
 from tests.mock_adapter import MockAdapter
 from tests.telemetry_helpers import installed_recording_backend

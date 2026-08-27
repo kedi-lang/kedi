@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kedi.lang.ast import VariableInitStmt, Program, Span
+from kedi.lang.ast import Program, Span, VariableInitStmt
 from kedi.lang.parser import parse_program
 from kedi.lsp import module_surface
 

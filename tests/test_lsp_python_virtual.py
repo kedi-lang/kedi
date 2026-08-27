@@ -673,14 +673,14 @@ def test_python_virtual_emits_procedure_map_and_assignment_variants() -> None:
 
 def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -> None:
     from kedi.lang.ast import (
+        AssignmentBlockStmt,
+        AssignmentStmt,
         ConditionalLoopStmt,
         IfStmt,
         LoopStmt,
         ProcDefStmt,
         ProcedureDef,
         PythonExprNativeSegment,
-        AssignmentBlockStmt,
-        AssignmentStmt,
         TextSegment,
     )
     from kedi.lsp import python_virtual as pv
@@ -1022,7 +1022,6 @@ def test_python_virtual_document_models_metric_scope_params_as_any():
 
 def test_python_virtual_helper_edges(monkeypatch):
     from kedi.lang.ast import (
-        VariableInitStmt,
         BacktickLineStmt,
         CallSegment,
         EvalMetric,
@@ -1046,6 +1045,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         TypeRef,
         TypeUnion,
         VarArg,
+        VariableInitStmt,
     )
     from kedi.lsp import python_virtual as pv
 
