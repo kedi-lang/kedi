@@ -63,9 +63,9 @@ from kedi.agent_adapter.tool_override import (
     SupportsToolRegistration,
     ToolScope,
     ToolSpec,
-    artifact_admission_scope,
     approval_request_for_tool,
     arguments_target_secret_file,
+    artifact_admission_scope,
 )
 from kedi.agent_adapter.utils import (
     dspy_sync_tool_function,
