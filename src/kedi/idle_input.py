@@ -181,6 +181,7 @@ class PromptToolkitInput:
             else:
                 event.current_buffer.insert_text("\n")
 
+        _add_deletion_bindings(bindings)
         return bindings
 
 
@@ -211,7 +212,18 @@ def _line_key_bindings() -> KeyBindings:
     def insert_tab(event: Any) -> None:
         event.current_buffer.insert_text("\t")
 
+    _add_deletion_bindings(bindings)
     return bindings
+
+
+def _add_deletion_bindings(bindings: KeyBindings) -> None:
+    @bindings.add("backspace")
+    def delete_before_cursor(event: Any) -> None:
+        event.current_buffer.delete_before_cursor(count=1)
+
+    @bindings.add("delete")
+    def delete_at_cursor(event: Any) -> None:
+        event.current_buffer.delete(count=1)
 
 
 def _should_submit_multiline(

@@ -286,17 +286,27 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
         def __init__(self, source: str = "") -> None:
             self.document = Document(source, cursor_position=len(source))
             self.inserted: list[str] = []
+            self.deleted: list[tuple[str, int]] = []
             self.submitted = 0
 
         def insert_text(self, text: str) -> None:
             self.inserted.append(text)
+
+        def delete_before_cursor(self, *, count: int) -> None:
+            self.deleted.append(("before", count))
+
+        def delete(self, *, count: int) -> None:
+            self.deleted.append(("at", count))
 
         def validate_and_handle(self) -> None:
             self.submitted += 1
 
     line_buffer = Buffer()
     prompt_input._line_bindings.bindings[0].handler(SimpleNamespace(current_buffer=line_buffer))
+    prompt_input._line_bindings.bindings[1].handler(SimpleNamespace(current_buffer=line_buffer))
+    prompt_input._line_bindings.bindings[2].handler(SimpleNamespace(current_buffer=line_buffer))
     assert line_buffer.inserted == ["\t"]
+    assert line_buffer.deleted == [("before", 1), ("at", 1)]
 
     tab_buffer = Buffer()
     force_buffer = Buffer()
@@ -307,11 +317,14 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
     bindings[1].handler(SimpleNamespace(current_buffer=force_buffer))
     bindings[2].handler(SimpleNamespace(current_buffer=submit_buffer))
     bindings[2].handler(SimpleNamespace(current_buffer=continue_buffer))
+    bindings[3].handler(SimpleNamespace(current_buffer=continue_buffer))
+    bindings[4].handler(SimpleNamespace(current_buffer=continue_buffer))
 
     assert tab_buffer.inserted == ["\t"]
     assert force_buffer.submitted == 1
     assert submit_buffer.submitted == 1
     assert continue_buffer.inserted == ["\n"]
+    assert continue_buffer.deleted == [("before", 1), ("at", 1)]
 
 
 def test_multiline_input_preserves_bracketed_paste_until_explicit_submission(
