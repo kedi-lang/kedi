@@ -1442,6 +1442,36 @@ def test_pydantic_codec_protects_mixed_system_prompts_and_provider_thinking() ->
     assert metadata_snapshot.entries[1].provider_required is True
 
 
+def test_pydantic_codec_keeps_plain_request_instructions_compactable() -> None:
+    messages = [
+        ModelRequest(
+            parts=[UserPromptPart("Complete the task")],
+            instructions="Stable instructions",
+        ),
+        ModelResponse(parts=[TextPart("Done")]),
+        ModelRequest(parts=[UserPromptPart("Confirm the result")]),
+        ModelResponse(parts=[TextPart("Confirmed")]),
+    ]
+    state = {"pydantic_messages": ModelMessagesTypeAdapter.dump_python(messages, mode="json")}
+    transaction = KediCompactionTransaction(PydanticHistoryCodec())
+    snapshot = transaction.processor.inspect(state, codec=PydanticHistoryCodec())
+
+    assert snapshot.entries[0].provider_required is False
+    assert snapshot.groups[0].protected_reasons == ()
+
+    prepared = transaction.prepare(
+        state,
+        HistoryReductionPolicy(
+            threshold_tokens=max(1, snapshot.total_tokens - 1),
+            target_tokens=max(1, snapshot.total_tokens // 2),
+            preserve_recent_tokens=0,
+            checkpoint_budget_tokens=1,
+            minimum_reduction_tokens=1,
+        ),
+    )
+    assert prepared.plan.window is not None
+
+
 def test_langchain_codec_tracks_server_tools_and_protects_unknown_content() -> None:
     messages = [
         HumanMessage(content="Search the server index."),

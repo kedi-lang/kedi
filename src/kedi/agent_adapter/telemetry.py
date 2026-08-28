@@ -354,6 +354,11 @@ def agent_call_span(
     mcp_server_count: int,
     artifacts_enabled: bool,
     configured_model: str | None,
+    prompt_kind: str | None = None,
+    instruction_count: int = 0,
+    history_count: int = 0,
+    cache_epoch: int | None = None,
+    turn_sequence: int | None = None,
 ) -> Iterator[AgentCallTelemetry]:
     """Trace one semantic Kedi agent call unless its adapter owns a native span."""
 
@@ -372,7 +377,15 @@ def agent_call_span(
         "kedi.tools.available_count": tool_count,
         "kedi.mcp.server_count": mcp_server_count,
         "kedi.artifacts.enabled": artifacts_enabled,
+        "kedi.instructions.count": instruction_count,
+        "kedi.history.message_count": history_count,
     }
+    if prompt_kind is not None:
+        attributes["kedi.prompt.kind"] = prompt_kind
+    if cache_epoch is not None:
+        attributes["kedi.cache.epoch"] = cache_epoch
+    if turn_sequence is not None:
+        attributes["kedi.conversation.turn_sequence"] = turn_sequence
     if configured_model is not None:
         attributes["gen_ai.request.model"] = configured_model
 

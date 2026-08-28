@@ -273,6 +273,8 @@ class ClaudeAdapter(HookRegistrationMixin):
                             "claude_session_fingerprint": session_fingerprint,
                         }
                     )
+                    if isinstance(conversation, AdapterConversationContext):
+                        conversation.mark_completed()
                 if resolver is not None:
                     resolver.complete_run(
                         final_text=_claude_text_response(result) if emit_final else None

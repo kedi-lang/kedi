@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import inspect
+import json
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import wraps
 from time import monotonic
 from typing import (
@@ -68,8 +70,11 @@ from ..telemetry import mcp_initialization_span
 from ..tool_override import (
     ToolScope,
     ToolSpec,
+    admit_current_artifact_result,
     arguments_target_secret_file,
+    current_artifact_admission,
     resolve_tool_arguments_async,
+    tool_has_artifact_boundary,
 )
 
 
@@ -92,7 +97,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_subagents=True,
         supports_background_subagents=True,
         supports_artifacts=True,
-        supports_native_artifacts=False,
+        supports_native_artifacts=True,
         supports_stateful_history=True,
         supports_history_replay=True,
         supports_native_compaction=True,
@@ -484,8 +489,9 @@ class LangChainAdapter(HookRegistrationMixin):
 
         if all(isinstance(message, BaseMessage) for message in messages):
             conversation.result_state["langchain_messages"] = [
-                message_to_dict(message) for message in messages
+                message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
+            conversation.mark_completed()
 
     def _create_agent(
         self,
@@ -532,7 +538,7 @@ class LangChainAdapter(HookRegistrationMixin):
             dispatcher.handlers_for(event)
             for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
         )
-        if not approval_enabled and not has_tool_hooks:
+        if not approval_enabled and not has_tool_hooks and current_artifact_admission() is None:
             return []
         known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         tool_specs = list(known_specs.values())
@@ -902,8 +908,11 @@ def _langchain_approval_middleware(
                     interrupted=is_tool_execution_interrupted(exc),
                 )
                 raise
-            if getattr(result, "status", None) == "error":
-                error = RuntimeError(str(getattr(result, "content", "Tool execution failed")))
+            result_message = _langchain_tool_message_for_call(result, call_id)
+            if result_message is not None and getattr(result_message, "status", None) == "error":
+                error = RuntimeError(
+                    str(getattr(result_message, "content", "Tool execution failed"))
+                )
                 await dispatch_post_tool_use_failure(
                     tool,
                     final_arguments,
@@ -915,6 +924,12 @@ def _langchain_approval_middleware(
                     duration_seconds=monotonic() - started,
                 )
                 return result
+            if tool.artifact_result != "never" and not tool_has_artifact_boundary(tool):
+                result = await _langchain_admit_native_tool_result(
+                    result,
+                    tool_name=tool_name,
+                    call_id=call_id,
+                )
             await dispatch_post_tool_use(
                 tool,
                 final_arguments,
@@ -927,6 +942,122 @@ def _langchain_approval_middleware(
             return result
 
     return KediToolLifecycleMiddleware()
+
+
+async def _langchain_admit_native_tool_result(
+    result: Any,
+    *,
+    tool_name: str,
+    call_id: str,
+) -> Any:
+    """Replace causal ToolMessage content while preserving LangGraph commands."""
+
+    try:
+        from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+    except ImportError:  # pragma: no cover - adapter dependency guard
+        return result
+
+    async def admit_message(message: Any) -> tuple[Any, bool]:
+        if not isinstance(message, ToolMessage) or message.tool_call_id != call_id:
+            return message, False
+        content = message.content
+        admitted = await admit_current_artifact_result(
+            content,
+            tool_name=tool_name,
+            call_id=call_id,
+        )
+        if admitted is content:
+            return message, False
+        model_content = (
+            json.dumps(admitted, ensure_ascii=True, separators=(",", ":"))
+            if isinstance(admitted, Mapping)
+            else admitted
+        )
+        return message.model_copy(update={"content": model_content}), True
+
+    async def admit_messages(value: Any) -> tuple[Any, bool]:
+        if isinstance(value, ToolMessage):
+            return await admit_message(value)
+        if isinstance(value, list):
+            changed = False
+            items: list[Any] = []
+            for item in value:
+                admitted, item_changed = await admit_messages(item)
+                items.append(admitted)
+                changed = changed or item_changed
+            return (items if changed else value), changed
+        if isinstance(value, tuple):
+            changed = False
+            items = []
+            for item in value:
+                admitted, item_changed = await admit_messages(item)
+                items.append(admitted)
+                changed = changed or item_changed
+            return (tuple(items) if changed else value), changed
+        return value, False
+
+    if isinstance(result, ToolMessage):
+        admitted, _ = await admit_message(result)
+        return admitted
+    if isinstance(result, Command):
+        update = result.update
+        if isinstance(update, Mapping):
+            if "messages" not in update:
+                return result
+            messages, changed = await admit_messages(update["messages"])
+            if not changed:
+                return result
+            return replace(result, update={**update, "messages": messages})
+
+        admitted_update, changed = await admit_messages(update)
+        return replace(result, update=admitted_update) if changed else result
+
+    # Keep the existing helper contract for direct/raw results used by adapter-native bridges.
+    content = getattr(result, "content", result)
+    admitted = await admit_current_artifact_result(
+        content,
+        tool_name=tool_name,
+        call_id=call_id,
+    )
+    if admitted is content:
+        return result
+    model_copy = getattr(result, "model_copy", None)
+    if not callable(model_copy):
+        return admitted
+    model_content = (
+        json.dumps(admitted, ensure_ascii=True, separators=(",", ":"))
+        if isinstance(admitted, Mapping)
+        else admitted
+    )
+    return model_copy(update={"content": model_content})
+
+
+def _langchain_tool_message_for_call(result: Any, call_id: str) -> Any | None:
+    """Find the causal ToolMessage in a direct result or LangGraph Command update."""
+
+    try:
+        from langchain_core.messages import ToolMessage
+        from langgraph.types import Command
+    except ImportError:  # pragma: no cover - adapter dependency guard
+        return None
+
+    def find(value: Any) -> Any | None:
+        if isinstance(value, ToolMessage):
+            return value if value.tool_call_id == call_id else None
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                found = find(item)
+                if found is not None:
+                    return found
+        return None
+
+    if isinstance(result, ToolMessage):
+        return find(result)
+    if not isinstance(result, Command):
+        return None
+    update = result.update
+    return find(update.get("messages")) if isinstance(update, Mapping) else find(update)
 
 
 def _langchain_hook_origin(tool: ToolSpec, native_tool: Any) -> ToolOrigin:
@@ -991,20 +1122,7 @@ def _langchain_event_handler(resolver: AgentMessageResolver) -> Any:
 
 
 def _langchain_completed_message_text(message: Any) -> str:
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if isinstance(block, str):
-            parts.append(block)
-        elif isinstance(block, Mapping):
-            text = block.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "".join(parts).strip()
+    return (_langchain_content_text(getattr(message, "content", None)) or "").strip()
 
 
 def _langchain_invocation_usage(
@@ -1218,9 +1336,25 @@ def _langchain_message_text(message: Any) -> str:
         return message
     if isinstance(message, Mapping):
         content = message.get("content")
-        if isinstance(content, str):
-            return content
-    content = getattr(message, "content", None)
+    else:
+        content = getattr(message, "content", None)
+    text = _langchain_content_text(content)
+    if text is not None:
+        return text
+    raise ValueError("LangChain agent did not return a text response.")
+
+
+def _langchain_content_text(content: Any) -> str | None:
     if isinstance(content, str):
         return content
-    raise ValueError("LangChain agent did not return a text response.")
+    if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
+        return None
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, Mapping):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)

@@ -374,6 +374,11 @@ def _agent_span(adapter: object):
         mcp_server_count=1,
         artifacts_enabled=True,
         configured_model=None,
+        prompt_kind="template",
+        instruction_count=2,
+        history_count=4,
+        cache_epoch=3,
+        turn_sequence=5,
     )
 
 
@@ -448,6 +453,11 @@ def test_agent_and_model_telemetry_cover_native_ownership_usage_and_failures() -
     assert agent_spans[0].attributes["kedi.usage.uncached_input_tokens"] == 4
     assert agent_spans[0].attributes["kedi.usage.cost_usd"] == 0.0015
     assert agent_spans[0].attributes["gen_ai.usage.output_tokens"] == 7
+    assert agent_spans[0].attributes["kedi.prompt.kind"] == "template"
+    assert agent_spans[0].attributes["kedi.instructions.count"] == 2
+    assert agent_spans[0].attributes["kedi.history.message_count"] == 4
+    assert agent_spans[0].attributes["kedi.cache.epoch"] == 3
+    assert agent_spans[0].attributes["kedi.conversation.turn_sequence"] == 5
     assert agent_spans[1].attributes["error.type"] == "CancelledError"
     assert agent_spans[1].events[-1].name == "agent cancelled"
     assert agent_spans[2].attributes["error.type"] == "RuntimeError"

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi import ArtifactPolicy as PublicArtifactPolicy
@@ -1280,6 +1280,45 @@ def test_native_approval_adapter_receives_unwrapped_artifact_tools() -> None:
     assert adapter.tool_calls == [
         ("read_artifact", "search_artifacts", "release_artifact", "run_artifact_code")
     ]
+    runtime.artifacts.close()
+
+
+def test_runtime_artifact_scope_covers_pydantic_constructor_tools() -> None:
+    async def respond(messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        if not any(
+            isinstance(part, ToolReturnPart) for message in messages for part in message.parts
+        ):
+            return ModelResponse(
+                parts=[ToolCallPart("native_tool", {}, tool_call_id="native-call")]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    def native_tool() -> str:
+        return "runtime-native-result" * 20
+
+    source = """
+> approval: allow
+> artifacts:
+    enabled: true
+    threshold: 10b
+
+[answer] << Call native_tool once, then answer done.
+= <answer>
+"""
+    runtime = compile_program(
+        parse_program(source),
+        adapter=PydanticAdapter(FunctionModel(respond), tools=[native_tool]),
+    )
+
+    assert runtime.run_main() == "done"
+    assert runtime.artifacts.get_value("tool_call_result_1") == "runtime-native-result" * 20
+    events = runtime.artifacts.history.snapshot()
+    assert events[0].data["call_id"] == "native-call"
+    assert events[-1].data == {
+        "tool_name": "native_tool",
+        "call_id": "native-call",
+        "artifacted": True,
+    }
     runtime.artifacts.close()
 
 

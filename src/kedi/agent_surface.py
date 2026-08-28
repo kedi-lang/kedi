@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from threading import Lock
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator
 
 from typing_extensions import final
 
@@ -17,6 +17,9 @@ from .agent_profile import (
     AgentProfileOverrideUnsupported,
     AgentToolOverrideUnsupported,
 )
+
+if TYPE_CHECKING:
+    from .artifacts import ArtifactManager
 
 __all__ = ("AgentSurface",)
 
@@ -36,6 +39,7 @@ class AgentSurface:
         profile: AgentProfile,
         tool_specs: tuple[ToolSpec, ...],
         conversation_state: ConversationState | None,
+        artifact_manager: ArtifactManager | None = None,
         close_conversation_state: bool = False,
     ) -> None:
         if not isinstance(agent, SupportsProfileOverride):
@@ -58,6 +62,13 @@ class AgentSurface:
         self.profile = profile
         self.tool_specs = tool_specs
         self.conversation_state = conversation_state
+        self._artifact_manager = (
+            artifact_manager
+            if artifact_manager is not None
+            else conversation_state.artifacts
+            if conversation_state is not None
+            else None
+        )
         self._close_conversation_state = close_conversation_state
         self._profile_adapter = agent
         self._tool_adapter = agent if isinstance(agent, SupportsToolRegistration) else None
@@ -81,10 +92,29 @@ class AgentSurface:
                 stack.enter_context(self._profile_adapter.profile_override(self.profile))
                 if self._tool_adapter is not None:
                     stack.enter_context(self._tool_adapter.tool_scope(self.tool_specs))
-                if self.conversation_state is not None:
-                    conversation = stack.enter_context(
-                        self.conversation_state.adapter_turn(self.agent.shortname)
+                if self._artifact_manager is not None and self.profile.artifacts is not None:
+                    from .agent_adapter.tool_override import artifact_admission_scope
+
+                    stack.enter_context(
+                        artifact_admission_scope(
+                            manager=self._artifact_manager,
+                            policy=self.profile.artifacts,
+                        )
                     )
+                if self.conversation_state is not None:
+                    from .agent_adapter.request import conversation_lane_identity
+
+                    conversation = stack.enter_context(
+                        self.conversation_state.adapter_turn(
+                            self.agent.shortname,
+                            lane_identity=conversation_lane_identity(
+                                self.agent,
+                                self.profile,
+                                self.tool_specs,
+                            ),
+                        )
+                    )
+                    conversation.require_explicit_completion()
                     if self._conversation_adapter is None:  # pragma: no cover - constructor guard
                         raise RuntimeError("Bound conversation adapter is unavailable")
                     stack.enter_context(self._conversation_adapter.conversation_scope(conversation))

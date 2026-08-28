@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any, Iterator, cast
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from kedi import (
@@ -19,8 +26,9 @@ from kedi import (
     observe_agent_events,
 )
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
+from kedi.agent_adapter.approval import ApprovalPolicy
 from kedi.agent_adapter.meta import AdapterCapabilities
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tool_override import ToolSpec, current_artifact_admission
 from kedi.agent_profile import (
     AgentProfile,
     AgentProfileOverrideUnsupported,
@@ -85,6 +93,47 @@ def test_bound_surface_replays_native_history_and_applies_profile() -> None:
     conversation.close()
 
 
+def test_bound_surface_rolls_back_native_iter_closed_before_result() -> None:
+    observed: list[list[ModelMessage]] = []
+
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        observed.append(list(messages))
+        return ModelResponse(parts=[TextPart(f"response-{len(observed)}")])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    conversation = ConversationState()
+    surface = KediRuntime(
+        adapter=adapter,
+        conversation_state=conversation,
+    ).bind_agent(
+        profile=AgentProfile(
+            history=True,
+            artifacts=ArtifactPolicy(enabled=False),
+        )
+    )
+
+    with surface.run_scope():
+        assert adapter.run_sync("committed prompt").output == "response-1"
+    committed = conversation.adapter_state_snapshot(adapter.shortname).state
+
+    async def close_before_result() -> None:
+        with surface.run_scope():
+            async with adapter.iter("discarded prompt"):
+                pass
+
+    asyncio.run(close_before_result())
+
+    assert len(observed) == 1
+    assert conversation.adapter_state_snapshot(adapter.shortname).state == committed
+
+    with surface.run_scope():
+        assert adapter.run_sync("next prompt").output == "response-2"
+    assert len(observed[1]) > len(observed[0])
+
+    surface.close()
+    conversation.close()
+
+
 def test_bound_surface_uses_canonical_tool_and_instruction_assembly(tmp_path: Path) -> None:
     async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart("ok")])
@@ -121,6 +170,68 @@ def test_bound_surface_uses_canonical_tool_and_instruction_assembly(tmp_path: Pa
         assert adapter.active_profile == surface.profile
     assert adapter.scoped_tool_specs == ()
     surface.close()
+
+
+def test_bound_surface_admits_native_tool_results_before_history_commit() -> None:
+    observed_ref: dict[str, Any] = {}
+
+    async def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        if not returns:
+            return ModelResponse(
+                parts=[ToolCallPart("native_tool", {}, tool_call_id="bound-native-call")]
+            )
+        content = returns[-1].content
+        assert isinstance(content, dict)
+        observed_ref.update(cast(dict[str, Any], content))
+        return ModelResponse(parts=[TextPart("done")])
+
+    def native_tool() -> str:
+        return "bound-native-result" * 20
+
+    adapter = PydanticAdapter(FunctionModel(respond), tools=[native_tool])
+    runtime = KediRuntime(adapter=adapter)
+    surface = runtime.bind_agent(
+        profile=AgentProfile(
+            approval=ApprovalPolicy.allow(),
+            artifacts=ArtifactPolicy(enabled=True, threshold_bytes=10),
+        )
+    )
+
+    with surface.run_scope():
+        assert adapter.run_sync("Call native_tool once.").output == "done"
+
+    assert observed_ref["ref_id"] == "tool_call_result_1"
+    assert runtime.artifacts.get_value("tool_call_result_1") == "bound-native-result" * 20
+    surface.close()
+    runtime.artifacts.close()
+
+
+def test_direct_bound_surface_uses_its_conversation_artifact_manager() -> None:
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("ok")])
+
+    conversation = ConversationState()
+    surface = AgentSurface(
+        agent=PydanticAdapter(FunctionModel(respond)),
+        profile=AgentProfile(artifacts=ArtifactPolicy(enabled=False)),
+        tool_specs=(),
+        conversation_state=conversation,
+    )
+
+    with surface.run_scope():
+        admission = current_artifact_admission()
+        assert admission is not None
+        assert admission[0] is conversation.artifacts
+
+    surface.close()
+    conversation.close()
 
 
 def test_bound_surface_lifecycle_is_atomic_and_explicitly_owned() -> None:

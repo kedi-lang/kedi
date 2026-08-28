@@ -88,7 +88,6 @@ class PydanticHistoryCodec:
             CompactionPart,
             FilePart,
             ModelMessagesTypeAdapter,
-            ModelRequest,
             RetryPromptPart,
             SystemPromptPart,
             TextPart,
@@ -169,8 +168,7 @@ class PydanticHistoryCodec:
             checkpoint=checkpoint,
             unknown=unknown,
             provider_required=(
-                (isinstance(message, ModelRequest) and bool(message.instructions))
-                or has_mixed_system_prompt
+                has_mixed_system_prompt
                 or any(isinstance(part, ToolAvailabilityDeltaPart) for part in message.parts)
                 or any(
                     isinstance(part, ThinkingPart)
