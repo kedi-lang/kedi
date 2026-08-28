@@ -226,6 +226,15 @@ def test_idle_lexer_preserves_unicode_before_highlighted_tokens() -> None:
     assert "".join(text for _style, text in get_line(0)) == source.rstrip("\n")
 
 
+def test_idle_lexer_keeps_each_document_callback_on_its_own_snapshot() -> None:
+    lexer = idle_input_module.KediLexer()
+    typo_line = lexer.lex_document(Document("> şf:"))
+    corrected_line = lexer.lex_document(Document("> if:"))
+
+    assert "".join(text for _style, text in typo_line(0)) == "> şf:"
+    assert "".join(text for _style, text in corrected_line(0)) == "> if:"
+
+
 def test_idle_lexer_ignores_invalid_and_empty_semantic_tokens() -> None:
     lexer = idle_input_module.KediLexer()
     lexer._compute_semantic_tokens = lambda _source, _path: SimpleNamespace(
@@ -270,6 +279,8 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
     assert prompt_input._continuation_prompt(6, 2, 0) == "  ... "
     assert isinstance(sessions[0]["lexer"], idle_input_module.KediLexer)
     assert sessions[0]["style"] is idle_input_module.KEDI_IDLE_STYLE
+    assert isinstance(sessions[0]["input_processors"], list)
+    assert len(sessions[0]["input_processors"]) == 1
     assert prompts[0][1]["multiline"] is False
     assert prompts[1][1]["multiline"] is True
 
@@ -305,7 +316,7 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
     prompt_input._line_bindings.bindings[0].handler(SimpleNamespace(current_buffer=line_buffer))
     prompt_input._line_bindings.bindings[1].handler(SimpleNamespace(current_buffer=line_buffer))
     prompt_input._line_bindings.bindings[2].handler(SimpleNamespace(current_buffer=line_buffer))
-    assert line_buffer.inserted == ["\t"]
+    assert line_buffer.inserted == [idle_input_module.IDLE_INDENT]
     assert line_buffer.deleted == [("before", 1), ("at", 1)]
 
     tab_buffer = Buffer()
@@ -320,7 +331,7 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
     bindings[3].handler(SimpleNamespace(current_buffer=continue_buffer))
     bindings[4].handler(SimpleNamespace(current_buffer=continue_buffer))
 
-    assert tab_buffer.inserted == ["\t"]
+    assert tab_buffer.inserted == [idle_input_module.IDLE_INDENT]
     assert force_buffer.submitted == 1
     assert submit_buffer.submitted == 1
     assert continue_buffer.inserted == ["\n"]

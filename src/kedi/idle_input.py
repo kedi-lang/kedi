@@ -10,11 +10,13 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text.base import StyleAndTextTuples
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout.processors import TabsProcessor
 from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
 
 MAX_HIGHLIGHT_CHARS = 8_000
+IDLE_INDENT = "  "
 
 _TOKEN_STYLES = {
     "namespace": "class:kedi.namespace",
@@ -78,10 +80,11 @@ class KediLexer(Lexer):
         if source != self._cached_source:
             self._cached_source = source
             self._cached_lines = self._highlight(source)
+        lines = self._cached_lines
 
         def get_line(line_number: int) -> StyleAndTextTuples:
-            if 0 <= line_number < len(self._cached_lines):
-                return self._cached_lines[line_number]
+            if 0 <= line_number < len(lines):
+                return lines[line_number]
             return [("", "")]
 
         return get_line
@@ -131,6 +134,14 @@ class PromptToolkitInput:
             history=ReadlineHistory(),
             lexer=KediLexer() if highlight else None,
             style=KEDI_IDLE_STYLE if highlight else None,
+            input_processors=[
+                TabsProcessor(
+                    tabstop=len(IDLE_INDENT),
+                    char1=" ",
+                    char2=" ",
+                    style="",
+                )
+            ],
         )
 
     def read_line(self, prompt: str) -> str:
@@ -167,7 +178,7 @@ class PromptToolkitInput:
 
         @bindings.add("tab")
         def insert_tab(event: Any) -> None:
-            event.current_buffer.insert_text("\t")
+            event.current_buffer.insert_text(IDLE_INDENT)
 
         @bindings.add("escape", "enter")
         def force_submit(event: Any) -> None:
@@ -210,7 +221,7 @@ def _line_key_bindings() -> KeyBindings:
 
     @bindings.add("tab")
     def insert_tab(event: Any) -> None:
-        event.current_buffer.insert_text("\t")
+        event.current_buffer.insert_text(IDLE_INDENT)
 
     _add_deletion_bindings(bindings)
     return bindings
@@ -262,6 +273,7 @@ def _line_fragments(
 
 
 __all__ = [
+    "IDLE_INDENT",
     "KEDI_IDLE_STYLE",
     "MAX_HIGHLIGHT_CHARS",
     "KediLexer",
