@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
-from collections.abc import Iterable
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import AsyncIterator, Iterable
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
 from hashlib import sha256
-from threading import RLock
-from typing import Any, Callable, Iterator, Literal, Protocol, runtime_checkable
+from threading import Condition, RLock, local
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal, Protocol, runtime_checkable
 
 from kedi.artifacts import ArtifactHistory, ArtifactManager
+
+if TYPE_CHECKING:
+    from .request import AdapterRunOutcome
 
 ConversationRole = Literal["user", "assistant"]
 
@@ -29,6 +34,46 @@ class AdapterConversationContext:
     result_state: dict[str, Any] = field(default_factory=dict)
     cache_prefix_changed: bool = False
     cleanup: Callable[[], None] | None = None
+    lane_identity: str = ""
+    turn_sequence: int = 0
+    _exchange_prompt: str | None = field(default=None, repr=False)
+    _exchange_result: Any = field(default=None, repr=False)
+    _has_exchange: bool = field(default=False, repr=False)
+    _requires_explicit_completion: bool = field(default=False, repr=False)
+    _completed: bool = field(default=False, repr=False)
+
+    def record_exchange(self, prompt: str, result: Any) -> None:
+        self._exchange_prompt = prompt
+        self._exchange_result = result
+        self._has_exchange = True
+
+    def apply_outcome(self, prompt: str, outcome: AdapterRunOutcome) -> None:
+        """Stage one completed adapter outcome for atomic transaction commit."""
+
+        self.result_state = dict(outcome.continuation_state)
+        self.cleanup = outcome.cleanup
+        self.cache_prefix_changed = outcome.cache_prefix_changed
+        self.record_exchange(prompt, outcome.portable_result)
+        self.mark_completed()
+
+    def require_explicit_completion(self) -> None:
+        """Commit this context only after its adapter reports a completed native run."""
+
+        self._requires_explicit_completion = True
+
+    def mark_completed(self) -> None:
+        """Mark native continuation changes as safe to commit."""
+
+        self._completed = True
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConversationTurnTicket:
+    sequence: int
+
+
+class _ConversationTurnCancelled(RuntimeError):
+    """Internal signal for a reserved turn retired before adapter execution."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -36,6 +81,7 @@ class AdapterStateSnapshot:
     """Immutable lane coordinates plus a shallow copy of adapter-owned state."""
 
     adapter_shortname: str
+    lane_identity: str
     cache_epoch: int
     state: dict[str, Any]
 
@@ -46,7 +92,7 @@ class SupportsConversationState(Protocol):
         self,
         conversation: AdapterConversationContext,
     ) -> AbstractContextManager[None]:
-        """Bind process-local continuation state for one adapter call."""
+        """Bind continuation state and mark it completed only after a terminal result."""
         ...
 
 
@@ -73,11 +119,22 @@ class ConversationState:
             history=self.history,
         )
         self._lock = RLock()
+        self._turn_condition = Condition(self._lock)
         self._turns: list[ConversationTurn] = []
         self._adapter_states: dict[str, dict[str, Any]] = {}
+        self._adapter_lane_identities: dict[str, str] = {}
         self._adapter_cleanups: dict[str, Callable[[], None]] = {}
         self._cache_epoch = 0
         self._closed = False
+        self._next_ticket = 0
+        self._next_turn = 0
+        self._active_ticket: int | None = None
+        self._cancelled_tickets: set[int] = set()
+        self._sync_turn_local = local()
+        self._async_turn_owner: ContextVar[asyncio.Task[Any] | None] = ContextVar(
+            f"kedi_conversation_turn_owner_{id(self)}",
+            default=None,
+        )
 
     @property
     def cache_epoch(self) -> int:
@@ -88,50 +145,127 @@ class ConversationState:
     def adapter_turn(
         self,
         adapter_shortname: str,
+        *,
+        ticket: ConversationTurnTicket | None = None,
+        lane_identity: str | None = None,
     ) -> Iterator[AdapterConversationContext]:
-        with self._lock:
-            self._ensure_open()
-            resume_state = dict(self._adapter_states.get(adapter_shortname, {}))
-            context = AdapterConversationContext(
-                session_id=self.session_id,
-                cache_epoch=self._cache_epoch,
-                cache_key=self._cache_key(adapter_shortname),
-                resume_state=resume_state,
-                cleanup=self._adapter_cleanups.get(adapter_shortname),
+        current_task = _current_async_task()
+        if getattr(self._sync_turn_local, "active", False) or (
+            current_task is not None and self._async_turn_owner.get() is current_task
+        ):
+            raise RuntimeError("nested turns on the same conversation are not supported")
+        active_ticket = ticket or self.reserve_turn()
+        lane = lane_identity or adapter_shortname
+        context = self._begin_turn(active_ticket, adapter_shortname, lane)
+        self._sync_turn_local.active = True
+        succeeded = False
+        try:
+            yield context
+            succeeded = True
+        finally:
+            self._sync_turn_local.active = False
+            _run_cleanups(
+                self._finish_turn(
+                    context,
+                    adapter_shortname,
+                    lane,
+                    succeeded=succeeded,
+                )
             )
+
+    @asynccontextmanager
+    async def adapter_turn_async(
+        self,
+        adapter_shortname: str,
+        *,
+        ticket: ConversationTurnTicket | None = None,
+        lane_identity: str | None = None,
+    ) -> AsyncIterator[AdapterConversationContext]:
+        """Task-safe async form that never blocks the event-loop thread while queued."""
+
+        current_task = asyncio.current_task()
+        if current_task is None:  # pragma: no cover - async context managers always have a task
+            raise RuntimeError("async conversation turns require a running task")
+        if self._async_turn_owner.get() is current_task or getattr(
+            self._sync_turn_local, "active", False
+        ):
+            raise RuntimeError("nested turns on the same conversation are not supported")
+        active_ticket = ticket or self.reserve_turn()
+        lane = lane_identity or adapter_shortname
+        begin_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._begin_turn,
+                active_ticket,
+                adapter_shortname,
+                lane,
+            )
+        )
+        try:
+            context = await asyncio.shield(begin_task)
+        except asyncio.CancelledError as cancellation:
+            self.cancel_turn(active_ticket)
             try:
-                yield context
-            except BaseException:
-                raise
+                context = await asyncio.shield(begin_task)
+            except _ConversationTurnCancelled:
+                pass
             else:
-                retired_cleanups: list[Callable[[], None]] = []
-                if context.cache_prefix_changed:
-                    self._cache_epoch += 1
-                    self._adapter_states.clear()
-                    retired_cleanups.extend(
-                        cleanup
-                        for cleanup in self._adapter_cleanups.values()
-                        if cleanup is not context.cleanup
+                _run_cleanups(
+                    self._finish_turn(
+                        context,
+                        adapter_shortname,
+                        lane,
+                        succeeded=False,
                     )
-                    self._adapter_cleanups.clear()
-                else:
-                    previous_cleanup = self._adapter_cleanups.get(adapter_shortname)
-                    if previous_cleanup is not None and previous_cleanup is not context.cleanup:
-                        retired_cleanups.append(previous_cleanup)
-                self._adapter_states[adapter_shortname] = dict(context.result_state)
-                if context.cleanup is None:
-                    self._adapter_cleanups.pop(adapter_shortname, None)
-                else:
-                    self._adapter_cleanups[adapter_shortname] = context.cleanup
-        _run_cleanups(retired_cleanups)
+                )
+            raise cancellation
+        owner_token = self._async_turn_owner.set(current_task)
+        succeeded = False
+        try:
+            yield context
+            succeeded = True
+        finally:
+            try:
+                cleanups = self._finish_turn(
+                    context,
+                    adapter_shortname,
+                    lane,
+                    succeeded=succeeded,
+                )
+                _run_cleanups(cleanups)
+            finally:
+                self._async_turn_owner.reset(owner_token)
+
+    def reserve_turn(self) -> ConversationTurnTicket:
+        """Reserve source order before a possibly deferred model job is scheduled."""
+
+        with self._turn_condition:
+            self._ensure_open()
+            ticket = ConversationTurnTicket(sequence=self._next_ticket)
+            self._next_ticket += 1
+            return ticket
+
+    def cancel_turn(self, ticket: ConversationTurnTicket) -> None:
+        """Retire a reserved turn that will never enter adapter execution."""
+
+        with self._turn_condition:
+            if ticket.sequence < self._next_turn:
+                return
+            if ticket.sequence == self._active_ticket:
+                return
+            self._cancelled_tickets.add(ticket.sequence)
+            self._advance_cancelled_tickets()
+            self._turn_condition.notify_all()
 
     def advance_cache_epoch(self) -> int:
         """Start a fresh provider-continuation epoch without changing the session."""
 
-        with self._lock:
+        with self._turn_condition:
             self._ensure_open()
+            if self._active_ticket is not None:
+                raise RuntimeError("cannot advance cache epoch during an active conversation turn")
             self._cache_epoch += 1
             self._adapter_states.clear()
+            self._adapter_lane_identities.clear()
             cleanups = tuple(self._adapter_cleanups.values())
             self._adapter_cleanups.clear()
             cache_epoch = self._cache_epoch
@@ -145,14 +279,22 @@ class ConversationState:
             self._ensure_open()
             return AdapterStateSnapshot(
                 adapter_shortname=adapter_shortname,
+                lane_identity=self._adapter_lane_identities.get(
+                    adapter_shortname,
+                    adapter_shortname,
+                ),
                 cache_epoch=self._cache_epoch,
                 state=dict(self._adapter_states.get(adapter_shortname, {})),
             )
 
     def record_exchange(self, prompt: str, result: Any) -> None:
         assistant = _portable_content(result)
-        with self._lock:
+        with self._turn_condition:
             self._ensure_open()
+            if self._active_ticket is not None:
+                raise RuntimeError(
+                    "record an active conversation exchange on AdapterConversationContext"
+                )
             self._turns.extend(
                 (
                     _conversation_turn("user", prompt),
@@ -174,14 +316,18 @@ class ConversationState:
             }
 
     def close(self) -> None:
-        with self._lock:
+        with self._turn_condition:
             if self._closed:
                 return
+            if self._active_ticket is not None:
+                raise RuntimeError("cannot close conversation state during an active turn")
             self._closed = True
             self._adapter_states.clear()
+            self._adapter_lane_identities.clear()
             cleanups = tuple(self._adapter_cleanups.values())
             self._adapter_cleanups.clear()
             self._turns.clear()
+            self._turn_condition.notify_all()
         _run_cleanups(cleanups)
         if self._owns_artifacts:
             self.artifacts.close()
@@ -195,9 +341,110 @@ class ConversationState:
         digest = sha256(material).hexdigest()[:24]
         return f"kedi_cache_{digest}_e{self._cache_epoch}"
 
+    def _begin_turn(
+        self,
+        ticket: ConversationTurnTicket,
+        adapter_shortname: str,
+        lane: str,
+    ) -> AdapterConversationContext:
+        with self._turn_condition:
+            self._ensure_open()
+            while ticket.sequence != self._next_turn:
+                if ticket.sequence in self._cancelled_tickets:
+                    raise _ConversationTurnCancelled(
+                        "conversation turn was cancelled before adapter execution"
+                    )
+                if ticket.sequence < self._next_turn:
+                    raise _ConversationTurnCancelled(
+                        "conversation turn ticket has already been retired"
+                    )
+                self._turn_condition.wait()
+                self._ensure_open()
+            self._active_ticket = ticket.sequence
+            stored_lane = self._adapter_lane_identities.get(adapter_shortname)
+            same_lane = stored_lane in {None, adapter_shortname, lane}
+            return AdapterConversationContext(
+                session_id=self.session_id,
+                cache_epoch=self._cache_epoch,
+                cache_key=self._cache_key(lane),
+                resume_state=(
+                    dict(self._adapter_states.get(adapter_shortname, {})) if same_lane else {}
+                ),
+                cleanup=(self._adapter_cleanups.get(adapter_shortname) if same_lane else None),
+                lane_identity=lane,
+                turn_sequence=ticket.sequence,
+            )
+
+    def _finish_turn(
+        self,
+        context: AdapterConversationContext,
+        adapter_shortname: str,
+        lane: str,
+        *,
+        succeeded: bool,
+    ) -> tuple[Callable[[], None], ...]:
+        retired_cleanups: list[Callable[[], None]] = []
+        with self._turn_condition:
+            previous_cleanup = self._adapter_cleanups.get(adapter_shortname)
+            should_commit = succeeded and (
+                not context._requires_explicit_completion or context._completed
+            )
+            if should_commit:
+                if context._has_exchange:
+                    assert context._exchange_prompt is not None
+                    self._turns.extend(
+                        (
+                            _conversation_turn("user", context._exchange_prompt),
+                            _conversation_turn(
+                                "assistant",
+                                _portable_content(context._exchange_result),
+                            ),
+                        )
+                    )
+                if context.cache_prefix_changed:
+                    self._cache_epoch += 1
+                    self._adapter_states.clear()
+                    self._adapter_lane_identities.clear()
+                    retired_cleanups.extend(
+                        cleanup
+                        for cleanup in self._adapter_cleanups.values()
+                        if cleanup is not context.cleanup
+                    )
+                    self._adapter_cleanups.clear()
+                else:
+                    if previous_cleanup is not None and previous_cleanup is not context.cleanup:
+                        retired_cleanups.append(previous_cleanup)
+                self._adapter_states[adapter_shortname] = dict(context.result_state)
+                self._adapter_lane_identities[adapter_shortname] = lane
+                if context.cleanup is None:
+                    self._adapter_cleanups.pop(adapter_shortname, None)
+                else:
+                    self._adapter_cleanups[adapter_shortname] = context.cleanup
+            elif context.cleanup is not None and context.cleanup is not previous_cleanup:
+                # The failed turn may have opened a replacement native session before raising.
+                # Keep the last committed session, but retire the uncommitted replacement.
+                retired_cleanups.append(context.cleanup)
+            self._active_ticket = None
+            self._next_turn += 1
+            self._advance_cancelled_tickets()
+            self._turn_condition.notify_all()
+        return tuple(retired_cleanups)
+
+    def _advance_cancelled_tickets(self) -> None:
+        while self._active_ticket is None and self._next_turn in self._cancelled_tickets:
+            self._cancelled_tickets.remove(self._next_turn)
+            self._next_turn += 1
+
 
 def _conversation_turn(role: ConversationRole, content: str) -> ConversationTurn:
     return ConversationTurn(role=role, content=content)
+
+
+def _current_async_task() -> asyncio.Task[Any] | None:
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None
 
 
 def _portable_content(value: Any) -> str:

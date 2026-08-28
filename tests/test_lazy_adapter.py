@@ -238,6 +238,16 @@ def test_lazy_adapter_rejects_subagent_execution_when_real_adapter_lacks_it() ->
         lazy.subagent_run_kwargs(SubagentUsageLimits())
 
 
+def test_lazy_adapter_telemetry_model_falls_back_to_default_model_or_none() -> None:
+    class DefaultOnly:
+        @staticmethod
+        def default_model() -> str:
+            return "fallback-model"
+
+    assert LazyAdapter(DefaultOnly).telemetry_model_name() == "fallback-model"
+    assert LazyAdapter(object).telemetry_model_name() is None
+
+
 def test_lazy_adapter_factory_is_called_once_for_concurrent_first_use() -> None:
     rec = _RecordingAdapter()
     builds: list[int] = []

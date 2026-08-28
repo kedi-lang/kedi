@@ -55,11 +55,13 @@ from kedi.agent_adapter.subagents import (
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
+    artifact_admission_scope,
     current_required_tool_calls,
 )
 from kedi.agent_adapter.utils import python_callable_tool_spec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
 
 
 def _request(messages: list[ModelMessage]) -> ModelRequest:
@@ -583,6 +585,86 @@ def test_native_run_includes_active_profile_mcp_toolsets(
     assert [tool.name for tool in model.last_model_request_parameters.function_tools] == [
         "mcp_tool"
     ]
+
+
+@pytest.mark.parametrize("origin", ["constructor", "mcp"])
+def test_native_and_mcp_results_are_artifactized_before_pydantic_history(
+    origin: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def large_tool() -> str:
+        return "native-result" * 20
+
+    model = TestModel(call_tools=["large_tool"])
+    adapter_kwargs: dict[str, Any] = {}
+    if origin == "constructor":
+        adapter_kwargs["tools"] = [large_tool]
+    adapter = PydanticAdapter(model, **adapter_kwargs)
+    if origin == "mcp":
+        monkeypatch.setattr(
+            adapter,
+            "_mcp_toolsets_for_profile",
+            lambda _profile: [FunctionToolset(tools=[Tool(large_tool)])],
+        )
+    manager = ArtifactManager(session_id=f"pydantic-{origin}")
+    policy = ArtifactPolicy(threshold_bytes=10)
+    profile = AgentProfile(
+        approval=ApprovalPolicy.allow(),
+        mcp_servers=(
+            (McpServerSpec(transport="http", url="https://mcp.invalid"),) if origin == "mcp" else ()
+        ),
+    )
+
+    with (
+        adapter.profile_override(profile),
+        artifact_admission_scope(manager=manager, policy=policy),
+    ):
+        result = adapter.run_sync("Call the tool.")
+
+    tool_return = next(
+        part
+        for message in result.all_messages()
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    )
+    assert isinstance(tool_return.content, dict)
+    assert tool_return.content["ref_id"] == "tool_call_result_1"
+    assert manager.get_value("tool_call_result_1") == "native-result" * 20
+    events = manager.history.snapshot()
+    assert events[0].data["call_id"] == tool_return.tool_call_id
+    assert events[-1].data == {
+        "tool_name": "large_tool",
+        "call_id": tool_return.tool_call_id,
+        "artifacted": True,
+    }
+
+
+def test_native_async_artifact_stream_is_consumed_before_pydantic_history() -> None:
+    async def chunks() -> AsyncIterator[str]:
+        yield "streamed-"
+        yield "result"
+
+    async def stream_tool() -> Any:
+        return ArtifactStream.text(chunks())
+
+    adapter = PydanticAdapter(TestModel(call_tools=["stream_tool"]), tools=[stream_tool])
+    manager = ArtifactManager(session_id="pydantic-stream")
+    policy = ArtifactPolicy(threshold_bytes=1)
+    with (
+        adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        artifact_admission_scope(manager=manager, policy=policy),
+    ):
+        result = adapter.run_sync("Call the stream tool.")
+
+    tool_return = next(
+        part
+        for message in result.all_messages()
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    )
+    assert isinstance(tool_return.content, dict)
+    assert manager.get_value(tool_return.content["ref_id"]) == "streamed-result"
+    assert manager.history.snapshot()[-1].data["call_id"] == tool_return.tool_call_id
 
 
 def test_native_run_requires_marked_tools_before_any_output() -> None:

@@ -1361,6 +1361,34 @@ def test_pydantic_prompt_hook_edits_transport_input_once() -> None:
     assert "secret" not in repr(backend.metrics)
 
 
+def test_runtime_assembles_history_from_hook_edited_prompt() -> None:
+    hook_calls = 0
+
+    async def respond(_messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("ok")])
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+
+    @adapter.on("user_prompt_submit")
+    def redact(event: Any) -> UserPromptSubmitDecision:
+        nonlocal hook_calls
+        hook_calls += 1
+        assert isinstance(event, UserPromptSubmitRequest)
+        return UserPromptSubmitDecision.edit(event.content.replace("secret", "[redacted]"))
+
+    runtime = compile_program(
+        parse_program("> history: enabled\n[answer] << secret\n= <answer>\n"),
+        adapter=adapter,
+    )
+
+    assert runtime.run_main() == "ok"
+    assert hook_calls == 1
+    assert runtime._implicit_conversation_state is not None
+    turns = runtime._implicit_conversation_state.snapshot()
+    assert turns[0].content == "[redacted]"
+    assert "secret" not in repr(turns)
+
+
 def test_pydantic_prompt_hook_denial_prevents_model_transport() -> None:
     calls = 0
 
@@ -1429,6 +1457,32 @@ def test_lazy_adapter_forwards_hooks_registered_before_and_after_resolution() ->
 
     assert lazy.hook_snapshot().handlers_for("pre_tool_use") == (before, after)
     assert real.hook_snapshot().handlers_for("pre_tool_use") == (before, after)
+
+
+def test_runtime_resolves_lazy_adapter_before_prompt_hook_dispatch() -> None:
+    hook_calls = 0
+
+    async def respond(_messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("ok")])
+
+    lazy = LazyAdapter(
+        lambda: PydanticAdapter(FunctionModel(respond)),
+        shortname="pydantic",
+    )
+
+    @lazy.on("user_prompt_submit")
+    def observe(_event: Any) -> None:
+        nonlocal hook_calls
+        hook_calls += 1
+
+    runtime = compile_program(
+        parse_program("[answer] << hello\n= <answer>\n"),
+        adapter=lazy,
+    )
+
+    assert runtime.run_main() == "ok"
+    assert lazy.is_initialized is True
+    assert hook_calls == 1
 
 
 def test_post_hook_event_repr_does_not_include_payload() -> None:

@@ -23,6 +23,8 @@ from typing import (
     Tuple,
     Union,
     cast,
+    get_args,
+    get_origin,
 )
 
 from pydantic import BaseModel, TypeAdapter
@@ -39,7 +41,13 @@ from .telemetry import capture_enabled
 from .telemetry.naming import qualified_type_name
 
 if TYPE_CHECKING:
-    from .agent_adapter.conversation import ConversationState
+    from .agent_adapter.conversation import ConversationState, ConversationTurnTicket
+    from .agent_adapter.request import (
+        AgentRunRequest,
+        InstructionPart,
+        OutputContract,
+        PromptDraft,
+    )
     from .agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from .agent_adapter.subagents.limits import SubagentUsageLimits
     from .agent_adapter.tool_override import ToolSpec
@@ -53,10 +61,6 @@ _PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
 DEFAULT_LOOP_ITERATION_LIMIT = 10_000
 _CLAIM_OUTPUT_DESCRIPTION = (
     "Whether the claim can be established as true from the available context."
-)
-_CLAIM_INSTRUCTION = (
-    "Return true only if the following claim can be established as true from the available "
-    "context; otherwise return false."
 )
 
 
@@ -178,6 +182,12 @@ def _tool_request_context(tools: Sequence[Any]) -> list[dict[str, Any]]:
         }
         for tool in tools
     ]
+
+
+def _type_display_name(value: Any) -> str:
+    if get_origin(value) is Annotated:
+        value = get_args(value)[0]
+    return getattr(value, "__name__", repr(value))
 
 
 class KediRuntime:
@@ -329,7 +339,9 @@ class KediRuntime:
             if self._closed:
                 raise RuntimeError("KediRuntime is closed")
         selected_profile = (profile or self.default_agent_profile).frozen_copy()
-        selected_adapter = adapter or self._resolve_adapter(selected_profile)
+        selected_adapter = self._concrete_adapter(
+            adapter or self._resolve_adapter(selected_profile)
+        )
         self._assert_profile_override_supported(selected_profile, selected_adapter)
         tool_specs = cast(
             "tuple[ToolSpec, ...]",
@@ -343,6 +355,7 @@ class KediRuntime:
             profile=effective_profile,
             tool_specs=tool_specs,
             conversation_state=conversation_state,
+            artifact_manager=self.artifacts,
             close_conversation_state=close_conversation_state,
         )
 
@@ -757,20 +770,27 @@ class KediRuntime:
 
         from .agent_profile import current_block_agent_profile
 
-        block_profile = current_block_agent_profile()
-        adapter = self._resolve_adapter(block_profile)
+        block_profile = current_block_agent_profile().frozen_copy()
+        adapter = self._concrete_adapter(self._resolve_adapter(block_profile))
         captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         self._assert_profile_override_supported(block_profile, adapter)
+        conversation_state, conversation_ticket, lane_identity = self._reserve_conversation_turn(
+            block_profile, adapter, captured_tool_specs
+        )
 
         def _call_invoke() -> str:
             resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
             prompt = "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_adapter.request import (
+                RawPromptBuilder,
+                TextOutput,
+                lower_request_sync,
+            )
             from .agent_adapter.tool_override import SupportsToolRegistration
-            from .agent_profile import current_block_agent_profile
 
-            profile = current_block_agent_profile()
+            profile = block_profile
             override_ctx = nullcontext()
             if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
@@ -785,30 +805,32 @@ class KediRuntime:
                 if tool_adapter is not None:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
-                run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile, adapter)
-                if instructions is not None:
-                    run_kwargs["instructions"] = instructions
+                instruction_parts = self._agent_instruction_parts(profile, adapter)
+
+                def invoke_request(request: AgentRunRequest) -> str:
+                    return str(lower_request_sync(adapter, request))
+
                 with override_ctx:
                     return self._run_conversation_call(
                         adapter,
-                        prompt,
-                        lambda active_prompt: str(
-                            adapter.invoke_sync(prompt=active_prompt, **run_kwargs)
-                        ),
-                        context=(
-                            instructions,
-                            _tool_request_context(captured_tool_specs),
-                        ),
-                        instructions=instructions,
+                        RawPromptBuilder(content=prompt).build(),
+                        invoke_request,
+                        instructions=instruction_parts,
                         tools=captured_tool_specs,
                         profile=profile,
                         call_kind="invoke",
-                        output_field_count=0,
+                        output=TextOutput(),
+                        conversation_state=conversation_state,
+                        conversation_ticket=conversation_ticket,
+                        lane_identity=lane_identity,
                     )
 
         if not parallel:
-            response = _call_invoke()
+            try:
+                response = _call_invoke()
+            except BaseException:
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
+                raise
             if capture_key is None:
                 return {}
             env[capture_key] = response
@@ -824,13 +846,26 @@ class KediRuntime:
                 response = _call_invoke()
                 return {capture_key: response} if capture_key is not None else {}
             except KediExecutionError:
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
                 raise
             except Exception as exc:  # noqa: BLE001
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
                 raise self.build_execution_error(exc) from None
             finally:
                 self._current_env.reset(token)
 
-        future = self._engine.schedule(deps, _job)
+        try:
+            future = self._engine.schedule(deps, _job)
+        except BaseException:
+            self._cancel_conversation_turn(conversation_state, conversation_ticket)
+            raise
+        future.add_done_callback(
+            lambda completed: self._retire_conversation_turn_after_failed_future(
+                conversation_state,
+                conversation_ticket,
+                completed,
+            )
+        )
         self._register_outstanding(future)
         if capture_key is None:
             return {}
@@ -844,11 +879,17 @@ class KediRuntime:
         from .agent_adapter.tool_override import SupportsToolRegistration
         from .agent_profile import current_block_agent_profile
 
-        profile = current_block_agent_profile()
-        adapter = self._resolve_adapter(profile)
+        profile = current_block_agent_profile().frozen_copy()
+        adapter = self._concrete_adapter(self._resolve_adapter(profile))
         captured_tool_specs = self._resolve_agent_tool_specs(profile, adapter)
         self._assert_profile_override_supported(profile, adapter)
-        question = f"{_CLAIM_INSTRUCTION}\nClaim: {claim}"
+        from .agent_adapter.request import (
+            ClaimPromptBuilder,
+            TypedOutput,
+            lower_request_sync,
+        )
+
+        question = ClaimPromptBuilder(claim=claim).build()
 
         override_ctx = nullcontext()
         if isinstance(adapter, SupportsProfileOverride):
@@ -864,45 +905,42 @@ class KediRuntime:
             if tool_adapter is not None:
                 for spec in captured_tool_specs:
                     tool_adapter.register_tool(spec)
-            run_kwargs: dict[str, Any] = {}
-            instructions = self._agent_instructions(profile, adapter)
-            if instructions is not None:
-                run_kwargs["instructions"] = instructions
-
-            def produce_claim(active_question: str) -> bool:
+            conversation_state, conversation_ticket, lane_identity = (
+                self._reserve_conversation_turn(profile, adapter, captured_tool_specs)
+            )
+            try:
+                instruction_parts = self._agent_instruction_parts(profile, adapter)
                 claim_output_type = cast(
                     type[Any],
                     Annotated[bool, _CLAIM_OUTPUT_DESCRIPTION],
                 )
-                result = adapter.produce_sync(
-                    template=active_question,
-                    output_type=claim_output_type,
-                    **run_kwargs,
-                )
-                if type(result) is not bool:
-                    raise TypeError(
-                        "Kedi template condition must return an exact bool; "
-                        f"received {type(result).__name__}"
-                    )
-                return result
 
-            with override_ctx:
-                return self._run_conversation_call(
-                    adapter,
-                    question,
-                    produce_claim,
-                    context=(
-                        instructions,
-                        _tool_request_context(captured_tool_specs),
-                        {"result": "bool"},
-                    ),
-                    instructions=instructions,
-                    tools=captured_tool_specs,
-                    profile=profile,
-                    call_kind="produce",
-                    output_field_count=1,
-                    output_schema={"result": "bool"},
-                )
+                def produce_claim(request: AgentRunRequest) -> bool:
+                    result = lower_request_sync(adapter, request)
+                    if type(result) is not bool:
+                        raise TypeError(
+                            "Kedi template condition must return an exact bool; "
+                            f"received {type(result).__name__}"
+                        )
+                    return result
+
+                with override_ctx:
+                    return self._run_conversation_call(
+                        adapter,
+                        question,
+                        produce_claim,
+                        instructions=instruction_parts,
+                        tools=captured_tool_specs,
+                        profile=profile,
+                        call_kind="produce",
+                        output=TypedOutput(output_type=claim_output_type),
+                        conversation_state=conversation_state,
+                        conversation_ticket=conversation_ticket,
+                        lane_identity=lane_identity,
+                    )
+            except BaseException:
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
+                raise
 
     def _kedi_run(self, expressions: Sequence[Expression], env: ValueEnv) -> Dict[str, Any]:
         NotFound = object()
@@ -951,16 +989,6 @@ class KediRuntime:
             else:
                 env[key] = value
 
-        # Keep question format stable for tests; append description after to preserve key parsing
-        prompt_template = (
-            "Fields to be substituted into the template string for final construction: ({})."
-        )
-        base_q = (
-            prompt_template.format(required[0])
-            if len(required) == 1
-            else prompt_template.format(", ".join(required))
-        )
-
         parallel = bool(getattr(self._engine, "parallel", False))
 
         # Resolve tool specs NOW, on the main thread, while the lexical scope is correct. A
@@ -969,38 +997,34 @@ class KediRuntime:
         # the spec here captures the compiled procedure fn for both registration AND invocation.
         from .agent_profile import current_block_agent_profile
 
-        block_profile = current_block_agent_profile()
-        adapter = self._resolve_adapter(block_profile)
+        block_profile = current_block_agent_profile().frozen_copy()
+        adapter = self._concrete_adapter(self._resolve_adapter(block_profile))
         captured_tool_specs = self._resolve_agent_tool_specs(block_profile, adapter)
         # Validate the profile override on the main thread too, so it raises synchronously at the
         # call site in BOTH modes — symmetric with the tool guard above, instead of surfacing late
         # at drain (wrapped, differently typed) when _produce runs on a parallel worker.
         self._assert_profile_override_supported(block_profile, adapter)
+        conversation_state, conversation_ticket, lane_identity = self._reserve_conversation_turn(
+            block_profile, adapter, captured_tool_specs
+        )
 
         def _produce() -> Dict[str, Any]:
             # Resolve any promise prompt parts (already complete by the time this job runs in the
             # parallel engine; concrete already in sequential), then build the prompt + call the
             # model + validate — all inside the captured context so profile/tools are correct.
             resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
-            instruction = (
-                "Fill each unescaped [name] or [name: type] output field with only that field's "
-                "replacement value; never return the completed template as a field value. "
-                "Escaped square brackets are literal text, not output fields; for example, "
-                "\\[ok\\] represents the literal text [ok]. "
-                "A replacement value may itself contain delimiters; include them when the template "
-                "explicitly requests them. Preserve literal values already present in the template "
-                "exactly; do not replace or invent them. The template must remain grammatically "
-                "and semantically coherent after substitution.\n"
-            )
-            question = instruction + base_q + "\n\nThe template string:\n" + "".join(resolved_parts)
 
             from .agent_adapter.profile_override import SupportsProfileOverride
+            from .agent_adapter.request import (
+                KediTemplatePromptBuilder,
+                SchemaOutput,
+                lower_request_sync,
+            )
             from .agent_adapter.tool_override import SupportsToolRegistration
-            from .agent_profile import current_block_agent_profile
 
             # Support was already validated synchronously on the main thread
             # (_assert_profile_override_supported); here we only enter the override scope.
-            profile = current_block_agent_profile()
+            profile = block_profile
             override_ctx = nullcontext()
             if isinstance(adapter, SupportsProfileOverride):
                 override_ctx = adapter.profile_override(profile)
@@ -1013,12 +1037,8 @@ class KediRuntime:
                 tool_adapter = adapter
                 tool_ctx = tool_adapter.tool_scope()
 
-            def produce_and_validate(active_question: str) -> Dict[str, Any]:
-                result = adapter.produce_sync(
-                    template=active_question,
-                    output_schema=typed_fields,
-                    **run_kwargs,
-                )
+            def produce_and_validate(request: AgentRunRequest) -> Dict[str, Any]:
+                result = lower_request_sync(adapter, request)
                 out_map: Dict[str, Any] = {}
                 artifact_policy = profile.artifacts
                 for key in required:
@@ -1045,33 +1065,35 @@ class KediRuntime:
                 if tool_adapter is not None:
                     for spec in captured_tool_specs:
                         tool_adapter.register_tool(spec)
-                run_kwargs: dict[str, Any] = {}
-                instructions = self._agent_instructions(profile, adapter)
-                if instructions is not None:
-                    run_kwargs["instructions"] = instructions
+                instruction_parts = self._agent_instruction_parts(profile, adapter)
+                prompt = KediTemplatePromptBuilder(
+                    template="".join(resolved_parts),
+                    output_fields=tuple(required),
+                ).build()
 
                 with override_ctx:
                     return self._run_conversation_call(
                         adapter,
-                        question,
+                        prompt,
                         produce_and_validate,
-                        context=(
-                            instructions,
-                            _tool_request_context(captured_tool_specs),
-                            {key: repr(value) for key, value in typed_fields.items()},
-                        ),
-                        instructions=instructions,
+                        instructions=instruction_parts,
                         tools=captured_tool_specs,
                         profile=profile,
                         call_kind="produce",
-                        output_field_count=len(required),
-                        output_schema={key: repr(value) for key, value in typed_fields.items()},
+                        output=SchemaOutput(schema=typed_fields),
+                        conversation_state=conversation_state,
+                        conversation_ticket=conversation_ticket,
+                        lane_identity=lane_identity,
                     )
 
         # Sequential default: run inline on the main thread and return concrete values. This is the
         # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
         if not parallel:
-            result_map = _produce()  # raises on the main thread, wrapped by the trace frame
+            try:
+                result_map = _produce()  # raises on the main thread, wrapped by the trace frame
+            except BaseException:
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
+                raise
             for key in required:
                 declare_output(key, result_map[key])
             return {k: env[k] for k in required}
@@ -1093,8 +1115,10 @@ class KediRuntime:
             try:
                 return _produce()
             except KediExecutionError:
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
                 raise
             except Exception as exc:  # noqa: BLE001
+                self._cancel_conversation_turn(conversation_state, conversation_ticket)
                 # build_execution_error keeps the provider error on `.original`, so the job-manager
                 # retry policy can still classify it (a 429/timeout stays retryable) even though the
                 # job surfaces the wrapped KediExecutionError. `from None` avoids re-chaining it.
@@ -1102,7 +1126,18 @@ class KediRuntime:
             finally:
                 self._current_env.reset(token)
 
-        future = self._engine.schedule(deps, _job)
+        try:
+            future = self._engine.schedule(deps, _job)
+        except BaseException:
+            self._cancel_conversation_turn(conversation_state, conversation_ticket)
+            raise
+        future.add_done_callback(
+            lambda completed: self._retire_conversation_turn_after_failed_future(
+                conversation_state,
+                conversation_ticket,
+                completed,
+            )
+        )
         self._register_outstanding(future)
         views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
         for key in required:
@@ -1112,19 +1147,30 @@ class KediRuntime:
     def _run_conversation_call(
         self,
         adapter: Any,
-        prompt: str,
-        call: Callable[[str], Any],
+        prompt: PromptDraft,
+        call: Callable[[AgentRunRequest], Any],
         *,
-        context: Sequence[Any] = (),
-        instructions: str | None,
+        instructions: Sequence[InstructionPart] = (),
         tools: Sequence[ToolSpec] = (),
         profile: AgentProfile,
         call_kind: Literal["produce", "invoke"],
-        output_field_count: int,
-        output_schema: Mapping[str, str] | None = None,
+        output: OutputContract,
+        conversation_state: ConversationState | None = None,
+        conversation_ticket: ConversationTurnTicket | None = None,
+        lane_identity: str | None = None,
     ) -> Any:
-        """Run one successful adapter turn through explicit continuation state."""
+        """Assemble and execute one adapter-neutral request transaction."""
+        from uuid import uuid4
+
+        from .agent_adapter.hooks import HookRegistrationMixin, prepared_agent_hook_run
         from .agent_adapter.invocation import observe_invocations
+        from .agent_adapter.request import (
+            AdapterRunOutcome,
+            ConversationCoordinates,
+            RunRequestAssembler,
+            SchemaOutput,
+            TypedOutput,
+        )
         from .agent_adapter.request_budget import ModelRequestBudget
         from .agent_adapter.telemetry import (
             agent_call_span,
@@ -1133,6 +1179,7 @@ class KediRuntime:
             resolved_adapter_model,
         )
         from .agent_adapter.tool_override import (
+            artifact_admission_scope,
             required_tool_call_scope,
             validate_required_tool_calls,
         )
@@ -1155,61 +1202,132 @@ class KediRuntime:
             if frame is not None and capture_enabled("source_snippet")
             else None
         )
-        record_conversation_assets(
-            prompt=prompt,
-            instructions=instructions,
-            profile=profile,
-            tools=tools,
-            output_schema=output_schema,
-            call_kind=call_kind,
-            source_path=source_path,
-            source_line=source_line,
-            source_snippet=source_snippet,
+        output_schema = (
+            {key: repr(value) for key, value in output.schema.items()}
+            if isinstance(output, SchemaOutput)
+            else {"result": _type_display_name(output.output_type)}
+            if isinstance(output, TypedOutput)
+            else None
         )
+        output_field_count = 0 if output_schema is None else len(output_schema)
+        assembler = RunRequestAssembler()
 
-        with agent_call_span(
-            adapter,
-            profile_name=profile.name,
-            call_kind=call_kind,
-            prompt_chars=len(prompt),
-            output_field_count=output_field_count,
-            tool_count=len(tools),
-            mcp_server_count=len(profile.mcp_servers),
-            artifacts_enabled=bool(profile.artifacts and profile.artifacts.enabled),
-            configured_model=configured_model,
-        ) as agent_telemetry:
+        def request_context(request: AgentRunRequest) -> tuple[Any, ...]:
+            values: list[Any] = []
+            if request.instruction_text is not None:
+                values.append(request.instruction_text)
+            values.append(_tool_request_context(tools))
+            if output_schema is not None:
+                values.append(output_schema)
+            return tuple(values)
 
-            def run_reserved_call(reservation: Any, active_prompt: str) -> Any:
-                with model_call_span(
-                    adapter,
-                    call_kind=call_kind,
-                    configured_model=configured_model,
-                ) as model_telemetry:
+        def execute(
+            request: AgentRunRequest,
+            *,
+            resume_state: Mapping[str, Any] | None = None,
+            conversation_scope: Any = None,
+        ) -> Any:
+            record_conversation_assets(
+                prompt=request.prompt.content,
+                instructions=request.instruction_text,
+                profile=profile,
+                tools=tools,
+                output_schema=output_schema,
+                call_kind=call_kind,
+                source_path=source_path,
+                source_line=source_line,
+                source_snippet=source_snippet,
+            )
+            with agent_call_span(
+                adapter,
+                profile_name=profile.name,
+                call_kind=call_kind,
+                prompt_chars=len(request.prompt.content),
+                output_field_count=output_field_count,
+                tool_count=len(request.tool_definitions),
+                mcp_server_count=len(profile.mcp_servers),
+                artifacts_enabled=bool(profile.artifacts and profile.artifacts.enabled),
+                configured_model=configured_model,
+                prompt_kind=request.prompt.kind,
+                instruction_count=len(request.instructions),
+                history_count=(
+                    0 if request.conversation is None else request.conversation.history_count
+                ),
+                cache_epoch=(
+                    None if request.conversation is None else request.conversation.cache_epoch
+                ),
+                turn_sequence=request.metadata.turn_sequence,
+            ) as agent_telemetry:
+                reservation = budget.reserve(
+                    request.prompt.content,
+                    context=request_context(request),
+                    resume_state=resume_state,
+                )
+                try:
+                    artifact_scope = (
+                        artifact_admission_scope(
+                            manager=self.artifacts,
+                            policy=profile.artifacts,
+                        )
+                        if profile.artifacts is not None
+                        else nullcontext()
+                    )
+                    with (
+                        required_tool_call_scope(tools),
+                        artifact_scope,
+                        conversation_scope or nullcontext(),
+                        model_call_span(
+                            adapter,
+                            call_kind=call_kind,
+                            configured_model=configured_model,
+                        ) as model_telemetry,
+                    ):
 
-                    def observe(usage: Any) -> None:
-                        reservation.observe(usage)
-                        agent_telemetry.observe(usage)
-                        model_telemetry.observe(usage)
+                        def observe(usage: Any) -> None:
+                            reservation.observe(usage)
+                            agent_telemetry.observe(usage)
+                            model_telemetry.observe(usage)
 
-                    with observe_invocations(observe):
-                        result = call(active_prompt)
-                    model = resolved_adapter_model(adapter, configured_model)
-                    model_telemetry.complete(result, model=model)
-                    agent_telemetry.complete(result, model=model)
-                    return result
-
-            with required_tool_call_scope(tools):
-                state = self._conversation_state_for_profile(profile)
-                if state is None:
-                    reservation = budget.reserve(prompt, context=context)
-                    try:
-                        result = run_reserved_call(reservation, prompt)
+                        with observe_invocations(observe):
+                            result = call(request)
                         validate_required_tool_calls()
-                    except BaseException:
-                        reservation.finish(raise_on_exceeded=False)
-                        raise
-                    reservation.finish()
-                    return result
+                        model = resolved_adapter_model(adapter, configured_model)
+                        model_telemetry.complete(result, model=model)
+                        agent_telemetry.complete(result, model=model)
+                except BaseException:
+                    reservation.finish(raise_on_exceeded=False)
+                    raise
+                reservation.finish()
+                return result
+
+        runtime_adapter: Any = adapter
+        if isinstance(runtime_adapter, HookRegistrationMixin):
+            hook_context = prepared_agent_hook_run(runtime_adapter, prompt.content)
+        else:
+            hook_context = nullcontext(None)
+
+        state = conversation_state
+        try:
+            with hook_context as prepared:
+                if prepared is None:
+                    active_prompt = prompt
+                    run_id = f"agent_{uuid4().hex}"
+                else:
+                    active_prompt = prompt.with_content(prepared.content)
+                    run_id = prepared.identity.run_id
+
+                if state is None:
+                    request = assembler.assemble(
+                        prompt=active_prompt,
+                        instructions=instructions,
+                        conversation=None,
+                        tool_specs=tools,
+                        output=output,
+                        run_id=run_id,
+                        turn_sequence=0,
+                        call_kind=call_kind,
+                    )
+                    return execute(request)
 
                 from .agent_adapter.conversation import SupportsConversationState
                 from .lang.compiler.environment import model_value
@@ -1223,28 +1341,53 @@ class KediRuntime:
                     raise RuntimeError(
                         f"Adapter {adapter_shortname!r} does not support stateful history"
                     )
-                with state.adapter_turn(adapter_shortname) as conversation:
-                    reservation = budget.reserve(
-                        prompt,
-                        context=context,
-                        resume_state=conversation.resume_state,
+                with state.adapter_turn(
+                    adapter_shortname,
+                    ticket=conversation_ticket,
+                    lane_identity=lane_identity,
+                ) as conversation:
+                    coordinates = ConversationCoordinates(
+                        session_id=conversation.session_id,
+                        lane_identity=conversation.lane_identity,
+                        cache_epoch=conversation.cache_epoch,
+                        cache_key=conversation.cache_key,
+                        history_count=len(state.snapshot()),
                     )
-                    conversation_scope = (
+                    request = assembler.assemble(
+                        prompt=active_prompt,
+                        instructions=instructions,
+                        conversation=coordinates,
+                        tool_specs=tools,
+                        output=output,
+                        run_id=run_id,
+                        turn_sequence=conversation.turn_sequence,
+                        call_kind=call_kind,
+                    )
+                    adapter_scope = (
                         adapter.conversation_scope(conversation)
                         if capabilities.supports("stateful_history")
                         and isinstance(adapter, SupportsConversationState)
                         else nullcontext()
                     )
-                    try:
-                        with conversation_scope:
-                            result = run_reserved_call(reservation, prompt)
-                        validate_required_tool_calls()
-                    except BaseException:
-                        reservation.finish(raise_on_exceeded=False)
-                        raise
-                    reservation.finish()
-                    state.record_exchange(prompt, model_value(result))
+                    result = execute(
+                        request,
+                        resume_state=conversation.resume_state,
+                        conversation_scope=adapter_scope,
+                    )
+                    conversation.apply_outcome(
+                        request.prompt.content,
+                        AdapterRunOutcome(
+                            value=result,
+                            portable_result=model_value(result),
+                            continuation_state=conversation.result_state,
+                            cleanup=conversation.cleanup,
+                            cache_prefix_changed=conversation.cache_prefix_changed,
+                        ),
+                    )
                     return result
+        except BaseException:
+            self._cancel_conversation_turn(state, conversation_ticket)
+            raise
 
     def _conversation_state_for_profile(
         self,
@@ -1262,6 +1405,41 @@ class KediRuntime:
 
                 self._implicit_conversation_state = ConversationState(artifacts=self.artifacts)
             return self._implicit_conversation_state
+
+    def _reserve_conversation_turn(
+        self,
+        profile: AgentProfile,
+        adapter: Any,
+        tools: Sequence[ToolSpec],
+    ) -> tuple[ConversationState | None, ConversationTurnTicket | None, str | None]:
+        state = self._conversation_state_for_profile(profile)
+        if state is None:
+            return None, None, None
+        from .agent_adapter.request import conversation_lane_identity
+
+        lane_identity = conversation_lane_identity(adapter, profile, tools)
+        return state, state.reserve_turn(), lane_identity
+
+    @staticmethod
+    def _cancel_conversation_turn(
+        state: ConversationState | None,
+        ticket: ConversationTurnTicket | None,
+    ) -> None:
+        if state is not None and ticket is not None:
+            state.cancel_turn(ticket)
+
+    @classmethod
+    def _retire_conversation_turn_after_failed_future(
+        cls,
+        state: ConversationState | None,
+        ticket: ConversationTurnTicket | None,
+        completed: Any,
+    ) -> None:
+        """Release a reservation when an engine fails before or outside the job body."""
+
+        failed = completed.cancelled() or completed.exception() is not None
+        if failed:
+            cls._cancel_conversation_turn(state, ticket)
 
     @staticmethod
     def _assert_profile_override_supported(profile: Any, adapter: Any) -> None:
@@ -1358,6 +1536,14 @@ class KediRuntime:
             selected = build_adapter(shortname, model)
             self._selected_adapters[cache_key] = selected
         return selected
+
+    @staticmethod
+    def _concrete_adapter(adapter: AgentAdapter[Any]) -> AgentAdapter[Any]:
+        from .agent_adapter.adapters.lazy import LazyAdapter
+
+        if isinstance(adapter, LazyAdapter):
+            return cast("AgentAdapter[Any]", adapter.resolve())
+        return adapter
 
     def _resolve_tool_specs(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
         """Resolve a template's tools to fully-bound ToolSpecs (on the main thread, in scope).
@@ -1661,15 +1847,31 @@ class KediRuntime:
 
         return skills_settings(getattr(profile, "skills", None))
 
-    def _agent_instructions(self, profile: Any, adapter: Any) -> str | None:
-        """Append enabled runtime contracts without replacing user instructions."""
+    def _agent_instruction_parts(self, profile: Any, adapter: Any) -> tuple[Any, ...]:
+        """Resolve cache-stable instruction fragments with explicit provenance."""
+        from .agent_adapter.request import InstructionPart
 
-        parts = [getattr(profile, "system", None)]
+        parts: list[InstructionPart] = []
+        system = getattr(profile, "system", None)
+        if system:
+            parts.append(
+                InstructionPart(
+                    identity="profile.system",
+                    source="profile",
+                    content=system,
+                )
+            )
         skills = self._skills_settings(profile)
         if skills is not None and skills.enabled:
             from .agent_adapter.skills import skill_instructions
 
-            parts.append(skill_instructions())
+            parts.append(
+                InstructionPart(
+                    identity="skills.instructions",
+                    source="skills",
+                    content=skill_instructions(),
+                )
+            )
         if self._artifact_contract_needed(
             profile,
             adapter,
@@ -1681,8 +1883,22 @@ class KediRuntime:
         ):
             from .artifacts import artifact_instructions
 
-            parts.append(artifact_instructions())
-        return "\n\n".join(part for part in parts if part) or None
+            parts.append(
+                InstructionPart(
+                    identity="artifacts.instructions",
+                    source="artifacts",
+                    content=artifact_instructions(),
+                )
+            )
+        return tuple(parts)
+
+    def _agent_instructions(self, profile: Any, adapter: Any) -> str | None:
+        """Append enabled runtime contracts without replacing user instructions."""
+
+        rendered = "\n\n".join(
+            part.content for part in self._agent_instruction_parts(profile, adapter)
+        )
+        return rendered or None
 
     def _artifact_contract_needed(
         self,

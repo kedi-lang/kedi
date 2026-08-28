@@ -111,12 +111,15 @@ from ..telemetry import (
 from ..tool_override import (
     ToolScope,
     ToolSpec,
+    admit_current_artifact_result,
     approval_request_for_tool,
     arguments_after_approval,
     arguments_target_secret_file,
+    current_artifact_admission,
     current_required_tool_calls,
     required_tool_call_scope,
     resolve_tool_arguments_async,
+    tool_has_artifact_boundary,
     with_required_before_output,
 )
 from ._pydantic_compat import (
@@ -158,6 +161,32 @@ class _KediTelemetryCapability(AbstractCapability[Any]):
         del ctx
         with native_tool_span_scope(call.tool_name):
             return await handler(args)
+
+
+class _KediArtifactCapability(AbstractCapability[Any]):
+    """Admit native and MCP results before Pydantic commits tool history."""
+
+    def __init__(self, adapter: PydanticAdapter[Any, Any]) -> None:
+        self.adapter = adapter
+
+    async def after_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        result: Any,
+    ) -> Any:
+        del ctx, tool_def, args
+        tool = self.adapter._tool_spec_for_call(call.tool_name)
+        if tool.artifact_result == "never" or tool_has_artifact_boundary(tool):
+            return result
+        return await admit_current_artifact_result(
+            result,
+            tool_name=call.tool_name,
+            call_id=call.tool_call_id,
+        )
 
 
 class _KediRequiredToolCapability(AbstractCapability[Any]):
@@ -252,6 +281,7 @@ class _KediHookCapability(AbstractCapability[Any]):
                 _KediDeferredApprovalCapability,
                 _KediExternalApprovalCapability,
                 _KediRequiredToolCapability,
+                _KediArtifactCapability,
                 _KediTelemetryCapability,
             )
         )
@@ -447,7 +477,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_subagents=True,
         supports_background_subagents=True,
         supports_artifacts=True,
-        supports_native_artifacts=False,
+        supports_native_artifacts=True,
         supports_stateful_history=True,
         supports_history_replay=True,
         supports_native_compaction=True,
@@ -978,6 +1008,8 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             result.all_messages(),
             mode="json",
         )
+        if isinstance(conversation, AdapterConversationContext):
+            conversation.mark_completed()
         if isinstance(conversation, AdapterConversationContext) and any(
             isinstance(part, CompactionPart)
             for message in result.new_messages()
@@ -1104,6 +1136,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 capabilities,
                 _KediHookCapability,
                 lambda: _KediHookCapability(self),
+            )
+        if current_artifact_admission() is not None:
+            capabilities = _with_capability(
+                capabilities,
+                _KediArtifactCapability,
+                lambda: _KediArtifactCapability(self),
             )
         codemode = normalize_codemode_settings(
             self.active_profile.codemode or getattr(self, "codemode", None)

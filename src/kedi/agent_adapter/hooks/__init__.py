@@ -1,4 +1,10 @@
-from .boundary import hooked_agent_run, native_agent_hook_run
+from .boundary import (
+    PreparedAgentPrompt,
+    hooked_agent_run,
+    native_agent_hook_run,
+    prepared_agent_hook_run,
+    prepared_agent_hook_run_async,
+)
 from .dispatcher import (
     HookDispatcher,
     HookDispatcherSnapshot,
@@ -57,6 +63,7 @@ __all__ = [
     "HookTimeoutError",
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
+    "PreparedAgentPrompt",
     "PreToolUseDecision",
     "PreToolUseRequest",
     "ToolHookContext",
@@ -76,6 +83,8 @@ __all__ = [
     "is_tool_execution_interrupted",
     "new_tool_call_id",
     "native_agent_hook_run",
+    "prepared_agent_hook_run",
+    "prepared_agent_hook_run_async",
     "validate_hook_event_name",
     "validate_hook_event_names",
     "with_hook_lifecycle",

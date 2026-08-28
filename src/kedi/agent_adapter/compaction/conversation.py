@@ -21,6 +21,7 @@ class PreparedConversationCompaction:
     """A Track A plan bound to one conversation lane and cache epoch."""
 
     adapter_shortname: str
+    lane_identity: str
     cache_epoch: int
     prepared: PreparedCompaction
 
@@ -59,6 +60,7 @@ class ConversationCompactionTransaction:
         )
         return PreparedConversationCompaction(
             adapter_shortname=self.codec.adapter_shortname,
+            lane_identity=lane.lane_identity,
             cache_epoch=lane.cache_epoch,
             prepared=self.transaction.prepare_snapshot(
                 snapshot,
@@ -78,7 +80,10 @@ class ConversationCompactionTransaction:
             raise CompactionValidationError(
                 "prepared conversation compaction belongs to a different adapter"
             )
-        with conversation.adapter_turn(self.codec.adapter_shortname) as lane:
+        with conversation.adapter_turn(
+            self.codec.adapter_shortname,
+            lane_identity=prepared.lane_identity,
+        ) as lane:
             if lane.cache_epoch != prepared.cache_epoch:
                 raise CompactionValidationError("conversation cache epoch changed")
             result = self.transaction.commit(

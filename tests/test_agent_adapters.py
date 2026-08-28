@@ -63,6 +63,7 @@ from kedi.agent_adapter.tool_override import (
     SupportsToolRegistration,
     ToolScope,
     ToolSpec,
+    artifact_admission_scope,
     approval_request_for_tool,
     arguments_target_secret_file,
 )
@@ -75,6 +76,7 @@ from kedi.agent_adapter.utils import (
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compaction import CompactionSettings, CompactionSettingsError
 from kedi.agent_profile.mcp import McpServerSpec
+from kedi.artifacts import ArtifactManager, ArtifactPolicy
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 
@@ -115,6 +117,9 @@ def test_artifact_capabilities_require_structured_tool_adapters() -> None:
         assert capabilities.supports("tool_registration")
         assert isinstance(adapter, type)
         assert issubclass(adapter, SupportsToolRegistration)
+
+    assert PydanticAdapter.capabilities.supports("native_artifacts")
+    assert LangChainAdapter.capabilities.supports("native_artifacts")
 
     with pytest.raises(ValueError, match="structured output and tool registration"):
         AdapterCapabilities(supports_artifacts=True)
@@ -431,7 +436,11 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
 
         async def run(self, template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
             assert "less known city" in template
-            assert set(kwargs) == {"instructions", "usage"}
+            assert set(kwargs) == {"capabilities", "instructions", "usage"}
+            assert any(
+                type(capability).__name__ == "_KediArtifactCapability"
+                for capability in kwargs["capabilities"]
+            )
             return SimpleNamespace(output=output_type(x="Konya"))
 
     monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
@@ -1306,6 +1315,289 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
     assert len(calls) == 3
 
 
+def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id() -> None:
+    from langchain_core.messages import ToolMessage
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+
+    def request_for(name: str, call_id: str) -> Any:
+        return ToolCallRequest(
+            tool_call={"name": name, "args": {}, "id": call_id, "type": "tool_call"},
+            tool=cast(Any, SimpleNamespace(metadata={"kedi_origin": "mcp"})),
+            state={},
+            runtime=cast(Any, None),
+        )
+
+    async def successful_handler(request: Any) -> ToolMessage:
+        return ToolMessage(
+            content="native-result" * 20,
+            tool_call_id=request.tool_call["id"],
+        )
+
+    manager = ArtifactManager(session_id="langchain-native")
+    policy = ArtifactPolicy(threshold_bytes=10)
+    middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=ApprovalPolicy.allow()),
+        tools=(),
+    )
+    with artifact_admission_scope(manager=manager, policy=policy):
+        result = asyncio.run(
+            middleware.awrap_tool_call(
+                request_for("native_tool", "native-call"),
+                successful_handler,
+            )
+        )
+
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "native-call"
+    assert json.loads(cast(str, result.content))["ref_id"] == "tool_call_result_1"
+    assert manager.get_value("tool_call_result_1") == "native-result" * 20
+    events = manager.history.snapshot()
+    assert events[0].data["call_id"] == "native-call"
+    assert events[-1].data["call_id"] == "native-call"
+
+    async def failed_handler(request: Any) -> ToolMessage:
+        return ToolMessage(
+            content="failure" * 20,
+            tool_call_id=request.tool_call["id"],
+            status="error",
+        )
+
+    with artifact_admission_scope(manager=manager, policy=policy):
+        failed = asyncio.run(
+            middleware.awrap_tool_call(
+                request_for("native_tool", "failed-call"),
+                failed_handler,
+            )
+        )
+    assert failed.status == "error"
+    assert len(manager.history.snapshot()) == len(events)
+
+    wrapped_tool = ToolSpec(
+        fn=lambda: "unused",
+        name="wrapped_tool",
+        metadata={"kedi_artifact_wrapped": True},
+    )
+    wrapped_middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=ApprovalPolicy.allow()),
+        tools=(wrapped_tool,),
+    )
+    with artifact_admission_scope(manager=manager, policy=policy):
+        wrapped = asyncio.run(
+            wrapped_middleware.awrap_tool_call(
+                request_for("wrapped_tool", "wrapped-call"),
+                successful_handler,
+            )
+        )
+    assert wrapped.content == "native-result" * 20
+    assert len(manager.history.snapshot()) == len(events)
+
+    with artifact_admission_scope(manager=manager, policy=policy):
+        raw = asyncio.run(
+            langchain_adapter_module._langchain_admit_native_tool_result(
+                "raw-result" * 20,
+                tool_name="raw_tool",
+                call_id="raw-call",
+            )
+        )
+    assert raw["ref_id"] == "tool_call_result_2"
+    assert manager.get_value("tool_call_result_2") == "raw-result" * 20
+
+
+def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -> None:
+    from langchain_core.messages import ToolMessage
+    from langgraph.prebuilt.tool_node import ToolCallRequest
+    from langgraph.types import Command
+
+    def request_for(call_id: str) -> Any:
+        return ToolCallRequest(
+            tool_call={
+                "name": "native_tool",
+                "args": {},
+                "id": call_id,
+                "type": "tool_call",
+            },
+            tool=cast(Any, SimpleNamespace(metadata={"kedi_origin": "mcp"})),
+            state={},
+            runtime=cast(Any, None),
+        )
+
+    async def successful_handler(request: Any) -> Command[Any]:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content="command-result" * 20,
+                        tool_call_id=request.tool_call["id"],
+                    )
+                ],
+                "counter": 1,
+            },
+            goto="next-node",
+            resume={"checkpoint": "keep"},
+        )
+
+    manager = ArtifactManager(session_id="langchain-command")
+    policy = ArtifactPolicy(threshold_bytes=10)
+    middleware = langchain_adapter_module._langchain_approval_middleware(
+        profile=AgentProfile(approval=ApprovalPolicy.allow()),
+        tools=(),
+    )
+    with artifact_admission_scope(manager=manager, policy=policy):
+        result = asyncio.run(
+            middleware.awrap_tool_call(request_for("command-call"), successful_handler)
+        )
+
+    assert isinstance(result, Command)
+    assert result.goto == "next-node"
+    assert result.resume == {"checkpoint": "keep"}
+    assert result.update["counter"] == 1
+    message = result.update["messages"][0]
+    assert isinstance(message, ToolMessage)
+    assert message.tool_call_id == "command-call"
+    assert json.loads(cast(str, message.content))["ref_id"] == "tool_call_result_1"
+    assert manager.get_value("tool_call_result_1") == "command-result" * 20
+
+    async def failed_handler(request: Any) -> Command[Any]:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content="command-failure" * 20,
+                        tool_call_id=request.tool_call["id"],
+                        status="error",
+                    )
+                ]
+            }
+        )
+
+    event_count = len(manager.history.snapshot())
+    with artifact_admission_scope(manager=manager, policy=policy):
+        failed = asyncio.run(
+            middleware.awrap_tool_call(request_for("failed-command"), failed_handler)
+        )
+    failed_message = failed.update["messages"][0]
+    assert failed_message.status == "error"
+    assert len(manager.history.snapshot()) == event_count
+
+    tuple_command = Command(
+        update=(
+            "preserved-metadata",
+            ToolMessage(content="tuple-result" * 20, tool_call_id="tuple-call"),
+        )
+    )
+    with artifact_admission_scope(manager=manager, policy=policy):
+        tuple_result = asyncio.run(
+            langchain_adapter_module._langchain_admit_native_tool_result(
+                tuple_command,
+                tool_name="native_tool",
+                call_id="tuple-call",
+            )
+        )
+    assert isinstance(tuple_result.update, tuple)
+    assert tuple_result.update[0] == "preserved-metadata"
+    assert json.loads(cast(str, tuple_result.update[1].content))["ref_id"] == ("tool_call_result_2")
+
+    without_messages = Command(update={"counter": 2})
+    with artifact_admission_scope(manager=manager, policy=policy):
+        assert (
+            asyncio.run(
+                langchain_adapter_module._langchain_admit_native_tool_result(
+                    without_messages,
+                    tool_name="native_tool",
+                    call_id="unused-call",
+                )
+            )
+            is without_messages
+        )
+
+    unmatched = Command(
+        update={"messages": [ToolMessage(content="small", tool_call_id="other-call")]}
+    )
+    with artifact_admission_scope(manager=manager, policy=policy):
+        assert (
+            asyncio.run(
+                langchain_adapter_module._langchain_admit_native_tool_result(
+                    unmatched,
+                    tool_name="native_tool",
+                    call_id="expected-call",
+                )
+            )
+            is unmatched
+        )
+
+    expected_message = ToolMessage(content="expected", tool_call_id="expected-call")
+    mixed_messages = Command(
+        update={
+            "messages": [
+                ToolMessage(content="other", tool_call_id="other-call"),
+                expected_message,
+            ]
+        }
+    )
+    assert (
+        langchain_adapter_module._langchain_tool_message_for_call(
+            mixed_messages,
+            "expected-call",
+        )
+        is expected_message
+    )
+    assert (
+        langchain_adapter_module._langchain_tool_message_for_call(
+            unmatched,
+            "expected-call",
+        )
+        is None
+    )
+    assert (
+        langchain_adapter_module._langchain_tool_message_for_call(
+            Command(update={"messages": None}),
+            "expected-call",
+        )
+        is None
+    )
+    manager.close()
+
+
+def test_langchain_raw_message_admission_preserves_model_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_core.messages import AIMessage
+
+    admitted_values = iter(({"ref_id": "tool_call_result_1"}, "compact scalar"))
+
+    async def admit(_result: Any, *, tool_name: str, call_id: str) -> Any:
+        assert tool_name == "native_tool"
+        assert call_id == "native-call"
+        return next(admitted_values)
+
+    monkeypatch.setattr(
+        langchain_adapter_module,
+        "admit_current_artifact_result",
+        admit,
+    )
+
+    original = AIMessage(content="large native result")
+    mapped = asyncio.run(
+        langchain_adapter_module._langchain_admit_native_tool_result(
+            original,
+            tool_name="native_tool",
+            call_id="native-call",
+        )
+    )
+    scalar = asyncio.run(
+        langchain_adapter_module._langchain_admit_native_tool_result(
+            original,
+            tool_name="native_tool",
+            call_id="native-call",
+        )
+    )
+
+    assert isinstance(mapped, AIMessage)
+    assert json.loads(cast(str, mapped.content))["ref_id"] == "tool_call_result_1"
+    assert isinstance(scalar, AIMessage)
+    assert scalar.content == "compact scalar"
+
+
 def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1649,6 +1941,22 @@ def test_langchain_structured_response_supports_mapping_and_object() -> None:
     assert (
         adapters_module._langchain_text_response(SimpleNamespace(content="object content"))
         == "object content"
+    )
+    response_blocks = [
+        {"type": "reasoning", "summary": []},
+        {"type": "text", "text": "block response", "phase": "final_answer"},
+    ]
+    assert (
+        adapters_module._langchain_text_response(
+            {"messages": [SimpleNamespace(content=response_blocks)]}
+        )
+        == "block response"
+    )
+    assert (
+        langchain_adapter_module._langchain_completed_message_text(
+            SimpleNamespace(content=response_blocks)
+        )
+        == "block response"
     )
     with pytest.raises(ValueError, match="text response"):
         adapters_module._langchain_text_response({"messages": []})

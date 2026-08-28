@@ -568,6 +568,7 @@ class CodexAdapter(HookRegistrationMixin):
             conversation.cleanup = _codex_thread_cleanup(self._client, result.thread_id)
         if result.compacted:
             conversation.cache_prefix_changed = True
+        conversation.mark_completed()
 
     def _approval_policies(
         self,

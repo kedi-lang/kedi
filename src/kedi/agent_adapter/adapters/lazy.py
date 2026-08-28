@@ -103,6 +103,11 @@ class LazyAdapter(HookRegistrationMixin):
                             )
         return self._real
 
+    def resolve(self) -> Any:
+        """Return the concrete adapter for request identity and native lowering."""
+
+        return self._ensure()
+
     def on(
         self,
         events: HookEventName | str | Sequence[HookEventName | str],

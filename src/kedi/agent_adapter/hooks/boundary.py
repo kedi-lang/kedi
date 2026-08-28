@@ -3,9 +3,10 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, ParamSpec, TypeVar, cast
+from dataclasses import dataclass
+from typing import Any, Iterator, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 from ..events import (
@@ -32,6 +33,12 @@ _ACTIVE_HOOK_RUNS: ContextVar[frozenset[tuple[int, str]]] = ContextVar(
 )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class PreparedAgentPrompt:
+    content: str
+    identity: AgentRunIdentity
+
+
 def hooked_agent_run(prompt_argument: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Apply user-prompt hooks and bind their dispatcher for one adapter run."""
 
@@ -48,30 +55,12 @@ def hooked_agent_run(prompt_argument: str) -> Callable[[Callable[P, R]], Callabl
                 adapter = _adapter_from_args(args)
                 bound = signature.bind(*args, **kwargs)
                 prompt = _prompt_from_bound(bound, prompt_argument)
-                dispatcher, identity = _dispatcher_for(adapter)
-                if dispatcher is None:
-                    return await cast(Callable[..., Awaitable[Any]], fn)(*args, **kwargs)
-                run_key = (id(adapter), identity.run_id)
-                if run_key in _ACTIVE_HOOK_RUNS.get():
-                    return await cast(Callable[..., Awaitable[Any]], fn)(*args, **kwargs)
-                bridge_token = _ACTIVE_HOOK_RUNS.set(_ACTIVE_HOOK_RUNS.get() | {run_key})
-                try:
-                    with (
-                        bind_agent_run(
-                            identity.run_id,
-                            parent_run_id=identity.parent_run_id,
-                            agent_name=identity.agent_name,
-                        ),
-                        bind_hook_dispatcher(dispatcher),
-                    ):
-                        edited = await _dispatch_prompt(adapter, dispatcher, identity, prompt)
-                        bound.arguments[prompt_argument] = edited
-                        return await cast(Callable[..., Awaitable[Any]], fn)(
-                            *bound.args,
-                            **bound.kwargs,
-                        )
-                finally:
-                    _ACTIVE_HOOK_RUNS.reset(bridge_token)
+                async with prepared_agent_hook_run_async(adapter, prompt) as prepared:
+                    bound.arguments[prompt_argument] = prepared.content
+                    return await cast(Callable[..., Awaitable[Any]], fn)(
+                        *bound.args,
+                        **bound.kwargs,
+                    )
 
             return cast(Callable[P, R], async_wrapper)
 
@@ -80,31 +69,73 @@ def hooked_agent_run(prompt_argument: str) -> Callable[[Callable[P, R]], Callabl
             adapter = _adapter_from_args(args)
             bound = signature.bind(*args, **kwargs)
             prompt = _prompt_from_bound(bound, prompt_argument)
-            dispatcher, identity = _dispatcher_for(adapter)
-            if dispatcher is None:
-                return fn(*args, **kwargs)
-            run_key = (id(adapter), identity.run_id)
-            if run_key in _ACTIVE_HOOK_RUNS.get():
-                return fn(*args, **kwargs)
-            bridge_token = _ACTIVE_HOOK_RUNS.set(_ACTIVE_HOOK_RUNS.get() | {run_key})
-            try:
-                with (
-                    bind_agent_run(
-                        identity.run_id,
-                        parent_run_id=identity.parent_run_id,
-                        agent_name=identity.agent_name,
-                    ),
-                    bind_hook_dispatcher(dispatcher),
-                ):
-                    edited = _dispatch_prompt_sync(adapter, dispatcher, identity, prompt)
-                    bound.arguments[prompt_argument] = edited
-                    return fn(*bound.args, **bound.kwargs)
-            finally:
-                _ACTIVE_HOOK_RUNS.reset(bridge_token)
+            with prepared_agent_hook_run(adapter, prompt) as prepared:
+                bound.arguments[prompt_argument] = prepared.content
+                return fn(*bound.args, **bound.kwargs)
 
         return cast(Callable[P, R], sync_wrapper)
 
     return decorate
+
+
+@contextmanager
+def prepared_agent_hook_run(
+    adapter: HookRegistrationMixin,
+    prompt: str,
+) -> Iterator[PreparedAgentPrompt]:
+    """Resolve prompt mutation before request assembly and suppress nested redispatch."""
+
+    dispatcher, identity = _dispatcher_for(adapter)
+    run_key = (id(adapter), identity.run_id)
+    if dispatcher is None or run_key in _ACTIVE_HOOK_RUNS.get():
+        yield PreparedAgentPrompt(content=prompt, identity=identity)
+        return
+    bridge_token = _ACTIVE_HOOK_RUNS.set(_ACTIVE_HOOK_RUNS.get() | {run_key})
+    try:
+        with (
+            bind_agent_run(
+                identity.run_id,
+                parent_run_id=identity.parent_run_id,
+                agent_name=identity.agent_name,
+            ),
+            bind_hook_dispatcher(dispatcher),
+        ):
+            yield PreparedAgentPrompt(
+                content=_dispatch_prompt_sync(adapter, dispatcher, identity, prompt),
+                identity=identity,
+            )
+    finally:
+        _ACTIVE_HOOK_RUNS.reset(bridge_token)
+
+
+@asynccontextmanager
+async def prepared_agent_hook_run_async(
+    adapter: HookRegistrationMixin,
+    prompt: str,
+) -> AsyncIterator[PreparedAgentPrompt]:
+    """Async counterpart of :func:`prepared_agent_hook_run`."""
+
+    dispatcher, identity = _dispatcher_for(adapter)
+    run_key = (id(adapter), identity.run_id)
+    if dispatcher is None or run_key in _ACTIVE_HOOK_RUNS.get():
+        yield PreparedAgentPrompt(content=prompt, identity=identity)
+        return
+    bridge_token = _ACTIVE_HOOK_RUNS.set(_ACTIVE_HOOK_RUNS.get() | {run_key})
+    try:
+        with (
+            bind_agent_run(
+                identity.run_id,
+                parent_run_id=identity.parent_run_id,
+                agent_name=identity.agent_name,
+            ),
+            bind_hook_dispatcher(dispatcher),
+        ):
+            yield PreparedAgentPrompt(
+                content=await _dispatch_prompt(adapter, dispatcher, identity, prompt),
+                identity=identity,
+            )
+    finally:
+        _ACTIVE_HOOK_RUNS.reset(bridge_token)
 
 
 @asynccontextmanager
@@ -117,19 +148,8 @@ async def native_agent_hook_run(
     if current_hook_dispatcher() is not None or not isinstance(prompt, str):
         yield prompt
         return
-    dispatcher, identity = _dispatcher_for(adapter)
-    if dispatcher is None:
-        yield prompt
-        return
-    with (
-        bind_agent_run(
-            identity.run_id,
-            parent_run_id=identity.parent_run_id,
-            agent_name=identity.agent_name,
-        ),
-        bind_hook_dispatcher(dispatcher),
-    ):
-        yield await _dispatch_prompt(adapter, dispatcher, identity, prompt)
+    async with prepared_agent_hook_run_async(adapter, prompt) as prepared:
+        yield prepared.content
 
 
 def _adapter_from_args(args: tuple[Any, ...]) -> HookRegistrationMixin:
@@ -218,4 +238,10 @@ def _resolve_prompt_decision(result: Any, original: str) -> str:
     return original
 
 
-__all__ = ["hooked_agent_run", "native_agent_hook_run"]
+__all__ = [
+    "PreparedAgentPrompt",
+    "hooked_agent_run",
+    "native_agent_hook_run",
+    "prepared_agent_hook_run",
+    "prepared_agent_hook_run_async",
+]

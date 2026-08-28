@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import Future
 from contextlib import contextmanager
 from contextvars import ContextVar
+from time import sleep
 from types import SimpleNamespace
 from typing import Any, Callable, cast
 
@@ -43,8 +45,9 @@ from kedi.agent_adapter.prefix_cache import (
     pydantic_prefix_cache_settings,
     pydantic_provider_cache_policy,
 )
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import AgentProfile, block_agent_profile_scope
 from kedi.artifacts import ArtifactHandle, ArtifactManager, ArtifactPolicy
+from kedi.engine import ThreadEngine
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import HistoryDirectiveStmt, ProfileDefStmt
 from kedi.lang.parser.diagnostics import KediParseError
@@ -91,6 +94,23 @@ class StatefulHistoryAdapter(MockAdapter):
         if conversation is None:
             return "stateless"
         turn = int(conversation.resume_state.get("turn", 0)) + 1
+        conversation.result_state["turn"] = turn
+        return f"response-{turn}"
+
+
+class DelayedStatefulHistoryAdapter(StatefulHistoryAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed: list[tuple[str, dict[str, Any]]] = []
+
+    def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+        conversation = self._conversation.get()
+        assert conversation is not None
+        resume = dict(conversation.resume_state)
+        self.observed.append((prompt, resume))
+        if "First" in prompt:
+            sleep(0.03)
+        turn = int(resume.get("turn", 0)) + 1
         conversation.result_state["turn"] = turn
         return f"response-{turn}"
 
@@ -195,6 +215,136 @@ def test_history_defaults_to_stateless_and_enabled_reuses_checkpoint() -> None:
     )
     assert runtime.run_main() == "response-2"
     assert adapter.resume_states == [{}, {"turn": 1}]
+
+
+def test_parallel_history_turns_execute_in_source_order() -> None:
+    adapter = DelayedStatefulHistoryAdapter()
+    runtime = compile_program(
+        parse_program("> history: enabled\n[first] << First.\n[second] << Second.\n= <second>\n"),
+        adapter=adapter,
+        engine=ThreadEngine(max_workers=2),
+    )
+
+    try:
+        assert runtime.run_main() == "response-2"
+    finally:
+        runtime._engine.shutdown()
+
+    assert adapter.observed == [
+        ("First.", {}),
+        ("Second.", {"turn": 1}),
+    ]
+
+
+@pytest.mark.parametrize("failure_mode", ["raise", "failed_future", "cancelled_future"])
+def test_parallel_engine_admission_failure_retires_reserved_history_turn(
+    failure_mode: str,
+) -> None:
+    class FailingEngine:
+        parallel = True
+
+        def schedule(self, _deps: Any, _job: Any) -> Future[Any]:
+            if failure_mode == "raise":
+                raise RuntimeError("schedule failed")
+            future: Future[Any] = Future()
+            if failure_mode == "failed_future":
+                future.set_exception(RuntimeError("submission failed"))
+            else:
+                future.cancel()
+            return future
+
+    state = ConversationState(session_id=f"engine-{failure_mode}")
+    adapter = StatefulHistoryAdapter()
+    source = "> history: enabled\n[answer] << First.\n= <answer>\n"
+    failed_runtime = compile_program(
+        parse_program(source),
+        adapter=adapter,
+        engine=FailingEngine(),
+        conversation_state=state,
+    )
+
+    with pytest.raises(Exception):
+        failed_runtime.run_main()
+
+    retry_runtime = compile_program(
+        parse_program(source),
+        adapter=adapter,
+        conversation_state=state,
+    )
+    assert retry_runtime.run_main() == "response-1"
+    state.close()
+
+
+def test_parallel_template_schedule_failure_retires_reserved_history_turn() -> None:
+    class FailingEngine:
+        parallel = True
+
+        @staticmethod
+        def schedule(_deps: Any, _job: Any) -> Future[Any]:
+            raise RuntimeError("schedule failed")
+
+    state = ConversationState(session_id="template-schedule-failure")
+    runtime = compile_program(
+        parse_program("> history: enabled\n>> Return [answer].\n= <answer>\n"),
+        adapter=StatefulHistoryAdapter(),
+        engine=FailingEngine(),
+        conversation_state=state,
+    )
+
+    with pytest.raises(RuntimeError, match="schedule failed"):
+        runtime.run_main()
+
+    with state.adapter_turn("test") as later:
+        assert later.turn_sequence == 1
+    state.close()
+
+
+def test_claim_preparation_failure_retires_reserved_history_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = ConversationState(session_id="claim-preparation-failure")
+    profile = AgentProfile(history=True, artifacts=ArtifactPolicy(enabled=False))
+    runtime = compile_program(
+        parse_program(""),
+        adapter=StatefulHistoryAdapter(),
+        default_agent_profile=profile,
+        conversation_state=state,
+    )
+
+    def fail_instruction_assembly(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("instruction assembly failed")
+
+    monkeypatch.setattr(runtime, "_agent_instruction_parts", fail_instruction_assembly)
+    with block_agent_profile_scope(profile):
+        with pytest.raises(RuntimeError, match="instruction assembly failed"):
+            runtime._evaluate_claim("Kedi is typed")
+
+    with state.adapter_turn("test") as later:
+        assert later.turn_sequence == 1
+    state.close()
+
+
+def test_lane_fingerprint_failure_does_not_reserve_a_history_turn() -> None:
+    state = ConversationState(session_id="invalid-lane")
+    adapter = StatefulHistoryAdapter()
+    runtime = compile_program(
+        parse_program(""),
+        adapter=adapter,
+        conversation_state=state,
+    )
+    invalid_profile = SimpleNamespace(
+        history=True,
+        model=None,
+        effort=None,
+        settings={1: "integer", "1": "string"},
+        mcp_servers=(),
+    )
+
+    with pytest.raises(TypeError):
+        runtime._reserve_conversation_turn(cast(Any, invalid_profile), adapter, ())
+
+    assert state.reserve_turn().sequence == 0
+    state.close()
 
 
 def test_profile_history_policy_enables_shared_context() -> None:
@@ -317,12 +467,12 @@ def test_conversation_native_resource_cleanup_tracks_committed_lanes() -> None:
         with state.adapter_turn("codex") as failed:
             failed.cleanup = lambda: cleaned.append("failed")
             raise RuntimeError("failed turn")
-    assert cleaned == ["one"]
+    assert cleaned == ["one", "failed"]
 
     with state.adapter_turn("codex") as resumed:
         assert resumed.resume_state == {"thread": "two"}
         resumed.cleanup = None
-    assert cleaned == ["one", "two"]
+    assert cleaned == ["one", "failed", "two"]
 
     state.close()
 
@@ -1196,6 +1346,23 @@ def test_langchain_history_ignores_incomplete_or_invalid_message_snapshots() -> 
     assert len(messages) == 1
     assert isinstance(messages[0], HumanMessage)
     assert conversation.result_state == {}
+
+
+def test_langchain_history_does_not_commit_request_time_cache_markers() -> None:
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    adapter = LangChainAdapter("anthropic:claude-sonnet-4-5")
+    conversation = AdapterConversationContext()
+    marked = langchain_adapter_module._langchain_with_cache_control(
+        HumanMessage(content="cache this turn")
+    )
+
+    with adapter.conversation_scope(conversation):
+        adapter._capture_conversation_messages({"messages": [marked, AIMessage(content="done")]})
+
+    serialized = conversation.result_state["langchain_messages"]
+    assert isinstance(serialized, list)
+    assert "cache_control" not in str(serialized)
 
 
 async def _empty_async_tools() -> list[Any]:
