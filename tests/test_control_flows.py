@@ -276,6 +276,62 @@ def test_map_continues_each_iteration_frame_without_leaking_locals() -> None:
     assert "doubled" not in runtime._globals_env
 
 
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            """
+[results: list] = `[]`
+> loop [outer]: `[1, 2]`:
+  > loop [inner]: `[10, 20]`:
+    [value: int] = `outer * inner`
+  > map:
+    `results.append([outer, inner, value])`
+= `sorted(results)`
+""".lstrip(),
+            [
+                [1, 10, 10],
+                [1, 20, 20],
+                [2, 10, 20],
+                [2, 20, 40],
+            ],
+        ),
+        (
+            """
+[results: list] = `[]`
+> loop [outer]: `[1, 2]`:
+  [base: int] = `outer * 100`
+> map:
+  > loop [inner]: `[10, 20]`:
+    [value: int] = `base + inner`
+  > map:
+    `results.append([outer, inner, value])`
+= `sorted(results)`
+""".lstrip(),
+            [
+                [1, 10, 110],
+                [1, 20, 120],
+                [2, 10, 210],
+                [2, 20, 220],
+            ],
+        ),
+    ],
+)
+def test_nested_loop_map_compositions(
+    source: str,
+    expected: list[list[int]],
+) -> None:
+    runtime = compile_program(parse_program(source))
+    assert runtime.run_main() == expected
+
+    engine = ThreadEngine(max_workers=2)
+    try:
+        runtime = compile_program(parse_program(source), engine=engine)
+        assert runtime.run_main() == expected
+    finally:
+        engine.shutdown()
+
+
 def test_parallel_map_uses_record_local_template_outputs() -> None:
     class ItemAdapter(MockAdapter):
         def produce_sync(self, *, template: str, output_schema=None, **kwargs: Any):
