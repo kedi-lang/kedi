@@ -51,6 +51,25 @@ def test_idle_console_uses_continuation_prompt_and_preserves_tab_indentation() -
     assert stdout.getvalue() == "8\n"
 
 
+@pytest.mark.parametrize("keyword", ["if", "loop"])
+def test_idle_console_buffers_template_condition_header_without_trailing_colon(
+    keyword: str,
+) -> None:
+    seen: list[str] = []
+
+    class Session:
+        def execute(self, source: str) -> None:
+            seen.append(source)
+
+    console = IdleConsole(Session(), stdout=StringIO(), stderr=StringIO())  # type: ignore[arg-type]
+
+    assert console.push(f"> {keyword}: İstanbul has about 16 million residents") is True
+    assert console.prompt == "... "
+    assert console.push("  = yes") is True
+    assert console.push("") is False
+    assert seen == [f"> {keyword}: İstanbul has about 16 million residents\n  = yes"]
+
+
 def test_idle_console_executes_explicit_multiline_fragment_once() -> None:
     line_prompts: list[str] = []
     multiline_prompts: list[str] = []
@@ -321,6 +340,42 @@ def test_multiline_input_preserves_bracketed_paste_until_explicit_submission(
             submitted = result.result(timeout=3)
 
     assert submitted == f"{source}\n"
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "> if: İstanbulX\x7f has about 16 million residents\r",
+        "> if: İstanbX\x1b[D\x1b[3~ul has about 16 million residents\r",
+    ],
+)
+def test_highlighted_line_input_preserves_unicode_backspace_and_delete(
+    typed: str,
+    monkeypatch: Any,
+) -> None:
+    expected = "> if: İstanbul has about 16 million residents"
+
+    with create_pipe_input() as pipe_input:
+        monkeypatch.setattr(
+            idle_input_module,
+            "PromptSession",
+            lambda **kwargs: PromptSession(
+                input=pipe_input,
+                output=DummyOutput(),
+                **kwargs,
+            ),
+        )
+        prompt_input = idle_input_module.PromptToolkitInput(
+            highlight=True,
+            requires_continuation=idle_module._requires_continuation,
+            continuation_marker="...",
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(prompt_input.read_line, "+++ ")
+            pipe_input.send_text(typed)
+            submitted = result.result(timeout=3)
+
+    assert submitted == expected
 
 
 @pytest.mark.parametrize(

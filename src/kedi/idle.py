@@ -230,9 +230,17 @@ def _requires_continuation(source: str) -> bool:
     stripped = source.rstrip()
     if stripped.endswith((":", "\\")):
         return True
+    if _is_template_control_header(stripped):
+        return True
     if stripped.count("```") % 2:
         return True
     return _has_unclosed_delimiter(stripped)
+
+
+def _is_template_control_header(source: str) -> bool:
+    """Return whether one line starts a model-classified control-flow block."""
+    stripped = source.strip()
+    return "\n" not in stripped and stripped.startswith(("> if:", "> loop:"))
 
 
 def _has_unclosed_delimiter(source: str) -> bool:
