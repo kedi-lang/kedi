@@ -243,6 +243,12 @@ def _skills_command_help() -> str:
     help="Resume an interactive session snapshot",
 )
 @click.option(
+    "--highlight",
+    "highlight_idle",
+    is_flag=True,
+    help="Enable syntax highlighting in interactive mode",
+)
+@click.option(
     "--quiet",
     is_flag=True,
     help="Suppress progress output from codegen and GEPA optimization",
@@ -280,6 +286,7 @@ def main(
     idle_mode: bool = False,
     record_idle: bool = False,
     load_session_path: Path | None = None,
+    highlight_idle: bool = False,
     quiet: bool = False,
     parse_only: bool = False,
     show_help: bool = False,
@@ -303,11 +310,12 @@ def main(
                 model=adapter_model,
                 record=record_idle,
                 load_path=load_session_path,
+                highlight=highlight_idle,
             )
         except SessionPersistenceError as exc:
             raise click.ClickException(str(exc)) from exc
-    if record_idle or load_session_path is not None:
-        raise click.UsageError("--record and --load require --idle.")
+    if record_idle or load_session_path is not None or highlight_idle:
+        raise click.UsageError("--record, --load, and --highlight require --idle.")
     if source == "skills" and command_source is None:
         return _run_skills_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:

@@ -20,6 +20,7 @@ from .lang.parser.diagnostics import KediParseError
 
 if TYPE_CHECKING:
     from .interactive_session import InteractiveSession
+    from .idle_input import PromptToolkitInput
 
 
 BEGIN_MARKER = "+++"
@@ -28,6 +29,7 @@ IDLE_BANNER = " /\\_/\\\n( o.o )\n > ^ <"
 _EXIT_COMMAND = ":exit"
 _DUMP_COMMAND = ":dump"
 _HELP_COMMANDS = frozenset({"help", "help()"})
+_MULTILINE_COMMAND = ":multiline"
 _SHOW_COMMAND = ":show"
 
 
@@ -42,15 +44,21 @@ class IdleConsole:
         stdout: TextIO = sys.stdout,
         stderr: TextIO = sys.stderr,
         input_reader: Callable[[str], str] | None = None,
+        multiline_reader: Callable[[str], str] | None = None,
         session_path: str | Path | None = None,
+        highlight: bool = False,
     ) -> None:
         self._session = session
         self._stdin = stdin
         self._stdout = stdout
         self._stderr = stderr
-        self._input_reader = input_reader or input
+        self._input_reader = input_reader
+        self._multiline_reader = multiline_reader
         self._buffer: list[str] = []
+        self._multiline_requested = False
         self._exit_requested = False
+        self._highlight = highlight
+        self._prompt_input: PromptToolkitInput | None = None
         self._session_path = (
             None if session_path is None else Path(session_path).expanduser().resolve()
         )
@@ -58,7 +66,7 @@ class IdleConsole:
     @property
     def prompt(self) -> str:
         """Return the prompt for the next input line."""
-        marker = CONTINUATION_MARKER if self._buffer else BEGIN_MARKER
+        marker = CONTINUATION_MARKER if self._buffer or self._multiline_requested else BEGIN_MARKER
         return f"{marker} "
 
     @property
@@ -95,6 +103,12 @@ class IdleConsole:
         if stripped in _HELP_COMMANDS:
             self._write_help()
             return False
+        if stripped == _MULTILINE_COMMAND:
+            self._multiline_requested = True
+            return True
+        if stripped.startswith(f"{_MULTILINE_COMMAND} "):
+            self._stderr.write("Usage: :multiline\n")
+            return False
         if stripped == _SHOW_COMMAND or stripped.startswith(f"{_SHOW_COMMAND} "):
             expression = stripped.removeprefix(_SHOW_COMMAND).strip()
             if not expression:
@@ -115,7 +129,13 @@ class IdleConsole:
             self._write_banner()
         while not self._exit_requested:
             try:
-                line = self._input_reader(self.prompt)
+                if self._multiline_requested:
+                    source = self._read_multiline(self.prompt)
+                    self._multiline_requested = False
+                    if source.strip():
+                        self._execute(source)
+                    continue
+                line = self._read_line(self.prompt)
             except EOFError:
                 self._stdout.write("\n")
                 break
@@ -123,6 +143,29 @@ class IdleConsole:
                 self._exit_requested = True
                 break
             self.push(line)
+
+    def _read_line(self, prompt: str) -> str:
+        if self._input_reader is not None:
+            return self._input_reader(prompt)
+        if self._highlight:
+            return self._get_prompt_input().read_line(prompt)
+        return input(prompt)
+
+    def _read_multiline(self, prompt: str) -> str:
+        if self._multiline_reader is not None:
+            return self._multiline_reader(prompt)
+        return self._get_prompt_input().read_multiline(prompt)
+
+    def _get_prompt_input(self) -> PromptToolkitInput:
+        if self._prompt_input is None:
+            from .idle_input import PromptToolkitInput
+
+            self._prompt_input = PromptToolkitInput(
+                highlight=self._highlight,
+                requires_continuation=_requires_continuation,
+                continuation_marker=CONTINUATION_MARKER,
+            )
+        return self._prompt_input
 
     def dump(self) -> Path | None:
         """Persist the current session and print the command that resumes it."""
@@ -159,7 +202,7 @@ class IdleConsole:
         self._stdout.write(
             f"{IDLE_BANNER}\nKedi {__version__} on {platform.system().lower()}\n"
             'Type "help" for interactive help, ":show" to inspect a value, '
-            '":dump" to save, '
+            '":multiline" for a multiline fragment, ":dump" to save, '
             'or ":exit" to leave.\n'
         )
 
@@ -167,7 +210,9 @@ class IdleConsole:
         self._stdout.write(
             f"Enter a complete Kedi fragment at {BEGIN_MARKER}. Compound blocks "
             f"continue at {CONTINUATION_MARKER}; press Tab to indent and submit an "
-            "empty line to run them. Use :show <expression> to inspect a value. "
+            "empty line to run them. Use :multiline for a freely editable multiline "
+            "fragment; press Enter twice to run it, or Alt+Enter to force submission. "
+            "Use :show <expression> to inspect a value. "
             "Use :dump to save the session. Use :exit, Ctrl+C, or Ctrl+D to exit.\n"
         )
 
@@ -259,6 +304,7 @@ def run_idle(
     model: str,
     record: bool = False,
     load_path: str | Path | None = None,
+    highlight: bool = False,
 ) -> int:
     """Run a terminal Kedi session with Python-style prompts."""
     from .api import interactive
@@ -272,7 +318,11 @@ def run_idle(
             else interactive(adapter=adapter, model=model)
         )
         with session as active_session:
-            console = IdleConsole(active_session, session_path=load_path)
+            console = IdleConsole(
+                active_session,
+                session_path=load_path,
+                highlight=highlight,
+            )
             try:
                 console.interact()
             finally:

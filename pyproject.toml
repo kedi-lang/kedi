@@ -16,6 +16,7 @@ dependencies = [
     "docstring-parser>=0.18",
     "python-dotenv",
     "pydantic-settings",
+    "prompt-toolkit>=3.0.52",
     "pydantic-ai-slim==2.23.0",
     "pydantic-monty>=0.0.21",
     "jsonschema>=4.26",
