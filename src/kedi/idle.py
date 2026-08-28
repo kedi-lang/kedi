@@ -19,8 +19,8 @@ from .lang import parse_program
 from .lang.parser.diagnostics import KediParseError
 
 if TYPE_CHECKING:
-    from .interactive_session import InteractiveSession
     from .idle_input import PromptToolkitInput
+    from .interactive_session import InteractiveSession
 
 
 BEGIN_MARKER = "+++"

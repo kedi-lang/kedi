@@ -14,7 +14,6 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import ColorDepth
 from prompt_toolkit.styles import Style
 
-
 MAX_HIGHLIGHT_CHARS = 8_000
 
 _TOKEN_STYLES = {
