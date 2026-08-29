@@ -79,6 +79,9 @@ langchain-aws = [
     "langchain",
     "langchain-aws",
 ]
+notebook = [
+    "kedi-notebook",
+]
 playground = [
     "basedpyright>=1.39.6",
     "fastapi>=0.138.1",
@@ -107,10 +110,14 @@ packages = [
 
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
+kedi-notebook = { path = "notebook", editable = true }
 
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ty.environment]
+extra-paths = ["notebook/src"]
 
 [tool.coverage.run]
 branch = true

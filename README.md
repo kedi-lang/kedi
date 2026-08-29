@@ -137,6 +137,28 @@ Fragments return native values and are executed exactly once. The session is
 process-local and non-transactional; completed state and side effects remain
 visible after a later fragment fails.
 
+Install the local notebook package to use the same runtime from a browser:
+
+```bash
+python -m pip install kedi-notebook
+kedi notebook
+```
+
+Or install and start it in one command with
+`uvx --from kedi-notebook kedi-notebook`.
+
+The notebook opens on localhost and uses browser-owned Pyodide by default.
+Choose a discovered host Python from the runtime menu when cells should use
+packages installed on the computer. Add an interpreter explicitly at serve
+time with `kedi notebook --python /path/to/python`; the option is repeatable.
+Pyodide starts loading as soon as the page opens and remains alive across
+cells. Notebook cells execute incrementally and are never replayed
+automatically. A cell beginning with `!` runs as a terminal cell; browser mode
+supports package installation with `!pip install` and `!uv add`, while host
+mode runs commands in the notebook working directory. Terminal output streams
+under the source while a command runs. Executed cells remain editable and
+rerunnable, and execution does not create an empty cell automatically.
+
 Use `adapter=` for framework backends (`pydantic`, `dspy`, `langchain`) and
 `agent=` for harness backends (`claude`, `codex`, `acp`). Both can be selected
 globally with `kedi.configure`, temporarily with `kedi.context`, or for one

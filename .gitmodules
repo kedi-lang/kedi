@@ -16,3 +16,6 @@
 [submodule "kedi-docs"]
 	path = kedi-docs
 	url = https://github.com/kedi-lang/kedi-docs
+[submodule "notebook"]
+	path = notebook
+	url = https://github.com/kedi-lang/notebook.git

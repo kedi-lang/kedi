@@ -115,6 +115,16 @@ def _skills_command_help() -> str:
     )
 
 
+def _run_notebook_command(arguments: list[str]) -> int:
+    try:
+        from kedi_notebook.server import serve_cli
+    except ImportError as exc:
+        raise click.ClickException(
+            "Kedi notebook is not installed. Install kedi-notebook, then run 'kedi notebook' again."
+        ) from exc
+    return serve_cli(arguments)
+
+
 @click.command(context_settings=context_settings, help="Run a .kedi program with KediRuntime")
 @click.argument("source", required=False)
 @click.option("-h", "--help", "show_help", is_flag=True, help="Show this message and exit.")
@@ -292,7 +302,12 @@ def main(
     show_help: bool = False,
 ):
     if show_help:
-        if source == "skills" and command_source is None:
+        if source == "notebook" and command_source is None:
+            click.echo(
+                "Usage: kedi notebook [--host HOST] [--port PORT] [--python PATH] "
+                "[--cwd PATH] [--no-open]\n\nRun the local Kedi notebook."
+            )
+        elif source == "skills" and command_source is None:
             click.echo(_skills_command_help())
         elif source in _PACKAGE_COMMANDS and command_source is None:
             click.echo(_package_command_help(source))
@@ -318,6 +333,8 @@ def main(
         raise click.UsageError("--record, --load, and --highlight require --idle.")
     if source == "skills" and command_source is None:
         return _run_skills_command(list(ctx.args))
+    if source == "notebook" and command_source is None:
+        return _run_notebook_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:
         return _run_package_command(source, list(ctx.args))
     if source == "parse":

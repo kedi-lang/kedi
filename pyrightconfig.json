@@ -2,7 +2,7 @@
   "pythonVersion": "3.11",
   "typeCheckingMode": "standard",
   "exclude": ["**/.*", "examples/**", "tests"],
-  "extraPaths": ["src"],
+  "extraPaths": ["src", "notebook/src"],
   "reportAny": "none",
   "reportExplicitAny": "none",
   "reportArgumentType": "none",
