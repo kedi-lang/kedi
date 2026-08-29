@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 import click
@@ -145,14 +146,13 @@ def test_cli_notebook_help_is_available_without_optional_package() -> None:
 
 
 def test_run_notebook_command_delegates_to_optional_package(monkeypatch) -> None:
-    from kedi_notebook import server as notebook_server
-
     received: list[list[str]] = []
-    monkeypatch.setattr(
-        notebook_server,
-        "serve_cli",
-        lambda arguments: received.append(list(arguments)) or 7,
-    )
+    package = types.ModuleType("kedi_notebook")
+    server = types.ModuleType("kedi_notebook.server")
+    setattr(package, "__path__", [])
+    setattr(server, "serve_cli", lambda arguments: received.append(list(arguments)) or 7)
+    monkeypatch.setitem(sys.modules, "kedi_notebook", package)
+    monkeypatch.setitem(sys.modules, "kedi_notebook.server", server)
 
     assert cli_module._run_notebook_command(["--no-open"]) == 7
     assert received == [["--no-open"]]
