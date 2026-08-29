@@ -56,3 +56,42 @@ jobs:
 
       - name: Run tests with coverage
         run: make check-coverage
+
+  notebook:
+    name: Python 3.11 notebook integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Kedi with notebook support
+        run: uv sync --locked --dev --extra notebook --python 3.11
+
+      - name: Run notebook tests
+        run: uv run --group dev --extra notebook --python 3.11 pytest notebook/tests -q -p no:cov
+
+      - name: Verify notebook CLI
+        run: uv run --extra notebook --python 3.11 kedi notebook --help
+
+      - name: Build notebook distribution
+        run: uv build notebook
+
+      - name: Verify notebook wheel assets
+        run: >-
+          uv run --extra notebook --python 3.11 python -c
+          "import glob, zipfile;
+          wheel = glob.glob('notebook/dist/*.whl')[0];
+          names = set(zipfile.ZipFile(wheel).namelist());
+          assert 'kedi_notebook/static/notebook/index.html' in names;
+          assert 'kedi_notebook/static/pyodide-worker.js' in names;
+          assert 'kedi_notebook/static/grammars/kedi/tree-sitter-kedi.wasm' in names"
