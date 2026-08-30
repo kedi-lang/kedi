@@ -1836,6 +1836,9 @@ langchain-aws = [
     { name = "langchain" },
     { name = "langchain-aws" },
 ]
+notebook = [
+    { name = "kedi-notebook" },
+]
 playground = [
     { name = "basedpyright" },
     { name = "fastapi" },
@@ -1874,6 +1877,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'playground'", specifier = ">=0.138.1" },
     { name = "groq", marker = "extra == 'groq'" },
     { name = "jsonschema", specifier = ">=4.26" },
+    { name = "kedi-notebook", marker = "extra == 'notebook'", editable = "notebook" },
     { name = "langchain", marker = "extra == 'langchain'" },
     { name = "langchain", marker = "extra == 'langchain-aws'" },
     { name = "langchain-aws", marker = "extra == 'langchain-aws'" },
@@ -1895,7 +1899,7 @@ requires-dist = [
     { name = "tree-sitter-python", specifier = ">=0.23" },
     { name = "uvicorn", marker = "extra == 'playground'", specifier = ">=0.30" },
 ]
-provides-extras = ["claude", "codex-model", "dspy", "groq", "langchain", "langchain-aws", "playground"]
+provides-extras = ["claude", "codex-model", "dspy", "groq", "langchain", "langchain-aws", "notebook", "playground"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1916,6 +1920,36 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.15.16" },
     { name = "ty", specifier = ">=0.0.44" },
+]
+
+[[package]]
+name = "kedi-notebook"
+version = "0.1.0"
+source = { editable = "notebook" }
+dependencies = [
+    { name = "basedpyright" },
+    { name = "fastapi" },
+    { name = "kedi" },
+    { name = "python-dotenv" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "basedpyright", specifier = ">=1.39.6" },
+    { name = "fastapi", specifier = ">=0.138.1" },
+    { name = "kedi", specifier = ">=0.4.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "playwright", specifier = ">=1.49" },
+    { name = "pytest", specifier = ">=8.2" },
+    { name = "pytest-cov", specifier = ">=5" },
+    { name = "ruff", specifier = ">=0.15" },
 ]
 
 [[package]]

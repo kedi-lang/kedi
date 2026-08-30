@@ -15,6 +15,92 @@ from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, sig
 # ---------------------------------------------------------------------
 
 
+def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
+    directive_items = features.compute_completion(
+        "> mo",
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=4),
+    )
+    assert any(item.label == "model" and item.insert_text == "model: " for item in directive_items)
+
+    source = (
+        "~Person(name: str)\n\n"
+        "@render(person: Person) -> str:\n"
+        "  [label: str] = <person>\n"
+        "  = <label>\n"
+    )
+    items = features.compute_completion(
+        source,
+        "/tmp/x.kedi",
+        lsp.Position(line=3, character=5),
+    )
+    labels = {item.label for item in items}
+    assert {"Person", "render", "person", "label", "str"} <= labels
+
+    assert (
+        features.compute_completion(
+            "```\nvalue = 1\n```",
+            "/tmp/x.kedi",
+            lsp.Position(line=1, character=3),
+        )
+        == []
+    )
+    invalid_labels = {
+        item.label
+        for item in features.compute_completion(
+            "[broken",
+            "/tmp/x.kedi",
+            lsp.Position(line=0, character=7),
+        )
+    }
+    assert "int" in invalid_labels
+
+
+def test_completion_exposes_top_level_control_flow_and_imported_symbols(tmp_path: Path) -> None:
+    module = tmp_path / "helpers.kedi"
+    module.write_text(
+        "~Record(name: str)\n"
+        "[count: int] = `1`\n"
+        "@render() -> str:\n"
+        "  = ok\n"
+        "> profile: analyst:\n"
+        "  > model: test\n"
+        "> export: *\n",
+        encoding="utf-8",
+    )
+    source = (
+        "> import: helpers\n"
+        "> profile: local_profile:\n"
+        "  > model: test\n"
+        "[before: int] = `1`\n"
+        "> loop [item]: `range(1)`:\n"
+        "  [label: str] = <item>\n"
+        "  >> Summarize <label> as [summary]\n"
+        "\n"
+        "[later: int] = `2`\n"
+    )
+    source_path = tmp_path / "main.kedi"
+    items = features.compute_completion(
+        source,
+        str(source_path),
+        lsp.Position(line=7, character=0),
+    )
+    labels = {item.label for item in items}
+
+    assert {
+        "Record",
+        "count",
+        "render",
+        "analyst",
+        "local_profile",
+        "before",
+        "item",
+        "label",
+        "summary",
+    } <= labels
+    assert "later" not in labels
+
+
 def test_document_symbols_lists_procedures_and_types():
     src = "~Person(name, age: int)\n\n@get(x: int) -> int:\n  = `x`\n"
     syms = features.compute_document_symbols(src, "/tmp/x.kedi")

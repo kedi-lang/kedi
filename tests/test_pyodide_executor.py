@@ -119,6 +119,30 @@ def test_pyodide_execution_layers_runtime_environment_without_syncing_it_back() 
     assert local_env == {"local": "updated"}
 
 
+def test_pyodide_incremental_prelude_preserves_and_syncs_prior_names() -> None:
+    bridge = QueueBridge(
+        {
+            "ok": True,
+            "result": None,
+            "env": {"items": [1, 2], "label": "done"},
+        }
+    )
+    executor = PyodideExecutor(bridge)
+    runtime = KediRuntime()
+    runtime._prelude_env = {"items": [1]}
+
+    result = executor.execute_prelude_incremental(
+        runtime,
+        "items.append(2)\nlabel = 'done'",
+        runtime._prelude_env,
+    )
+
+    assert result == {"items": [1, 2], "label": "done"}
+    assert bridge.requests[0]["action"] == "execute_prelude"
+    assert bridge.requests[0]["env"] == {"items": [1]}
+    assert bridge.requests[0]["syncNames"] == ["items", "label"]
+
+
 def test_pyodide_writeback_updates_nearest_owner_and_validates_atomically() -> None:
     bridge = QueueBridge(
         {"ok": True, "result": None, "env": {"count": 2, "name": "updated"}},

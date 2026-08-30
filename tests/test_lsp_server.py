@@ -128,6 +128,12 @@ def ask(name: str) -> str:
         )
         == "definition"
     )
+    assert (
+        handlers[lsp.TEXT_DOCUMENT_COMPLETION](
+            SimpleNamespace(text_document=text_document, position=position)
+        )
+        == []
+    )
     assert handlers[lsp.TEXT_DOCUMENT_REFERENCES](
         SimpleNamespace(
             text_document=text_document,
@@ -210,6 +216,11 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
 
     monkeypatch.setattr(server_module.features, "compute_diagnostics", record("diagnostics", []))
     monkeypatch.setattr(server_module.features, "compute_hover", record("hover", "hovered"))
+    monkeypatch.setattr(
+        server_module.features,
+        "compute_completion",
+        record("completion", ["completion"]),
+    )
     monkeypatch.setattr(
         server_module.features, "compute_definition", record("definition", "definition")
     )
@@ -296,6 +307,9 @@ def test_server_helpers_and_registered_handlers(monkeypatch):
         )
         == "definition"
     )
+    assert handlers[lsp.TEXT_DOCUMENT_COMPLETION](
+        SimpleNamespace(text_document=text_document, position=position)
+    ) == ["completion"]
     assert handlers[lsp.TEXT_DOCUMENT_REFERENCES](
         SimpleNamespace(
             text_document=text_document,
