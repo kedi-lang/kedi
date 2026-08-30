@@ -1,0 +1,45 @@
+name: Dependency Locks
+
+on:
+  pull_request:
+    branches: [stable]
+  push:
+    branches: [stable]
+
+jobs:
+  dependency-locks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.21"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate dependency policy
+        run: python scripts/check_dependency_pins.py
+
+      - name: Check Python locks
+        run: |
+          uv lock --check
+          uv lock --check --project notebook
+          uv lock --check --project kedi-otel
+          uv lock --check --project playground
+          uv lock --check --project tree-sitter-kedi
+
+      - name: Check JavaScript locks
+        run: |
+          npm ci --ignore-scripts --prefix kedi-vscode
+          npm ci --ignore-scripts --prefix tree-sitter-kedi
+
+      - name: Check Cargo lock
+        run: cargo metadata --locked --manifest-path kedi-zed/Cargo.toml --no-deps

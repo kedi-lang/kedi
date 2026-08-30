@@ -65,7 +65,11 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
     src = tmp_path / "prog.kedi"
     src.write_text("= ok\n", encoding="utf-8")
 
-    sentinel = object()
+    class Sentinel:
+        def produce_sync(self) -> None:
+            seen["invoked"] = True
+
+    sentinel = Sentinel()
     seen: dict[str, object] = {}
 
     def fake_codegen(*args, **kwargs):
@@ -78,6 +82,7 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
 
     def fake_run_tests(src_main: str, *, adapter=None):
         seen["run_adapter"] = adapter
+        adapter.produce_sync()
         return [RunResult(procedure="solve", cases=[CaseResult(name="basic", success=True)])]
 
     monkeypatch.setattr(app, "maybe_run_codegen", fake_codegen)
@@ -94,7 +99,8 @@ def test_run_tests_cli_forwards_selected_adapter_model(tmp_path: Path, monkeypat
     assert "Tests:" in out
     assert seen["adapter"] == "dspy"
     assert seen["model"] == "openrouter/google/gemini-3-flash-preview"
-    assert seen["run_adapter"] is sentinel
+    assert isinstance(seen["run_adapter"], app.LazyAdapter)
+    assert seen["invoked"] is True
 
 
 def test_build_runtime_adapter_paths(monkeypatch: Any) -> None:
