@@ -7,7 +7,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_REF = re.compile(r"^\s*uses:\s*([^\s#]+)@([^\s#]+)", re.MULTILINE)
 EXACT_ACTION_REF = re.compile(r"[0-9a-f]{40}")
