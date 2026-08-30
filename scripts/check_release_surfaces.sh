@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+vscode_version="$(node -p "require('./kedi-vscode/package.json').version")"
+vscode_vsix="kedi-vscode/kedi-vscode-${vscode_version}.vsix"
+zed_version="$(
+  grep -E '^version[[:space:]]*=' kedi-zed/extension.toml \
+    | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/'
+)"
+zed_archive="dist/kedi-zed-${zed_version//./}.zip"
+
 echo "==> Verifying submodule pins..."
 if git submodule status --recursive | grep -E '^[-+]'; then
   echo "Submodule pins are uninitialized or out of sync with the superproject."
@@ -38,13 +46,6 @@ echo "==> Building and packaging kedi-zed extension..."
     exit 1
   fi
 
-  version="$(
-    grep -E '^version[[:space:]]*=' extension.toml \
-      | sed -E 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/'
-  )"
-  version_tag="${version//./}"
-  archive_name="kedi-zed-${version_tag}.zip"
-
   staging="$(mktemp -d)"
   cp extension.toml "$staging/"
   cp "$wasm_path" "$staging/extension.wasm"
@@ -55,13 +56,15 @@ echo "==> Building and packaging kedi-zed extension..."
   mkdir -p "$ROOT/dist"
   (
     cd "$staging"
-    zip -qr "$ROOT/dist/$archive_name" .
+    zip -qr "$ROOT/$zed_archive" .
   )
   rm -rf "$staging"
 
-  echo "Created $ROOT/dist/$archive_name"
+  echo "Created $ROOT/$zed_archive"
 )
 
-echo "==> Packaged VSIX: kedi-vscode/$(basename kedi-vscode/*.vsix)"
-echo "==> Packaged Zed archive: dist/$(basename dist/kedi-zed-*.zip)"
+test -f "$vscode_vsix"
+test -f "$zed_archive"
+echo "==> Packaged VSIX: $vscode_vsix"
+echo "==> Packaged Zed archive: $zed_archive"
 echo "==> Release surface checks passed."

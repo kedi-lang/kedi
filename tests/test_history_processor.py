@@ -1356,7 +1356,7 @@ def test_orphan_lifecycle_results_and_userless_cycles_are_never_compactable(
 
 def test_pydantic_codec_recognizes_native_tools_files_and_tool_availability() -> None:
     messages = [
-        ModelRequest(parts=[ToolAvailabilityDeltaPart(added=["web_search"])]),
+        ModelRequest(parts=[ToolAvailabilityDeltaPart(tools_added=["web_search"])]),
         ModelRequest(parts=[UserPromptPart("Inspect the attachment.")]),
         ModelResponse(
             parts=[

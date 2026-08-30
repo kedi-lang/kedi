@@ -43,6 +43,17 @@ def _build_runtime_adapter(
     return build_adapter(adapter, model)
 
 
+def _build_lazy_runtime_adapter(adapter: str, model: str | None) -> LazyAdapter:
+    """Defer provider imports, credentials, and clients until the first model call."""
+    metadata = adapter_factory(adapter)
+    return LazyAdapter(
+        lambda: _build_runtime_adapter(adapter, model),
+        kind=metadata.kind,
+        shortname=metadata.shortname,
+        capabilities=adapter_capabilities(adapter),
+    )
+
+
 CliArgs = AttrDict[str, ArgType]
 
 
@@ -75,7 +86,7 @@ def run_tests_cli(
     ok, err = maybe_run_codegen(source, model=model, use_cache=use_cache)
     if not ok:
         return 1, (err or "Code generation failed")
-    kwargs: dict[str, Any] = {"adapter": _build_runtime_adapter(adapter, model)}
+    kwargs: dict[str, Any] = {"adapter": _build_lazy_runtime_adapter(adapter, model)}
     if runtime_args is not None:
         kwargs["runtime_globals"] = _runtime_globals(runtime_args)
     results = run_tests(source, **kwargs)
@@ -459,13 +470,7 @@ def run_program_cli(
             program = load_program_with_optimized_prompts(source_path, debug=DEBUG)
 
             # Offline programs never construct the lazy adapter or require an API key.
-            metadata = adapter_factory(adapter)
-            lazy_adapter = LazyAdapter(
-                lambda: _build_runtime_adapter(adapter, model),
-                kind=metadata.kind,
-                shortname=metadata.shortname,
-                capabilities=adapter_capabilities(adapter),
-            )
+            lazy_adapter = _build_lazy_runtime_adapter(adapter, model)
             rt = compile_program(
                 program,
                 adapter=lazy_adapter,
@@ -509,13 +514,7 @@ def run_source_cli(
     ) as active:
         try:
             program = parse_program(source_text, source_path=source_path)
-            metadata = adapter_factory(adapter)
-            lazy_adapter = LazyAdapter(
-                lambda: _build_runtime_adapter(adapter, model),
-                kind=metadata.kind,
-                shortname=metadata.shortname,
-                capabilities=adapter_capabilities(adapter),
-            )
+            lazy_adapter = _build_lazy_runtime_adapter(adapter, model)
             rt = compile_program(
                 program,
                 adapter=lazy_adapter,

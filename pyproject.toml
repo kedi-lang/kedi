@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -9,22 +9,22 @@ description = "Kedi Language"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "click",
-    "questionary>=2.1.1",
-    "pydantic>=2",
-    "packaging>=24",
-    "docstring-parser>=0.18",
-    "python-dotenv",
-    "pydantic-settings",
-    "prompt-toolkit>=3.0.52",
-    "pydantic-ai-slim==2.23.0",
-    "pydantic-monty>=0.0.21",
-    "jsonschema>=4.26",
-    "tree-sitter>=0.25",
+    "click>=8.3.3,<9",
+    "questionary>=2.1.1,<3",
+    "pydantic>=2.13.4,<2.14",
+    "packaging>=25,<26",
+    "docstring-parser>=0.18,<0.19",
+    "python-dotenv>=1.2.2,<2",
+    "pydantic-settings>=2.14.1,<2.15",
+    "prompt-toolkit>=3.0.52,<3.1",
+    "pydantic-ai-slim==2.36.0",
+    "pydantic-monty==0.0.21",
+    "jsonschema>=4.26,<5",
+    "tree-sitter==0.25.2",
     "tree-sitter-kedi==0.4.0",
-    "tree-sitter-python>=0.23",
-    "pygls>=1.3",
-    "rich>=13",
+    "tree-sitter-python==0.25.0",
+    "pygls==2.1.1",
+    "rich>=15,<16",
 ]
 authors = [
     {name = "Mert Sırakaya", email = "mert@kedi-lang.org"},
@@ -58,34 +58,34 @@ kedi-lsp = "kedi.lsp.server:main"
 
 [project.optional-dependencies]
 claude = [
-    "claude-agent-sdk",
+    "claude-agent-sdk==0.2.148",
 ]
 codex-model = [
     "codex-auth-helper==1.6.1; python_version >= '3.11'",
 ]
 dspy = [
-    "dspy",
+    "dspy==3.3.1",
 ]
 groq = [
-    "groq",
+    "groq==1.7.0",
 ]
 langchain = [
-    "langchain",
-    "langchain-mcp-adapters",
-    "langchain-openai",
-    "langchain-openrouter",
+    "langchain==1.3.18",
+    "langchain-mcp-adapters==0.3.2",
+    "langchain-openai==1.6.0",
+    "langchain-openrouter==0.2.8",
 ]
 langchain-aws = [
-    "langchain",
-    "langchain-aws",
+    "langchain==1.3.18",
+    "langchain-aws==1.7.4",
 ]
 notebook = [
-    "kedi-notebook",
+    "kedi-notebook>=0.1,<0.2",
 ]
 playground = [
-    "basedpyright>=1.39.6",
-    "fastapi>=0.138.1",
-    "uvicorn>=0.30",
+    "basedpyright>=1.39.6,<1.40",
+    "fastapi>=0.138.1,<0.139",
+    "uvicorn>=0.47,<0.48",
 ]
 
 [tool.hatch.build]
@@ -140,21 +140,21 @@ exclude_also = [
 
 [dependency-groups]
 dev = [
-    "anthropic<1",
-    "basedpyright>=1.39.6",
+    "anthropic==1.2.0",
+    "basedpyright==1.39.6",
     "cassetter[httpx]==0.5.0",
-    "coverage>=7.14.1",
-    "dspy",
-    "groq",
-    "langchain",
-    "langchain-aws",
-    "langchain-mcp-adapters",
-    "langchain-openai",
-    "langchain-openrouter",
-    "pre-commit>=4.6.0",
-    "pydantic-ai==2.23.0",
-    "pytest>=8.2",
-    "pytest-cov>=7.1.0",
-    "ruff>=0.15.16",
-    "ty>=0.0.44",
+    "coverage==7.14.1",
+    "dspy==3.3.1",
+    "groq==1.7.0",
+    "langchain==1.3.18",
+    "langchain-aws==1.7.4",
+    "langchain-mcp-adapters==0.3.2",
+    "langchain-openai==1.6.0",
+    "langchain-openrouter==0.2.8",
+    "pre-commit==4.6.0",
+    "pydantic-ai==2.36.0",
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.16",
+    "ty==0.0.44",
 ]

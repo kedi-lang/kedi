@@ -17,7 +17,14 @@ from typing import (
     overload,
 )
 
-from pydantic_ai import Agent, AgentModelSettings, AgentRetries, AgentSpec, ModelRetry
+from pydantic_ai import (
+    Agent,
+    AgentModelSettings,
+    AgentRetries,
+    AgentSpec,
+    CancellationToken,
+    ModelRetry,
+)
 from pydantic_ai.agent.abstract import AgentInstructions, AgentMetadata, RunOutputDataT
 from pydantic_ai.capabilities import (
     AbstractCapability,
@@ -795,6 +802,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT | None = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -819,6 +827,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT | None = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -842,6 +851,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT | None = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -867,6 +877,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 "deps": deps,
                 "model_settings": model_settings,
                 "usage_limits": usage_limits,
+                "cancellation_token": cancellation_token,
                 "usage": usage,
                 "metadata": metadata,
                 "retries": retries,
