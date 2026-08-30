@@ -103,6 +103,16 @@ def test_interactive_session_preserves_profile_selection_across_fragments() -> N
     assert adapter.model_calls == ["retained-model"]
 
 
+def test_interactive_session_preserves_direct_model_selection_across_fragments() -> None:
+    adapter = MockAdapter()
+    with kedi.interactive(adapter=adapter) as session:
+        session.execute("> model: retained-model")
+
+        assert session.execute(">> The result is [answer].\n= `answer`") == "answer-value"
+
+    assert adapter.model_calls == ["retained-model"]
+
+
 def test_interactive_session_keeps_prior_state_after_failure() -> None:
     with kedi.interactive() as session:
         with pytest.raises(KediExecutionError, match="division by zero"):

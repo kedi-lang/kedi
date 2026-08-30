@@ -12,8 +12,8 @@ CST→AST walker:
     ``TypeDef`` / parameter / output declaration when the cursor is on
     a reference.
 
-Deferred (intentionally out of scope for the scaffold): completions,
-rename, formatting, semantic-tokens, incremental parsing wiring.
+The server also exposes completions, references, rename, formatting,
+semantic tokens, signatures, inlay hints, and embedded-Python projections.
 
 Entry point::
 

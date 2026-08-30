@@ -94,4 +94,8 @@ jobs:
           names = set(zipfile.ZipFile(wheel).namelist());
           assert 'kedi_notebook/static/notebook/index.html' in names;
           assert 'kedi_notebook/static/pyodide-worker.js' in names;
+          assert 'kedi_notebook/static/vendor/pyodide/pyodide.mjs' in names;
+          assert 'kedi_notebook/static/vendor/pyodide/pyodide.asm.wasm' in names;
+          assert 'kedi_notebook/static/vendor/pyodide/python_stdlib.zip' in names;
+          assert 'kedi_notebook/static/vendor/pyodide/pydantic-2.12.5-py3-none-any.whl' in names;
           assert 'kedi_notebook/static/grammars/kedi/tree-sitter-kedi.wasm' in names"

@@ -1930,6 +1930,7 @@ dependencies = [
     { name = "basedpyright" },
     { name = "fastapi" },
     { name = "kedi" },
+    { name = "python-dotenv" },
     { name = "uvicorn" },
 ]
 
@@ -1938,12 +1939,14 @@ requires-dist = [
     { name = "basedpyright", specifier = ">=1.39.6" },
     { name = "fastapi", specifier = ">=0.138.1" },
     { name = "kedi", specifier = ">=0.4.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "playwright", specifier = ">=1.49" },
     { name = "pytest", specifier = ">=8.2" },
     { name = "pytest-cov", specifier = ">=5" },
     { name = "ruff", specifier = ">=0.15" },

@@ -137,20 +137,23 @@ Fragments return native values and are executed exactly once. The session is
 process-local and non-transactional; completed state and side effects remain
 visible after a later fragment fails.
 
-Install the local notebook package to use the same runtime from a browser:
+Install the checked-out notebook extra and start the same runtime in one command:
 
 ```bash
-python -m pip install kedi-notebook
-kedi notebook
+uv run --extra notebook kedi notebook
 ```
 
-Or install and start it in one command with
-`uvx --from kedi-notebook kedi-notebook`.
+The notebook is currently a local-build surface; the command uses this Kedi
+checkout and its `notebook` submodule rather than a published package.
 
 The notebook opens on localhost and uses browser-owned Pyodide by default.
 Choose a discovered host Python from the runtime menu when cells should use
-packages installed on the computer. Add an interpreter explicitly at serve
+the host. Kedi creates a persistent, project-specific notebook virtualenv from
+that interpreter and installs the checked-out Kedi runtime into it; the base
+Python environment is not modified. Add an interpreter explicitly at serve
 time with `kedi notebook --python /path/to/python`; the option is repeatable.
+The package action beside the host runtime installs additional requirements
+into this managed environment and reuses them on later notebook sessions.
 Pyodide starts loading as soon as the page opens and remains alive across
 cells. Notebook cells execute incrementally and are never replayed
 automatically. A cell beginning with `!` runs as a terminal cell; browser mode
@@ -158,6 +161,8 @@ supports package installation with `!pip install` and `!uv add`, while host
 mode runs commands in the notebook working directory. Terminal output streams
 under the source while a command runs. Executed cells remain editable and
 rerunnable, and execution does not create an empty cell automatically.
+Core Pyodide, Python standard-library, Micropip, and Pydantic assets are shipped
+with the notebook package; browser Python does not need a runtime CDN download.
 
 Use `adapter=` for framework backends (`pydantic`, `dspy`, `langchain`) and
 `agent=` for harness backends (`claude`, `codex`, `acp`). Both can be selected

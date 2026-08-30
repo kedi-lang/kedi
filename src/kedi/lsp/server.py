@@ -80,6 +80,22 @@ def make_server() -> LanguageServer:
             pos=params.position,
         )
 
+    # ----- Completion -----
+
+    @server.feature(
+        lsp.TEXT_DOCUMENT_COMPLETION,
+        lsp.CompletionOptions(trigger_characters=[">", "<", "[", ":"]),
+    )
+    def _completion(params: lsp.CompletionParams) -> List[lsp.CompletionItem]:
+        doc = server.workspace.get_text_document(params.text_document.uri)
+        if _is_python_uri(params.text_document.uri):
+            return []
+        return features.compute_completion(
+            source=doc.source,
+            source_path=_uri_to_path(params.text_document.uri),
+            pos=params.position,
+        )
+
     # ----- Definition -----
 
     @server.feature(lsp.TEXT_DOCUMENT_DEFINITION)

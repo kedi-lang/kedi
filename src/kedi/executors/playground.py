@@ -103,6 +103,25 @@ class PlaygroundExecutor:
         )
         return _response_env(response)
 
+    def execute_prelude_incremental(
+        self,
+        rt: KediRuntime,
+        code: str,
+        env: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Execute a fragment prelude in the bridge's persistent namespace."""
+        from ..lang.compiler.environment import build_python_env
+
+        execution_env = build_python_env(rt, {})
+        sync_names = list(dict.fromkeys([*(env or {}), *_prelude_names(code)]))
+        response = self._request(
+            "execute_prelude",
+            code,
+            execution_env,
+            sync_names=sync_names,
+        )
+        return _response_env(response)
+
     def create_dynamic_function(
         self,
         name: str,
