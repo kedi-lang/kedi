@@ -1066,7 +1066,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
         kedi_dirty=False,
         model="openai/gpt-test",
         environment="daytona",
-        task_names=("task-a", "task-b"),
+        task_names=("task-a", "terminal-bench/task-b"),
         concurrency=2,
         harbor_policy=HarborRunPolicy(
             timeout_multiplier=1.25,
@@ -1094,6 +1094,10 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert command[3] == "terminal-bench/terminal-bench-2-1@6"
     assert "kedi.integrations.harbor:KediAgent" in command
     assert command.count("--include-task-name") == 2
+    task_filters = [
+        command[index + 1] for index, value in enumerate(command) if value == "--include-task-name"
+    ]
+    assert task_filters == ["terminal-bench/task-a", "terminal-bench/task-b"]
     assert f"manifest_digest={manifest.material_digest}" in command
     assert "history_enabled=true" in command
     assert "artifacts_enabled=true" in command

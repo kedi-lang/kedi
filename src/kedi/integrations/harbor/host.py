@@ -342,7 +342,8 @@ def _harbor_run_command(
     elif kedi_package is not None:
         command.extend(("--agent-kwarg", f"kedi_package={kedi_package}"))
     for task in manifest.task_names:
-        command.extend(("--include-task-name", task))
+        task_name = task if "/" in task else f"terminal-bench/{task}"
+        command.extend(("--include-task-name", task_name))
     if jobs_dir is not None:
         command.extend(("--jobs-dir", str(jobs_dir.resolve())))
     if job_name is not None:
