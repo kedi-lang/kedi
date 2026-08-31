@@ -14,6 +14,7 @@ from typing import (
     Mapping,
     Sequence,
     cast,
+    get_type_hints,
     overload,
 )
 
@@ -1636,7 +1637,7 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
                     raise
                 raise retry from exc
 
-        return validated_async_tool
+        return _preserve_tool_introspection(validated_async_tool, tool.fn)
 
     @wraps(tool.fn)
     def validated_tool(*args: Any, **kwargs: Any) -> Any:
@@ -1651,7 +1652,44 @@ def _validated_tool_function(tool: ToolSpec) -> Any:
                 raise
             raise retry from exc
 
-    return validated_tool
+    return _preserve_tool_introspection(validated_tool, tool.fn)
+
+
+def _preserve_tool_introspection(wrapper: Any, function: Callable[..., Any]) -> Any:
+    """Keep wrapped tool signatures introspectable across Python annotation models."""
+
+    signature = inspect.signature(function)
+    setattr(wrapper, "__signature__", signature)
+    required = {
+        name
+        for name, parameter in signature.parameters.items()
+        if parameter.annotation is not inspect.Parameter.empty
+    }
+    if signature.return_annotation is not inspect.Signature.empty:
+        required.add("return")
+
+    annotations: dict[str, Any] = {}
+    current: Any = function
+    seen: set[int] = set()
+    while callable(current) and id(current) not in seen:
+        seen.add(id(current))
+        try:
+            resolved = get_type_hints(current, include_extras=True)
+        except (NameError, TypeError):
+            resolved = inspect.get_annotations(current, eval_str=False)
+        for name, annotation in resolved.items():
+            annotations.setdefault(name, annotation)
+        if required.issubset(annotations):
+            break
+        current = getattr(current, "__wrapped__", None)
+
+    for name, parameter in signature.parameters.items():
+        if parameter.annotation is not inspect.Parameter.empty:
+            annotations.setdefault(name, parameter.annotation)
+    if signature.return_annotation is not inspect.Signature.empty:
+        annotations.setdefault("return", signature.return_annotation)
+    wrapper.__annotations__ = annotations
+    return wrapper
 
 
 def pydantic_tool_from_spec(

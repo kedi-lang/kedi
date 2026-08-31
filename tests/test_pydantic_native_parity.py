@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -48,6 +49,7 @@ from kedi.agent_adapter.approval import (
     ApprovalPolicy,
     ApprovalRequest,
 )
+from kedi.agent_adapter.hooks.tool_wrapper import with_hook_lifecycle
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
@@ -821,6 +823,71 @@ def test_public_pydantic_tool_conversion_preserves_description_without_schema() 
     tool = pydantic_tool_from_spec(spec)
 
     assert tool.description == "Return the supplied value."
+
+
+def test_public_pydantic_tool_conversion_preserves_stream_wrapper_annotations() -> None:
+    def stream_output(process_id: str) -> ArtifactStream[str]:
+        return ArtifactStream.text([process_id])
+
+    spec = with_hook_lifecycle(
+        python_callable_tool_spec("stream_output", stream_output),
+        adapter_shortname="pydantic",
+    )
+    tool = pydantic_tool_from_spec(spec)
+
+    assert tool.tool_def.parameters_json_schema == {
+        "additionalProperties": False,
+        "properties": {"process_id": {"type": "string"}},
+        "required": ["process_id"],
+        "type": "object",
+    }
+    assert cast(Any, tool.function)(process_id="process_1").logical_type == "str"
+
+
+def test_pydantic_tool_introspection_preserves_annotation_fallbacks() -> None:
+    def unresolved(value: Any) -> Any:
+        return value
+
+    unresolved.__annotations__ = {
+        "value": "MissingType",
+        "return": "MissingType",
+    }
+
+    def unresolved_wrapper(**kwargs: Any) -> dict[str, Any]:
+        return kwargs
+
+    preserved = pydantic_adapter_module._preserve_tool_introspection(
+        unresolved_wrapper,
+        unresolved,
+    )
+    assert preserved.__annotations__ == {
+        "value": "MissingType",
+        "return": "MissingType",
+    }
+
+    def signature_only(**kwargs: Any) -> dict[str, Any]:
+        return kwargs
+
+    setattr(
+        signature_only,
+        "__signature__",
+        inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    "process_id",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    annotation=str,
+                )
+            ],
+            return_annotation=str,
+        ),
+    )
+    signature_only.__annotations__ = {}
+    preserved = pydantic_adapter_module._preserve_tool_introspection(
+        lambda **kwargs: kwargs,
+        signature_only,
+    )
+    assert preserved.__annotations__ == {"process_id": str, "return": str}
 
 
 def test_bundled_filesystem_path_errors_are_model_retries() -> None:
