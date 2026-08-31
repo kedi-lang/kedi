@@ -26,6 +26,7 @@ from kedi.agent_adapter.hooks import PostToolUseEvent
 from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
 from kedi.agent_adapter.utils import python_callable_tool_spec
 from kedi.integrations.harbor import host, runner
+from kedi.integrations.harbor import process_supervisor as harbor_process_supervisor
 from kedi.integrations.harbor.records import (
     HarborRunPolicy,
     HarnessPolicy,
@@ -102,6 +103,8 @@ def test_manifest_is_immutable_and_digest_validated(tmp_path: Path) -> None:
         ({"command_timeout_seconds": float("nan")}, "positive"),
         ({"terminal_preview_bytes": 0}, "positive"),
         ({"terminal_output_limit_bytes": 0}, "positive"),
+        ({"retained_process_timeout_seconds": 0}, "positive"),
+        ({"retained_process_timeout_seconds": float("inf")}, "positive"),
         ({"history": False}, "prefix_cache requires history"),
         ({"prefix_cache": False}, "stateful Kedi history"),
         ({"subagents": True}, "does not define subagents"),
@@ -372,6 +375,548 @@ def test_terminal_background_lifecycle_and_verification(terminal: TerminalSessio
     assert terminal.verification_status()["state"] == "stale"
 
 
+def test_terminal_retains_only_explicit_execution_processes(tmp_path: Path) -> None:
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "records",
+        preview_bytes=64,
+        output_limit_bytes=1_000_000,
+    )
+    retained = terminal.start_process(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys,time; print('ready', flush=True); "
+                "line=sys.stdin.readline(); print('unexpected-eof', flush=True); time.sleep(30)"
+            ),
+        ]
+    )
+    ordinary = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+    retained_id = cast(str, retained["process_id"])
+    ordinary_id = cast(str, ordinary["process_id"])
+    try:
+        deadline = time.monotonic() + 2
+        while "ready" not in terminal.process_status(retained_id)["stdout"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        promoted = terminal.retain_process(retained_id)
+        assert promoted["lifetime"] == "execution"
+        assert promoted["retained"] is True
+
+        terminal.finish_session()
+        terminal.finish_session()
+        time.sleep(0.1)
+        assert terminal.process_status(retained_id)["status"] == "running"
+        assert "unexpected-eof" not in terminal.process_status(retained_id)["stdout"]
+        assert terminal.process_status(ordinary_id)["status"] == "finished"
+        assert terminal.summary()["retained_processes"] == 1
+        terminal._record_retained_process(terminal._process(retained_id))
+    finally:
+        terminal.close()
+    assert terminal.process_status(retained_id)["status"] == "finished"
+
+
+def test_terminal_retained_process_has_a_bounded_lifetime(tmp_path: Path) -> None:
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "records",
+        retained_process_timeout_seconds=0.1,
+    )
+    process = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+    process_id = cast(str, process["process_id"])
+    try:
+        terminal.retain_process(process_id)
+        terminal.finish_session()
+        deadline = time.monotonic() + 3
+        while terminal.process_status(process_id)["status"] == "running":
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert terminal.process_status(process_id)["timed_out"] is True
+    finally:
+        terminal.close()
+
+
+def test_retained_service_survives_terminal_owner_process_exit(tmp_path: Path) -> None:
+    heartbeat = tmp_path / "heartbeat.txt"
+    owner_source = "\n".join(
+        (
+            "import json, sys, time",
+            "from pathlib import Path",
+            "from kedi.integrations.harbor.terminal import TerminalSession",
+            "root = Path(sys.argv[1])",
+            "heartbeat = root / 'heartbeat.txt'",
+            "terminal = TerminalSession(root=root, records_dir=root / 'records')",
+            'worker = "from pathlib import Path; import sys,time; p=Path(sys.argv[1]); i=0; " '
+            "+ \"exec('while True:\\\\n p.write_text(str(i)); i += 1; time.sleep(0.02)')\"",
+            "process = terminal.start_process([sys.executable, '-c', worker, str(heartbeat)])",
+            "deadline = time.monotonic() + 5",
+            "while not heartbeat.exists():",
+            "    if time.monotonic() >= deadline: raise TimeoutError('worker did not start')",
+            "    time.sleep(0.02)",
+            "terminal.retain_process(process['process_id'])",
+            "terminal.finish_session()",
+            "print(json.dumps(terminal.process_status(process['process_id'])), flush=True)",
+        )
+    )
+    owner = subprocess.run(
+        [sys.executable, "-c", owner_source, str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    process = json.loads(owner.stdout)
+
+    def heartbeat_value(deadline: float) -> int:
+        while time.monotonic() < deadline:
+            try:
+                return int(heartbeat.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                time.sleep(0.01)
+        raise TimeoutError("heartbeat was not readable")
+
+    try:
+        deadline = time.monotonic() + 2
+        before = heartbeat_value(deadline)
+        after = before
+        while after <= before:
+            assert time.monotonic() < deadline
+            time.sleep(0.03)
+            after = heartbeat_value(deadline)
+        assert process["handed_off"] is True
+        assert process["lifetime"] == "execution"
+    finally:
+        for process_group in (process["pid"], process["supervisor_pid"]):
+            try:
+                os.killpg(process_group, signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
+                pass
+
+
+def test_terminal_rejects_invalid_process_retention(terminal: TerminalSession) -> None:
+    foreground = terminal.run_command([sys.executable, "-c", "print('done')"])
+    with pytest.raises(ValueError, match="background"):
+        terminal.retain_process(cast(str, foreground["process_id"]))
+
+    finished = terminal.start_process([sys.executable, "-c", "pass"])
+    process_id = cast(str, finished["process_id"])
+    deadline = time.monotonic() + 2
+    while terminal.process_status(process_id)["status"] == "running":
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    with pytest.raises(RuntimeError, match="no longer running"):
+        terminal.retain_process(process_id)
+
+
+def test_terminal_supervisor_start_and_state_edge_cases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="positive"):
+        TerminalSession(
+            root=tmp_path,
+            records_dir=tmp_path / "invalid-records",
+            retained_process_timeout_seconds=0,
+        )
+
+    deadline = time.monotonic() + 10
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "deadline-records",
+        deadline_monotonic=deadline,
+        retained_process_timeout_seconds=30,
+    )
+    process = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+    managed = terminal._process(cast(str, process["process_id"]))
+    assert managed.retention_deadline_monotonic == deadline
+    terminal.close()
+
+    exited = SimpleNamespace(poll=lambda: 1)
+    assert terminal._await_supervisor_start(cast(Any, exited), tmp_path / "missing.json") == {}
+    expired = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "expired-records",
+        deadline_monotonic=time.monotonic() - 1,
+    )
+    waiting = SimpleNamespace(poll=lambda: None)
+    assert expired._await_supervisor_start(cast(Any, waiting), tmp_path / "missing.json") == {}
+    expired.close()
+
+    class BrokenInput:
+        def write(self, _: bytes) -> None:
+            raise BrokenPipeError
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeSupervisorProcess:
+        pid = 987_654
+
+        def __init__(self, *, broken_input: bool, timeout_once: bool) -> None:
+            self.stdin = (
+                BrokenInput()
+                if broken_input
+                else SimpleNamespace(
+                    write=lambda _: None,
+                    flush=lambda: None,
+                    close=lambda: None,
+                )
+            )
+            self.timeout_once = timeout_once
+            self.wait_calls = 0
+
+        def poll(self) -> None:
+            return None
+
+        def wait(self, *, timeout: float) -> int:
+            self.wait_calls += 1
+            if self.timeout_once and self.wait_calls == 1:
+                raise subprocess.TimeoutExpired("supervisor", timeout)
+            return 126
+
+    failures = iter(
+        (
+            {"phase": "supervisor_failure", "start_error_type": "RuntimeError"},
+            {"phase": "running"},
+        )
+    )
+    fake_processes = iter(
+        (
+            FakeSupervisorProcess(broken_input=True, timeout_once=True),
+            FakeSupervisorProcess(broken_input=False, timeout_once=True),
+        )
+    )
+    signals: list[tuple[int, int]] = []
+    mocked = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "mocked-records",
+    )
+    monkeypatch.setattr(
+        harbor_terminal.subprocess, "Popen", lambda *_args, **_kwargs: next(fake_processes)
+    )
+    monkeypatch.setattr(mocked, "_await_supervisor_start", lambda *_args: next(failures))
+    monkeypatch.setattr(
+        mocked,
+        "_signal_pid_group",
+        lambda process_group, signum: signals.append((process_group, signum)),
+    )
+    first = mocked.start_process(["first"])
+    second = mocked.start_process(["second"])
+    assert first["status"] == "failed_to_start"
+    assert first["start_error_type"] == "OSError"
+    assert second["status"] == "failed_to_start"
+    assert signals == [
+        (987_654, signal.SIGKILL),
+        (987_654, signal.SIGTERM),
+        (987_654, signal.SIGKILL),
+    ]
+    mocked.close()
+
+
+def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -> None:
+    assert isinstance(
+        harbor_terminal._supervisor_start_error(
+            {"start_error_type": "FileNotFoundError", "start_error_message": "missing"}
+        ),
+        FileNotFoundError,
+    )
+    assert isinstance(
+        harbor_terminal._supervisor_start_error(
+            {"start_error_type": "PermissionError", "start_error_message": "denied"}
+        ),
+        PermissionError,
+    )
+    assert isinstance(harbor_terminal._supervisor_start_error({}), OSError)
+    assert harbor_terminal._preview_file(tmp_path / "missing.bin", 8) == ("", False, False, 0)
+    invalid_utf8 = tmp_path / "invalid-utf8.bin"
+    invalid_utf8.write_bytes(b"\xff\xfe")
+    assert harbor_terminal._preview_file(invalid_utf8, 8) == ("\ufffd\ufffd", False, True, 2)
+
+    class BrokenClose:
+        def close(self) -> None:
+            raise BrokenPipeError
+
+    harbor_terminal._close_process_input(cast(Any, SimpleNamespace(stdin=None)))
+    harbor_terminal._close_process_input(cast(Any, SimpleNamespace(stdin=BrokenClose())))
+
+    terminal = TerminalSession(root=tmp_path, records_dir=tmp_path / "state-records")
+    result = terminal.run_command([sys.executable, "-c", "pass"])
+    managed = terminal._process(cast(str, result["process_id"]))
+    state_path = tmp_path / "partial-state.json"
+    managed.supervisor_state_path = state_path
+    managed.target_pid = 10
+    managed.target_pgid = 20
+    atomic_write_json(state_path, {"target_pid": 30, "target_pgid": "invalid"})
+    terminal._refresh_supervisor_state(managed)
+    assert (managed.target_pid, managed.target_pgid) == (30, 20)
+    atomic_write_json(state_path, {"target_pid": "invalid", "target_pgid": 40})
+    terminal._refresh_supervisor_state(managed)
+    assert (managed.target_pid, managed.target_pgid) == (30, 40)
+    terminal.close()
+
+
+def _supervisor_config(
+    root: Path,
+    command: list[str],
+    *,
+    retained: bool,
+    output_limit_bytes: int = 1_000_000,
+    lifetime_seconds: float = 10.0,
+) -> dict[str, Any]:
+    root.mkdir(parents=True, exist_ok=True)
+    paths = {
+        name: root / name
+        for name in ("state.json", "control.json", "stdout.bin", "stderr.bin", "combined.bin")
+    }
+    for name in ("stdout.bin", "stderr.bin", "combined.bin"):
+        paths[name].touch()
+    atomic_write_json(paths["control.json"], {"retained": retained})
+    return {
+        "command": command,
+        "cwd": str(root),
+        "state_path": str(paths["state.json"]),
+        "control_path": str(paths["control.json"]),
+        "stdout_path": str(paths["stdout.bin"]),
+        "stderr_path": str(paths["stderr.bin"]),
+        "combined_path": str(paths["combined.bin"]),
+        "output_limit_bytes": output_limit_bytes,
+        "deadline_monotonic": time.monotonic() + lifetime_seconds,
+    }
+
+
+def test_process_supervisor_success_failure_input_and_limits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    monkeypatch.setattr(harbor_process_supervisor.signal, "signal", lambda *_: None)
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"hello\n")),
+    )
+    success_root = tmp_path / "success"
+    success_config = _supervisor_config(
+        success_root,
+        [
+            sys.executable,
+            "-c",
+            "import sys; print(sys.stdin.readline().strip()); print('err', file=sys.stderr)",
+        ],
+        retained=True,
+    )
+    assert harbor_process_supervisor._ProcessSupervisor(success_config).run() == 0
+    success_state = json.loads((success_root / "state.json").read_text(encoding="utf-8"))
+    assert success_state["phase"] == "finished"
+    assert (success_root / "stdout.bin").read_text(encoding="utf-8") == "hello\n"
+    assert (success_root / "stderr.bin").read_text(encoding="utf-8") == "err\n"
+    assert "hello" in (success_root / "combined.bin").read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO()),
+    )
+    failure_root = tmp_path / "failure"
+    failure_config = _supervisor_config(
+        failure_root,
+        [str(tmp_path / "missing-executable")],
+        retained=False,
+    )
+    assert harbor_process_supervisor._ProcessSupervisor(failure_config).run() == 127
+    failure_state = json.loads((failure_root / "state.json").read_text(encoding="utf-8"))
+    assert failure_state["phase"] == "failed_to_start"
+    assert failure_state["start_error_type"] == "FileNotFoundError"
+
+    limited_root = tmp_path / "limited"
+    limited_config = _supervisor_config(
+        limited_root,
+        [
+            sys.executable,
+            "-c",
+            (
+                "import signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('x' * 10000, flush=True); time.sleep(30)"
+            ),
+        ],
+        retained=True,
+        output_limit_bytes=32,
+    )
+    assert harbor_process_supervisor._ProcessSupervisor(limited_config).run() != 0
+    limited_state = json.loads((limited_root / "state.json").read_text(encoding="utf-8"))
+    assert limited_state["output_limited"] is True
+    assert (limited_root / "stdout.bin").stat().st_size == 32
+
+    deadline_root = tmp_path / "deadline"
+    deadline_config = _supervisor_config(
+        deadline_root,
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        retained=True,
+        lifetime_seconds=0.05,
+    )
+    assert harbor_process_supervisor._ProcessSupervisor(deadline_config).run() != 0
+    deadline_state = json.loads((deadline_root / "state.json").read_text(encoding="utf-8"))
+    assert deadline_state["timed_out"] is True
+
+
+def test_process_supervisor_validation_signals_and_main(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+
+    with pytest.raises(ValueError, match="command"):
+        harbor_process_supervisor._ProcessSupervisor({"command": []})
+
+    config = _supervisor_config(
+        tmp_path / "signals",
+        [sys.executable, "-c", "pass"],
+        retained=False,
+    )
+    supervisor = harbor_process_supervisor._ProcessSupervisor(config)
+    assert supervisor._is_retained() is False
+    Path(config["control_path"]).write_text("not-json", encoding="utf-8")
+    assert supervisor._is_retained() is False
+    Path(config["control_path"]).write_text("[]", encoding="utf-8")
+    assert supervisor._is_retained() is False
+
+    signals: list[tuple[int, int]] = []
+    child = SimpleNamespace(pid=123, poll=lambda: None)
+    supervisor._child = cast(Any, child)
+    monkeypatch.setattr(
+        harbor_process_supervisor.os,
+        "killpg",
+        lambda process_group, signum: signals.append((process_group, signum)),
+    )
+    supervisor._handle_signal(signal.SIGTERM, None)
+    assert signals == [(123, signal.SIGTERM)]
+    assert supervisor._requested_signal == signal.SIGTERM
+    child.poll = lambda: 0
+    supervisor._signal_child(signal.SIGKILL)
+    supervisor._child = None
+    supervisor._signal_child(signal.SIGKILL)
+    supervisor._forward_input()
+    supervisor._close_child_input()
+
+    class BrokenInput:
+        def write(self, _: bytes) -> None:
+            raise BrokenPipeError
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            raise BrokenPipeError
+
+    child = SimpleNamespace(pid=123, poll=lambda: None, stdin=BrokenInput())
+    supervisor._child = cast(Any, child)
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"input")),
+    )
+    supervisor._forward_input()
+    supervisor._close_child_input()
+    child.stdin = None
+    supervisor._forward_input()
+    supervisor._close_child_input()
+
+    child.stdin = io.BytesIO()
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO()),
+    )
+    atomic_write_json(Path(config["control_path"]), {"retained": False})
+    supervisor._termination_deadline = None
+    supervisor._forward_input()
+    assert supervisor._termination_deadline is not None
+    supervisor._termination_deadline = None
+    supervisor._request_termination(signal.SIGKILL)
+    assert supervisor._termination_deadline is None
+    monkeypatch.setattr(
+        harbor_process_supervisor.os,
+        "killpg",
+        lambda *_: (_ for _ in ()).throw(PermissionError("gone")),
+    )
+    supervisor._signal_child(signal.SIGTERM)
+
+    supervisor.output_limit_bytes = 0
+    limited_source = io.BytesIO(b"discarded")
+    reader = supervisor._reader("stdout", limited_source, Path(config["stdout_path"]))
+    reader.start()
+    reader.join(timeout=2)
+    assert supervisor._output_limited is True
+
+    Path(config["state_path"]).write_text("[]", encoding="utf-8")
+    supervisor._write_state(phase="test")
+    assert json.loads(Path(config["state_path"]).read_text(encoding="utf-8"))["phase"] == "test"
+
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO()),
+    )
+    assert harbor_process_supervisor.main() == 126
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"invalid\n")),
+    )
+    assert harbor_process_supervisor.main() == 126
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"[]\n")),
+    )
+    assert harbor_process_supervisor.main() == 126
+
+    class SuccessfulSupervisor:
+        def __init__(self, _: dict[str, Any]) -> None:
+            pass
+
+        def run(self) -> int:
+            return 7
+
+    monkeypatch.setattr(harbor_process_supervisor, "_ProcessSupervisor", SuccessfulSupervisor)
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"{}\n")),
+    )
+    assert harbor_process_supervisor.main() == 7
+
+    failure_state = tmp_path / "main-failure.json"
+
+    class FailingSupervisor:
+        def __init__(self, _: dict[str, Any]) -> None:
+            pass
+
+        def run(self) -> int:
+            raise RuntimeError("failed")
+
+    monkeypatch.setattr(harbor_process_supervisor, "_ProcessSupervisor", FailingSupervisor)
+    payload = json.dumps({"state_path": str(failure_state)}).encode() + b"\n"
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(payload)),
+    )
+    assert harbor_process_supervisor.main() == 126
+    assert json.loads(failure_state.read_text(encoding="utf-8"))["phase"] == "supervisor_failure"
+    monkeypatch.setattr(
+        harbor_process_supervisor.sys,
+        "stdin",
+        SimpleNamespace(buffer=io.BytesIO(b"{}\n")),
+    )
+    assert harbor_process_supervisor.main() == 126
+
+
 def test_shell_compound_command_cannot_claim_verification(
     terminal: TerminalSession,
 ) -> None:
@@ -393,10 +938,9 @@ def test_terminal_timeout_path_bounds_and_missing_process(
     assert timed_out["status"] == "finished"
     with pytest.raises(PermissionError, match="escapes"):
         terminal.run_command(["true"], cwd=str(tmp_path.parent))
-    assert (
-        python_callable_tool_spec("run_command", terminal.run_command).metadata["kedi_tool_kind"]
-        == "terminal"
-    )
+    tool_spec = python_callable_tool_spec("run_command", terminal.run_command)
+    assert tool_spec.metadata is not None
+    assert tool_spec.metadata["kedi_tool_kind"] == "terminal"
     with pytest.raises(KeyError, match="unknown"):
         terminal.process_status("process_999")
     with pytest.raises(ValueError, match="argv"):
@@ -424,6 +968,40 @@ def test_terminal_output_limit_kills_a_process_that_ignores_sigterm(tmp_path: Pa
             timeout_seconds=5,
         )
         assert result["status"] == "finished"
+        assert result["output_limited"] is True
+        assert result["stdout_bytes"] == 1_024
+        assert result["exit_code"] != 0
+    finally:
+        terminal.close()
+
+
+def test_background_supervisor_enforces_output_limit_after_handoff(tmp_path: Path) -> None:
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "records",
+        output_limit_bytes=1_024,
+        preview_bytes=128,
+    )
+    process = terminal.start_process(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import signal,sys,time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "sys.stdout.write('x' * 100_000); sys.stdout.flush(); time.sleep(30)"
+            ),
+        ]
+    )
+    process_id = cast(str, process["process_id"])
+    try:
+        terminal.retain_process(process_id)
+        terminal.finish_session()
+        deadline = time.monotonic() + 5
+        while terminal.process_status(process_id)["status"] == "running":
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        result = terminal.process_status(process_id)
         assert result["output_limited"] is True
         assert result["stdout_bytes"] == 1_024
         assert result["exit_code"] != 0
@@ -655,6 +1233,15 @@ def test_benchmark_policy_is_non_interactive_and_allowlisted() -> None:
         metadata=None,
     )
     assert runner.benchmark_approval(remove).decision == "allow"
+    retain = ApprovalRequest.create(
+        tool_name="retain_process",
+        arguments={"process_id": "process_1"},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+    assert runner.benchmark_approval(retain).decision == "allow"
     unknown = ApprovalRequest.create(
         tool_name="host_escape",
         arguments={},
@@ -826,6 +1413,83 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert "sk-do-not" not in cast(str, failed.error_message)
 
 
+def test_runner_hands_off_retained_processes_only_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminals: list[TerminalSession] = []
+
+    def retaining_bind(**kwargs: Any) -> Any:
+        start_process = next(item for item in kwargs["tools"] if item.__name__ == "start_process")
+        retain_process = next(item for item in kwargs["tools"] if item.__name__ == "retain_process")
+        process_status = next(item for item in kwargs["tools"] if item.__name__ == "process_status")
+        terminals.append(cast(TerminalSession, start_process.__self__))
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                process = start_process(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import time; print('ready', flush=True); time.sleep(30)",
+                    ]
+                )
+                process_id = cast(str, process["process_id"])
+                deadline = time.monotonic() + 2
+                while "ready" not in process_status(process_id)["stdout"]:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
+                retain_process(process_id)
+                return "service ready"
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", retaining_bind)
+    completed = runner.run_trial(
+        instruction="start service",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "retained" / "result.json",
+        trial_id="retained",
+    )
+    assert completed.state == "completed"
+    assert completed.terminal["retained_processes"] == 1
+    assert completed.terminal["records"][0]["handed_off"] is True
+    assert terminals[0].list_processes()[0]["status"] == "running"
+    terminals[0].close()
+
+    def failing_bind(**kwargs: Any) -> Any:
+        start_process = next(item for item in kwargs["tools"] if item.__name__ == "start_process")
+        retain_process = next(item for item in kwargs["tools"] if item.__name__ == "retain_process")
+        terminals.append(cast(TerminalSession, start_process.__self__))
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                process = start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+                retain_process(process["process_id"])
+                raise RuntimeError("agent failed")
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", failing_bind)
+    failed = runner.run_trial(
+        instruction="fail after starting service",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "failed-retained" / "result.json",
+        trial_id="failed-retained",
+    )
+    assert failed.state == "agent_failure"
+    assert failed.terminal["retained_processes"] == 0
+    assert terminals[1].list_processes()[0]["status"] == "finished"
+
+
 def test_runner_classifies_setup_failure_and_enforces_local_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -972,6 +1636,10 @@ def test_runner_cleanup_failure_is_durable(
     original_terminal = runner.TerminalSession
 
     class CleanupFailureTerminal(original_terminal):
+        def finish_session(self) -> None:
+            super().finish_session()
+            raise RuntimeError("cleanup failed")
+
         def close(self) -> None:
             super().close()
             raise RuntimeError("cleanup failed")
@@ -1182,6 +1850,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert f"manifest_digest={manifest.material_digest}" in command
     assert "history_enabled=true" in command
     assert "artifacts_enabled=true" in command
+    assert "retained_process_timeout_seconds=3600.0" in command
     assert command[command.index("--timeout-multiplier") + 1] == "1.25"
     assert command[command.index("--agent-timeout-multiplier") + 1] == "1.5"
     assert command[command.index("--verifier-timeout-multiplier") + 1] == "1.75"

@@ -7,6 +7,7 @@ import re
 import shlex
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -15,9 +16,10 @@ from typing import Any, Literal, Sequence
 
 from ... import ArtifactStream, tool
 from ...agent_adapter.hooks import HookEvent, PostToolUseEvent
-from .records import VerificationState, is_secret_name, redact_text, utc_now
+from .records import VerificationState, atomic_write_json, is_secret_name, redact_text, utc_now
 
 OutputStream = Literal["stdout", "stderr", "combined"]
+ProcessLifetime = Literal["session", "execution"]
 _WRITE_TOOLS = frozenset(
     {
         "write_text_file",
@@ -116,6 +118,14 @@ class _ManagedProcess:
     combined_path: Path
     stdout_preview: _BytePreview
     stderr_preview: _BytePreview
+    background: bool = False
+    lifetime: ProcessLifetime = "session"
+    supervisor_state_path: Path | None = None
+    supervisor_control_path: Path | None = None
+    target_pid: int | None = None
+    target_pgid: int | None = None
+    retention_deadline_monotonic: float | None = None
+    handed_off: bool = False
     threads: list[threading.Thread] = field(default_factory=list)
     finished_monotonic: float | None = None
     timed_out: bool = False
@@ -126,7 +136,7 @@ class _ManagedProcess:
 
 
 class TerminalSession:
-    """Session-owned terminal tools with bounded previews and process cleanup."""
+    """Tracked terminal tools with explicit session and execution process lifetimes."""
 
     def __init__(
         self,
@@ -138,6 +148,7 @@ class TerminalSession:
         output_limit_bytes: int = 512_000_000,
         deadline_monotonic: float | None = None,
         artifacts_enabled: bool = True,
+        retained_process_timeout_seconds: float = 3_600.0,
     ) -> None:
         self.root = root.resolve()
         self.records_dir = records_dir.resolve()
@@ -148,11 +159,15 @@ class TerminalSession:
         self.output_limit_bytes = output_limit_bytes
         self.deadline_monotonic = deadline_monotonic
         self.artifacts_enabled = artifacts_enabled
+        if retained_process_timeout_seconds <= 0:
+            raise ValueError("retained_process_timeout_seconds must be positive")
+        self.retained_process_timeout_seconds = retained_process_timeout_seconds
         self._lock = threading.RLock()
         self._combined_lock = threading.Lock()
         self._processes: dict[str, _ManagedProcess] = {}
         self._next_process_id = 1
         self._closed = False
+        self._destroyed = False
         self._verification_state: VerificationState = "not_attempted"
         self._verification_command: str | None = None
         self._verification_exit_code: int | None = None
@@ -167,6 +182,7 @@ class TerminalSession:
             self.run_shell,
             self.start_process,
             self.start_shell,
+            self.retain_process,
             self.process_status,
             self.read_process_output,
             self.write_process_input,
@@ -175,7 +191,7 @@ class TerminalSession:
             self.verification_status,
         )
         if self.artifacts_enabled:
-            return (*tools[:6], self.stream_process_output, *tools[6:])
+            return (*tools[:7], self.stream_process_output, *tools[7:])
         return tools
 
     def hook_handler(self, event: HookEvent) -> None:
@@ -197,7 +213,7 @@ class TerminalSession:
             timeout_seconds: Optional command timeout bounded by the trial deadline.
         """
         normalized = _validated_argv(argv)
-        managed = self._start(normalized, cwd=cwd, shell=False)
+        managed = self._start(normalized, cwd=cwd, shell=False, background=False)
         if isinstance(managed, dict):
             return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
@@ -212,7 +228,7 @@ class TerminalSession:
         """Run a foreground Bash command when pipes, redirects, or expansion are required."""
         if not command.strip():
             raise ValueError("shell command cannot be empty")
-        managed = self._start(command, cwd=cwd, shell=True)
+        managed = self._start(command, cwd=cwd, shell=True, background=False)
         if isinstance(managed, dict):
             return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
@@ -220,7 +236,12 @@ class TerminalSession:
     @_terminal_tool(risk="mutating")
     def start_process(self, argv: list[str], cwd: str = ".") -> dict[str, Any]:
         """Start a background process without shell expansion and return its process ID."""
-        managed = self._start(_validated_argv(argv), cwd=cwd, shell=False)
+        managed = self._start(
+            _validated_argv(argv),
+            cwd=cwd,
+            shell=False,
+            background=True,
+        )
         if isinstance(managed, dict):
             return managed
         self.invalidate_verification("a background process was started")
@@ -231,10 +252,33 @@ class TerminalSession:
         """Start a background Bash command when shell syntax is required."""
         if not command.strip():
             raise ValueError("shell command cannot be empty")
-        managed = self._start(command, cwd=cwd, shell=True)
+        managed = self._start(command, cwd=cwd, shell=True, background=True)
         if isinstance(managed, dict):
             return managed
         self.invalidate_verification("a background process was started")
+        return self._snapshot(managed)
+
+    @_terminal_tool(risk="mutating")
+    def retain_process(self, process_id: str) -> dict[str, Any]:
+        """Keep a verified background service alive until the outer execution is destroyed.
+
+        Call this only after checking that a service required by later verification is healthy.
+        Session processes remain the default and are stopped when the agent finishes.
+        """
+        managed = self._process(process_id)
+        if not managed.background:
+            raise ValueError("only background processes can be retained")
+        if self._snapshot(managed)["status"] != "running":
+            raise RuntimeError(f"process {process_id!r} is no longer running")
+        managed.lifetime = "execution"
+        self._write_supervisor_control(managed, retained=True)
+        self._write_event(
+            {
+                "event": "process_retention_changed",
+                "process_id": process_id,
+                "lifetime": managed.lifetime,
+            }
+        )
         return self._snapshot(managed)
 
     @_terminal_tool(risk="read_only")
@@ -326,7 +370,7 @@ class TerminalSession:
 
     @_terminal_tool(risk="mutating")
     def stop_process(self, process_id: str, grace_seconds: float = 2.0) -> dict[str, Any]:
-        """Terminate a session-owned process tree, escalating to SIGKILL if needed."""
+        """Terminate a tracked process tree, escalating to SIGKILL if needed."""
         if grace_seconds < 0 or grace_seconds > 30:
             raise ValueError("grace_seconds must be between 0 and 30")
         managed = self._process(process_id)
@@ -336,7 +380,7 @@ class TerminalSession:
 
     @_terminal_tool(risk="read_only")
     def list_processes(self) -> list[dict[str, Any]]:
-        """List all foreground and background processes owned by this Kedi session."""
+        """List all foreground and background processes tracked by this execution."""
         with self._lock:
             return [self._snapshot(item) for item in self._processes.values()]
 
@@ -360,23 +404,50 @@ class TerminalSession:
 
     def summary(self) -> dict[str, Any]:
         with self._lock:
-            running = sum(item.process.poll() is None for item in self._processes.values())
+            snapshots = [self._snapshot(item) for item in self._processes.values()]
+            running = sum(item["status"] == "running" for item in snapshots)
             return {
                 "commands": len(self._commands),
                 "processes": len(self._processes),
                 "running_processes": running,
+                "retained_processes": sum(
+                    item["status"] == "running" and item["lifetime"] == "execution"
+                    for item in snapshots
+                ),
                 "verification": self.verification_status(),
                 "records": list(self._commands),
             }
 
-    def close(self) -> None:
+    def finish_session(self) -> None:
+        """Close agent-owned resources while handing retained services to the execution."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             processes = tuple(self._processes.values())
         for managed in processes:
-            if managed.process.poll() is None:
+            snapshot = self._snapshot(managed)
+            if snapshot["status"] != "running":
+                self._join_readers(managed)
+                self._record_process(managed)
+                continue
+            if managed.background and managed.lifetime == "execution":
+                managed.handed_off = True
+                _close_process_input(managed.process)
+                self._record_retained_process(managed)
+                continue
+            self._terminate(managed, grace_seconds=1.0)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._destroyed:
+                return
+            self._closed = True
+            self._destroyed = True
+            processes = tuple(self._processes.values())
+        for managed in processes:
+            self._write_supervisor_control(managed, retained=False)
+            if self._snapshot(managed)["status"] == "running":
                 self._terminate(managed, grace_seconds=1.0)
             else:
                 self._join_readers(managed)
@@ -388,6 +459,7 @@ class TerminalSession:
         *,
         cwd: str,
         shell: bool,
+        background: bool,
     ) -> _ManagedProcess | dict[str, Any]:
         with self._lock:
             if self._closed:
@@ -409,6 +481,17 @@ class TerminalSession:
             popen_command = ("/bin/bash", "-c", str(command))
         else:
             popen_command = command
+        if background:
+            return self._start_supervised(
+                process_id=process_id,
+                command=redact_text(str(display)),
+                popen_command=popen_command,
+                shell=shell,
+                cwd=resolved_cwd,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                combined_path=combined_path,
+            )
         try:
             process = subprocess.Popen(
                 popen_command,
@@ -445,6 +528,7 @@ class TerminalSession:
             combined_path=combined_path,
             stdout_preview=_BytePreview(self.preview_bytes),
             stderr_preview=_BytePreview(self.preview_bytes),
+            background=False,
         )
         with self._lock:
             self._processes[process_id] = managed
@@ -462,9 +546,177 @@ class TerminalSession:
                 "pid": process.pid,
                 "command": managed.command,
                 "cwd": str(resolved_cwd),
+                "lifetime": managed.lifetime,
             }
         )
         return managed
+
+    def _start_supervised(
+        self,
+        *,
+        process_id: str,
+        command: str,
+        popen_command: Sequence[str],
+        shell: bool,
+        cwd: Path,
+        stdout_path: Path,
+        stderr_path: Path,
+        combined_path: Path,
+    ) -> _ManagedProcess | dict[str, Any]:
+        started_at = utc_now()
+        started_monotonic = time.monotonic()
+        state_path = stdout_path.parent / "state.json"
+        control_path = stdout_path.parent / "control.json"
+        retention_deadline = started_monotonic + self.retained_process_timeout_seconds
+        if self.deadline_monotonic is not None:
+            retention_deadline = min(retention_deadline, self.deadline_monotonic)
+        atomic_write_json(control_path, {"retained": False})
+        config = {
+            "command": list(popen_command),
+            "cwd": str(cwd),
+            "state_path": str(state_path),
+            "control_path": str(control_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "combined_path": str(combined_path),
+            "output_limit_bytes": self.output_limit_bytes,
+            "deadline_monotonic": retention_deadline,
+        }
+        try:
+            process = subprocess.Popen(
+                (
+                    sys.executable,
+                    "-m",
+                    "kedi.integrations.harbor.process_supervisor",
+                ),
+                cwd=cwd,
+                env=_sanitized_subprocess_env(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return self._record_start_failure(
+                process_id=process_id,
+                command=command,
+                shell=shell,
+                cwd=cwd,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                combined_path=combined_path,
+                error=exc,
+            )
+        assert process.stdin is not None
+        try:
+            process.stdin.write(
+                (json.dumps(config, ensure_ascii=True, separators=(",", ":")) + "\n").encode(
+                    "utf-8"
+                )
+            )
+            process.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        state = self._await_supervisor_start(process, state_path)
+        phase = state.get("phase")
+        if phase in {"failed_to_start", "supervisor_failure"}:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._signal_pid_group(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
+            error = _supervisor_start_error(state)
+            return self._record_start_failure(
+                process_id=process_id,
+                command=command,
+                shell=shell,
+                cwd=cwd,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                combined_path=combined_path,
+                error=error,
+            )
+        target_pid = state.get("target_pid")
+        target_pgid = state.get("target_pgid")
+        if not isinstance(target_pid, int) or not isinstance(target_pgid, int):
+            self._signal_pid_group(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self._signal_pid_group(process.pid, signal.SIGKILL)
+                process.wait(timeout=2)
+            return self._record_start_failure(
+                process_id=process_id,
+                command=command,
+                shell=shell,
+                cwd=cwd,
+                started_at=started_at,
+                started_monotonic=started_monotonic,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                combined_path=combined_path,
+                error=OSError("background process supervisor did not initialize"),
+            )
+        managed = _ManagedProcess(
+            process_id=process_id,
+            command=command,
+            shell=shell,
+            cwd=cwd,
+            process=process,
+            started_at=started_at,
+            started_monotonic=started_monotonic,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            combined_path=combined_path,
+            stdout_preview=_BytePreview(self.preview_bytes),
+            stderr_preview=_BytePreview(self.preview_bytes),
+            background=True,
+            supervisor_state_path=state_path,
+            supervisor_control_path=control_path,
+            target_pid=target_pid,
+            target_pgid=target_pgid,
+            retention_deadline_monotonic=retention_deadline,
+        )
+        with self._lock:
+            self._processes[process_id] = managed
+        self._write_event(
+            {
+                "event": "process_started",
+                "process_id": process_id,
+                "pid": target_pid,
+                "supervisor_pid": process.pid,
+                "command": command,
+                "cwd": str(cwd),
+                "lifetime": managed.lifetime,
+            }
+        )
+        return managed
+
+    def _await_supervisor_start(
+        self,
+        process: subprocess.Popen[bytes],
+        state_path: Path,
+    ) -> dict[str, Any]:
+        wait_deadline = time.monotonic() + 5.0
+        if self.deadline_monotonic is not None:
+            wait_deadline = min(wait_deadline, self.deadline_monotonic)
+        while time.monotonic() < wait_deadline:
+            state = _read_json_object(state_path)
+            if state.get("phase") in {
+                "running",
+                "finished",
+                "failed_to_start",
+                "supervisor_failure",
+            }:
+                return state
+            if process.poll() is not None:
+                return state
+            time.sleep(0.01)
+        return _read_json_object(state_path)
 
     def _record_start_failure(
         self,
@@ -491,6 +743,7 @@ class TerminalSession:
         record = {
             "process_id": process_id,
             "pid": None,
+            "supervisor_pid": None,
             "command": command,
             "shell": shell,
             "cwd": str(cwd),
@@ -500,6 +753,9 @@ class TerminalSession:
             "stopped": False,
             "output_limited": False,
             "duration_seconds": max(0.0, time.monotonic() - started_monotonic),
+            "lifetime": "session",
+            "retained": False,
+            "handed_off": False,
             "stdout": "",
             "stderr": stderr,
             "stdout_bytes": 0,
@@ -589,7 +845,8 @@ class TerminalSession:
         return self._snapshot(managed)
 
     def _terminate(self, managed: _ManagedProcess, *, grace_seconds: float) -> None:
-        if managed.process.poll() is None:
+        self._write_supervisor_control(managed, retained=False)
+        if self._snapshot(managed)["status"] == "running":
             self._signal_process_group(managed, signal.SIGTERM)
             try:
                 managed.process.wait(timeout=grace_seconds)
@@ -599,8 +856,7 @@ class TerminalSession:
         if managed.finished_monotonic is None:
             managed.finished_monotonic = time.monotonic()
         managed.stopped = True
-        if managed.process.stdin is not None:
-            managed.process.stdin.close()
+        _close_process_input(managed.process)
         self._join_readers(managed)
         self._record_process(managed)
 
@@ -636,15 +892,47 @@ class TerminalSession:
             self._commands.append(record)
         self._write_event({"event": "process_finished", **record})
 
+    def _record_retained_process(self, managed: _ManagedProcess) -> None:
+        with self._lock:
+            if managed.recorded:
+                return
+            managed.recorded = True
+            record = self._snapshot(managed)
+            self._commands.append(record)
+        self._write_event({"event": "process_handed_off", **record})
+
     def _snapshot(self, managed: _ManagedProcess) -> dict[str, Any]:
+        state = self._refresh_supervisor_state(managed)
+        state_phase = state.get("phase")
+        state_returncode = state.get("returncode")
         exit_code = managed.process.poll()
+        if state_phase in {"finished", "failed_to_start", "supervisor_failure"} and isinstance(
+            state_returncode, int
+        ):
+            exit_code = state_returncode
         if exit_code is not None and managed.finished_monotonic is None:
-            managed.finished_monotonic = time.monotonic()
-        stdout, stdout_truncated, stdout_invalid = managed.stdout_preview.render()
-        stderr, stderr_truncated, stderr_invalid = managed.stderr_preview.render()
+            finished = state.get("finished_monotonic")
+            managed.finished_monotonic = (
+                float(finished) if isinstance(finished, (int, float)) else time.monotonic()
+            )
+        if managed.background:
+            stdout, stdout_truncated, stdout_invalid, stdout_bytes = _preview_file(
+                managed.stdout_path,
+                self.preview_bytes,
+            )
+            stderr, stderr_truncated, stderr_invalid, stderr_bytes = _preview_file(
+                managed.stderr_path,
+                self.preview_bytes,
+            )
+        else:
+            stdout, stdout_truncated, stdout_invalid = managed.stdout_preview.render()
+            stderr, stderr_truncated, stderr_invalid = managed.stderr_preview.render()
+            stdout_bytes = managed.stdout_preview.total_bytes
+            stderr_bytes = managed.stderr_preview.total_bytes
         return {
             "process_id": managed.process_id,
-            "pid": managed.process.pid,
+            "pid": managed.target_pid or managed.process.pid,
+            "supervisor_pid": managed.process.pid if managed.background else None,
             "command": managed.command,
             "shell": managed.shell,
             "cwd": str(managed.cwd),
@@ -657,10 +945,13 @@ class TerminalSession:
                 0.0,
                 (managed.finished_monotonic or time.monotonic()) - managed.started_monotonic,
             ),
+            "lifetime": managed.lifetime,
+            "retained": managed.lifetime == "execution",
+            "handed_off": managed.handed_off,
             "stdout": stdout,
             "stderr": stderr,
-            "stdout_bytes": managed.stdout_preview.total_bytes,
-            "stderr_bytes": managed.stderr_preview.total_bytes,
+            "stdout_bytes": stdout_bytes,
+            "stderr_bytes": stderr_bytes,
             "stdout_truncated": stdout_truncated,
             "stderr_truncated": stderr_truncated,
             "stdout_invalid_utf8": stdout_invalid,
@@ -670,6 +961,27 @@ class TerminalSession:
             "combined_path": str(managed.combined_path),
             "started_at": managed.started_at,
         }
+
+    def _refresh_supervisor_state(self, managed: _ManagedProcess) -> dict[str, Any]:
+        if managed.supervisor_state_path is None:
+            return {}
+        state = _read_json_object(managed.supervisor_state_path)
+        target_pid = state.get("target_pid")
+        target_pgid = state.get("target_pgid")
+        if isinstance(target_pid, int):
+            managed.target_pid = target_pid
+        if isinstance(target_pgid, int):
+            managed.target_pgid = target_pgid
+        if state.get("timed_out") is True:
+            managed.timed_out = True
+        if state.get("output_limited") is True:
+            managed.output_limited = True
+        return state
+
+    def _write_supervisor_control(self, managed: _ManagedProcess, *, retained: bool) -> None:
+        if managed.supervisor_control_path is None:
+            return
+        atomic_write_json(managed.supervisor_control_path, {"retained": retained})
 
     def _update_verification(self, managed: _ManagedProcess) -> None:
         if not _is_verification_command(managed.command, shell=managed.shell):
@@ -702,9 +1014,17 @@ class TerminalSession:
 
     @staticmethod
     def _signal_process_group(managed: _ManagedProcess, signum: int) -> None:
+        groups = [getattr(managed, "target_pgid", None), managed.process.pid]
+        for process_group in dict.fromkeys(groups):
+            if not isinstance(process_group, int):
+                continue
+            TerminalSession._signal_pid_group(process_group, signum)
+
+    @staticmethod
+    def _signal_pid_group(process_group: int, signum: int) -> None:
         try:
-            os.killpg(managed.process.pid, signum)
-        except ProcessLookupError:
+            os.killpg(process_group, signum)
+        except (PermissionError, ProcessLookupError):
             pass
 
     def _bounded_timeout(self, requested: float | None) -> float:
@@ -749,6 +1069,58 @@ def _validated_argv(argv: list[str]) -> tuple[str, ...]:
     if not argv or not all(isinstance(item, str) and item for item in argv):
         raise ValueError("argv must contain at least one non-empty string")
     return tuple(argv)
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _supervisor_start_error(state: dict[str, Any]) -> OSError:
+    error_type = state.get("start_error_type")
+    message = str(state.get("start_error_message") or "background process failed to start")
+    if error_type == "FileNotFoundError":
+        return FileNotFoundError(message)
+    if error_type == "PermissionError":
+        return PermissionError(message)
+    return OSError(message)
+
+
+def _preview_file(path: Path, limit: int) -> tuple[str, bool, bool, int]:
+    try:
+        total = path.stat().st_size
+    except OSError:
+        return "", False, False, 0
+    if total == 0:
+        return "", False, False, 0
+    with path.open("rb") as handle:
+        if total <= limit * 2:
+            payload = handle.read()
+        else:
+            head = handle.read(limit)
+            handle.seek(max(0, total - limit))
+            tail = handle.read(limit)
+            omitted = total - len(head) - len(tail)
+            payload = head + f"\n... {omitted} bytes omitted ...\n".encode() + tail
+    invalid_utf8 = False
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        text = payload.decode("utf-8", errors="replace")
+        invalid_utf8 = True
+    return text, total > limit, invalid_utf8, total
+
+
+def _close_process_input(process: subprocess.Popen[bytes]) -> None:
+    if process.stdin is None:
+        return
+    try:
+        process.stdin.close()
+    except OSError:
+        pass
 
 
 def _sanitized_subprocess_env() -> dict[str, str]:

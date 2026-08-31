@@ -103,6 +103,7 @@ class HarnessPolicy:
     command_timeout_seconds: float = 120.0
     terminal_preview_bytes: int = 32_768
     terminal_output_limit_bytes: int = 512_000_000
+    retained_process_timeout_seconds: float = 3_600.0
 
     def __post_init__(self) -> None:
         if self.compaction_mode not in {"disabled", "native"}:
@@ -134,6 +135,11 @@ class HarnessPolicy:
             raise ValueError("terminal_preview_bytes must be positive")
         if self.terminal_output_limit_bytes <= 0:
             raise ValueError("terminal_output_limit_bytes must be positive")
+        if (
+            not math.isfinite(self.retained_process_timeout_seconds)
+            or self.retained_process_timeout_seconds <= 0
+        ):
+            raise ValueError("retained_process_timeout_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

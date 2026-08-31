@@ -11,7 +11,9 @@
     run focused checks after mutations. Prefer run_command with exact argv; use run_shell only
     when shell syntax is required. Treat tool results as evidence and inspect failures before
     retrying. Never read credentials or paths outside the assigned task root. Do not ask for
-    interactive approval. Stop when the task is verified or no safe progress remains.
+    interactive approval. Background processes are stopped when your session ends. If later
+    verification requires a service to remain running, check its health and then call
+    retain_process with its process ID. Stop when the task is verified or no safe progress remains.
 
 >> Complete the following task: <instruction>
 When finished, return a concise [task_summary] of the work performed and the latest verification

@@ -40,6 +40,7 @@ _ALLOWED_MUTATING_TOOLS = frozenset(
         "remove_directory",
         "remove_file",
         "release_artifact",
+        "retain_process",
         "run_artifact_code",
         "run_command",
         "run_shell",
@@ -112,6 +113,7 @@ def run_trial(
     command_timeout_seconds: float = 120.0,
     terminal_preview_bytes: int = 32_768,
     terminal_output_limit_bytes: int = 512_000_000,
+    retained_process_timeout_seconds: float = 3_600.0,
     trial_timeout_seconds: float | None = None,
 ) -> TrialRecord:
     logfire_enabled = _configure_logfire()
@@ -132,6 +134,7 @@ def run_trial(
         output_limit_bytes=terminal_output_limit_bytes,
         deadline_monotonic=deadline,
         artifacts_enabled=artifacts_enabled,
+        retained_process_timeout_seconds=retained_process_timeout_seconds,
     )
     usage = InvocationUsage()
     state: TrialState = "completed"
@@ -237,9 +240,10 @@ def run_trial(
         error_message = redact_text(str(exc))
         _write_error(records_dir, exc)
     finally:
+        terminal_cleanup = terminal.finish_session if state == "completed" else terminal.close
         for cleanup_name, cleanup in (
             ("conversation", conversation.close if conversation is not None else None),
-            ("terminal", terminal.close),
+            ("terminal", terminal_cleanup),
             ("signals", signal_state.restore),
             ("cwd", lambda: os.chdir(previous_cwd)),
             (
@@ -257,6 +261,12 @@ def run_trial(
                 )
 
     if cleanup_errors:
+        try:
+            terminal.close()
+        except BaseException as exc:
+            cleanup_errors.append(
+                f"terminal destroy: {type(exc).__name__}: {redact_text(str(exc))}"
+            )
         cleanup_message = "; ".join(cleanup_errors)
         (records_dir / "cleanup-errors.txt").write_text(
             cleanup_message + "\n",
@@ -296,6 +306,7 @@ def run_trial(
             "command_timeout_seconds": command_timeout_seconds,
             "terminal_preview_bytes": terminal_preview_bytes,
             "terminal_output_limit_bytes": terminal_output_limit_bytes,
+            "retained_process_timeout_seconds": retained_process_timeout_seconds,
             "trial_timeout_seconds": trial_timeout_seconds,
             "logfire": logfire_enabled,
             "request_limit": request_limit,
@@ -436,6 +447,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--command-timeout-seconds", type=float, default=120.0)
     parser.add_argument("--terminal-preview-bytes", type=int, default=32_768)
     parser.add_argument("--terminal-output-limit-bytes", type=int, default=512_000_000)
+    parser.add_argument("--retained-process-timeout-seconds", type=float, default=3_600.0)
     parser.add_argument("--trial-timeout-seconds", type=float)
     return parser
 
@@ -462,6 +474,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         command_timeout_seconds=args.command_timeout_seconds,
         terminal_preview_bytes=args.terminal_preview_bytes,
         terminal_output_limit_bytes=args.terminal_output_limit_bytes,
+        retained_process_timeout_seconds=args.retained_process_timeout_seconds,
         trial_timeout_seconds=args.trial_timeout_seconds,
     )
     return 0 if record.state == "completed" else 1

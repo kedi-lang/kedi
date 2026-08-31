@@ -57,6 +57,7 @@ class KediAgent(BaseInstalledAgent):
         command_timeout_seconds: float = 120.0,
         terminal_preview_bytes: int = 32_768,
         terminal_output_limit_bytes: int = 512_000_000,
+        retained_process_timeout_seconds: float = 3_600.0,
         runner_timeout_seconds: int | None = None,
         task_root: str | None = None,
         manifest_digest: str | None = None,
@@ -84,6 +85,7 @@ class KediAgent(BaseInstalledAgent):
             command_timeout_seconds=command_timeout_seconds,
             terminal_preview_bytes=terminal_preview_bytes,
             terminal_output_limit_bytes=terminal_output_limit_bytes,
+            retained_process_timeout_seconds=retained_process_timeout_seconds,
         )
         if runner_timeout_seconds is not None and runner_timeout_seconds <= 0:
             raise ValueError("runner_timeout_seconds must be positive")
@@ -99,6 +101,7 @@ class KediAgent(BaseInstalledAgent):
         self._command_timeout_seconds = policy.command_timeout_seconds
         self._terminal_preview_bytes = policy.terminal_preview_bytes
         self._terminal_output_limit_bytes = policy.terminal_output_limit_bytes
+        self._retained_process_timeout_seconds = policy.retained_process_timeout_seconds
         self._runner_timeout_seconds = runner_timeout_seconds
         self._task_root = task_root
         self._manifest_digest = manifest_digest
@@ -248,6 +251,8 @@ class KediAgent(BaseInstalledAgent):
             str(self._terminal_preview_bytes),
             "--terminal-output-limit-bytes",
             str(self._terminal_output_limit_bytes),
+            "--retained-process-timeout-seconds",
+            str(self._retained_process_timeout_seconds),
         ]
         if self.mcp_servers:
             command.extend(("--mcp-config", self._MCP_CONFIG.as_posix()))

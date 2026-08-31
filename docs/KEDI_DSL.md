@@ -3157,6 +3157,14 @@ Benchmark approval is non-interactive: read-only and declared task-container
 operations are allowed, while sensitive requests and tools outside the
 benchmark allowlist are denied.
 
+Background processes are session-owned by default and are terminated with their
+complete process group when the agent finishes, fails, times out, or is cancelled.
+An agent may call `retain_process` after a successful health check when an external
+verifier must reach a service after the final response. Retention transfers that
+tracked process to the surrounding execution rather than detaching it: output
+continues into the same bounded logs, a fixed lifetime still applies, and failure
+or execution teardown terminates the complete process group.
+
 Task logs include `kedi-result.json`, `terminal-events.jsonl`, bounded command
 summaries, complete capped terminal logs, artifact payloads, and redacted error
 or cleanup records. Trial states distinguish normal completion, agent failure,

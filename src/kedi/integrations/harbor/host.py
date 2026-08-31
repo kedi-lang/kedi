@@ -100,6 +100,12 @@ def cli() -> None:
 @click.option("--artifact-threshold-bytes", type=click.IntRange(min=1), default=16_384)
 @click.option("--artifact-quota-bytes", type=click.IntRange(min=1), default=256_000_000)
 @click.option("--command-timeout-seconds", type=float, default=120.0, show_default=True)
+@click.option(
+    "--retained-process-timeout-seconds",
+    type=click.FloatRange(min=0, min_open=True),
+    default=3_600.0,
+    show_default=True,
+)
 @click.option("--kedi-root", type=click.Path(path_type=Path), default=Path("."))
 def create_manifest(
     *,
@@ -132,6 +138,7 @@ def create_manifest(
     artifact_threshold_bytes: int,
     artifact_quota_bytes: int,
     command_timeout_seconds: float,
+    retained_process_timeout_seconds: float,
     kedi_root: Path,
 ) -> None:
     if kedi_wheel is not None and kedi_package is not None:
@@ -185,6 +192,7 @@ def create_manifest(
             artifact_threshold_bytes=artifact_threshold_bytes,
             artifact_quota_bytes=artifact_quota_bytes,
             command_timeout_seconds=command_timeout_seconds,
+            retained_process_timeout_seconds=retained_process_timeout_seconds,
         ),
     )
     manifest.write(output.resolve())
@@ -314,6 +322,8 @@ def _harbor_run_command(
         f"terminal_preview_bytes={manifest.policy.terminal_preview_bytes}",
         "--agent-kwarg",
         f"terminal_output_limit_bytes={manifest.policy.terminal_output_limit_bytes}",
+        "--agent-kwarg",
+        f"retained_process_timeout_seconds={manifest.policy.retained_process_timeout_seconds}",
         "--agent-kwarg",
         f"manifest_digest={manifest.material_digest}",
     ]
