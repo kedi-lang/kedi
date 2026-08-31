@@ -938,6 +938,22 @@ def test_bundled_filesystem_operation_errors_are_model_retries() -> None:
         cast(Any, tool.function)(file_path="module.py")
 
 
+def test_terminal_boundary_errors_are_model_retries() -> None:
+    def rejected_command(*, cwd: str) -> dict[str, object]:
+        raise PermissionError(f"working directory escapes task root: {cwd}")
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=rejected_command,
+            name="run_command",
+            metadata={"kedi_tool_kind": "terminal"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="assigned task root"):
+        cast(Any, tool.function)(cwd="/tmp")
+
+
 def test_pydantic_adapter_default_usage_limits_preserve_explicit_overrides() -> None:
     default_limits = UsageLimits(request_limit=128)
     explicit_limits = UsageLimits(request_limit=3)

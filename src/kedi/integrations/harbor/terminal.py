@@ -58,6 +58,15 @@ _READ_ONLY_GIT_COMMANDS = frozenset(
 )
 
 
+def _terminal_tool(*, risk: Literal["read_only", "mutating"]) -> Any:
+    def decorate(fn: Any) -> Any:
+        wrapped = tool(risk=risk)(fn)
+        setattr(wrapped, "__kedi_tool_kind__", "terminal")
+        return wrapped
+
+    return decorate
+
+
 @dataclass(slots=True)
 class _BytePreview:
     limit: int
@@ -173,7 +182,7 @@ class TerminalSession:
         if isinstance(event, PostToolUseEvent) and event.tool_name in _WRITE_TOOLS:
             self.invalidate_verification(f"{event.tool_name} changed the workspace")
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def run_command(
         self,
         argv: list[str],
@@ -193,7 +202,7 @@ class TerminalSession:
             return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def run_shell(
         self,
         command: str,
@@ -208,7 +217,7 @@ class TerminalSession:
             return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def start_process(self, argv: list[str], cwd: str = ".") -> dict[str, Any]:
         """Start a background process without shell expansion and return its process ID."""
         managed = self._start(_validated_argv(argv), cwd=cwd, shell=False)
@@ -217,7 +226,7 @@ class TerminalSession:
         self.invalidate_verification("a background process was started")
         return self._snapshot(managed)
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def start_shell(self, command: str, cwd: str = ".") -> dict[str, Any]:
         """Start a background Bash command when shell syntax is required."""
         if not command.strip():
@@ -228,12 +237,12 @@ class TerminalSession:
         self.invalidate_verification("a background process was started")
         return self._snapshot(managed)
 
-    @tool(risk="read_only")
+    @_terminal_tool(risk="read_only")
     def process_status(self, process_id: str) -> dict[str, Any]:
         """Return current status, exit code, output sizes, and previews for a process."""
         return self._snapshot(self._process(process_id))
 
-    @tool(risk="read_only")
+    @_terminal_tool(risk="read_only")
     def read_process_output(
         self,
         process_id: str,
@@ -275,7 +284,7 @@ class TerminalSession:
             "complete": complete,
         }
 
-    @tool(risk="read_only")
+    @_terminal_tool(risk="read_only")
     def stream_process_output(
         self,
         process_id: str,
@@ -295,7 +304,7 @@ class TerminalSession:
             metadata={"process_id": process_id, "stream": stream},
         )
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def write_process_input(
         self,
         process_id: str,
@@ -315,7 +324,7 @@ class TerminalSession:
         )
         return {"process_id": process_id, "written_bytes": len(payload)}
 
-    @tool(risk="mutating")
+    @_terminal_tool(risk="mutating")
     def stop_process(self, process_id: str, grace_seconds: float = 2.0) -> dict[str, Any]:
         """Terminate a session-owned process tree, escalating to SIGKILL if needed."""
         if grace_seconds < 0 or grace_seconds > 30:
@@ -325,13 +334,13 @@ class TerminalSession:
         self.invalidate_verification("a background process was stopped")
         return self._snapshot(managed)
 
-    @tool(risk="read_only")
+    @_terminal_tool(risk="read_only")
     def list_processes(self) -> list[dict[str, Any]]:
         """List all foreground and background processes owned by this Kedi session."""
         with self._lock:
             return [self._snapshot(item) for item in self._processes.values()]
 
-    @tool(risk="read_only")
+    @_terminal_tool(risk="read_only")
     def verification_status(self) -> dict[str, Any]:
         """Return the latest evidence-backed verification state."""
         with self._lock:

@@ -130,6 +130,10 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     risk = getattr(fn, "__kedi_tool_risk__", "mutating")
     if risk not in ("read_only", "mutating", "sensitive"):
         raise ValueError(f"invalid Kedi tool risk {risk!r} for {name!r}")
+    metadata: dict[str, Any] = {}
+    kind = getattr(fn, "__kedi_tool_kind__", None)
+    if isinstance(kind, str):
+        metadata["kedi_tool_kind"] = kind
     return ToolSpec(
         fn=tool_fn,
         name=name,
@@ -137,6 +141,7 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
         return_schema=(
             TypeAdapter(logical_return).json_schema() if logical_return is not None else None
         ),
+        metadata=metadata,
         risk=risk,
         argument_validator=_python_callable_argument_validator(tool_fn),
     )

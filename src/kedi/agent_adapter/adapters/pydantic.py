@@ -1909,6 +1909,13 @@ def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | N
             f"Filesystem operation failed: {original}. Correct the arguments, inspect the "
             "target when needed, and retry the operation."
         )
+    if kind == "terminal":
+        from pydantic_ai import ModelRetry
+
+        return ModelRetry(
+            f"Terminal request rejected: {original}. Keep working directories inside the "
+            "assigned task root, correct invalid arguments or process IDs, and retry."
+        )
     if kind == "dynamic_workflow":
         from pydantic_ai import ModelRetry
 

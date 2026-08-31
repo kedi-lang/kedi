@@ -24,6 +24,7 @@ from click.testing import CliRunner
 from kedi.agent_adapter.approval import ApprovalRequest
 from kedi.agent_adapter.hooks import PostToolUseEvent
 from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
+from kedi.agent_adapter.utils import python_callable_tool_spec
 from kedi.integrations.harbor import host, runner
 from kedi.integrations.harbor.records import (
     HarborRunPolicy,
@@ -392,6 +393,10 @@ def test_terminal_timeout_path_bounds_and_missing_process(
     assert timed_out["status"] == "finished"
     with pytest.raises(PermissionError, match="escapes"):
         terminal.run_command(["true"], cwd=str(tmp_path.parent))
+    assert (
+        python_callable_tool_spec("run_command", terminal.run_command).metadata["kedi_tool_kind"]
+        == "terminal"
+    )
     with pytest.raises(KeyError, match="unknown"):
         terminal.process_status("process_999")
     with pytest.raises(ValueError, match="argv"):
