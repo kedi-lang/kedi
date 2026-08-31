@@ -429,6 +429,7 @@ def test_terminal_output_limit_kills_a_process_that_ignores_sigterm(tmp_path: Pa
 def test_terminal_rejects_invalid_inputs_and_closed_sessions(
     terminal: TerminalSession,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with pytest.raises(ValueError, match="shell command"):
         terminal.run_shell("  ")
@@ -444,8 +445,33 @@ def test_terminal_rejects_invalid_inputs_and_closed_sessions(
         terminal.stop_process("missing", grace_seconds=-1)
     with pytest.raises(NotADirectoryError):
         terminal.run_command(["true"], cwd="missing-directory")
-    with pytest.raises(RuntimeError, match="could not start"):
-        terminal.run_command([str(tmp_path / "missing-executable")])
+    missing = terminal.run_command([str(tmp_path / "missing-executable")])
+    assert missing["status"] == "failed_to_start"
+    assert missing["exit_code"] == 127
+    assert missing["pid"] is None
+    assert missing["start_error_type"] == "FileNotFoundError"
+    assert "could not start command" in missing["stderr"]
+    assert terminal.summary()["commands"] == 1
+
+    missing_verification = terminal.run_command([str(tmp_path / "pytest"), "-q"])
+    assert missing_verification["exit_code"] == 127
+    assert terminal.verification_status()["state"] == "failed"
+
+    missing_background = terminal.start_process([str(tmp_path / "missing-background")])
+    assert missing_background["status"] == "failed_to_start"
+    assert terminal.list_processes() == []
+
+    with monkeypatch.context() as context:
+        context.setattr(
+            harbor_terminal.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("blocked")),
+        )
+        blocked_shell = terminal.run_shell("printf nope")
+        blocked_background_shell = terminal.start_shell("printf nope")
+    assert blocked_shell["exit_code"] == 126
+    assert blocked_shell["start_error_type"] == "PermissionError"
+    assert blocked_background_shell["status"] == "failed_to_start"
 
     terminal.close()
     terminal.close()

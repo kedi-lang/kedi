@@ -189,6 +189,8 @@ class TerminalSession:
         """
         normalized = _validated_argv(argv)
         managed = self._start(normalized, cwd=cwd, shell=False)
+        if isinstance(managed, dict):
+            return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
     @tool(risk="mutating")
@@ -202,12 +204,16 @@ class TerminalSession:
         if not command.strip():
             raise ValueError("shell command cannot be empty")
         managed = self._start(command, cwd=cwd, shell=True)
+        if isinstance(managed, dict):
+            return managed
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
     @tool(risk="mutating")
     def start_process(self, argv: list[str], cwd: str = ".") -> dict[str, Any]:
         """Start a background process without shell expansion and return its process ID."""
         managed = self._start(_validated_argv(argv), cwd=cwd, shell=False)
+        if isinstance(managed, dict):
+            return managed
         self.invalidate_verification("a background process was started")
         return self._snapshot(managed)
 
@@ -217,6 +223,8 @@ class TerminalSession:
         if not command.strip():
             raise ValueError("shell command cannot be empty")
         managed = self._start(command, cwd=cwd, shell=True)
+        if isinstance(managed, dict):
+            return managed
         self.invalidate_verification("a background process was started")
         return self._snapshot(managed)
 
@@ -371,7 +379,7 @@ class TerminalSession:
         *,
         cwd: str,
         shell: bool,
-    ) -> _ManagedProcess:
+    ) -> _ManagedProcess | dict[str, Any]:
         with self._lock:
             if self._closed:
                 raise RuntimeError("terminal session is closed")
@@ -403,17 +411,18 @@ class TerminalSession:
                 start_new_session=True,
             )
         except OSError as exc:
-            self._write_event(
-                {
-                    "event": "process_start_failed",
-                    "process_id": process_id,
-                    "command": redact_text(str(display)),
-                    "cwd": str(resolved_cwd),
-                    "error_type": type(exc).__name__,
-                    "error_message": redact_text(str(exc)),
-                }
+            return self._record_start_failure(
+                process_id=process_id,
+                command=redact_text(str(display)),
+                shell=shell,
+                cwd=resolved_cwd,
+                started_at=utc_now(),
+                started_monotonic=time.monotonic(),
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                combined_path=combined_path,
+                error=exc,
             )
-            raise RuntimeError(f"could not start command: {exc}") from exc
         managed = _ManagedProcess(
             process_id=process_id,
             command=redact_text(str(display)),
@@ -447,6 +456,66 @@ class TerminalSession:
             }
         )
         return managed
+
+    def _record_start_failure(
+        self,
+        *,
+        process_id: str,
+        command: str,
+        shell: bool,
+        cwd: Path,
+        started_at: str,
+        started_monotonic: float,
+        stdout_path: Path,
+        stderr_path: Path,
+        combined_path: Path,
+        error: OSError,
+    ) -> dict[str, Any]:
+        error_message = redact_text(str(error))
+        stderr = f"could not start command: {error_message}\n"
+        payload = stderr.encode("utf-8")
+        for path in (stderr_path, combined_path):
+            with path.open("wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        record = {
+            "process_id": process_id,
+            "pid": None,
+            "command": command,
+            "shell": shell,
+            "cwd": str(cwd),
+            "status": "failed_to_start",
+            "exit_code": 127 if isinstance(error, FileNotFoundError) else 126,
+            "timed_out": False,
+            "stopped": False,
+            "output_limited": False,
+            "duration_seconds": max(0.0, time.monotonic() - started_monotonic),
+            "stdout": "",
+            "stderr": stderr,
+            "stdout_bytes": 0,
+            "stderr_bytes": len(payload),
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "stdout_invalid_utf8": False,
+            "stderr_invalid_utf8": False,
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "combined_path": str(combined_path),
+            "started_at": started_at,
+            "start_error_type": type(error).__name__,
+        }
+        with self._lock:
+            self._commands.append(record)
+            if _is_verification_command(command, shell=shell):
+                self._verification_state = "failed"
+                self._verification_command = command
+                self._verification_exit_code = int(record["exit_code"])
+                self._verification_updated_at = utc_now()
+        self._write_event({"event": "process_start_failed", **record})
+        if _is_verification_command(command, shell=shell):
+            self._write_event({"event": "verification_updated", **self.verification_status()})
+        return record
 
     def _reader_thread(
         self,
