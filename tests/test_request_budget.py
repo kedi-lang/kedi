@@ -75,6 +75,24 @@ def test_model_request_budget_tracks_estimates_and_actual_usage() -> None:
         reservation.finish()
 
 
+def test_model_request_budget_reconciles_cached_input_as_uncached_usage() -> None:
+    budget = ModelRequestBudget(_limits(cumulative_input_tokens=500_000, request_limit=128))
+    reservation = budget.reserve("prompt")
+
+    reservation.observe(
+        InvocationUsage(
+            requests=58,
+            input_tokens=2_029_375,
+            cache_read_tokens=1_628_928,
+        )
+    )
+
+    snapshot = reservation.finish()
+
+    assert snapshot.requests == 58
+    assert snapshot.cumulative_input_tokens == 400_447
+
+
 def test_invocation_usage_aggregates_cache_and_cost_without_negative_uncached_tokens() -> None:
     usage = InvocationUsage(
         requests=1,
@@ -144,7 +162,7 @@ def test_model_request_budget_rejects_request_and_cumulative_limits() -> None:
     ("usage", "message"),
     [
         (InvocationUsage(requests=2, input_tokens=10), "used 2 requests"),
-        (InvocationUsage(requests=1, input_tokens=4_101), "cumulative input tokens"),
+        (InvocationUsage(requests=1, input_tokens=4_101), "cumulative uncached input tokens"),
     ],
 )
 def test_model_request_budget_reports_provider_side_overrun(

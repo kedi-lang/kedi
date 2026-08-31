@@ -154,7 +154,9 @@ class ModelRequestBudget:
         raise_on_exceeded: bool,
     ) -> ModelRequestBudgetSnapshot:
         actual_requests = max(1, usage.requests)
-        actual_input_tokens = usage.input_tokens if usage.input_tokens > 0 else estimated_tokens
+        actual_input_tokens = (
+            usage.uncached_input_tokens if usage.input_tokens > 0 else estimated_tokens
+        )
         with self._lock:
             self._requests += actual_requests - 1
             self._cumulative_input_tokens += actual_input_tokens - estimated_tokens
@@ -196,7 +198,8 @@ def _exceeded_message(
     if snapshot.cumulative_input_tokens > limits.cumulative_input_tokens:
         return (
             "model run used "
-            f"{snapshot.cumulative_input_tokens} cumulative input tokens, exceeding the host "
+            f"{snapshot.cumulative_input_tokens} cumulative uncached input tokens, "
+            "exceeding the host "
             f"limit of {limits.cumulative_input_tokens}"
         )
     return None
