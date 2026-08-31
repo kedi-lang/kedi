@@ -33,6 +33,10 @@ class KediAgent(BaseInstalledAgent):
     _KEDI_HOME = PurePosixPath("/installed-agent/kedi-home")
     _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.36.0"
     _CODEX_RUNTIME = "codex-auth-helper==1.6.1"
+    _LOGFIRE_RUNTIME = "logfire[httpx]==4.41.0"
+    _UV_RUNTIME = "uv==0.11.21"
+    _MANAGED_PYTHON = "3.11"
+    _BOOTSTRAP_VENV = PurePosixPath("/installed-agent/kedi-bootstrap")
     _TREE_SITTER_KEDI_REPOSITORY = "https://github.com/kedi-lang/tree-sitter-kedi.git"
 
     def __init__(
@@ -142,11 +146,28 @@ class KediAgent(BaseInstalledAgent):
             )
         if self._codex_auth_file is not None:
             runtime_packages.append(self._CODEX_RUNTIME)
+        logfire_enabled = os.getenv("KEDI_HARBOR_LOGFIRE") == "1"
+        if logfire_enabled:
+            runtime_packages.append(self._LOGFIRE_RUNTIME)
+        supported_python = shlex.quote("import sys; raise SystemExit(sys.version_info < (3, 10))")
+        create_runtime = (
+            f"if python3 -c {supported_python}; then "
+            f"python3 -m venv {shlex.quote(self._VENV.as_posix())}; "
+            "else "
+            f"rm -rf {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
+            f"python3 -m venv {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
+            f"{self._BOOTSTRAP_VENV}/bin/python -m pip install "
+            f"--disable-pip-version-check {shlex.quote(self._UV_RUNTIME)} && "
+            f"{self._BOOTSTRAP_VENV}/bin/uv venv "
+            f"--python {shlex.quote(self._MANAGED_PYTHON)} --managed-python --seed "
+            f"{shlex.quote(self._VENV.as_posix())}; "
+            "fi"
+        )
         await self.exec_as_root(
             environment,
             command=(
                 f"rm -rf {shlex.quote(self._VENV.as_posix())} && "
-                f"python3 -m venv {shlex.quote(self._VENV.as_posix())} && "
+                f"{create_runtime} && "
                 f"{self._VENV}/bin/python -m pip install --disable-pip-version-check "
                 + " ".join(shlex.quote(package) for package in runtime_packages)
             ),
@@ -185,6 +206,10 @@ class KediAgent(BaseInstalledAgent):
             )
         env = dict(self.model_connection.env)
         env["KEDI_HOME"] = self._KEDI_HOME.as_posix()
+        if logfire_enabled := os.getenv("KEDI_HARBOR_LOGFIRE") == "1":
+            env["KEDI_HARBOR_LOGFIRE"] = "1"
+        if logfire_enabled and (logfire_token := os.getenv("LOGFIRE_TOKEN")):
+            env["LOGFIRE_TOKEN"] = logfire_token
         if self._codex_auth_file is not None:
             await self._upload_ephemeral_codex_auth(environment)
             env["KEDI_CODEX_AUTH_FILE"] = self._CODEX_AUTH.as_posix()

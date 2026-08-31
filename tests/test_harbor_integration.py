@@ -734,6 +734,27 @@ def test_runner_executes_the_real_benchmark_profile(
     assert json.loads(result_path.read_text(encoding="utf-8"))["state"] == "completed"
 
 
+def test_runner_configures_logfire_only_when_explicitly_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    fake_logfire = SimpleNamespace(
+        configure=lambda **kwargs: calls.append(("configure", kwargs)),
+        instrument_pydantic_ai=lambda: calls.append(("pydantic_ai", None)),
+    )
+    monkeypatch.setitem(sys.modules, "logfire", fake_logfire)
+    monkeypatch.delenv("KEDI_HARBOR_LOGFIRE", raising=False)
+    assert runner._configure_logfire() is False
+    assert calls == []
+
+    monkeypatch.setenv("KEDI_HARBOR_LOGFIRE", "1")
+    assert runner._configure_logfire() is True
+    assert calls == [
+        ("configure", {"service_name": "kedi", "send_to_logfire": "if-token-present"}),
+        ("pydantic_ai", None),
+    ]
+
+
 def test_runner_writes_durable_completed_and_failed_records(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -789,7 +810,7 @@ def test_runner_writes_durable_completed_and_failed_records(
     failed = runner.run_trial(
         instruction="fail",
         model="openai/test",
-        adapter="pydantic",
+        adapter="langchain",
         workspace=tmp_path,
         result_path=tmp_path / "failed" / "result.json",
         trial_id="trial-2",
@@ -1719,6 +1740,8 @@ def test_harbor_agent_lifecycle_and_context_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("KEDI_HARBOR_LOGFIRE", "1")
+    monkeypatch.setenv("LOGFIRE_TOKEN", "logfire-test-token")
     base = _install_fake_harbor(monkeypatch)
     monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
     agent_module = importlib.import_module("kedi.integrations.harbor.agent")
@@ -1766,6 +1789,11 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert (
         "tree-sitter-kedi @ git+https://github.com/kedi-lang/tree-sitter-kedi.git@" + "a" * 40
     ) in environment.root_calls[-1]["command"]
+    install_command = environment.root_calls[-1]["command"]
+    assert "sys.version_info < (3, 10)" in install_command
+    assert "uv==0.11.21" in install_command
+    assert "uv venv --python 3.11 --managed-python --seed" in install_command
+    assert "logfire[httpx]==4.41.0" in install_command
 
     context = SimpleNamespace(metadata=None)
     asyncio.run(agent.run("solve task", environment, context))
@@ -1777,6 +1805,9 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert "--no-history-enabled" in run_call["command"]
     assert "--no-artifacts-enabled" in run_call["command"]
     assert "sk-provider-secret-value" not in run_call["command"]
+    assert "logfire-test-token" not in run_call["command"]
+    assert run_call["env"]["KEDI_HARBOR_LOGFIRE"] == "1"
+    assert run_call["env"]["LOGFIRE_TOKEN"] == "logfire-test-token"
 
     agent.logs_dir.mkdir(parents=True)
     (agent.logs_dir / "kedi-result.json").write_text(

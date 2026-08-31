@@ -18,6 +18,7 @@ import kedi
 from ...agent_adapter.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from ...agent_adapter.conversation import ConversationState
 from ...agent_adapter.invocation import InvocationUsage, observe_invocations
+from ...agent_adapter.request_budget import ModelRequestBudgetLimits
 from ...agent_profile import McpServerSpec
 from ...agent_profile.mcp import mcp_spec_from_mapping
 from ...artifacts import ArtifactPolicy
@@ -113,6 +114,7 @@ def run_trial(
     terminal_output_limit_bytes: int = 512_000_000,
     trial_timeout_seconds: float | None = None,
 ) -> TrialRecord:
+    logfire_enabled = _configure_logfire()
     started_at = utc_now()
     started_monotonic = time.monotonic()
     workspace = workspace.resolve()
@@ -141,6 +143,7 @@ def run_trial(
     signal_state = _SignalState(terminal)
     source_path: Path | None = None
     conversation: ConversationState | None = None
+    request_limit = ModelRequestBudgetLimits().request_limit
     phase = "setup"
     cleanup_errors: list[str] = []
 
@@ -184,10 +187,20 @@ def run_trial(
         else:
             artifacts = False
 
+        runtime_adapter: str | object = adapter
+        if adapter == "pydantic":
+            from pydantic_ai import UsageLimits
+
+            from ...agent_adapter.adapters import PydanticAdapter
+
+            runtime_adapter = PydanticAdapter(
+                default_usage_limits=UsageLimits(request_limit=request_limit),
+            )
+
         @kedi.bind(
             file=source_path,
             model=model,
-            adapter=adapter,
+            adapter=runtime_adapter,
             effort=_effort(effort),
             settings=dict(model_settings or {}),
             tools=terminal.tools,
@@ -284,6 +297,8 @@ def run_trial(
             "terminal_preview_bytes": terminal_preview_bytes,
             "terminal_output_limit_bytes": terminal_output_limit_bytes,
             "trial_timeout_seconds": trial_timeout_seconds,
+            "logfire": logfire_enabled,
+            "request_limit": request_limit,
         },
         result_summary=result_summary,
         failure_phase=failure_phase,
@@ -292,6 +307,16 @@ def run_trial(
     )
     atomic_write_json(result_path, record.to_dict())
     return record
+
+
+def _configure_logfire() -> bool:
+    if os.getenv("KEDI_HARBOR_LOGFIRE") != "1":
+        return False
+    import logfire
+
+    logfire.configure(service_name="kedi", send_to_logfire="if-token-present")
+    logfire.instrument_pydantic_ai()
+    return True
 
 
 class _TrialTimedOut(TimeoutError):

@@ -512,6 +512,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
         hook_handler: HookHandler | None = None,
+        default_usage_limits: UsageLimits | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -573,6 +574,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         self.approval_resolution = approval_resolution
         self.subagent_approval_resolution = subagent_approval_resolution
         self._subagent_failure_policy = subagent_failure_policy
+        self._default_usage_limits = default_usage_limits
         self.codemode = normalize_codemode_settings(codemode)
         self._model_overrides: dict[str, Model] = {}
         logical_model = model if isinstance(model, str) else None
@@ -752,6 +754,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             output_type = self.type_builder(output_schema)
         agent = self._agent_for_produce()
         run_kwargs: dict[str, object] = {"output_type": output_type, **kwargs}
+        self._apply_default_usage_limits(run_kwargs)
         tool_specs = self._tool_specs_for_run(run_kwargs)
         if agent is not self:
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
@@ -770,6 +773,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
         run_kwargs: dict[str, object] = dict(kwargs)
+        self._apply_default_usage_limits(run_kwargs)
         agent = self._agent_for_produce()
         tool_specs = self._tool_specs_for_run(run_kwargs)
         if agent is not self:
@@ -1058,6 +1062,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         tool_specs: Sequence[ToolSpec],
     ) -> dict[str, object]:
         run_kwargs: dict[str, object] = dict(kwargs)
+        self._apply_default_usage_limits(run_kwargs)
         if self.active_profile.system is not None and run_kwargs.get("instructions") is None:
             run_kwargs["instructions"] = self.active_profile.system
         model_settings = pydantic_model_settings(self.active_profile.settings)
@@ -1206,6 +1211,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if capabilities:
             run_kwargs["capabilities"] = capabilities
         return run_kwargs
+
+    def _apply_default_usage_limits(self, run_kwargs: dict[str, object]) -> None:
+        default_limits = getattr(self, "_default_usage_limits", None)
+        if "usage_limits" not in run_kwargs and default_limits is not None:
+            run_kwargs["usage_limits"] = default_limits
 
     def _with_telemetry_capability(self, existing: object | None) -> list[Any]:
         from ...telemetry import owns_native_spans
@@ -1891,6 +1901,13 @@ def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | N
             f"Filesystem request rejected: {original}. Use repository-relative paths only, "
             "inspect unknown paths with get_file_info, use list_directory for directories, "
             "and read_text_file only for regular files."
+        )
+    if kind == "filesystem":
+        from pydantic_ai import ModelRetry
+
+        return ModelRetry(
+            f"Filesystem operation failed: {original}. Correct the arguments, inspect the "
+            "target when needed, and retry the operation."
         )
     if kind == "dynamic_workflow":
         from pydantic_ai import ModelRetry

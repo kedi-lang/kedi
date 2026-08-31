@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic_ai import ModelRetry, ModelSettings
+from pydantic_ai import ModelRetry, ModelSettings, UsageLimits
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
     ModelMessage,
@@ -920,6 +920,34 @@ def test_filesystem_permission_errors_are_reported_without_bypassing_the_boundar
 
     with pytest.raises(ModelRetry, match="Use repository-relative paths only"):
         cast(Any, tool.function)(file_path="secret.env")
+
+
+def test_bundled_filesystem_operation_errors_are_model_retries() -> None:
+    def ambiguous_edit(*, file_path: str) -> str:
+        raise ValueError(f"old_text is ambiguous in {file_path}")
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=ambiguous_edit,
+            name="edit_file",
+            metadata={"kedi_tool_kind": "filesystem"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="old_text is ambiguous"):
+        cast(Any, tool.function)(file_path="module.py")
+
+
+def test_pydantic_adapter_default_usage_limits_preserve_explicit_overrides() -> None:
+    default_limits = UsageLimits(request_limit=128)
+    explicit_limits = UsageLimits(request_limit=3)
+    adapter = PydanticAdapter(default_usage_limits=default_limits)
+
+    assert adapter._run_kwargs({}, tool_specs=())["usage_limits"] is default_limits
+    assert (
+        adapter._run_kwargs({"usage_limits": explicit_limits}, tool_specs=())["usage_limits"]
+        is explicit_limits
+    )
 
 
 @pytest.mark.parametrize("placement", ["constructor", "caller"])
