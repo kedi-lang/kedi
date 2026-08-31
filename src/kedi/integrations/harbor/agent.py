@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import tempfile
 from datetime import timedelta
@@ -32,6 +33,7 @@ class KediAgent(BaseInstalledAgent):
     _KEDI_HOME = PurePosixPath("/installed-agent/kedi-home")
     _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.36.0"
     _CODEX_RUNTIME = "codex-auth-helper==1.6.1"
+    _TREE_SITTER_KEDI_REPOSITORY = "https://github.com/kedi-lang/tree-sitter-kedi.git"
 
     def __init__(
         self,
@@ -55,6 +57,7 @@ class KediAgent(BaseInstalledAgent):
         task_root: str | None = None,
         manifest_digest: str | None = None,
         codex_auth_file: str | Path | None = None,
+        tree_sitter_kedi_revision: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -96,6 +99,11 @@ class KediAgent(BaseInstalledAgent):
         self._task_root = task_root
         self._manifest_digest = manifest_digest
         self._codex_auth_file = self._resolve_codex_auth_file(codex_auth_file)
+        if tree_sitter_kedi_revision is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", tree_sitter_kedi_revision
+        ):
+            raise ValueError("tree_sitter_kedi_revision must be a lowercase Git revision")
+        self._tree_sitter_kedi_revision = tree_sitter_kedi_revision
 
     @staticmethod
     def name() -> str:
@@ -107,9 +115,19 @@ class KediAgent(BaseInstalledAgent):
         )
 
     async def install(self, environment: BaseEnvironment) -> None:
+        system_dependencies = [
+            "bash",
+            "git",
+            "python3",
+            "python_pip",
+            "python_venv",
+            "ripgrep",
+        ]
+        if self._tree_sitter_kedi_revision is not None:
+            system_dependencies.append("build_tools")
         await self.ensure_system_dependencies(
             environment,
-            ("bash", "git", "python3", "python_pip", "python_venv", "ripgrep"),
+            tuple(system_dependencies),
         )
         install_target = self._kedi_package
         if self._kedi_wheel is not None:
@@ -117,6 +135,11 @@ class KediAgent(BaseInstalledAgent):
             await environment.upload_file(self._kedi_wheel, remote_wheel.as_posix())
             install_target = remote_wheel.as_posix()
         runtime_packages = [install_target, self._PYDANTIC_RUNTIME]
+        if self._tree_sitter_kedi_revision is not None:
+            runtime_packages.append(
+                "tree-sitter-kedi @ git+"
+                f"{self._TREE_SITTER_KEDI_REPOSITORY}@{self._tree_sitter_kedi_revision}"
+            )
         if self._codex_auth_file is not None:
             runtime_packages.append(self._CODEX_RUNTIME)
         await self.exec_as_root(

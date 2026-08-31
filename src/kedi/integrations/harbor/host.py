@@ -16,6 +16,7 @@ from .records import (
     HarborRunPolicy,
     HarnessPolicy,
     RunManifest,
+    current_gitlink_revision,
     current_git_state,
     load_manifest,
     sha256_file,
@@ -152,6 +153,11 @@ def create_manifest(
         kedi_dirty=dirty,
         kedi_package=kedi_package,
         kedi_wheel_sha256=sha256_file(kedi_wheel) if kedi_wheel is not None else None,
+        tree_sitter_kedi_revision=(
+            current_gitlink_revision(kedi_root.resolve(), "tree-sitter-kedi")
+            if kedi_wheel is not None
+            else None
+        ),
         model=model,
         adapter=adapter,
         effort=effort,
@@ -317,6 +323,13 @@ def _harbor_run_command(
         command.extend(("--retry-exclude", exception_name))
     if manifest.effort is not None:
         command.extend(("--agent-kwarg", f"effort={manifest.effort}"))
+    if manifest.tree_sitter_kedi_revision is not None:
+        command.extend(
+            (
+                "--agent-kwarg",
+                f"tree_sitter_kedi_revision={manifest.tree_sitter_kedi_revision}",
+            )
+        )
     if manifest.model_settings:
         command.extend(
             (

@@ -188,6 +188,7 @@ class RunManifest:
     kedi_dirty: bool
     kedi_package: str | None = None
     kedi_wheel_sha256: str | None = None
+    tree_sitter_kedi_revision: str | None = None
     model: str
     adapter: str = "pydantic"
     effort: str | None = None
@@ -213,6 +214,10 @@ class RunManifest:
             r"[0-9a-f]{64}", self.kedi_wheel_sha256
         ):
             raise ValueError("kedi_wheel_sha256 must be a lowercase SHA-256 digest")
+        if self.tree_sitter_kedi_revision is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", self.tree_sitter_kedi_revision
+        ):
+            raise ValueError("tree_sitter_kedi_revision must be a lowercase Git revision")
         if not self.model.strip():
             raise ValueError("model must not be empty")
         if self.effort is not None and self.effort not in {
@@ -295,6 +300,23 @@ def current_git_state(root: Path) -> tuple[str, bool]:
         ).stdout.strip()
     )
     return commit, dirty
+
+
+def current_gitlink_revision(root: Path, path: str) -> str:
+    output = subprocess.run(
+        ["git", "ls-tree", "HEAD", path],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    parts = output.split()
+    if len(parts) != 4 or parts[0] != "160000" or parts[1] != "commit":
+        raise ValueError(f"{path!r} is not a pinned Git submodule")
+    revision = parts[2]
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError(f"{path!r} has an invalid Git revision")
+    return revision
 
 
 def sha256_file(path: Path) -> str:
@@ -386,6 +408,7 @@ __all__ = [
     "TrialState",
     "VerificationState",
     "atomic_write_json",
+    "current_gitlink_revision",
     "current_git_state",
     "is_secret_name",
     "invocation_usage_dict",

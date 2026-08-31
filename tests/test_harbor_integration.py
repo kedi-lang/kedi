@@ -31,6 +31,7 @@ from kedi.integrations.harbor.records import (
     RunManifest,
     TrialRecord,
     atomic_write_json,
+    current_gitlink_revision,
     current_git_state,
     is_secret_name,
     invocation_usage_dict,
@@ -178,6 +179,7 @@ def test_records_are_atomic_and_secrets_are_redacted(
             "mutually exclusive",
         ),
         ({"kedi_wheel_sha256": "ABC"}, "lowercase SHA-256"),
+        ({"tree_sitter_kedi_revision": "ABC"}, "lowercase Git revision"),
         ({"model": " "}, "model must not be empty"),
         ({"effort": "impossible"}, "unsupported effort"),
         ({"model_settings": {"temperature": float("nan")}}, "JSON object"),
@@ -213,6 +215,31 @@ def test_record_helpers_capture_git_usage_hashes_and_nested_secrets(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert current_git_state(tmp_path) == ("abc123", True)
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="160000 commit " + "a" * 40 + "\ttree-sitter-kedi\n"
+        ),
+    )
+    assert current_gitlink_revision(tmp_path, "tree-sitter-kedi") == "a" * 40
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(stdout="100644 blob abc\tfile\n"),
+    )
+    with pytest.raises(ValueError, match="not a pinned Git submodule"):
+        current_gitlink_revision(tmp_path, "tree-sitter-kedi")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="160000 commit " + "z" * 40 + "\ttree-sitter-kedi\n"
+        ),
+    )
+    with pytest.raises(ValueError, match="invalid Git revision"):
+        current_gitlink_revision(tmp_path, "tree-sitter-kedi")
 
     payload = tmp_path / "payload.bin"
     payload.write_bytes(b"payload")
@@ -1067,6 +1094,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
         model="openai/gpt-test",
         environment="daytona",
         task_names=("task-a", "terminal-bench/task-b"),
+        tree_sitter_kedi_revision="a" * 40,
         concurrency=2,
         harbor_policy=HarborRunPolicy(
             timeout_multiplier=1.25,
@@ -1093,6 +1121,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert command[:3] == ["harbor", "run", "--dataset"]
     assert command[3] == "terminal-bench/terminal-bench-2-1@6"
     assert "kedi.integrations.harbor:KediAgent" in command
+    assert f"tree_sitter_kedi_revision={'a' * 40}" in command
     assert command.count("--include-task-name") == 2
     task_filters = [
         command[index + 1] for index, value in enumerate(command) if value == "--include-task-name"
@@ -1294,6 +1323,9 @@ def test_manifest_cli_writes_complete_policy_and_rejects_dirty_or_conflicting_in
     assert created.exit_code == 0, created.output
     manifest = load_manifest(output)
     assert manifest.kedi_wheel_sha256 == sha256_file(wheel)
+    assert manifest.tree_sitter_kedi_revision == current_gitlink_revision(
+        Path.cwd(), "tree-sitter-kedi"
+    )
     assert manifest.harbor_policy.retry_exclude_exceptions == ()
     assert manifest.model_settings == {"temperature": 0}
 
@@ -1684,6 +1716,12 @@ def test_harbor_agent_lifecycle_and_context_projection(
         environment.uploaded.append((Path(local), remote))
 
     environment.upload_file = upload_file
+    with pytest.raises(ValueError, match="lowercase Git revision"):
+        KediAgent(
+            logs_dir=tmp_path / "invalid-logs",
+            model_name="openrouter/test-model",
+            tree_sitter_kedi_revision="ABC",
+        )
     agent = KediAgent(
         logs_dir=tmp_path / "logs",
         model_name="openrouter/test-model",
@@ -1693,10 +1731,15 @@ def test_harbor_agent_lifecycle_and_context_projection(
         artifacts_enabled=False,
         runner_timeout_seconds=10,
         manifest_digest="manifest",
+        tree_sitter_kedi_revision="a" * 40,
     )
     asyncio.run(agent.install(environment))
     assert environment.uploaded[0][1].endswith("/kedi.whl")
     assert "python_venv" in environment.dependencies
+    assert "build_tools" in environment.dependencies
+    assert (
+        "tree-sitter-kedi @ git+https://github.com/kedi-lang/tree-sitter-kedi.git@" + "a" * 40
+    ) in environment.root_calls[-1]["command"]
 
     context = SimpleNamespace(metadata=None)
     asyncio.run(agent.run("solve task", environment, context))
@@ -1945,6 +1988,7 @@ def test_harbor_agent_full_configuration_and_failure_projection(
     assert "from kedi import __version__" in cast(str, agent.get_version_command())
     asyncio.run(agent.install(environment))
     assert environment.uploaded == []
+    assert "build_tools" not in environment.dependencies
     assert "kedi==fixture" in environment.root_calls[-1]["command"]
 
     context = SimpleNamespace(metadata={"existing": True})
