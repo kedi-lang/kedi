@@ -2426,6 +2426,7 @@ playground = [
     { name = "uvicorn" },
 ]
 terminal-bench = [
+    { name = "codex-auth-helper", marker = "python_full_version >= '3.12'" },
     { name = "harbor", extra = ["daytona"], marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
 ]
 
@@ -2456,6 +2457,7 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = "==0.2.148" },
     { name = "click", specifier = ">=8.3.3,<9" },
     { name = "codex-auth-helper", marker = "python_full_version >= '3.11' and extra == 'codex-model'", specifier = "==1.6.1" },
+    { name = "codex-auth-helper", marker = "python_full_version >= '3.12' and extra == 'terminal-bench'", specifier = "==1.6.1" },
     { name = "docstring-parser", specifier = ">=0.18,<0.19" },
     { name = "dspy", marker = "extra == 'dspy'", specifier = "==3.3.1" },
     { name = "fastapi", marker = "extra == 'playground'", specifier = ">=0.138.1,<0.139" },
@@ -2968,8 +2970,8 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
-    { name = "python-multipart", version = "0.0.28", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (python_full_version == '3.11.*' and extra == 'extra-4-kedi-terminal-bench') or (python_full_version == '3.11.*' and extra == 'group-4-kedi-dev') or (python_full_version >= '3.12' and extra == 'group-4-kedi-dev')" },
-    { name = "python-multipart", version = "0.0.32", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench') or (python_full_version >= '3.12' and extra != 'group-4-kedi-dev') or (python_full_version < '3.11' and extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version == '3.11.*' and extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version == '3.11.*' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')" },
+    { name = "python-multipart", version = "0.0.28", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+    { name = "python-multipart", version = "0.0.32", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "sse-starlette" },
     { name = "starlette" },
@@ -4593,14 +4595,7 @@ name = "python-multipart"
 version = "0.0.28"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "python_full_version >= '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "(python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
-    "python_full_version < '3.11' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
-    "python_full_version == '3.11.*' and extra == 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version < '3.11' and extra == 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
-    "python_full_version < '3.11' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
+    "python_full_version < '3.11'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/82/54/a85eb421fbdd5007bc5af39d0f4ed9fa609e0fedbfdc2adcf0b34526870e/python_multipart-0.0.28.tar.gz", hash = "sha256:8550da197eac0f7ab748961fc9509b999fa2662ea25cef857f05249f6893c0f8", size = 45314, upload-time = "2026-05-10T11:05:16.596Z" }
 wheels = [
@@ -4612,7 +4607,12 @@ name = "python-multipart"
 version = "0.0.32"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version >= '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "python_full_version >= '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev'",
+    "(python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev') or (python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')",
     "python_full_version >= '3.12' and extra == 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
+    "python_full_version == '3.11.*' and extra == 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "python_full_version >= '3.12' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev'",
     "(python_full_version >= '3.11' and sys_platform != 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev') or (python_full_version == '3.11.*' and sys_platform == 'emscripten' and extra != 'extra-4-kedi-terminal-bench' and extra != 'group-4-kedi-dev')",
 ]

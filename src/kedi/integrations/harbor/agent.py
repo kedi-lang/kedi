@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import tempfile
+from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
 
@@ -161,11 +163,7 @@ class KediAgent(BaseInstalledAgent):
         env = dict(self.model_connection.env)
         env["KEDI_HOME"] = self._KEDI_HOME.as_posix()
         if self._codex_auth_file is not None:
-            await self._upload_private_file(
-                environment,
-                source=self._codex_auth_file,
-                destination=self._CODEX_AUTH,
-            )
+            await self._upload_ephemeral_codex_auth(environment)
             env["KEDI_CODEX_AUTH_FILE"] = self._CODEX_AUTH.as_posix()
         await self._install_skills(environment, env)
 
@@ -267,6 +265,45 @@ class KediAgent(BaseInstalledAgent):
             environment,
             command=f"{ownership}chmod 600 {quoted_path}",
         )
+
+    async def _upload_ephemeral_codex_auth(self, environment: BaseEnvironment) -> None:
+        if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
+            raise RuntimeError("Codex auth source is unavailable")
+
+        from codex_auth_helper import (  # ty: ignore[unresolved-import]
+            CodexAuthConfig,
+            CodexAuthState,
+            CodexAuthStore,
+            create_codex_async_openai,
+        )
+
+        config = CodexAuthConfig(
+            auth_path=self._codex_auth_file,
+            refresh_margin=timedelta(minutes=30),
+        )
+        client = create_codex_async_openai(config=config)
+        try:
+            access_token = await client.token_manager.get_access_token()
+            state = client.token_manager.current_state
+        finally:
+            await client.close()
+
+        ephemeral_state = CodexAuthState(
+            access_token=access_token,
+            refresh_token="kedi-ephemeral-no-refresh",
+            account_id=state.account_id,
+            auth_mode=state.auth_mode,
+            expires_at=state.expires_at,
+            last_refresh=state.last_refresh,
+        )
+        with tempfile.TemporaryDirectory(prefix="kedi-codex-auth-") as temp_dir:
+            path = Path(temp_dir) / "auth.json"
+            CodexAuthStore(path).write_state(ephemeral_state)
+            await self._upload_private_file(
+                environment,
+                source=path,
+                destination=self._CODEX_AUTH,
+            )
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         result_path = self.logs_dir / "kedi-result.json"

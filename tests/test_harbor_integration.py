@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -1743,19 +1744,77 @@ def test_harbor_agent_transfers_codex_auth_privately(
     KediAgent = agent_module.KediAgent
 
     auth_file = tmp_path / "auth.json"
-    secret = "codex-secret-canary"
-    auth_file.write_text(json.dumps({"tokens": {"access_token": secret}}))
+    source_secret = "source-refresh-secret-canary"
+    access_secret = "short-lived-access-canary"
+    auth_file.write_text(json.dumps({"tokens": {"refresh_token": source_secret}}))
+    helper = ModuleType("codex_auth_helper")
+    helper_calls: list[Any] = []
+
+    class CodexAuthConfig:
+        def __init__(self, **kwargs: Any) -> None:
+            self.auth_path = kwargs["auth_path"]
+            self.refresh_margin = kwargs["refresh_margin"]
+            helper_calls.append(self)
+
+    class CodexAuthState:
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class CodexAuthStore:
+        def __init__(self, path: Path) -> None:
+            self.path = path
+
+        def write_state(self, state: Any) -> None:
+            self.path.write_text(
+                json.dumps(
+                    {
+                        "auth_mode": state.auth_mode,
+                        "tokens": {
+                            "access_token": state.access_token,
+                            "account_id": state.account_id,
+                            "refresh_token": state.refresh_token,
+                        },
+                    }
+                )
+            )
+
+    state = SimpleNamespace(
+        account_id="account-fixture",
+        auth_mode="chatgpt",
+        expires_at=None,
+        last_refresh=None,
+    )
+
+    class TokenManager:
+        current_state = state
+
+        async def get_access_token(self) -> str:
+            return access_secret
+
+    class Client:
+        token_manager = TokenManager()
+
+        async def close(self) -> None:
+            helper_calls.append("closed")
+
+    setattr(helper, "CodexAuthConfig", CodexAuthConfig)
+    setattr(helper, "CodexAuthState", CodexAuthState)
+    setattr(helper, "CodexAuthStore", CodexAuthStore)
+    setattr(helper, "create_codex_async_openai", lambda **_: Client())
+    monkeypatch.setitem(sys.modules, "codex_auth_helper", helper)
     environment = SimpleNamespace(
         dependencies=(),
         root_calls=[],
         agent_calls=[],
         configs=[],
         uploaded=[],
+        uploaded_contents={},
         default_user="agent",
     )
 
     async def upload_file(local: Path, remote: str) -> None:
         environment.uploaded.append((Path(local), remote))
+        environment.uploaded_contents[remote] = Path(local).read_text()
 
     environment.upload_file = upload_file
     agent = KediAgent(
@@ -1768,20 +1827,29 @@ def test_harbor_agent_transfers_codex_auth_privately(
     asyncio.run(agent.install(environment))
     install_command = environment.root_calls[-1]["command"]
     assert "codex-auth-helper==1.6.1" in install_command
-    assert secret not in install_command
+    assert source_secret not in install_command
 
     asyncio.run(agent.run("solve", environment, SimpleNamespace(metadata=None)))
 
-    uploaded_auth = [item for item in environment.uploaded if item[0] == auth_file]
-    assert uploaded_auth == [(auth_file.resolve(), "/installed-agent/kedi-codex-auth.json")]
+    uploaded_auth = [
+        item for item in environment.uploaded if item[1] == "/installed-agent/kedi-codex-auth.json"
+    ]
+    assert len(uploaded_auth) == 1
+    assert uploaded_auth[0][0] != auth_file.resolve()
+    uploaded_payload = environment.uploaded_contents["/installed-agent/kedi-codex-auth.json"]
+    assert access_secret in uploaded_payload
+    assert "kedi-ephemeral-no-refresh" in uploaded_payload
+    assert source_secret not in uploaded_payload
+    assert helper_calls[-1] == "closed"
+    assert helper_calls[0].refresh_margin == timedelta(minutes=30)
     assert "chmod 600" in environment.root_calls[-1]["command"]
     assert "chown agent" in environment.root_calls[-1]["command"]
     run_call = environment.agent_calls[-1]
     assert run_call["env"]["KEDI_CODEX_AUTH_FILE"] == ("/installed-agent/kedi-codex-auth.json")
     assert "trap" in run_call["command"]
     assert "rm -f -- /installed-agent/kedi-codex-auth.json" in run_call["command"]
-    assert secret not in run_call["command"]
-    assert secret not in json.dumps(run_call["env"])
+    assert access_secret not in run_call["command"]
+    assert access_secret not in json.dumps(run_call["env"])
 
     environment.default_user = None
     asyncio.run(
@@ -1932,8 +2000,8 @@ def test_real_harbor_contract_when_extra_is_installed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pytest.importorskip("harbor")
-    BaseInstalledAgent = importlib.import_module("harbor.agents.installed.base").BaseInstalledAgent
+    harbor_base = pytest.importorskip("harbor.agents.installed.base")
+    BaseInstalledAgent = harbor_base.BaseInstalledAgent
     AgentContext = importlib.import_module("harbor.models.agent.context").AgentContext
 
     sys.modules.pop("kedi.integrations.harbor.agent", None)
@@ -1972,7 +2040,7 @@ def test_lazy_harbor_import_reports_missing_extra(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
     try:
-        importlib.import_module("harbor")
+        importlib.import_module("harbor.agents.installed.base")
     except ImportError:
         with pytest.raises(ImportError, match="terminal-bench"):
             integration.__getattr__("KediAgent")

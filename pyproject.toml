@@ -89,6 +89,7 @@ playground = [
     "uvicorn>=0.47,<0.48",
 ]
 terminal-bench = [
+    "codex-auth-helper==1.6.1; python_version >= '3.12'",
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 
