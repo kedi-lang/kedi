@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, Sequence, cast
 
 import click
+import dotenv
 
 from ...effort import EFFORT_VALUES
 from .records import (
@@ -414,6 +415,7 @@ def _resolve_kedi_distribution(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    dotenv.load_dotenv()
     cli.main(args=list(argv) if argv is not None else None, prog_name="kedi-terminal-bench")
     return 0
 

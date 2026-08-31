@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
-from typing import Any
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pydantic_ai.models.test import TestModel
@@ -20,16 +21,31 @@ def _fake_helper(
 ) -> None:
     helper = ModuleType("codex_auth_helper")
 
-    def pydantic_factory(model: str, *, instructions: str) -> object:
+    class CodexAuthConfig:
+        def __init__(self, *, auth_path: Path) -> None:
+            self.auth_path = auth_path
+
+    def pydantic_factory(
+        model: str,
+        *,
+        instructions: str,
+        config: object | None = None,
+    ) -> object:
         calls.append(("pydantic", model, instructions))
-        return object()
+        return SimpleNamespace(config=config)
 
-    def langchain_factory(model: str, *, instructions: str) -> object:
+    def langchain_factory(
+        model: str,
+        *,
+        instructions: str,
+        config: object | None = None,
+    ) -> object:
         calls.append(("langchain", model, instructions))
-        return object()
+        return SimpleNamespace(config=config)
 
-    helper.create_codex_responses_model = pydantic_factory  # type: ignore[attr-defined]
-    helper.create_codex_chat_openai = langchain_factory  # type: ignore[attr-defined]
+    setattr(helper, "CodexAuthConfig", CodexAuthConfig)
+    setattr(helper, "create_codex_responses_model", pydantic_factory)
+    setattr(helper, "create_codex_chat_openai", langchain_factory)
     monkeypatch.setitem(sys.modules, "codex_auth_helper", helper)
     monkeypatch.setattr(model_module, "find_spec", lambda _name: object())
 
@@ -50,6 +66,20 @@ def test_codex_responses_model_builds_supported_framework_models(
     assert all("active instructions" in instructions for _, _, instructions in calls)
 
 
+def test_codex_responses_model_uses_explicit_auth_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str]] = []
+    _fake_helper(monkeypatch, calls)
+    auth_path = tmp_path / "auth.json"
+    monkeypatch.setenv("KEDI_CODEX_AUTH_FILE", str(auth_path))
+
+    model = cast(Any, codex_responses_model("codex/gpt-5.6-luna", "pydantic"))
+
+    assert model.config.auth_path == auth_path
+
+
 def test_codex_responses_model_reports_missing_dependency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,8 +97,8 @@ def test_codex_responses_model_reports_missing_login(
     def missing_login(*_args: object, **_kwargs: object) -> object:
         raise FileNotFoundError("auth.json")
 
-    helper.create_codex_responses_model = missing_login  # type: ignore[attr-defined]
-    helper.create_codex_chat_openai = missing_login  # type: ignore[attr-defined]
+    setattr(helper, "create_codex_responses_model", missing_login)
+    setattr(helper, "create_codex_chat_openai", missing_login)
     monkeypatch.setitem(sys.modules, "codex_auth_helper", helper)
     monkeypatch.setattr(model_module, "find_spec", lambda _name: object())
 
@@ -117,4 +147,4 @@ def test_codex_responses_model_rejects_unknown_adapter(
     _fake_helper(monkeypatch, calls)
 
     with pytest.raises(ValueError, match="Unsupported Codex model adapter"):
-        codex_responses_model("codex/gpt-5.6-luna", "dspy")  # type: ignore[arg-type]
+        codex_responses_model("codex/gpt-5.6-luna", cast(Any, "dspy"))

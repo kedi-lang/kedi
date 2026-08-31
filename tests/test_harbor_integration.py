@@ -1090,6 +1090,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
         job_name="pilot",
     )
     assert command[:3] == ["harbor", "run", "--dataset"]
+    assert command[3] == "terminal-bench/terminal-bench-2-1@6"
     assert "kedi.integrations.harbor:KediAgent" in command
     assert command.count("--include-task-name") == 2
     assert f"manifest_digest={manifest.material_digest}" in command
@@ -1491,13 +1492,20 @@ def test_host_executable_version_and_distribution_boundaries(
 
 def test_host_main_forwards_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[list[str] | None, str]] = []
+    dotenv_calls = 0
 
     def fake_main(*, args: list[str] | None, prog_name: str) -> None:
         calls.append((args, prog_name))
 
+    def fake_load_dotenv() -> None:
+        nonlocal dotenv_calls
+        dotenv_calls += 1
+
     monkeypatch.setattr(host.cli, "main", fake_main)
+    monkeypatch.setattr(host.dotenv, "load_dotenv", fake_load_dotenv)
     assert host.main(["--help"]) == 0
     assert calls == [(["--help"], "kedi-terminal-bench")]
+    assert dotenv_calls == 1
 
 
 def test_runner_preserves_mcp_transport_configuration(tmp_path: Path) -> None:
@@ -1723,6 +1731,86 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert context.n_output_tokens == 10
     assert context.cost_usd == 0.01
     assert context.metadata["kedi_state"] == "completed"
+
+
+def test_harbor_agent_transfers_codex_auth_privately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    agent_module = importlib.import_module("kedi.integrations.harbor.agent")
+    KediAgent = agent_module.KediAgent
+
+    auth_file = tmp_path / "auth.json"
+    secret = "codex-secret-canary"
+    auth_file.write_text(json.dumps({"tokens": {"access_token": secret}}))
+    environment = SimpleNamespace(
+        dependencies=(),
+        root_calls=[],
+        agent_calls=[],
+        configs=[],
+        uploaded=[],
+        default_user="agent",
+    )
+
+    async def upload_file(local: Path, remote: str) -> None:
+        environment.uploaded.append((Path(local), remote))
+
+    environment.upload_file = upload_file
+    agent = KediAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="codex/gpt-5.6-luna",
+        kedi_package="kedi==fixture",
+        codex_auth_file=auth_file,
+    )
+
+    asyncio.run(agent.install(environment))
+    install_command = environment.root_calls[-1]["command"]
+    assert "codex-auth-helper==1.6.1" in install_command
+    assert secret not in install_command
+
+    asyncio.run(agent.run("solve", environment, SimpleNamespace(metadata=None)))
+
+    uploaded_auth = [item for item in environment.uploaded if item[0] == auth_file]
+    assert uploaded_auth == [(auth_file.resolve(), "/installed-agent/kedi-codex-auth.json")]
+    assert "chmod 600" in environment.root_calls[-1]["command"]
+    assert "chown agent" in environment.root_calls[-1]["command"]
+    run_call = environment.agent_calls[-1]
+    assert run_call["env"]["KEDI_CODEX_AUTH_FILE"] == ("/installed-agent/kedi-codex-auth.json")
+    assert "trap" in run_call["command"]
+    assert "rm -f -- /installed-agent/kedi-codex-auth.json" in run_call["command"]
+    assert secret not in run_call["command"]
+    assert secret not in json.dumps(run_call["env"])
+
+    environment.default_user = None
+    asyncio.run(
+        agent._upload_private_file(
+            environment,
+            source=auth_file,
+            destination=PurePosixPath("/installed-agent/no-owner-auth.json"),
+        )
+    )
+    assert environment.root_calls[-1]["command"] == (
+        "chmod 600 /installed-agent/no-owner-auth.json"
+    )
+
+
+def test_harbor_agent_rejects_missing_codex_auth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    KediAgent = importlib.import_module("kedi.integrations.harbor.agent").KediAgent
+
+    with pytest.raises(FileNotFoundError, match="codex login"):
+        KediAgent(
+            logs_dir=tmp_path,
+            model_name="codex/gpt-5.6-luna",
+            kedi_package="kedi",
+            codex_auth_file=tmp_path / "missing-auth.json",
+        )
 
 
 def test_harbor_agent_full_configuration_and_failure_projection(

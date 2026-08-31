@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 import json
+import os
 import shlex
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
@@ -25,8 +26,10 @@ class KediAgent(BaseInstalledAgent):
     _INSTRUCTION = PurePosixPath("/installed-agent/kedi-instruction.txt")
     _MCP_CONFIG = PurePosixPath("/installed-agent/kedi-mcp.json")
     _MODEL_SETTINGS = PurePosixPath("/installed-agent/kedi-model-settings.json")
+    _CODEX_AUTH = PurePosixPath("/installed-agent/kedi-codex-auth.json")
     _KEDI_HOME = PurePosixPath("/installed-agent/kedi-home")
     _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.36.0"
+    _CODEX_RUNTIME = "codex-auth-helper==1.6.1"
 
     def __init__(
         self,
@@ -49,6 +52,7 @@ class KediAgent(BaseInstalledAgent):
         runner_timeout_seconds: int | None = None,
         task_root: str | None = None,
         manifest_digest: str | None = None,
+        codex_auth_file: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -89,6 +93,7 @@ class KediAgent(BaseInstalledAgent):
         self._runner_timeout_seconds = runner_timeout_seconds
         self._task_root = task_root
         self._manifest_digest = manifest_digest
+        self._codex_auth_file = self._resolve_codex_auth_file(codex_auth_file)
 
     @staticmethod
     def name() -> str:
@@ -109,13 +114,16 @@ class KediAgent(BaseInstalledAgent):
             remote_wheel = PurePosixPath("/installed-agent") / self._kedi_wheel.name
             await environment.upload_file(self._kedi_wheel, remote_wheel.as_posix())
             install_target = remote_wheel.as_posix()
+        runtime_packages = [install_target, self._PYDANTIC_RUNTIME]
+        if self._codex_auth_file is not None:
+            runtime_packages.append(self._CODEX_RUNTIME)
         await self.exec_as_root(
             environment,
             command=(
                 f"rm -rf {shlex.quote(self._VENV.as_posix())} && "
                 f"python3 -m venv {shlex.quote(self._VENV.as_posix())} && "
                 f"{self._VENV}/bin/python -m pip install --disable-pip-version-check "
-                f"{shlex.quote(install_target)} {shlex.quote(self._PYDANTIC_RUNTIME)}"
+                + " ".join(shlex.quote(package) for package in runtime_packages)
             ),
         )
 
@@ -152,6 +160,13 @@ class KediAgent(BaseInstalledAgent):
             )
         env = dict(self.model_connection.env)
         env["KEDI_HOME"] = self._KEDI_HOME.as_posix()
+        if self._codex_auth_file is not None:
+            await self._upload_private_file(
+                environment,
+                source=self._codex_auth_file,
+                destination=self._CODEX_AUTH,
+            )
+            env["KEDI_CODEX_AUTH_FILE"] = self._CODEX_AUTH.as_posix()
         await self._install_skills(environment, env)
 
         result_path = self.environment_logs_dir / "kedi-result.json"
@@ -200,9 +215,12 @@ class KediAgent(BaseInstalledAgent):
             command.extend(("--trial-timeout-seconds", str(self._runner_timeout_seconds)))
         if self._manifest_digest is not None:
             command.extend(("--manifest-digest", self._manifest_digest))
+        shell_prefix = "set -o pipefail; "
+        if self._codex_auth_file is not None:
+            cleanup = f"rm -f -- {shlex.quote(self._CODEX_AUTH.as_posix())}"
+            shell_prefix += f"trap {shlex.quote(cleanup)} EXIT; "
         shell_command = (
-            "set -o pipefail; "
-            f"{shlex.join(command)} 2>&1 | tee {shlex.quote(output_path.as_posix())}"
+            shell_prefix + f"{shlex.join(command)} 2>&1 | tee {shlex.quote(output_path.as_posix())}"
         )
         await self.exec_as_agent(
             environment,
@@ -214,6 +232,40 @@ class KediAgent(BaseInstalledAgent):
                 if self._runner_timeout_seconds is not None
                 else None
             ),
+        )
+
+    def _resolve_codex_auth_file(self, configured: str | Path | None) -> Path | None:
+        if not (self.model_name or "").startswith("codex/"):
+            return None
+        candidate = configured or os.environ.get("KEDI_CODEX_AUTH_FILE")
+        path = (
+            Path(candidate).expanduser()
+            if candidate is not None
+            else Path.home() / ".codex" / "auth.json"
+        )
+        if not path.is_file():
+            raise FileNotFoundError(
+                "Codex authentication is unavailable. Run `codex login`, then retry."
+            )
+        return path.resolve()
+
+    async def _upload_private_file(
+        self,
+        environment: BaseEnvironment,
+        *,
+        source: Path,
+        destination: PurePosixPath,
+    ) -> None:
+        remote_path = destination.as_posix()
+        await environment.upload_file(source, remote_path)
+        quoted_path = shlex.quote(remote_path)
+        default_user = getattr(environment, "default_user", None)
+        ownership = ""
+        if default_user is not None:
+            ownership = f"chown {shlex.quote(str(default_user))} {quoted_path} && "
+        await self.exec_as_root(
+            environment,
+            command=f"{ownership}chmod 600 {quoted_path}",
         )
 
     def populate_context_post_run(self, context: AgentContext) -> None:

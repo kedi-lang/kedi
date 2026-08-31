@@ -179,8 +179,8 @@ class HarborRunPolicy:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RunManifest:
     schema_version: int = 1
-    dataset: str = "terminal-bench"
-    dataset_version: str = "2.1"
+    dataset: str = "terminal-bench/terminal-bench-2-1"
+    dataset_version: str = "6"
     harbor_version: str = "0.22.0"
     harbor_revision: str
     kedi_version: str = __version__

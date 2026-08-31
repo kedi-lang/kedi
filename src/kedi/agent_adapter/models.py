@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from importlib.util import find_spec
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 if TYPE_CHECKING:
@@ -44,16 +46,22 @@ def codex_responses_model(
 
     helper = cast(Any, __import__("codex_auth_helper"))
 
+    factory_kwargs: dict[str, Any] = {"instructions": CODEX_DEFAULT_INSTRUCTIONS}
+    if auth_path := os.environ.get("KEDI_CODEX_AUTH_FILE"):
+        factory_kwargs["config"] = helper.CodexAuthConfig(
+            auth_path=Path(auth_path).expanduser(),
+        )
+
     try:
         if adapter == "pydantic":
             return helper.create_codex_responses_model(
                 model_name,
-                instructions=CODEX_DEFAULT_INSTRUCTIONS,
+                **factory_kwargs,
             )
         if adapter == "langchain":
             return helper.create_codex_chat_openai(
                 model_name,
-                instructions=CODEX_DEFAULT_INSTRUCTIONS,
+                **factory_kwargs,
             )
     except FileNotFoundError as exc:
         raise RuntimeError(

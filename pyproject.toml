@@ -89,7 +89,7 @@ playground = [
     "uvicorn>=0.47,<0.48",
 ]
 terminal-bench = [
-    "harbor==0.22.0; python_version >= '3.12'",
+    "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 
 [tool.hatch.build]
