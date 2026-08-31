@@ -515,6 +515,8 @@ def test_internal_filesystem_module_exports_profile_and_tools(
     assert rt.run_main() == "hello filesystem"
     assert "filesystem" in rt._profile_registry
     assert "read_text_file" in rt._procedures
+    assert "remove_file" in rt._procedures
+    assert "remove_directory" in rt._procedures
 
     from kedi.artifacts import ArtifactStream
     from kedi.tool_context import kedi_tool_call_context
@@ -670,11 +672,8 @@ def test_internal_filesystem_rejects_out_of_root_path(
 
 
 def _compile_fs_module_with_call(tmp_path: Path, call: str) -> Path:
-    # remove_directory is intentionally not exported / not in the default profile, so exercise the
-    # real module code by compiling the actual filesystem.kedi source with an appended return.
-    src = Path(internal_module_path("filesystem")).read_text(encoding="utf-8")
     main = tmp_path / "main.kedi"
-    main.write_text(f"{src}\n{call}\n", encoding="utf-8")
+    main.write_text(f"> import: filesystem\n\n{call}\n", encoding="utf-8")
     return main
 
 
@@ -832,6 +831,8 @@ def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> Non
             "path_exists",
             "list_directory",
             "create_directory",
+            "remove_file",
+            "remove_directory",
             "get_file_info",
             "read_artifact",
             "search_artifacts",

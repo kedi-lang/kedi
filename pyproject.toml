@@ -55,6 +55,7 @@ Tracker = "https://github.com/kedi-lang/kedi/issues"
 [project.scripts]
 kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
+kedi-terminal-bench = "kedi.integrations.harbor.host:main"
 
 [project.optional-dependencies]
 claude = [
@@ -87,6 +88,9 @@ playground = [
     "fastapi>=0.138.1,<0.139",
     "uvicorn>=0.47,<0.48",
 ]
+terminal-bench = [
+    "harbor==0.22.0; python_version >= '3.12'",
+]
 
 [tool.hatch.build]
 include-package-data = true
@@ -106,6 +110,14 @@ include = [
 [tool.hatch.build.targets.wheel]
 packages = [
     "src/kedi",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "terminal-bench" },
+        { group = "dev" },
+    ],
 ]
 
 [tool.uv.sources]
