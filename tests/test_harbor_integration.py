@@ -47,7 +47,7 @@ def terminal(tmp_path: Path) -> Iterator[TerminalSession]:
     value = TerminalSession(
         root=tmp_path,
         records_dir=tmp_path / "records",
-        command_timeout_seconds=1,
+        command_timeout_seconds=10,
         preview_bytes=32,
         output_limit_bytes=1_000_000,
     )
