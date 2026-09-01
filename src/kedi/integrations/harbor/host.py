@@ -302,6 +302,7 @@ def _harbor_run_command(
         str(manifest.harbor_policy.environment_build_timeout_multiplier),
         "--max-retries",
         str(manifest.harbor_policy.max_retries),
+        "--yes",
         "--agent-kwarg",
         f"adapter={manifest.adapter}",
         "--agent-kwarg",

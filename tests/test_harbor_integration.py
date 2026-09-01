@@ -1857,6 +1857,7 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert command[command.index("--agent-setup-timeout-multiplier") + 1] == "2.0"
     assert command[command.index("--environment-build-timeout-multiplier") + 1] == "2.25"
     assert command[command.index("--max-retries") + 1] == "2"
+    assert command.count("--yes") == 1
     assert command[command.index("--retry-include") + 1] == "ApiRateLimitError"
     assert command[command.index("--retry-exclude") + 1] == "AgentTimeoutError"
 
