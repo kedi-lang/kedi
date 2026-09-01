@@ -20,6 +20,22 @@ from ..._version import __version__
 from .records import HarnessPolicy
 
 
+_LOGFIRE_CREDENTIALS_FILENAME = "logfire_credentials.json"
+
+
+def _resolve_logfire_token() -> str | None:
+    if token := os.getenv("LOGFIRE_TOKEN"):
+        return token
+    credentials_dir = Path(os.getenv("LOGFIRE_CREDENTIALS_DIR", ".logfire")).expanduser()
+    try:
+        token = json.loads(
+            (credentials_dir / _LOGFIRE_CREDENTIALS_FILENAME).read_text(encoding="utf-8")
+        )["token"]
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+    return token if isinstance(token, str) else None
+
+
 class KediAgent(BaseInstalledAgent):
     """Official Harbor custom-agent bridge for the Kedi coding harness."""
 
@@ -211,7 +227,7 @@ class KediAgent(BaseInstalledAgent):
         env["KEDI_HOME"] = self._KEDI_HOME.as_posix()
         if logfire_enabled := os.getenv("KEDI_HARBOR_LOGFIRE") == "1":
             env["KEDI_HARBOR_LOGFIRE"] = "1"
-        if logfire_enabled and (logfire_token := os.getenv("LOGFIRE_TOKEN")):
+        if logfire_enabled and (logfire_token := _resolve_logfire_token()):
             env["LOGFIRE_TOKEN"] = logfire_token
         if self._codex_auth_file is not None:
             await self._upload_ephemeral_codex_auth(environment)

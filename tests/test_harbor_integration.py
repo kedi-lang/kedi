@@ -2415,7 +2415,21 @@ def test_harbor_agent_lifecycle_and_context_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("KEDI_HARBOR_LOGFIRE", "1")
-    monkeypatch.setenv("LOGFIRE_TOKEN", "logfire-test-token")
+    monkeypatch.delenv("LOGFIRE_TOKEN", raising=False)
+    credentials_dir = tmp_path / "logfire"
+    credentials_dir.mkdir()
+    (credentials_dir / "logfire_credentials.json").write_text(
+        json.dumps(
+            {
+                "token": "logfire-test-token",
+                "project_name": "test",
+                "project_url": "https://example.test/project",
+                "logfire_api_url": "https://example.test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LOGFIRE_CREDENTIALS_DIR", str(credentials_dir))
     base = _install_fake_harbor(monkeypatch)
     monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
     agent_module = importlib.import_module("kedi.integrations.harbor.agent")
@@ -2510,6 +2524,28 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert context.n_output_tokens == 10
     assert context.cost_usd == 0.01
     assert context.metadata["kedi_state"] == "completed"
+
+
+def test_harbor_logfire_token_resolution_is_optional_and_env_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    agent_module = importlib.import_module("kedi.integrations.harbor.agent")
+    credentials_dir = tmp_path / "logfire"
+    credentials_dir.mkdir()
+    credentials_path = credentials_dir / "logfire_credentials.json"
+    monkeypatch.setenv("LOGFIRE_CREDENTIALS_DIR", str(credentials_dir))
+    monkeypatch.setenv("LOGFIRE_TOKEN", "explicit-token")
+    assert agent_module._resolve_logfire_token() == "explicit-token"
+
+    monkeypatch.delenv("LOGFIRE_TOKEN")
+    assert agent_module._resolve_logfire_token() is None
+    credentials_path.write_text("not-json", encoding="utf-8")
+    assert agent_module._resolve_logfire_token() is None
+    credentials_path.write_text('{"token": 42}', encoding="utf-8")
+    assert agent_module._resolve_logfire_token() is None
 
 
 def test_harbor_agent_transfers_codex_auth_privately(
