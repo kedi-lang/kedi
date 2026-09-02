@@ -3,6 +3,7 @@ from __future__ import annotations
 # pyright: reportMissingImports=false
 
 import json
+import math
 import os
 import re
 import shlex
@@ -79,6 +80,7 @@ class KediAgent(BaseInstalledAgent):
         manifest_digest: str | None = None,
         codex_auth_file: str | Path | None = None,
         tree_sitter_kedi_revision: str | None = None,
+        tree_sitter_kedi_distribution: str | Path | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -103,7 +105,9 @@ class KediAgent(BaseInstalledAgent):
             terminal_output_limit_bytes=terminal_output_limit_bytes,
             retained_process_timeout_seconds=retained_process_timeout_seconds,
         )
-        if runner_timeout_seconds is not None and runner_timeout_seconds <= 0:
+        if runner_timeout_seconds is not None and (
+            not math.isfinite(runner_timeout_seconds) or runner_timeout_seconds <= 0
+        ):
             raise ValueError("runner_timeout_seconds must be positive")
         self._adapter = adapter
         self._effort = effort
@@ -127,6 +131,16 @@ class KediAgent(BaseInstalledAgent):
         ):
             raise ValueError("tree_sitter_kedi_revision must be a lowercase Git revision")
         self._tree_sitter_kedi_revision = tree_sitter_kedi_revision
+        self._tree_sitter_kedi_distribution = (
+            Path(tree_sitter_kedi_distribution).expanduser().resolve()
+            if tree_sitter_kedi_distribution
+            else None
+        )
+        if (
+            self._tree_sitter_kedi_distribution is not None
+            and not self._tree_sitter_kedi_distribution.is_file()
+        ):
+            raise FileNotFoundError(self._tree_sitter_kedi_distribution)
 
     @staticmethod
     def name() -> str:
@@ -146,7 +160,10 @@ class KediAgent(BaseInstalledAgent):
             "python_venv",
             "ripgrep",
         ]
-        if self._tree_sitter_kedi_revision is not None:
+        if (
+            self._tree_sitter_kedi_revision is not None
+            or self._tree_sitter_kedi_distribution is not None
+        ):
             system_dependencies.append("build_tools")
         await self.ensure_system_dependencies(
             environment,
@@ -158,7 +175,16 @@ class KediAgent(BaseInstalledAgent):
             await environment.upload_file(self._kedi_wheel, remote_wheel.as_posix())
             install_target = remote_wheel.as_posix()
         runtime_packages = [install_target, self._PYDANTIC_RUNTIME]
-        if self._tree_sitter_kedi_revision is not None:
+        if self._tree_sitter_kedi_distribution is not None:
+            remote_distribution = (
+                PurePosixPath("/installed-agent") / self._tree_sitter_kedi_distribution.name
+            )
+            await environment.upload_file(
+                self._tree_sitter_kedi_distribution,
+                remote_distribution.as_posix(),
+            )
+            runtime_packages.append(remote_distribution.as_posix())
+        elif self._tree_sitter_kedi_revision is not None:
             runtime_packages.append(
                 "tree-sitter-kedi @ git+"
                 f"{self._TREE_SITTER_KEDI_REPOSITORY}@{self._tree_sitter_kedi_revision}"
@@ -168,19 +194,14 @@ class KediAgent(BaseInstalledAgent):
         logfire_enabled = os.getenv("KEDI_HARBOR_LOGFIRE") == "1"
         if logfire_enabled:
             runtime_packages.append(self._LOGFIRE_RUNTIME)
-        supported_python = shlex.quote("import sys; raise SystemExit(sys.version_info < (3, 10))")
         create_runtime = (
-            f"if python3 -c {supported_python}; then "
-            f"python3 -m venv {shlex.quote(self._VENV.as_posix())}; "
-            "else "
             f"rm -rf {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
             f"python3 -m venv {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
             f"{self._BOOTSTRAP_VENV}/bin/python -m pip install "
             f"--disable-pip-version-check {shlex.quote(self._UV_RUNTIME)} && "
             f"{self._BOOTSTRAP_VENV}/bin/uv venv "
             f"--python {shlex.quote(self._MANAGED_PYTHON)} --managed-python --seed "
-            f"{shlex.quote(self._VENV.as_posix())}; "
-            "fi"
+            f"{shlex.quote(self._VENV.as_posix())}"
         )
         await self.exec_as_root(
             environment,

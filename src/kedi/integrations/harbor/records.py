@@ -17,6 +17,7 @@ from ...agent_adapter.invocation import InvocationUsage
 
 TrialState = Literal[
     "completed",
+    "budget_exhausted",
     "agent_failure",
     "integration_failure",
     "timed_out",
@@ -195,6 +196,7 @@ class RunManifest:
     kedi_package: str | None = None
     kedi_wheel_sha256: str | None = None
     tree_sitter_kedi_revision: str | None = None
+    tree_sitter_kedi_distribution_sha256: str | None = None
     model: str
     adapter: str = "pydantic"
     effort: str | None = None
@@ -224,6 +226,19 @@ class RunManifest:
             r"[0-9a-f]{40}", self.tree_sitter_kedi_revision
         ):
             raise ValueError("tree_sitter_kedi_revision must be a lowercase Git revision")
+        if self.tree_sitter_kedi_distribution_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.tree_sitter_kedi_distribution_sha256
+        ):
+            raise ValueError(
+                "tree_sitter_kedi_distribution_sha256 must be a lowercase SHA-256 digest"
+            )
+        if (
+            self.tree_sitter_kedi_distribution_sha256 is not None
+            and self.tree_sitter_kedi_revision is None
+        ):
+            raise ValueError(
+                "tree_sitter_kedi_distribution_sha256 requires a pinned tree_sitter_kedi_revision"
+            )
         if not self.model.strip():
             raise ValueError("model must not be empty")
         if self.effort is not None and self.effort not in {
@@ -259,6 +274,8 @@ class RunManifest:
     def material_digest(self) -> str:
         material = self.to_dict()
         material.pop("created_at", None)
+        if material.get("tree_sitter_kedi_distribution_sha256") is None:
+            material.pop("tree_sitter_kedi_distribution_sha256", None)
         return hashlib.sha256(
             json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()

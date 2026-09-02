@@ -35,6 +35,10 @@ def cli() -> None:
 @click.option("--task", "tasks", multiple=True, required=True)
 @click.option("--kedi-wheel", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-package")
+@click.option(
+    "--tree-sitter-kedi-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--allow-dirty", is_flag=True)
 @click.option("--environment", default="daytona", show_default=True)
 @click.option("--adapter", default="pydantic", show_default=True)
@@ -115,6 +119,7 @@ def create_manifest(
     tasks: tuple[str, ...],
     kedi_wheel: Path | None,
     kedi_package: str | None,
+    tree_sitter_kedi_distribution: Path | None,
     allow_dirty: bool,
     environment: str,
     adapter: str,
@@ -162,7 +167,12 @@ def create_manifest(
         kedi_wheel_sha256=sha256_file(kedi_wheel) if kedi_wheel is not None else None,
         tree_sitter_kedi_revision=(
             current_gitlink_revision(kedi_root.resolve(), "tree-sitter-kedi")
-            if kedi_wheel is not None
+            if kedi_wheel is not None or tree_sitter_kedi_distribution is not None
+            else None
+        ),
+        tree_sitter_kedi_distribution_sha256=(
+            sha256_file(tree_sitter_kedi_distribution)
+            if tree_sitter_kedi_distribution is not None
             else None
         ),
         model=model,
@@ -203,6 +213,10 @@ def create_manifest(
 @click.argument("manifest_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-wheel", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-package")
+@click.option(
+    "--tree-sitter-kedi-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option("--jobs-dir", type=click.Path(path_type=Path))
 @click.option("--job-name")
 @click.option("--harbor-command", default="harbor", show_default=True)
@@ -212,6 +226,7 @@ def run_manifest(
     *,
     kedi_wheel: Path | None,
     kedi_package: str | None,
+    tree_sitter_kedi_distribution: Path | None,
     jobs_dir: Path | None,
     job_name: str | None,
     harbor_command: str,
@@ -225,6 +240,10 @@ def run_manifest(
         kedi_wheel=kedi_wheel,
         kedi_package=kedi_package,
     )
+    resolved_tree_sitter_distribution = _resolve_tree_sitter_kedi_distribution(
+        manifest,
+        distribution=tree_sitter_kedi_distribution,
+    )
     executable = _resolve_executable(harbor_command, allow_missing=dry_run)
     effective_jobs_dir = (jobs_dir or Path("jobs")).resolve()
     effective_job_name = job_name or f"kedi-{manifest.material_digest[:12]}"
@@ -235,6 +254,7 @@ def run_manifest(
         kedi_package=resolved_package,
         jobs_dir=effective_jobs_dir,
         job_name=effective_job_name,
+        tree_sitter_kedi_distribution=resolved_tree_sitter_distribution,
     )
     if dry_run:
         click.echo(shlex.join(command))
@@ -274,6 +294,7 @@ def _harbor_run_command(
     kedi_package: str | None,
     jobs_dir: Path | None,
     job_name: str | None,
+    tree_sitter_kedi_distribution: Path | None = None,
 ) -> list[str]:
     command = [
         harbor_command,
@@ -339,6 +360,13 @@ def _harbor_run_command(
             (
                 "--agent-kwarg",
                 f"tree_sitter_kedi_revision={manifest.tree_sitter_kedi_revision}",
+            )
+        )
+    if tree_sitter_kedi_distribution is not None:
+        command.extend(
+            (
+                "--agent-kwarg",
+                f"tree_sitter_kedi_distribution={tree_sitter_kedi_distribution.resolve()}",
             )
         )
     if manifest.model_settings:
@@ -437,6 +465,29 @@ def _resolve_kedi_distribution(
             f"Kedi package {kedi_package!r} does not match manifest package {expected!r}"
         )
     return None, expected
+
+
+def _resolve_tree_sitter_kedi_distribution(
+    manifest: RunManifest,
+    *,
+    distribution: Path | None,
+) -> Path | None:
+    expected = manifest.tree_sitter_kedi_distribution_sha256
+    if expected is None:
+        if distribution is not None:
+            raise click.UsageError(
+                "the manifest does not record a tree-sitter-kedi distribution digest; "
+                "recreate it with --tree-sitter-kedi-distribution"
+            )
+        return None
+    if distribution is None:
+        raise click.UsageError("this manifest requires --tree-sitter-kedi-distribution")
+    resolved = distribution.expanduser().resolve()
+    if sha256_file(resolved) != expected:
+        raise click.ClickException(
+            "tree-sitter-kedi distribution SHA-256 does not match the immutable run manifest"
+        )
+    return resolved
 
 
 def main(argv: Sequence[str] | None = None) -> int:

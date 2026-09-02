@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import signal
 import tempfile
@@ -18,11 +19,12 @@ import kedi
 from ...agent_adapter.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from ...agent_adapter.conversation import ConversationState
 from ...agent_adapter.invocation import InvocationUsage, observe_invocations
-from ...agent_adapter.request_budget import ModelRequestBudgetLimits
+from ...agent_adapter.request_budget import ModelRequestBudgetError, ModelRequestBudgetLimits
 from ...agent_profile import McpServerSpec
 from ...agent_profile.mcp import mcp_spec_from_mapping
 from ...artifacts import ArtifactPolicy
 from ...effort import EFFORT_VALUES, EffortValue
+from ...errors import KediExecutionError
 from .records import (
     TrialRecord,
     TrialState,
@@ -51,6 +53,7 @@ _ALLOWED_MUTATING_TOOLS = frozenset(
         "write_text_file",
     }
 )
+_FINALIZATION_RESERVE_SECONDS = 15.0
 
 
 def benchmark_approval(request: ApprovalRequest) -> ApprovalDecision:
@@ -119,12 +122,25 @@ def run_trial(
     logfire_enabled = _configure_logfire()
     started_at = utc_now()
     started_monotonic = time.monotonic()
+    trial_timeout_valid = trial_timeout_seconds is None or (
+        math.isfinite(trial_timeout_seconds) and trial_timeout_seconds > 0
+    )
+    recorded_trial_timeout: float | str | None = (
+        trial_timeout_seconds if trial_timeout_valid else repr(trial_timeout_seconds)
+    )
     workspace = workspace.resolve()
     result_path = result_path.resolve()
     records_dir = result_path.parent
     records_dir.mkdir(parents=True, exist_ok=True)
     deadline = (
-        started_monotonic + trial_timeout_seconds if trial_timeout_seconds is not None else None
+        started_monotonic + trial_timeout_seconds
+        if trial_timeout_seconds is not None and trial_timeout_valid
+        else None
+    )
+    finalization_reserve_seconds = (
+        min(_FINALIZATION_RESERVE_SECONDS, trial_timeout_seconds * 0.1)
+        if trial_timeout_seconds is not None and trial_timeout_valid
+        else 0.0
     )
     terminal = TerminalSession(
         root=workspace,
@@ -133,6 +149,7 @@ def run_trial(
         preview_bytes=terminal_preview_bytes,
         output_limit_bytes=terminal_output_limit_bytes,
         deadline_monotonic=deadline,
+        finalization_reserve_seconds=finalization_reserve_seconds,
         artifacts_enabled=artifacts_enabled,
         retained_process_timeout_seconds=retained_process_timeout_seconds,
     )
@@ -155,7 +172,7 @@ def run_trial(
         usage = usage + item
 
     try:
-        if trial_timeout_seconds is not None and trial_timeout_seconds <= 0:
+        if not trial_timeout_valid:
             raise ValueError("trial_timeout_seconds must be positive")
         if not workspace.is_dir():
             raise NotADirectoryError(str(workspace))
@@ -234,13 +251,20 @@ def run_trial(
         error_type = type(exc).__name__
         error_message = "trial cancelled"
     except BaseException as exc:
-        state = "agent_failure" if phase == "agent" else "integration_failure"
+        if phase == "agent" and _is_model_request_budget_error(exc):
+            state = "budget_exhausted"
+        else:
+            state = "agent_failure" if phase == "agent" else "integration_failure"
         failure_phase = phase
         error_type = type(exc).__name__
         error_message = redact_text(str(exc))
         _write_error(records_dir, exc)
     finally:
-        terminal_cleanup = terminal.finish_session if state == "completed" else terminal.close
+        terminal_cleanup = (
+            terminal.finish_session
+            if state in {"completed", "budget_exhausted"}
+            else terminal.close
+        )
         for cleanup_name, cleanup in (
             ("conversation", conversation.close if conversation is not None else None),
             ("terminal", terminal_cleanup),
@@ -272,7 +296,7 @@ def run_trial(
             cleanup_message + "\n",
             encoding="utf-8",
         )
-        if state == "completed":
+        if state in {"completed", "budget_exhausted"}:
             state = "integration_failure"
             failure_phase = "teardown"
             error_type = "CleanupError"
@@ -307,7 +331,8 @@ def run_trial(
             "terminal_preview_bytes": terminal_preview_bytes,
             "terminal_output_limit_bytes": terminal_output_limit_bytes,
             "retained_process_timeout_seconds": retained_process_timeout_seconds,
-            "trial_timeout_seconds": trial_timeout_seconds,
+            "trial_timeout_seconds": recorded_trial_timeout,
+            "finalization_reserve_seconds": finalization_reserve_seconds,
             "logfire": logfire_enabled,
             "request_limit": request_limit,
         },
@@ -379,6 +404,18 @@ def _write_error(records_dir: Path, exc: BaseException) -> None:
         )
     except OSError:
         return
+
+
+def _is_model_request_budget_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, ModelRequestBudgetError):
+            return True
+        if isinstance(current, KediExecutionError):
+            current = current.original
+        else:
+            current = current.__cause__
+    return False
 
 
 def threading_is_main() -> bool:
@@ -477,7 +514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         retained_process_timeout_seconds=args.retained_process_timeout_seconds,
         trial_timeout_seconds=args.trial_timeout_seconds,
     )
-    return 0 if record.state == "completed" else 1
+    return 0 if record.state in {"completed", "budget_exhausted"} else 1
 
 
 if __name__ == "__main__":  # pragma: no cover

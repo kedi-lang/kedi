@@ -88,6 +88,16 @@ def test_manifest_is_immutable_and_digest_validated(tmp_path: Path) -> None:
     with pytest.raises((ValueError, FileExistsError)):
         other.write(path)
 
+    source_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        model="openai/gpt-test",
+        tree_sitter_kedi_revision="a" * 40,
+        tree_sitter_kedi_distribution_sha256="b" * 64,
+    )
+    assert source_manifest.material_digest != manifest.material_digest
+
     immutable_path = tmp_path / "immutable.json"
     manifest.write(immutable_path)
     with pytest.raises(FileExistsError, match="different run manifest"):
@@ -184,6 +194,14 @@ def test_records_are_atomic_and_secrets_are_redacted(
         ),
         ({"kedi_wheel_sha256": "ABC"}, "lowercase SHA-256"),
         ({"tree_sitter_kedi_revision": "ABC"}, "lowercase Git revision"),
+        (
+            {"tree_sitter_kedi_distribution_sha256": "ABC"},
+            "lowercase SHA-256",
+        ),
+        (
+            {"tree_sitter_kedi_distribution_sha256": "0" * 64},
+            "requires a pinned",
+        ),
         ({"model": " "}, "model must not be empty"),
         ({"effort": "impossible"}, "unsupported effort"),
         ({"model_settings": {"temperature": float("nan")}}, "JSON object"),
@@ -1083,11 +1101,42 @@ def test_terminal_output_boundaries_deadline_and_environment(
 
     with pytest.raises(ValueError, match="positive"):
         terminal._bounded_timeout(0)
+    with pytest.raises(ValueError, match="positive"):
+        terminal._bounded_timeout(float("nan"))
+    assert terminal._bounded_timeout(600) == terminal.command_timeout_seconds
+    with pytest.raises(ValueError, match="retained_process_timeout_seconds"):
+        TerminalSession(
+            root=terminal.root,
+            records_dir=terminal.records_dir / "invalid-retention",
+            retained_process_timeout_seconds=float("inf"),
+        )
+    with pytest.raises(ValueError, match="command_timeout_seconds"):
+        TerminalSession(
+            root=terminal.root,
+            records_dir=terminal.records_dir / "invalid-command-timeout",
+            command_timeout_seconds=float("nan"),
+        )
+    with pytest.raises(ValueError, match="finalization_reserve_seconds"):
+        TerminalSession(
+            root=terminal.root,
+            records_dir=terminal.records_dir / "invalid-finalization-reserve",
+            finalization_reserve_seconds=-1,
+        )
     terminal.deadline_monotonic = time.monotonic() - 1
     with pytest.raises(TimeoutError, match="deadline"):
         terminal._bounded_timeout(None)
     terminal.deadline_monotonic = time.monotonic() + 1
     assert 0 < terminal._bounded_timeout(10) <= 1
+
+    reserved = TerminalSession(
+        root=terminal.root,
+        records_dir=terminal.records_dir / "reserved",
+        deadline_monotonic=time.monotonic() + 1,
+        finalization_reserve_seconds=2,
+    )
+    with pytest.raises(TimeoutError, match="finalization reserve"):
+        reserved._bounded_timeout(None)
+    reserved.close()
 
     monkeypatch.setenv("OPENAI_API_KEY", "secret")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "access")
@@ -1385,6 +1434,7 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert record.manifest_digest == "manifest"
     assert record.failure_phase is None
     assert record.policy["history"] is True
+    assert record.policy["finalization_reserve_seconds"] == 0.0
     assert json.loads(result_path.read_text())["state"] == "completed"
     assert captured["skills"] is True
     assert captured["conversation"]._closed is True
@@ -1411,6 +1461,52 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert failed.failure_phase == "agent"
     assert failed.error_type == "RuntimeError"
     assert "sk-do-not" not in cast(str, failed.error_message)
+
+
+def test_runner_treats_model_request_budget_exhaustion_as_verifiable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.agent_adapter.request_budget import ModelRequestBudgetError
+    from kedi.errors import KediExecutionError
+
+    terminals: list[TerminalSession] = []
+
+    def exhausted_bind(**kwargs: Any) -> Any:
+        start_process = next(item for item in kwargs["tools"] if item.__name__ == "start_process")
+        retain_process = next(item for item in kwargs["tools"] if item.__name__ == "retain_process")
+        terminals.append(cast(TerminalSession, start_process.__self__))
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                process = start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+                retain_process(process["process_id"])
+                raise KediExecutionError(
+                    "request budget exhausted",
+                    original=ModelRequestBudgetError("cumulative model input"),
+                )
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", exhausted_bind)
+    result_path = tmp_path / "budget" / "result.json"
+    record = runner.run_trial(
+        instruction="work until the host budget is exhausted",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=result_path,
+        trial_id="budget-exhausted",
+    )
+
+    assert record.state == "budget_exhausted"
+    assert record.failure_phase == "agent"
+    assert record.error_type == "KediExecutionError"
+    assert record.terminal["retained_processes"] == 1
+    assert json.loads(result_path.read_text(encoding="utf-8"))["state"] == ("budget_exhausted")
+    terminals[0].close()
 
 
 def test_runner_hands_off_retained_processes_only_after_success(
@@ -1528,6 +1624,7 @@ def test_runner_classifies_setup_failure_and_enforces_local_timeout(
     )
     assert timed_out.state == "timed_out"
     assert timed_out.failure_phase == "agent"
+    assert timed_out.policy["finalization_reserve_seconds"] == pytest.approx(0.005)
 
 
 def test_runner_can_disable_history_and_artifacts(
@@ -1627,6 +1724,19 @@ def test_runner_records_usage_cancellation_and_invalid_timeout(
     )
     assert invalid.state == "integration_failure"
     assert invalid.failure_phase == "setup"
+
+    invalid_infinite = runner.run_trial(
+        instruction="invalid",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "invalid-infinite-timeout" / "result.json",
+        trial_id="invalid-infinite-timeout",
+        trial_timeout_seconds=float("inf"),
+    )
+    assert invalid_infinite.state == "integration_failure"
+    assert invalid_infinite.failure_phase == "setup"
+    assert invalid_infinite.policy["trial_timeout_seconds"] == "inf"
 
 
 def test_runner_cleanup_failure_is_durable(
@@ -1804,6 +1914,26 @@ def test_runner_helpers_signal_state_and_main(
         )
         == 1
     )
+    monkeypatch.setattr(
+        runner,
+        "run_trial",
+        lambda **_: SimpleNamespace(state="budget_exhausted"),
+    )
+    assert (
+        runner.main(
+            [
+                "--instruction-file",
+                str(instruction),
+                "--model",
+                "openai/test",
+                "--result-file",
+                str(result),
+                "--trial-id",
+                "trial",
+            ]
+        )
+        == 0
+    )
 
 
 def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
@@ -1830,6 +1960,8 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     )
     wheel = tmp_path / "kedi.whl"
     wheel.touch()
+    tree_sitter_distribution = tmp_path / "tree-sitter-kedi.tar.gz"
+    tree_sitter_distribution.touch()
     command = host._harbor_run_command(
         manifest,
         harbor_command="harbor",
@@ -1837,11 +1969,13 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
         kedi_package=None,
         jobs_dir=tmp_path / "jobs",
         job_name="pilot",
+        tree_sitter_kedi_distribution=tree_sitter_distribution,
     )
     assert command[:3] == ["harbor", "run", "--dataset"]
     assert command[3] == "terminal-bench/terminal-bench-2-1@6"
     assert "kedi.integrations.harbor:KediAgent" in command
     assert f"tree_sitter_kedi_revision={'a' * 40}" in command
+    assert f"tree_sitter_kedi_distribution={tree_sitter_distribution.resolve()}" in command
     assert command.count("--include-task-name") == 2
     task_filters = [
         command[index + 1] for index, value in enumerate(command) if value == "--include-task-name"
@@ -2329,6 +2463,39 @@ def test_host_requires_the_distribution_recorded_by_manifest(tmp_path: Path) -> 
             kedi_package=None,
         )
 
+    tree_sitter_distribution = tmp_path / "tree-sitter-kedi.tar.gz"
+    tree_sitter_distribution.write_bytes(b"exact-tree-sitter-distribution")
+    tree_sitter_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        tree_sitter_kedi_revision="a" * 40,
+        tree_sitter_kedi_distribution_sha256=sha256_file(tree_sitter_distribution),
+        model="openai/gpt-test",
+    )
+    assert (
+        host._resolve_tree_sitter_kedi_distribution(
+            tree_sitter_manifest,
+            distribution=tree_sitter_distribution,
+        )
+        == tree_sitter_distribution.resolve()
+    )
+    with pytest.raises(UsageError, match="requires --tree-sitter-kedi-distribution"):
+        host._resolve_tree_sitter_kedi_distribution(
+            tree_sitter_manifest,
+            distribution=None,
+        )
+    with pytest.raises(ClickException, match="SHA-256"):
+        host._resolve_tree_sitter_kedi_distribution(
+            tree_sitter_manifest,
+            distribution=changed,
+        )
+    with pytest.raises(UsageError, match="does not record"):
+        host._resolve_tree_sitter_kedi_distribution(
+            manifest,
+            distribution=tree_sitter_distribution,
+        )
+
 
 def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
     modules = {
@@ -2442,6 +2609,8 @@ def test_harbor_agent_lifecycle_and_context_projection(
 
     wheel = tmp_path / "kedi.whl"
     wheel.write_bytes(b"wheel")
+    tree_sitter_distribution = tmp_path / "tree-sitter-kedi.tar.gz"
+    tree_sitter_distribution.write_bytes(b"source distribution")
     environment = SimpleNamespace(
         dependencies=(),
         root_calls=[],
@@ -2470,19 +2639,42 @@ def test_harbor_agent_lifecycle_and_context_projection(
         runner_timeout_seconds=10,
         manifest_digest="manifest",
         tree_sitter_kedi_revision="a" * 40,
+        tree_sitter_kedi_distribution=tree_sitter_distribution,
     )
     asyncio.run(agent.install(environment))
     assert environment.uploaded[0][1].endswith("/kedi.whl")
+    assert environment.uploaded[1][1].endswith("/tree-sitter-kedi.tar.gz")
     assert "python_venv" in environment.dependencies
     assert "build_tools" in environment.dependencies
-    assert (
-        "tree-sitter-kedi @ git+https://github.com/kedi-lang/tree-sitter-kedi.git@" + "a" * 40
-    ) in environment.root_calls[-1]["command"]
     install_command = environment.root_calls[-1]["command"]
-    assert "sys.version_info < (3, 10)" in install_command
+    assert "/installed-agent/tree-sitter-kedi.tar.gz" in install_command
+    assert "git+https://github.com/kedi-lang/tree-sitter-kedi.git" not in install_command
+    assert "sys.version_info" not in install_command
+    assert "python3 -m venv /installed-agent/kedi-bootstrap" in install_command
+    assert "python3 -m venv /installed-agent/kedi &&" not in install_command
     assert "uv==0.11.21" in install_command
     assert "uv venv --python 3.11 --managed-python --seed" in install_command
     assert "logfire[httpx]==4.41.0" in install_command
+
+    revision_environment = SimpleNamespace(
+        dependencies=(),
+        root_calls=[],
+        agent_calls=[],
+        configs=[],
+        uploaded=[],
+        upload_file=upload_file,
+    )
+    revision_agent = KediAgent(
+        logs_dir=tmp_path / "revision-logs",
+        model_name="openrouter/test-model",
+        kedi_package="kedi",
+        tree_sitter_kedi_revision="a" * 40,
+    )
+    asyncio.run(revision_agent.install(revision_environment))
+    revision_install_command = revision_environment.root_calls[-1]["command"]
+    assert (
+        f"tree-sitter-kedi @ git+https://github.com/kedi-lang/tree-sitter-kedi.git@{'a' * 40}"
+    ) in revision_install_command
 
     context = SimpleNamespace(metadata=None)
     asyncio.run(agent.run("solve task", environment, context))
@@ -2720,12 +2912,25 @@ def test_harbor_agent_full_configuration_and_failure_projection(
             model_name="openai/test",
             kedi_wheel=tmp_path / "missing.whl",
         )
+    with pytest.raises(FileNotFoundError):
+        KediAgent(
+            logs_dir=tmp_path,
+            model_name="openai/test",
+            tree_sitter_kedi_distribution=tmp_path / "missing.tar.gz",
+        )
     with pytest.raises(ValueError, match="runner_timeout_seconds"):
         KediAgent(
             logs_dir=tmp_path,
             model_name="openai/test",
             kedi_package="kedi",
             runner_timeout_seconds=0,
+        )
+    with pytest.raises(ValueError, match="runner_timeout_seconds"):
+        KediAgent(
+            logs_dir=tmp_path,
+            model_name="openai/test",
+            kedi_package="kedi",
+            runner_timeout_seconds=cast(Any, float("inf")),
         )
 
     assert KediAgent.name() == "kedi"

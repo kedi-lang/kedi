@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 import shlex
@@ -147,6 +148,7 @@ class TerminalSession:
         preview_bytes: int = 32_768,
         output_limit_bytes: int = 512_000_000,
         deadline_monotonic: float | None = None,
+        finalization_reserve_seconds: float = 0.0,
         artifacts_enabled: bool = True,
         retained_process_timeout_seconds: float = 3_600.0,
     ) -> None:
@@ -154,12 +156,20 @@ class TerminalSession:
         self.records_dir = records_dir.resolve()
         self.output_dir = self.records_dir / "terminal"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        if not math.isfinite(command_timeout_seconds) or command_timeout_seconds <= 0:
+            raise ValueError("command_timeout_seconds must be positive")
+        if not math.isfinite(finalization_reserve_seconds) or finalization_reserve_seconds < 0:
+            raise ValueError("finalization_reserve_seconds must not be negative")
         self.command_timeout_seconds = command_timeout_seconds
         self.preview_bytes = preview_bytes
         self.output_limit_bytes = output_limit_bytes
         self.deadline_monotonic = deadline_monotonic
+        self.finalization_reserve_seconds = finalization_reserve_seconds
         self.artifacts_enabled = artifacts_enabled
-        if retained_process_timeout_seconds <= 0:
+        if (
+            not math.isfinite(retained_process_timeout_seconds)
+            or retained_process_timeout_seconds <= 0
+        ):
             raise ValueError("retained_process_timeout_seconds must be positive")
         self.retained_process_timeout_seconds = retained_process_timeout_seconds
         self._lock = threading.RLock()
@@ -210,7 +220,7 @@ class TerminalSession:
         Args:
             argv: Exact executable and arguments, such as ["pytest", "-q"].
             cwd: Working directory inside the assigned task root.
-            timeout_seconds: Optional command timeout bounded by the trial deadline.
+            timeout_seconds: Optional timeout bounded by the configured ceiling and trial deadline.
         """
         normalized = _validated_argv(argv)
         managed = self._start(normalized, cwd=cwd, shell=False, background=False)
@@ -1028,14 +1038,21 @@ class TerminalSession:
             pass
 
     def _bounded_timeout(self, requested: float | None) -> float:
-        timeout = self.command_timeout_seconds if requested is None else requested
-        if timeout <= 0:
+        if requested is not None and (not math.isfinite(requested) or requested <= 0):
             raise ValueError("timeout_seconds must be positive")
+        timeout = (
+            self.command_timeout_seconds
+            if requested is None
+            else min(self.command_timeout_seconds, requested)
+        )
         if self.deadline_monotonic is not None:
             remaining = self.deadline_monotonic - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("trial deadline has elapsed")
-            timeout = min(timeout, remaining)
+            command_window = remaining - self.finalization_reserve_seconds
+            if command_window <= 0:
+                raise TimeoutError("trial finalization reserve has begun")
+            timeout = min(timeout, command_window)
         return timeout
 
     def _process(self, process_id: str) -> _ManagedProcess:
