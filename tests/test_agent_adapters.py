@@ -453,7 +453,9 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
     monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
-    assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
+    assert created_agents == [
+        {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
+    ]
 
 
 def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -3403,7 +3405,9 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
         with kedi_tool_call_context():
             assert adapter.invoke_sync(prompt="raw") == "fresh raw"
 
-    assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
+    assert created_agents == [
+        {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
+    ]
 
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:

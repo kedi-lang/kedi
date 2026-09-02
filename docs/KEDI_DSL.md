@@ -2313,6 +2313,12 @@ The native precedence rules are explicit:
 - caller capabilities are retained and each required Kedi capability is
   appended at most once.
 
+Unless `retries` is supplied explicitly, `PydanticAdapter` allows three
+bounded retries for correctable tool-call failures. This changes only the tool
+retry category; Pydantic AI's output-validation retry budget is unchanged.
+Passing an integer or `AgentRetries` value to the adapter keeps that explicit
+policy intact.
+
 Codex-authenticated Pydantic models can also be built directly. The returned
 object is a normal Pydantic AI `Model`, so native `PydanticAdapter` tools,
 structured outputs, profiles, and effort settings remain active:

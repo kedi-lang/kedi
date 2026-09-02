@@ -452,6 +452,7 @@ class _KediHookCapability(AbstractCapability[Any]):
 
 PydanticApprovalResolution = Literal["kedi", "external"]
 KEDI_APPROVAL_METADATA_KEY = "kedi_approval"
+_DEFAULT_TOOL_RETRIES = 3
 
 
 class _KediPydanticTool(Tool[Any]):
@@ -594,6 +595,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             filtered_settings = pydantic_model_settings(model_settings)
             if filtered_settings:
                 kwargs["model_settings"] = filtered_settings
+        kwargs.setdefault("retries", {"tools": _DEFAULT_TOOL_RETRIES})
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 

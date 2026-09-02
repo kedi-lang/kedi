@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 from pydantic_ai import ModelRetry, ModelSettings, UsageLimits
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -964,6 +965,59 @@ def test_pydantic_adapter_default_usage_limits_preserve_explicit_overrides() -> 
         adapter._run_kwargs({"usage_limits": explicit_limits}, tool_specs=())["usage_limits"]
         is explicit_limits
     )
+
+
+def test_pydantic_adapter_default_tool_retries_recover_from_correctable_calls() -> None:
+    model_calls = 0
+    tool_calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if tool_calls < 3:
+            return ModelResponse(parts=[ToolCallPart("patch", {"attempt": model_calls})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def patch(*, attempt: int) -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        if tool_calls < 3:
+            raise ModelRetry(f"invalid patch attempt {attempt}")
+        return "patched"
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    with adapter.tool_scope((ToolSpec(patch, "patch", risk="read_only"),)):
+        result = adapter.run_sync("Apply the patch.")
+
+    assert result.output == "done"
+    assert model_calls == 4
+    assert tool_calls == 3
+
+
+def test_pydantic_adapter_default_tool_retries_remain_bounded() -> None:
+    tool_calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("patch", {})])
+
+    def patch() -> None:
+        nonlocal tool_calls
+        tool_calls += 1
+        raise ModelRetry("still invalid")
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    with adapter.tool_scope((ToolSpec(patch, "patch", risk="read_only"),)):
+        with pytest.raises(UnexpectedModelBehavior, match="max retries count of 3"):
+            adapter.run_sync("Apply the patch.")
+
+    assert tool_calls == 4
+
+
+def test_pydantic_adapter_explicit_retry_policy_overrides_kedi_default() -> None:
+    adapter = PydanticAdapter(TestModel(), retries=1)
+
+    assert adapter._max_tool_retries == 1
+    assert adapter._max_output_retries == 1
 
 
 @pytest.mark.parametrize("placement", ["constructor", "caller"])
