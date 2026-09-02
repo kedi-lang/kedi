@@ -4,6 +4,7 @@ import inspect
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
+from dataclasses import replace
 from functools import wraps
 from time import monotonic
 from typing import (
@@ -50,6 +51,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturn,
     UserContent,
 )
 from pydantic_ai.models import KnownModelName, Model
@@ -186,15 +188,21 @@ class _KediArtifactCapability(AbstractCapability[Any]):
         args: ValidatedToolArgs,
         result: Any,
     ) -> Any:
-        del ctx, tool_def, args
+        del ctx, args
+        if (tool_def.metadata or {}).get("kedi_codemode_control") is True:
+            return result
         tool = self.adapter._tool_spec_for_call(call.tool_name)
         if tool.artifact_result == "never" or tool_has_artifact_boundary(tool):
             return result
-        return await admit_current_artifact_result(
-            result,
+        payload = result.return_value if isinstance(result, ToolReturn) else result
+        admitted = await admit_current_artifact_result(
+            payload,
             tool_name=call.tool_name,
             call_id=call.tool_call_id,
         )
+        if isinstance(result, ToolReturn):
+            return replace(result, return_value=admitted, content=None)
+        return admitted
 
 
 class _KediRequiredToolCapability(AbstractCapability[Any]):

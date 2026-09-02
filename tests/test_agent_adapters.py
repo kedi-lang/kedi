@@ -18,7 +18,14 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 from pydantic_ai.capabilities import HandleDeferredToolCalls
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturn,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolDenied
@@ -1313,6 +1320,51 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
         == "tool result"
     )
     assert len(calls) == 3
+
+
+def test_pydantic_tool_return_crosses_artifact_boundary_and_keeps_metadata() -> None:
+    observed: list[ToolReturnPart] = []
+    step = 0
+
+    def respond(messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        nonlocal step
+        step += 1
+        if step == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("large_result", {}, tool_call_id="native-call")]
+            )
+        observed.extend(
+            part
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "large_result"
+        )
+        return ModelResponse(parts=[TextPart("done")])
+
+    def large_result() -> ToolReturn:
+        return ToolReturn(
+            return_value="x" * 10_000,
+            metadata={"source": "native-tool"},
+        )
+
+    manager = ArtifactManager(session_id="pydantic-tool-return")
+    adapter = PydanticAdapter(FunctionModel(respond), tools=[large_result])
+    try:
+        with (
+            artifact_admission_scope(
+                manager=manager,
+                policy=ArtifactPolicy(threshold_bytes=100),
+            ),
+            adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        ):
+            result = adapter.run_sync("Call the large result tool.")
+
+        assert result.output == "done"
+        assert len(observed) == 1
+        assert observed[0].content["ref_id"] == "tool_call_result_1"
+        assert observed[0].metadata == {"source": "native-tool"}
+    finally:
+        manager.close()
 
 
 def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id() -> None:

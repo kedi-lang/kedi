@@ -240,11 +240,14 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
                 name=name,
                 description=description,
                 parameters_json_schema=schema,
-                metadata=(
-                    {"code_arg_name": "code", "code_arg_language": "python"}
-                    if kind == "execute"
-                    else None
-                ),
+                metadata={
+                    "kedi_codemode_control": True,
+                    **(
+                        {"code_arg_name": "code", "code_arg_language": "python"}
+                        if kind == "execute"
+                        else {}
+                    ),
+                },
                 sequential=True,
             ),
             max_retries=3,
