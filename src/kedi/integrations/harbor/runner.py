@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import argparse
 import hashlib
 import json
@@ -462,7 +464,9 @@ def _configure_logfire() -> bool:
     if os.getenv("KEDI_HARBOR_LOGFIRE") != "1":
         return False
     import logfire
-    from opentelemetry.instrumentation.kedi import KediInstrumentor
+    from opentelemetry.instrumentation.kedi import (  # ty: ignore[unresolved-import]
+        KediInstrumentor,
+    )
 
     logfire.configure(service_name="kedi", send_to_logfire="if-token-present")
     KediInstrumentor().instrument(

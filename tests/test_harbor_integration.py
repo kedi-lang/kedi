@@ -907,7 +907,10 @@ def test_terminal_rejects_invalid_process_retention(terminal: TerminalSession) -
 
 
 def test_terminal_retained_service_survives_agent_deadline(tmp_path: Path) -> None:
-    agent_deadline = time.monotonic() + 1.5
+    # Give the real supervisor enough time to start even on a loaded CI host. Once it is
+    # retained, advance the session's agent deadline directly; retained lifetime is owned by
+    # the execution deadline and must not depend on wall-clock scheduling variance in this test.
+    agent_deadline = time.monotonic() + 10
     terminal = TerminalSession(
         root=tmp_path,
         records_dir=tmp_path / "retained",
@@ -918,8 +921,8 @@ def test_terminal_retained_service_survives_agent_deadline(tmp_path: Path) -> No
         process = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
         process_id = process["process_id"]
         terminal.retain_process(process_id)
+        terminal.deadline_monotonic = time.monotonic() - 1
         terminal.finish_session()
-        time.sleep(max(0, agent_deadline - time.monotonic()) + 0.1)
         assert terminal.process_status(process_id)["status"] == "running"
         managed = terminal._process(process_id)
         assert managed.retention_deadline_monotonic > agent_deadline

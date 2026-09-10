@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import threading
 from contextlib import AbstractContextManager, contextmanager
+from contextvars import ContextVar
 from typing import Any, Dict, Iterator, List, Sequence
 
 from kedi.agent_adapter import AgentAdapter
@@ -36,16 +37,35 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         # parallel engine; guard the grouped appends so concurrent calls don't interleave.
         self._record_lock = threading.Lock()
         self.default_model_value = default_model
-        self.last_effective_model: str | None = default_model
-        self.last_effective_effort: str | None = None
-        self.last_effective_settings: dict[str, Any] = {}
-        self.last_effective_mcp_commands: tuple[str | None, ...] = ()
+        self._effective_profile: ContextVar[
+            tuple[str | None, str | None, dict[str, Any], tuple[str | None, ...]]
+        ] = ContextVar(
+            f"mock_adapter_profile_{id(self)}",
+            default=(default_model, None, {}, ()),
+        )
         self.model_calls: list[str | None] = []
         self.effort_calls: list[str | None] = []
         self.settings_calls: list[dict[str, Any]] = []
         self.instruction_calls: list[str | None] = []
         self.tool_calls: list[tuple[str, ...]] = []
         self.mcp_calls: list[tuple[str | None, ...]] = []
+        self.request_calls: list[str] = []
+
+    @property
+    def last_effective_model(self) -> str | None:
+        return self._effective_profile.get()[0]
+
+    @property
+    def last_effective_effort(self) -> str | None:
+        return self._effective_profile.get()[1]
+
+    @property
+    def last_effective_settings(self) -> dict[str, Any]:
+        return self._effective_profile.get()[2]
+
+    @property
+    def last_effective_mcp_commands(self) -> tuple[str | None, ...]:
+        return self._effective_profile.get()[3]
 
     def default_model(self) -> str | None:
         return self.default_model_value
@@ -62,30 +82,22 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
 
     @contextmanager
     def profile_override(self, profile: AgentProfile) -> Iterator[None]:
-        previous = self.last_effective_model
-        previous_effort = self.last_effective_effort
-        previous_settings = self.last_effective_settings
-        previous_mcp = self.last_effective_mcp_commands
-        if profile.model is not None:
-            self.last_effective_model = profile.model
-        if profile.effort is not None:
-            self.last_effective_effort = profile.effort
-        if profile.settings:
-            self.last_effective_settings = {
-                **self.last_effective_settings,
-                **profile.settings,
-            }
-        if profile.mcp_servers:
-            self.last_effective_mcp_commands = tuple(
-                server.command for server in profile.mcp_servers
-            )
+        model, effort, settings, mcp_commands = self._effective_profile.get()
+        effective = (
+            profile.model if profile.model is not None else model,
+            profile.effort if profile.effort is not None else effort,
+            {**settings, **profile.settings} if profile.settings else settings,
+            (
+                tuple(server.command for server in profile.mcp_servers)
+                if profile.mcp_servers
+                else mcp_commands
+            ),
+        )
+        token = self._effective_profile.set(effective)
         try:
             yield
         finally:
-            self.last_effective_model = previous
-            self.last_effective_effort = previous_effort
-            self.last_effective_settings = previous_settings
-            self.last_effective_mcp_commands = previous_mcp
+            self._effective_profile.reset(token)
 
     async def produce(
         self,
@@ -105,6 +117,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
         **kwargs: Any,
     ) -> AttrDict[str, Any]:
         with self._record_lock:
+            self.request_calls.append(template)
             self.model_calls.append(self.last_effective_model)
             self.effort_calls.append(self.last_effective_effort)
             self.settings_calls.append(dict(self.last_effective_settings))
@@ -149,6 +162,7 @@ class MockAdapter(AgentAdapter[AttrDict[str, Any]]):
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         with self._record_lock:
+            self.request_calls.append(prompt)
             self.model_calls.append(self.last_effective_model)
             self.effort_calls.append(self.last_effective_effort)
             self.settings_calls.append(dict(self.last_effective_settings))

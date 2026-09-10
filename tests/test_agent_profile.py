@@ -1117,7 +1117,13 @@ def test_block_state_model_within_procedure_body() -> None:
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
     rt._invoke_procedure(rt._procedures["foo"], [])
-    assert adapter.model_calls == ["default-model", "inner-model"]
+    models_by_request = dict(zip(adapter.request_calls, adapter.model_calls, strict=True))
+    assert next(model for request, model in models_by_request.items() if "first" in request) == (
+        "default-model"
+    )
+    assert next(model for request, model in models_by_request.items() if "second" in request) == (
+        "inner-model"
+    )
 
 
 def test_block_state_system_within_procedure_body() -> None:
@@ -1289,10 +1295,13 @@ def test_settings_applies_to_top_level_prompt_and_procedure_body() -> None:
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
     rt.run_main()
-    assert adapter.settings_calls == [
-        {"temperature": 0.2},
-        {"temperature": 0.2, "max_tokens": 10},
-    ]
+    settings_by_request = dict(zip(adapter.request_calls, adapter.settings_calls, strict=True))
+    assert next(
+        settings for request, settings in settings_by_request.items() if "first" in request
+    ) == {"temperature": 0.2}
+    assert next(
+        settings for request, settings in settings_by_request.items() if "second" in request
+    ) == {"temperature": 0.2, "max_tokens": 10}
 
 
 def test_backtick_effort_applies_in_profile_and_body() -> None:

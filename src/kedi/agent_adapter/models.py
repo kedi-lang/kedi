@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -45,7 +47,7 @@ def codex_responses_model(
 
     model_name = _codex_model_name(model_id)
     try:
-        import codex_auth_helper
+        import codex_auth_helper  # ty: ignore[unresolved-import]  # Optional codex-model extra.
     except ModuleNotFoundError as exc:
         if exc.name != "codex_auth_helper":
             raise

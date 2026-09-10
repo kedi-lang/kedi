@@ -562,7 +562,7 @@ class KediAgent(BaseInstalledAgent):
         if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
             raise RuntimeError("Codex auth source is unavailable")
 
-        from codex_auth_helper import (
+        from codex_auth_helper import (  # ty: ignore[unresolved-import]  # Optional TB extra.
             CodexAuthConfig,
             CodexAuthState,
             CodexAuthStore,

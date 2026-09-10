@@ -365,7 +365,19 @@ def test_profile_history_policy_enables_shared_context() -> None:
 
 
 def test_nested_history_disabled_does_not_read_or_mutate_outer_checkpoint() -> None:
-    adapter = StatefulHistoryAdapter()
+    class PromptStateAdapter(StatefulHistoryAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.states_by_prompt: dict[str, dict[str, Any] | None] = {}
+
+        def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
+            conversation = self._conversation.get()
+            self.states_by_prompt[prompt] = (
+                None if conversation is None else dict(conversation.resume_state)
+            )
+            return super().invoke_sync(prompt=prompt, **kwargs)
+
+    adapter = PromptStateAdapter()
     source = """
 @stateless_call():
     > history: disabled
@@ -381,7 +393,11 @@ def test_nested_history_disabled_does_not_read_or_mutate_outer_checkpoint() -> N
     runtime = compile_program(parse_program(source), adapter=adapter)
 
     assert runtime.run_main() == "response-2"
-    assert adapter.resume_states == [{}, None, {"turn": 1}]
+    assert adapter.states_by_prompt == {
+        "First.": {},
+        "Middle.": None,
+        "Second.": {"turn": 1},
+    }
 
 
 def test_failed_history_turn_does_not_commit_implicit_state() -> None:
