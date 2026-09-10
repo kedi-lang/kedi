@@ -3845,7 +3845,7 @@ def test_harbor_agent_bounds_unresponsive_remote_finalization(
         try:
             done, _ = await asyncio.wait({task}, timeout=0.5)
             assert task in done, "remote cleanup has no host-side deadline"
-            with pytest.raises(TimeoutError):
+            with pytest.raises(asyncio.TimeoutError):
                 task.result()
             assert cleaned
         finally:
