@@ -5,6 +5,10 @@ class ArtifactError(RuntimeError):
     """Base error for artifact lifecycle and storage operations."""
 
 
+class ArtifactInputError(ArtifactError, ValueError):
+    """Raised when artifact read/search arguments need correction."""
+
+
 class ArtifactPolicyError(ArtifactError, ValueError):
     """Raised when artifact policy configuration is invalid."""
 
@@ -67,3 +71,17 @@ class ArtifactCodeAccessError(ArtifactCodeError, PermissionError):
 
 class ArtifactCodeBudgetError(ArtifactCodeError):
     """Raised when sandboxed artifact processing exceeds a host budget."""
+
+
+def artifact_tool_error_message(exc: BaseException | None) -> str | None:
+    """Describe correctable tool requests without masking storage/runtime failures."""
+
+    if isinstance(exc, ArtifactInputError):
+        return f"Artifact request rejected: {exc}. Correct the arguments and retry."
+    if isinstance(exc, (ArtifactNotFoundError, ArtifactExpiredError, ArtifactReleasedError)):
+        return f"Artifact reference unavailable: {exc}. Use an active artifact ref_id."
+    if isinstance(exc, ArtifactCodeError):
+        return (
+            f"{exc}. Correct the artifact Python using the documented helper signatures and retry."
+        )
+    return None

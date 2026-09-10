@@ -11,6 +11,7 @@ from pathlib import Path
 from types import FrameType
 from typing import Any, Mapping, Sequence
 
+from .process_groups import finish_process_group
 from .records import atomic_write_json, redact_text
 
 
@@ -88,6 +89,7 @@ class _ProcessSupervisor:
             time.sleep(0.05)
 
         returncode = child.wait()
+        finish_process_group(child.pid)
         self._close_child_input()
         for reader in readers:
             reader.join(timeout=5)

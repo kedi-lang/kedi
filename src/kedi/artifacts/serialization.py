@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from .errors import ArtifactSerializationError
+from .errors import ArtifactInputError, ArtifactSerializationError
 
 JsonPointerRange = tuple[int, int, int, int]
 _MAX_JSON_POINTER_INDEX_ENTRIES = 100_000
@@ -211,16 +211,24 @@ def resolve_json_pointer(value: Any, pointer: str) -> Any:
     if pointer == "":
         return value
     if not pointer.startswith("/"):
-        raise ValueError("artifact JSON path must be an RFC 6901 pointer")
+        raise ArtifactInputError("artifact JSON path must be an RFC 6901 pointer")
     current = value
     for raw_part in pointer.split("/")[1:]:
         part = raw_part.replace("~1", "/").replace("~0", "~")
         if isinstance(current, dict):
-            current = current[part]
+            try:
+                current = current[part]
+            except KeyError as exc:
+                raise ArtifactInputError(f"artifact JSON path {pointer!r} was not found") from exc
         elif isinstance(current, list):
-            current = current[int(part)]
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError) as exc:
+                raise ArtifactInputError(f"artifact JSON path {pointer!r} was not found") from exc
         else:
-            raise ValueError(f"artifact JSON path cannot descend through {type(current).__name__}")
+            raise ArtifactInputError(
+                f"artifact JSON path cannot descend through {type(current).__name__}"
+            )
     return current
 
 

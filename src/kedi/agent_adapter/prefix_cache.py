@@ -336,7 +336,9 @@ def langchain_cache_settings(
     model_kwargs = (
         dict(configured_model_kwargs) if isinstance(configured_model_kwargs, Mapping) else {}
     )
-    model_kwargs.setdefault("prompt_cache_key", conversation.cache_key)
+    model_kwargs.setdefault(
+        "prompt_cache_key", result.get("prompt_cache_key", conversation.cache_key)
+    )
     result["model_kwargs"] = model_kwargs
     if policy.continuation and not _langchain_response_storage_disabled(result, model):
         result.setdefault("use_previous_response_id", True)
@@ -351,10 +353,13 @@ def _langchain_provider(model: str | object) -> str:
         return _normalize_provider(provider)
     module = type(model).__module__
     name = type(model).__name__
+    if any(
+        base.__module__.startswith("langchain_openai") and base.__name__ == "ChatOpenAI"
+        for base in type(model).__mro__
+    ):
+        return _openai_compatible_provider(model)
     if module.startswith("langchain_openrouter") and name == "ChatOpenRouter":
         return "openrouter"
-    if module.startswith("langchain_openai") and name == "ChatOpenAI":
-        return _openai_compatible_provider(model)
     if module.startswith("langchain_openai") and name == "AzureChatOpenAI":
         return "azure"
     if module.startswith("langchain_anthropic") and name == "ChatAnthropic":

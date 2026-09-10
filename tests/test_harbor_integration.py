@@ -4,12 +4,14 @@ import asyncio
 import builtins
 import importlib
 import json
+import logging
 import os
 import signal
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -22,7 +24,12 @@ from click import ClickException, UsageError
 from click.testing import CliRunner
 
 from kedi.agent_adapter.approval import ApprovalRequest
-from kedi.agent_adapter.hooks import PostToolUseEvent
+from kedi.agent_adapter.hooks import (
+    PostToolUseEvent,
+    PostToolUseFailureEvent,
+    PreToolUseRequest,
+    UserPromptSubmitRequest,
+)
 from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
 from kedi.agent_adapter.utils import python_callable_tool_spec
 from kedi.integrations.harbor import host, runner
@@ -97,6 +104,27 @@ def test_manifest_is_immutable_and_digest_validated(tmp_path: Path) -> None:
         tree_sitter_kedi_distribution_sha256="b" * 64,
     )
     assert source_manifest.material_digest != manifest.material_digest
+    assert (
+        replace(manifest, kedi_otel_distribution_sha256="d" * 64).material_digest
+        != manifest.material_digest
+    )
+
+    codex_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        model="codex/gpt-test",
+        codex_auth_helper_distribution_sha256="c" * 64,
+    )
+    assert (
+        codex_manifest.material_digest
+        != RunManifest(
+            harbor_revision="harbor-commit",
+            kedi_commit="kedi-commit",
+            kedi_dirty=False,
+            model="codex/gpt-test",
+        ).material_digest
+    )
 
     immutable_path = tmp_path / "immutable.json"
     manifest.write(immutable_path)
@@ -121,6 +149,28 @@ def test_manifest_is_immutable_and_digest_validated(tmp_path: Path) -> None:
         ({"dynamic_workflows": True}, "does not define subagents"),
         ({"artifact_threshold_bytes": 0}, "positive"),
         ({"artifact_quota_bytes": 0}, "positive"),
+        ({"model_request_limit": 0}, "positive"),
+        ({"model_cumulative_input_tokens": 0}, "positive"),
+        ({"history_archive_threshold_tokens": 0}, "positive"),
+        ({"history_archive_preserve_tokens": 0}, "positive"),
+        (
+            {
+                "history_archive_threshold_tokens": 10_000,
+                "history_archive_preserve_tokens": 10_000,
+            },
+            "lower than",
+        ),
+        (
+            {"artifacts": False, "history_archive_threshold_tokens": 32_000},
+            "requires artifacts",
+        ),
+        (
+            {
+                "compaction_mode": "native",
+                "history_archive_threshold_tokens": 32_000,
+            },
+            "mutually exclusive",
+        ),
     ],
 )
 def test_harness_policy_rejects_invalid_values(kwargs: dict[str, Any], message: str) -> None:
@@ -133,6 +183,12 @@ def test_harness_policy_rejects_unknown_compaction_and_stateless_compaction() ->
         HarnessPolicy(compaction_mode=cast(Any, "unknown"))
     with pytest.raises(ValueError, match="requires history"):
         HarnessPolicy(history=False, prefix_cache=False, compaction_mode="native")
+    with pytest.raises(ValueError, match="requires history"):
+        HarnessPolicy(
+            history=False,
+            prefix_cache=False,
+            history_archive_threshold_tokens=32_000,
+        )
 
 
 @pytest.mark.parametrize(
@@ -193,6 +249,15 @@ def test_records_are_atomic_and_secrets_are_redacted(
             "mutually exclusive",
         ),
         ({"kedi_wheel_sha256": "ABC"}, "lowercase SHA-256"),
+        (
+            {"codex_auth_helper_distribution_sha256": "ABC"},
+            "lowercase SHA-256",
+        ),
+        (
+            {"codex_auth_helper_distribution_sha256": "0" * 64},
+            "requires a codex/ model",
+        ),
+        ({"kedi_otel_distribution_sha256": "ABC"}, "lowercase SHA-256"),
         ({"tree_sitter_kedi_revision": "ABC"}, "lowercase Git revision"),
         (
             {"tree_sitter_kedi_distribution_sha256": "ABC"},
@@ -326,6 +391,18 @@ def test_terminal_runs_argv_shell_binary_and_bounded_output(terminal: TerminalSe
     argv = terminal.run_command([sys.executable, "-c", "print('hello')"])
     assert argv["exit_code"] == 0
     assert argv["stdout"] == "hello\n"
+    assert set(argv) == {
+        "process_id",
+        "exit_code",
+        "duration_seconds",
+        "stdout",
+        "stderr",
+    }
+    recorded = terminal.summary()["records"][0]
+    assert "print(" in recorded["command"]
+    assert "hello" in recorded["command"]
+    assert recorded["status"] == "finished"
+    assert recorded["stdout_path"].endswith("stdout.bin")
 
     shell = terminal.run_shell("printf 'left\\n'; printf 'right\\n' >&2")
     assert shell["exit_code"] == 0
@@ -339,11 +416,136 @@ def test_terminal_runs_argv_shell_binary_and_bounded_output(terminal: TerminalSe
     assert page["encoding"] == "base64"
     assert page["complete"] is True
 
+    complete_output = terminal.run_command([sys.executable, "-c", "print('b' * 49)"])
+    assert complete_output["stdout"] == "b" * 49 + "\n"
+    assert "stdout_truncated" not in complete_output
+
     long_output = terminal.run_command([sys.executable, "-c", "print('a' * 100)"])
     assert long_output["stdout_truncated"] is True
+    assert long_output["output_excerpt"] == "head_tail"
+    continuation = long_output["output_continuations"]["stdout"]
+    assert continuation == {
+        "tool": "read_process_output",
+        "arguments": {
+            "process_id": long_output["process_id"],
+            "stream": "stdout",
+            "offset_bytes": 0,
+            "max_bytes": 65_536,
+        },
+    }
     assert "omitted" in long_output["stdout"]
+    full_page = terminal.read_process_output(**continuation["arguments"])
+    assert full_page["complete"] is True
+    assert full_page["content"].strip() == "a" * 100
     stream = terminal.stream_process_output(long_output["process_id"], "stdout")
     assert "".join(stream.iter_chunks()).strip() == "a" * 100
+
+
+def test_terminal_waits_for_background_process_without_stopping_on_timeout(
+    terminal: TerminalSession,
+) -> None:
+    process = terminal.start_process(
+        [sys.executable, "-c", "import time; time.sleep(0.15); print('done')"]
+    )
+    process_id = cast(str, process["process_id"])
+
+    running = terminal.wait_process(process_id, timeout_seconds=0.02)
+    assert running["wait_completed"] is False
+    assert running["status"] == "running"
+    assert "stdout" not in running
+
+    finished = terminal.wait_process(process_id, timeout_seconds=2)
+    assert finished["wait_completed"] is True
+    assert finished["status"] == "finished"
+    assert finished["stdout"] == "done\n"
+
+
+def test_terminal_can_use_a_broader_explicit_cwd_root(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    external = tmp_path / "external"
+    workspace.mkdir()
+    external.mkdir()
+    terminal = TerminalSession(
+        root=workspace,
+        cwd_root=tmp_path,
+        records_dir=tmp_path / "records",
+    )
+    try:
+        result = terminal.run_command(
+            [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=str(external)
+        )
+        assert result["stdout"].strip() == str(external)
+        with pytest.raises(PermissionError, match="allowed cwd root"):
+            terminal.run_command([sys.executable, "-c", "pass"], cwd=str(tmp_path.parent))
+    finally:
+        terminal.close()
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr"])
+@pytest.mark.parametrize("background", [False, True])
+def test_terminal_artifact_preview_preserves_full_log_route(
+    tmp_path: Path, stream: str, background: bool
+) -> None:
+    from kedi.artifacts import ArtifactHandle, ArtifactManager, ArtifactPolicy
+
+    terminal = TerminalSession(root=tmp_path, records_dir=tmp_path / "records")
+    manager = ArtifactManager(session_id=f"terminal-route-{stream}")
+    try:
+        payload = "H" * 40_000 + "middle-evidence" + "T" * 60_000
+        fd = 1 if stream == "stdout" else 2
+        argv = [
+            sys.executable,
+            "-c",
+            f"import os; os.write({fd}, b'H'*40000+b'middle-evidence'+b'T'*60000)",
+        ]
+        if background:
+            started = terminal.start_process(argv)
+            terminal.wait_process(started["process_id"], timeout_seconds=3)
+            result = terminal.process_status(started["process_id"])
+        else:
+            result = terminal.run_command(argv)
+        stored = manager.artifactize(
+            result,
+            policy=ArtifactPolicy.patch(
+                {"enabled": True, "threshold_bytes": 16_384, "preview_chars": 1200}
+            ),
+        )
+        assert isinstance(stored, ArtifactHandle)
+        continuation = result["output_continuations"][stream]
+        assert "read_process_output" in stored.ref.preview
+        visible_continuations, _ = json.JSONDecoder().raw_decode(
+            stored.ref.preview.split('"output_continuations":', 1)[1].lstrip()
+        )
+        assert visible_continuations[stream] == continuation
+        assert result["process_id"] in stored.ref.preview
+        assert "head_tail" in stored.ref.preview
+        assert "middle-evidence" not in result[stream]
+        arguments = dict(continuation["arguments"])
+        pages: list[str] = []
+        while True:
+            page = terminal.read_process_output(**arguments)
+            pages.append(page["content"])
+            if page["complete"]:
+                break
+            arguments["offset_bytes"] = page["next_offset_bytes"]
+        assert "".join(pages) == payload
+    finally:
+        manager.close()
+        terminal.close()
+
+
+def test_waiting_again_cannot_revalidate_old_verification(terminal: TerminalSession) -> None:
+    verifier = terminal.root / "pytest"
+    verifier.write_text("#!/bin/sh\nexit 0\n")
+    verifier.chmod(0o700)
+    process = terminal.start_process([str(verifier)])
+    finished = terminal.wait_process(process["process_id"], timeout_seconds=10)
+    assert finished["wait_completed"] is True
+    assert finished["exit_code"] == 0
+    assert terminal.verification_status()["state"] == "passed"
+    terminal.invalidate_verification("subsequent edit")
+    terminal.wait_process(process["process_id"], timeout_seconds=2)
+    assert terminal.verification_status()["state"] == "stale"
 
 
 def test_terminal_background_lifecycle_and_verification(terminal: TerminalSession) -> None:
@@ -391,6 +593,130 @@ def test_terminal_background_lifecycle_and_verification(terminal: TerminalSessio
         )
     )
     assert terminal.verification_status()["state"] == "stale"
+
+
+def test_terminal_records_bounded_redacted_tool_lifecycle_without_breaking_hooks(
+    terminal: TerminalSession,
+) -> None:
+    common: dict[str, Any] = {
+        "run_id": "run",
+        "adapter_shortname": "pydantic",
+        "tool_call_id": "patch-call",
+        "tool_name": "apply_patch",
+        "origin": "kedi",
+        "arguments": {
+            "operation": "update",
+            "content": "x" * 5_000,
+            "api_key": "fixture-secret-value",
+        },
+        "metadata": {"authorization": "Bearer abcdefghijklmnopqrstuvwxyz"},
+    }
+    terminal.hook_handler(PreToolUseRequest(sequence=1, **common))
+    terminal.hook_handler(PostToolUseEvent(sequence=2, result={"updated": True}, **common))
+    terminal.hook_handler(
+        PostToolUseFailureEvent(
+            sequence=3,
+            error_type="ValueError",
+            error_message="failed with sk-this-must-be-redacted",
+            duration_seconds=0.25,
+            interrupted=False,
+            **common,
+        )
+    )
+
+    records = [
+        json.loads(line)
+        for line in (terminal.records_dir / "tool-events.jsonl").read_text().splitlines()
+    ]
+    assert [record["event"] for record in records] == [
+        "pre_tool_use",
+        "post_tool_use",
+        "post_tool_use_failure",
+    ]
+    assert sum(record["event"] == "pre_tool_use" for record in records) == 1
+    assert sum(record["event"] == "post_tool_use" for record in records) == 1
+    assert records[0]["arguments"]["api_key"] == "[REDACTED]"
+    assert records[0]["arguments"]["content"]["truncated"] is True
+    assert "fixture-secret-value" not in json.dumps(records)
+    assert "abcdefghijklmnopqrstuvwxyz" not in json.dumps(records)
+    assert "sk-this-must" not in json.dumps(records)
+    assert terminal.summary()["tool_events"] == 3
+    assert terminal.summary()["tool_failures"] == 1
+
+    terminal._tool_events_path = terminal.root
+    terminal.hook_handler(PreToolUseRequest(sequence=4, **common))
+    assert terminal.summary()["tool_audit_errors"] == 1
+
+    class BrokenRepresentation:
+        def __repr__(self) -> str:
+            raise RuntimeError("audit serialization failed")
+
+    terminal.hook_handler(PostToolUseEvent(sequence=5, result=BrokenRepresentation(), **common))
+    assert terminal.summary()["tool_audit_errors"] == 2
+
+
+def test_terminal_tool_audit_serializes_supported_values_and_flushes_fail_open(
+    terminal: TerminalSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert harbor_terminal._audit_value(None) is None
+    assert harbor_terminal._audit_value(b"short") == {
+        "kind": "bytes",
+        "size_bytes": 5,
+        "sha256": "f9b0078b5df596d2ea19010c001bbd009e651de2c57e8fb7e355f31eb9d3f739",
+        "preview": "short",
+        "truncated": False,
+    }
+    long_bytes = b"x" * 5_000
+    assert harbor_terminal._audit_value(long_bytes)["truncated"] is True
+    assert harbor_terminal._audit_value(Path("fixture.txt")) == "fixture.txt"
+    assert harbor_terminal._audit_value({"nested": {"value": 1}}, depth=4) == {
+        "kind": "depth_limit",
+        "type": "dict",
+    }
+
+    mapping = {f"item-{index}": index for index in range(33)}
+    mapped = harbor_terminal._audit_value(mapping)
+    assert mapped["__audit_truncated_items__"] == 1
+    assert "item-32" not in mapped
+    long_key = "prefix-" + "x" * 5_000 + "-suffix"
+    audited_long_key = next(iter(harbor_terminal._audit_value({long_key: 1})))
+    assert len(audited_long_key) == 256
+    assert audited_long_key.startswith("prefix-")
+    assert audited_long_key.endswith("-suffix")
+    assert "sha256:" in audited_long_key
+    assert harbor_terminal._audit_value({"sk-this-must-be-redacted": 1}) == {"[REDACTED]": 1}
+    assert harbor_terminal._audit_value(1.5) == 1.5
+    assert harbor_terminal._audit_value(float("nan")) == {"kind": "float", "value": "nan"}
+    assert harbor_terminal._audit_value(float("inf")) == {"kind": "float", "value": "inf"}
+    assert harbor_terminal._audit_value((1, 2)) == [1, 2]
+    sequence = harbor_terminal._audit_value(tuple(range(33)))
+    assert sequence == {
+        "kind": "sequence",
+        "total_items": 33,
+        "items": list(range(32)),
+        "truncated": True,
+    }
+    assert harbor_terminal._audit_value(SimpleNamespace(value=1)) == "namespace(value=1)"
+
+    terminal.hook_handler(
+        UserPromptSubmitRequest(
+            run_id="run",
+            sequence=1,
+            adapter_shortname="pydantic",
+            content="ignored",
+        )
+    )
+    assert terminal.summary()["tool_events"] == 0
+
+    terminal._tool_events_path.write_text("{}\n")
+
+    def fail_fsync(_: int) -> None:
+        raise OSError("fixture fsync failure")
+
+    monkeypatch.setattr(harbor_terminal.os, "fsync", fail_fsync)
+    terminal._flush_tool_events()
+    assert terminal.summary()["tool_audit_errors"] == 1
 
 
 def test_terminal_retains_only_explicit_execution_processes(tmp_path: Path) -> None:
@@ -512,6 +838,59 @@ def test_retained_service_survives_terminal_owner_process_exit(tmp_path: Path) -
                 pass
 
 
+@pytest.mark.parametrize("background", [False, True])
+@pytest.mark.parametrize("ignore_term", [False, True])
+def test_terminal_reaps_pipe_owners_after_leader_exits(
+    terminal: TerminalSession,
+    tmp_path: Path,
+    background: bool,
+    ignore_term: bool,
+) -> None:
+    child_source = (
+        "import os, signal, time; from pathlib import Path; "
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_term else "")
+        + "Path('heartbeat').touch(); Path('ready').touch(); print('child-ready', flush=True); "
+        "exec('for _ in range(2250):\\n "
+        'with Path("heartbeat").open("ab", buffering=0) as h: h.write(b".")\\n '
+        "time.sleep(0.02)')"
+    )
+    parent_source = (
+        "import os, subprocess, sys, time; from pathlib import Path; "
+        f"subprocess.Popen([sys.executable, '-c', {child_source!r}]); "
+        "Path('group').write_text(str(os.getpgrp())); "
+        "exec('while not Path(\"ready\").exists(): time.sleep(0.01)'); "
+        "time.sleep(0.15); print('parent-done', flush=True); sys.exit(7)"
+    )
+    started = time.monotonic()
+    try:
+        if background:
+            process = terminal.start_process([sys.executable, "-c", parent_source])
+            process_id = cast(str, process["process_id"])
+            while terminal.process_status(process_id)["status"] == "running":
+                assert time.monotonic() - started < 4, "orphaned pipes delayed supervisor exit"
+                time.sleep(0.02)
+            result = terminal.process_status(process_id)
+        else:
+            result = terminal.run_command([sys.executable, "-c", parent_source])
+            process_id = cast(str, result["process_id"])
+        assert time.monotonic() - started < 4, "orphaned pipes delayed foreground completion"
+        assert result["exit_code"] == 7
+        output = terminal.read_process_output(process_id)
+        assert "child-ready" in output["content"]
+        assert "parent-done" in output["content"]
+        heartbeat = tmp_path / "heartbeat"
+        size = heartbeat.stat().st_size
+        time.sleep(0.1)
+        assert heartbeat.stat().st_size == size, "descendant survived its process-group owner"
+    finally:
+        group = tmp_path / "group"
+        if group.exists():
+            try:
+                os.killpg(int(group.read_text()), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
 def test_terminal_rejects_invalid_process_retention(terminal: TerminalSession) -> None:
     foreground = terminal.run_command([sys.executable, "-c", "print('done')"])
     with pytest.raises(ValueError, match="background"):
@@ -525,6 +904,29 @@ def test_terminal_rejects_invalid_process_retention(terminal: TerminalSession) -
         time.sleep(0.01)
     with pytest.raises(RuntimeError, match="no longer running"):
         terminal.retain_process(process_id)
+
+
+def test_terminal_retained_service_survives_agent_deadline(tmp_path: Path) -> None:
+    agent_deadline = time.monotonic() + 1.5
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "retained",
+        agent_deadline_monotonic=agent_deadline,
+        retained_process_timeout_seconds=20,
+    )
+    try:
+        process = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
+        process_id = process["process_id"]
+        terminal.retain_process(process_id)
+        terminal.finish_session()
+        time.sleep(max(0, agent_deadline - time.monotonic()) + 0.1)
+        assert terminal.process_status(process_id)["status"] == "running"
+        managed = terminal._process(process_id)
+        assert managed.retention_deadline_monotonic > agent_deadline
+        with pytest.raises(TimeoutError, match="deadline"):
+            terminal._bounded_timeout(None)
+    finally:
+        terminal.close()
 
 
 def test_terminal_supervisor_start_and_state_edge_cases(
@@ -653,6 +1055,19 @@ def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -
     invalid_utf8 = tmp_path / "invalid-utf8.bin"
     invalid_utf8.write_bytes(b"\xff\xfe")
     assert harbor_terminal._preview_file(invalid_utf8, 8) == ("\ufffd\ufffd", False, True, 2)
+    complete_preview = tmp_path / "complete-preview.bin"
+    complete_preview.write_bytes(b"abcdefghijkl")
+    assert harbor_terminal._preview_file(complete_preview, 8) == (
+        "abcdefghijkl",
+        False,
+        False,
+        12,
+    )
+    truncated_preview = tmp_path / "truncated-preview.bin"
+    truncated_preview.write_bytes(b"abcdefghijklmnopqrst")
+    rendered, truncated, invalid, total = harbor_terminal._preview_file(truncated_preview, 8)
+    assert (truncated, invalid, total) == (True, False, 20)
+    assert "4 bytes omitted" in rendered
 
     class BrokenClose:
         def close(self) -> None:
@@ -953,7 +1368,6 @@ def test_terminal_timeout_path_bounds_and_missing_process(
         timeout_seconds=0.05,
     )
     assert timed_out["timed_out"] is True
-    assert timed_out["status"] == "finished"
     with pytest.raises(PermissionError, match="escapes"):
         terminal.run_command(["true"], cwd=str(tmp_path.parent))
     tool_spec = python_callable_tool_spec("run_command", terminal.run_command)
@@ -985,7 +1399,6 @@ def test_terminal_output_limit_kills_a_process_that_ignores_sigterm(tmp_path: Pa
             ],
             timeout_seconds=5,
         )
-        assert result["status"] == "finished"
         assert result["output_limited"] is True
         assert result["stdout_bytes"] == 1_024
         assert result["exit_code"] != 0
@@ -1049,10 +1462,10 @@ def test_terminal_rejects_invalid_inputs_and_closed_sessions(
     missing = terminal.run_command([str(tmp_path / "missing-executable")])
     assert missing["status"] == "failed_to_start"
     assert missing["exit_code"] == 127
-    assert missing["pid"] is None
     assert missing["start_error_type"] == "FileNotFoundError"
     assert "could not start command" in missing["stderr"]
     assert terminal.summary()["commands"] == 1
+    assert terminal.summary()["records"][0]["pid"] is None
 
     missing_verification = terminal.run_command([str(tmp_path / "pytest"), "-q"])
     assert missing_verification["exit_code"] == 127
@@ -1086,7 +1499,12 @@ def test_terminal_output_boundaries_deadline_and_environment(
 ) -> None:
     preview = harbor_terminal._BytePreview(limit=4)
     preview.append(b"abcdef")
-    assert preview.render() == ("abcdef", True, False)
+    assert preview.render() == ("abcdef", False, False)
+    preview.append(b"ghijkl")
+    rendered, truncated, invalid_utf8 = preview.render()
+    assert truncated is True
+    assert invalid_utf8 is False
+    assert "omitted" in rendered
 
     result = terminal.run_command([sys.executable, "-c", "print('done')"])
     process_id = cast(str, result["process_id"])
@@ -1095,7 +1513,10 @@ def test_terminal_output_boundaries_deadline_and_environment(
     with pytest.raises(ValueError, match="stream must be"):
         terminal.read_process_output(process_id, stream=cast(Any, "invalid"))
 
-    combined_path = Path(cast(str, result["combined_path"]))
+    recorded = next(
+        record for record in terminal.summary()["records"] if record["process_id"] == process_id
+    )
+    combined_path = Path(cast(str, recorded["combined_path"]))
     combined_path.unlink()
     assert terminal.read_process_output(process_id)["content"] == ""
 
@@ -1329,11 +1750,27 @@ def test_agent_source_variants_parse() -> None:
         runner.render_agent_source(compaction_mode="disabled", compaction_threshold=1)
     disabled = runner.render_agent_source(
         history_enabled=False,
+        codemode_enabled=False,
         compaction_mode="disabled",
         compaction_threshold=None,
     )
     assert "> history: disabled" in disabled
+    assert "> codemode: disabled" in disabled
     parse_program(disabled, source_path="<harbor-agent-stateless>")
+    enabled = runner.render_agent_source(
+        codemode_enabled=True,
+        compaction_mode="disabled",
+        compaction_threshold=None,
+    )
+    assert "> codemode: enabled" in enabled
+    assert "bounded tool invocation" not in enabled
+    batching = runner.render_agent_source(
+        batching_guidance_enabled=True,
+        compaction_mode="disabled",
+        compaction_threshold=None,
+    )
+    assert "bounded tool invocation" in batching
+    parse_program(batching, source_path="<harbor-agent-batching>")
     with pytest.raises(ValueError, match="requires history"):
         runner.render_agent_source(
             history_enabled=False,
@@ -1367,6 +1804,7 @@ def test_runner_executes_the_real_benchmark_profile(
         workspace=tmp_path,
         result_path=result_path,
         trial_id="real-runtime-smoke",
+        codemode_enabled=True,
     )
 
     assert record.state == "completed"
@@ -1375,15 +1813,111 @@ def test_runner_executes_the_real_benchmark_profile(
     assert json.loads(result_path.read_text(encoding="utf-8"))["state"] == "completed"
 
 
+@pytest.mark.parametrize("artifacts_enabled", [False, True])
+def test_runner_uses_raw_output_without_losing_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifacts_enabled: bool,
+) -> None:
+    from pydantic_ai.messages import (
+        ModelMessage,
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
+        ToolReturnPart,
+        UserPromptPart,
+    )
+    from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+    from kedi.agent_adapter import PydanticAdapter
+
+    instruction = (
+        "Read status.txt; [expected] and <placeholder> are literal text.\nReport its status."
+    )
+    summary = "Status is ready; no changes made."
+    calls: list[set[str]] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompts = [
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, UserPromptPart)
+        ]
+        assert prompts == [instruction]
+        assert info.allow_text_output
+        assert not info.output_tools
+        tools = {tool.name for tool in info.function_tools}
+        assert {"read_text_file", "apply_patch", "run_command", "retain_process"} <= tools
+        assert ("read_artifact" in tools) is artifacts_enabled
+        assert ("run_artifact_code" in tools) is artifacts_enabled
+        instructions = info.instructions or ""
+        assert "Verify related changes together" in instructions
+        assert "Do not claim effects unsupported by tool output." in instructions
+        calls.append(tools)
+        if len(calls) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "read_text_file", {"file_path": "status.txt"}, tool_call_id="read-status"
+                    )
+                ]
+            )
+        results = [
+            part
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        assert len(results) == 1
+        assert results[0].tool_call_id == "read-status"
+        assert "ready" in str(results[0].content)
+        return ModelResponse(parts=[TextPart(summary)])
+
+    real_bind = runner.kedi.bind
+
+    def bind_with_test_model(**kwargs: Any) -> Any:
+        kwargs["adapter"] = PydanticAdapter(FunctionModel(respond))
+        kwargs.pop("model", None)
+        kwargs.pop("effort", None)
+        return real_bind(**kwargs)
+
+    monkeypatch.setattr(runner.kedi, "bind", bind_with_test_model)
+    monkeypatch.delenv("KEDI_HARBOR_LOGFIRE", raising=False)
+    (tmp_path / "status.txt").write_text("ready", encoding="utf-8")
+    record = runner.run_trial(
+        instruction=instruction,
+        model="test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "logs" / "kedi-result.json",
+        trial_id="raw-invoke-smoke",
+        artifacts_enabled=artifacts_enabled,
+    )
+
+    assert record.state == "completed", record.error_message
+    assert record.result_summary == summary
+    assert record.usage["requests"] == 2
+    assert record.usage["tool_calls"] == 1
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert record.terminal["tool_failures"] == 0
+
+
 def test_runner_configures_logfire_only_when_explicitly_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, Any]] = []
     fake_logfire = SimpleNamespace(
         configure=lambda **kwargs: calls.append(("configure", kwargs)),
-        instrument_pydantic_ai=lambda: calls.append(("pydantic_ai", None)),
     )
+    fake_instrumentor = SimpleNamespace(instrument=lambda **kwargs: calls.append(("kedi", kwargs)))
     monkeypatch.setitem(sys.modules, "logfire", fake_logfire)
+    monkeypatch.setitem(
+        sys.modules,
+        "opentelemetry.instrumentation.kedi",
+        SimpleNamespace(KediInstrumentor=lambda: fake_instrumentor),
+    )
     monkeypatch.delenv("KEDI_HARBOR_LOGFIRE", raising=False)
     assert runner._configure_logfire() is False
     assert calls == []
@@ -1392,8 +1926,77 @@ def test_runner_configures_logfire_only_when_explicitly_enabled(
     assert runner._configure_logfire() is True
     assert calls == [
         ("configure", {"service_name": "kedi", "send_to_logfire": "if-token-present"}),
-        ("pydantic_ai", None),
+        (
+            "kedi",
+            {
+                "runtime_detail": "off",
+                "agent_enabled": True,
+                "artifacts_enabled": True,
+                "instrument_pydantic_ai": True,
+                "instrument_httpx": False,
+                "capture_content": False,
+            },
+        ),
     ]
+
+
+@pytest.mark.parametrize("adapter_name", ["pydantic", "langchain"])
+def test_runner_enables_artifact_history_only_when_requested(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    adapter_name: str,
+) -> None:
+    import kedi.agent_adapter.adapters as adapter_module
+    from kedi.agent_adapter.compaction import HistoryArchiveSettings
+
+    constructed: list[dict[str, Any]] = []
+    bound: list[dict[str, Any]] = []
+
+    def fake_adapter(**kwargs: Any) -> Any:
+        constructed.append(kwargs)
+        return SimpleNamespace()
+
+    def fake_bind(**kwargs: Any) -> Any:
+        bound.append(kwargs)
+
+        def decorate(_: Any) -> Any:
+            return lambda _instruction: "done"
+
+        return decorate
+
+    monkeypatch.setattr(
+        adapter_module,
+        "PydanticAdapter" if adapter_name == "pydantic" else "LangChainAdapter",
+        fake_adapter,
+    )
+    monkeypatch.setattr(runner.kedi, "bind", fake_bind)
+    enabled = runner.run_trial(
+        instruction="fix it",
+        model="openai/test",
+        adapter=adapter_name,
+        workspace=tmp_path,
+        result_path=tmp_path / "enabled.json",
+        trial_id="archive-enabled",
+        history_archive_threshold_tokens=2_000,
+        history_archive_preserve_tokens=500,
+    )
+    disabled = runner.run_trial(
+        instruction="fix it",
+        model="openai/test",
+        adapter=adapter_name,
+        workspace=tmp_path,
+        result_path=tmp_path / "disabled.json",
+        trial_id="archive-disabled",
+    )
+
+    assert isinstance(constructed[0]["history_archive"], HistoryArchiveSettings)
+    assert constructed[1]["history_archive"] is None
+    assert constructed[0]["default_usage_limits"].request_limit == 512
+    assert enabled.policy["history_archive_threshold_tokens"] == 2_000
+    assert enabled.policy["history_archive_preserve_tokens"] == 500
+    assert disabled.policy["history_archive_threshold_tokens"] is None
+    assert len(bound) == 2
+    assert all(call["skills"] is False for call in bound)
 
 
 def test_runner_writes_durable_completed_and_failed_records(
@@ -1434,9 +2037,17 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert record.manifest_digest == "manifest"
     assert record.failure_phase is None
     assert record.policy["history"] is True
+    assert record.policy["codemode"] is False
     assert record.policy["finalization_reserve_seconds"] == 0.0
     assert json.loads(result_path.read_text())["state"] == "completed"
-    assert captured["skills"] is True
+    assert captured["skills"] is False
+    assert set(captured["hooks"]) == {
+        "pre_tool_use",
+        "post_tool_use",
+        "post_tool_use_failure",
+    }
+    assert record.policy["request_limit"] == 512
+    assert record.policy["cumulative_input_tokens"] == 50_000_000
     assert captured["conversation"]._closed is True
 
     def failing_bind(**_: Any) -> Any:
@@ -1461,6 +2072,45 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert failed.failure_phase == "agent"
     assert failed.error_type == "RuntimeError"
     assert "sk-do-not" not in cast(str, failed.error_message)
+
+
+def test_runner_scopes_generous_configurable_model_budgets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kedi.agent_adapter.request_budget import ModelRequestBudget, ModelRequestBudgetLimits
+
+    captured: dict[str, Any] = {}
+
+    def fake_bind(**kwargs: Any) -> Any:
+        captured["adapter"] = kwargs["adapter"]
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                captured["limits"] = ModelRequestBudget().limits
+                return "done"
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", fake_bind)
+    record = runner.run_trial(
+        instruction="use the benchmark budget",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "budget-policy" / "result.json",
+        trial_id="budget-policy",
+        model_request_limit=777,
+        model_cumulative_input_tokens=123_000_000,
+    )
+
+    assert record.state == "completed"
+    assert captured["limits"].request_limit == 777
+    assert captured["limits"].cumulative_input_tokens == 123_000_000
+    assert captured["adapter"]._default_usage_limits.request_limit == 777
+    assert ModelRequestBudget().limits == ModelRequestBudgetLimits()
 
 
 def test_runner_treats_model_request_budget_exhaustion_as_verifiable(
@@ -1627,6 +2277,78 @@ def test_runner_classifies_setup_failure_and_enforces_local_timeout(
     assert timed_out.policy["finalization_reserve_seconds"] == pytest.approx(0.005)
 
 
+@pytest.mark.parametrize("expired", [True, False])
+def test_runner_absolute_deadline_includes_launch_delay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expired: bool
+) -> None:
+    monkeypatch.delenv("KEDI_HARBOR_LOGFIRE", raising=False)
+    invoked = False
+
+    def slow_bind(**_: Any) -> Any:
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                nonlocal invoked
+                invoked = True
+                time.sleep(5)
+                return "too late"
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", slow_bind)
+    deadline = time.time() + (-1 if expired else 0.5)
+    started = time.monotonic()
+    record = runner.run_trial(
+        instruction="wait",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "deadline" / "result.json",
+        trial_id="deadline",
+        trial_timeout_seconds=600,
+        trial_deadline_unix=deadline,
+    )
+    assert record.state == "timed_out"
+    assert record.failure_phase == ("setup" if expired else "agent")
+    assert invoked is not expired
+    assert time.monotonic() - started < 3
+    assert record.policy["trial_deadline_unix"] == deadline
+    assert record.policy["trial_timeout_seconds"] == 600
+
+
+def test_terminal_time_notice_is_once_only_and_preserves_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(harbor_terminal.time, "monotonic", lambda: clock[0])
+    terminal = TerminalSession(
+        root=tmp_path,
+        records_dir=tmp_path / "logs",
+        deadline_monotonic=1000,
+        finalization_reserve_seconds=20,
+    )
+    assert "execution_budget" not in terminal.verification_status()
+    clock[0] = 880
+    results: list[dict[str, Any]] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(terminal.verification_status()))
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    notices = [result["execution_budget"] for result in results if "execution_budget" in result]
+    assert len(notices) == 1
+    assert notices[0]["remaining_seconds"] == 120
+    assert notices[0]["finalization_reserve_seconds"] == 20
+    assert all(result["state"] == "not_attempted" for result in results)
+    assert "execution_budget" not in terminal.verification_status()
+    unlimited = TerminalSession(root=tmp_path, records_dir=tmp_path / "unlimited")
+    assert "execution_budget" not in unlimited.verification_status()
+
+
 def test_runner_can_disable_history_and_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1713,6 +2435,62 @@ def test_runner_records_usage_cancellation_and_invalid_timeout(
     assert cancelled.state == "cancelled"
     assert cancelled.error_type == "KeyboardInterrupt"
 
+    def wrapped_timeout_bind(**_: Any) -> Any:
+        from kedi.errors import KediExecutionError
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                raise KediExecutionError(
+                    "wrapped timeout",
+                    original=runner._TrialTimedOut("trial terminated by Harbor"),
+                )
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", wrapped_timeout_bind)
+    wrapped_timeout = runner.run_trial(
+        instruction="timeout",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "wrapped-timeout" / "result.json",
+        trial_id="wrapped-timeout",
+    )
+    assert wrapped_timeout.state == "timed_out"
+    assert wrapped_timeout.failure_phase == "agent"
+    assert wrapped_timeout.error_type == "_TrialTimedOut"
+    assert wrapped_timeout.error_message == "trial terminated by Harbor"
+
+    def wrapped_cancelled_bind(**_: Any) -> Any:
+        from kedi.errors import KediExecutionError
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                raise KediExecutionError(
+                    "wrapped cancellation",
+                    original=KeyboardInterrupt(),
+                )
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", wrapped_cancelled_bind)
+    wrapped_cancelled = runner.run_trial(
+        instruction="cancel",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "wrapped-cancelled" / "result.json",
+        trial_id="wrapped-cancelled",
+    )
+    assert wrapped_cancelled.state == "cancelled"
+    assert wrapped_cancelled.failure_phase == "agent"
+    assert wrapped_cancelled.error_type == "KeyboardInterrupt"
+    assert wrapped_cancelled.error_message == "trial cancelled"
+
     invalid = runner.run_trial(
         instruction="invalid",
         model="openai/test",
@@ -1737,6 +2515,19 @@ def test_runner_records_usage_cancellation_and_invalid_timeout(
     assert invalid_infinite.state == "integration_failure"
     assert invalid_infinite.failure_phase == "setup"
     assert invalid_infinite.policy["trial_timeout_seconds"] == "inf"
+
+    invalid_budget = runner.run_trial(
+        instruction="invalid",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=tmp_path / "invalid-budget" / "result.json",
+        trial_id="invalid-budget",
+        model_request_limit=0,
+    )
+    assert invalid_budget.state == "integration_failure"
+    assert invalid_budget.failure_phase == "setup"
+    assert invalid_budget.error_type == "ValueError"
 
 
 def test_runner_cleanup_failure_is_durable(
@@ -1898,6 +2689,8 @@ def test_runner_helpers_signal_state_and_main(
         == 0
     )
     assert captured["instruction"] == "solve"
+    assert captured["model_request_limit"] == 512
+    assert captured["model_cumulative_input_tokens"] == 50_000_000
     monkeypatch.setattr(runner, "run_trial", lambda **_: SimpleNamespace(state="agent_failure"))
     assert (
         runner.main(
@@ -1956,10 +2749,18 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
             retry_include_exceptions=("ApiRateLimitError",),
             retry_exclude_exceptions=("AgentTimeoutError",),
         ),
-        policy=HarnessPolicy(compaction_mode="native", compaction_threshold=100_000),
+        policy=HarnessPolicy(
+            batching_guidance=True,
+            compaction_mode="native",
+            compaction_threshold=100_000,
+        ),
     )
     wheel = tmp_path / "kedi.whl"
     wheel.touch()
+    kedi_otel_distribution = tmp_path / "opentelemetry_instrumentation_kedi.whl"
+    kedi_otel_distribution.touch()
+    codex_auth_helper_distribution = tmp_path / "codex_auth_helper.whl"
+    codex_auth_helper_distribution.touch()
     tree_sitter_distribution = tmp_path / "tree-sitter-kedi.tar.gz"
     tree_sitter_distribution.touch()
     command = host._harbor_run_command(
@@ -1967,6 +2768,8 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
         harbor_command="harbor",
         kedi_wheel=wheel,
         kedi_package=None,
+        codex_auth_helper_distribution=codex_auth_helper_distribution,
+        kedi_otel_distribution=kedi_otel_distribution,
         jobs_dir=tmp_path / "jobs",
         job_name="pilot",
         tree_sitter_kedi_distribution=tree_sitter_distribution,
@@ -1976,6 +2779,8 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert "kedi.integrations.harbor:KediAgent" in command
     assert f"tree_sitter_kedi_revision={'a' * 40}" in command
     assert f"tree_sitter_kedi_distribution={tree_sitter_distribution.resolve()}" in command
+    assert f"kedi_otel_distribution={kedi_otel_distribution.resolve()}" in command
+    assert f"codex_auth_helper_distribution={codex_auth_helper_distribution.resolve()}" in command
     assert command.count("--include-task-name") == 2
     task_filters = [
         command[index + 1] for index, value in enumerate(command) if value == "--include-task-name"
@@ -1984,7 +2789,13 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert f"manifest_digest={manifest.material_digest}" in command
     assert "history_enabled=true" in command
     assert "artifacts_enabled=true" in command
+    assert "codemode_enabled=false" in command
+    assert "batching_guidance_enabled=true" in command
     assert "retained_process_timeout_seconds=3600.0" in command
+    assert "model_request_limit=512" in command
+    assert "model_cumulative_input_tokens=50000000" in command
+    assert not any("history_archive" in item for item in command)
+    assert "command_timeout_seconds=600.0" in command
     assert command[command.index("--timeout-multiplier") + 1] == "1.25"
     assert command[command.index("--agent-timeout-multiplier") + 1] == "1.5"
     assert command[command.index("--verifier-timeout-multiplier") + 1] == "1.75"
@@ -1994,6 +2805,27 @@ def test_host_builds_exact_harbor_command(tmp_path: Path) -> None:
     assert command.count("--yes") == 1
     assert command[command.index("--retry-include") + 1] == "ApiRateLimitError"
     assert command[command.index("--retry-exclude") + 1] == "AgentTimeoutError"
+
+    archive_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        model="openai/gpt-test",
+        policy=HarnessPolicy(
+            history_archive_threshold_tokens=32_000,
+            history_archive_preserve_tokens=12_000,
+        ),
+    )
+    archive_command = host._harbor_run_command(
+        archive_manifest,
+        harbor_command="harbor",
+        kedi_wheel=wheel,
+        kedi_package=None,
+        jobs_dir=tmp_path / "jobs",
+        job_name="archive",
+    )
+    assert "history_archive_threshold_tokens=32000" in archive_command
+    assert "history_archive_preserve_tokens=12000" in archive_command
 
     package_manifest = RunManifest(
         harbor_revision="harbor-commit",
@@ -2174,6 +3006,10 @@ def test_manifest_cli_writes_complete_policy_and_rejects_dirty_or_conflicting_in
             "native",
             "--compaction-threshold",
             "1000",
+            "--model-request-limit",
+            "777",
+            "--model-cumulative-input-tokens",
+            "123000000",
         ],
     )
     assert created.exit_code == 0, created.output
@@ -2184,6 +3020,8 @@ def test_manifest_cli_writes_complete_policy_and_rejects_dirty_or_conflicting_in
     )
     assert manifest.harbor_policy.retry_exclude_exceptions == ()
     assert manifest.model_settings == {"temperature": 0}
+    assert manifest.policy.model_request_limit == 777
+    assert manifest.policy.model_cumulative_input_tokens == 123_000_000
 
     unused_wheel = tmp_path / "unused.whl"
     unused_wheel.write_bytes(b"unused")
@@ -2496,6 +3334,70 @@ def test_host_requires_the_distribution_recorded_by_manifest(tmp_path: Path) -> 
             distribution=tree_sitter_distribution,
         )
 
+    kedi_otel_distribution = tmp_path / "opentelemetry_instrumentation_kedi.whl"
+    kedi_otel_distribution.write_bytes(b"exact-kedi-otel-distribution")
+    kedi_otel_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        kedi_otel_distribution_sha256=sha256_file(kedi_otel_distribution),
+        model="openai/gpt-test",
+    )
+    assert (
+        host._resolve_kedi_otel_distribution(
+            kedi_otel_manifest,
+            distribution=kedi_otel_distribution,
+        )
+        == kedi_otel_distribution.resolve()
+    )
+    with pytest.raises(UsageError, match="requires --kedi-otel-distribution"):
+        host._resolve_kedi_otel_distribution(
+            kedi_otel_manifest,
+            distribution=None,
+        )
+    with pytest.raises(ClickException, match="SHA-256"):
+        host._resolve_kedi_otel_distribution(
+            kedi_otel_manifest,
+            distribution=changed,
+        )
+    with pytest.raises(UsageError, match="does not record"):
+        host._resolve_kedi_otel_distribution(
+            manifest,
+            distribution=kedi_otel_distribution,
+        )
+
+    codex_auth_helper_distribution = tmp_path / "codex_auth_helper.whl"
+    codex_auth_helper_distribution.write_bytes(b"exact-codex-helper-distribution")
+    codex_helper_manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        codex_auth_helper_distribution_sha256=sha256_file(codex_auth_helper_distribution),
+        model="codex/gpt-test",
+    )
+    assert (
+        host._resolve_codex_auth_helper_distribution(
+            codex_helper_manifest,
+            distribution=codex_auth_helper_distribution,
+        )
+        == codex_auth_helper_distribution.resolve()
+    )
+    with pytest.raises(UsageError, match="requires --codex-auth-helper-distribution"):
+        host._resolve_codex_auth_helper_distribution(
+            codex_helper_manifest,
+            distribution=None,
+        )
+    with pytest.raises(ClickException, match="SHA-256"):
+        host._resolve_codex_auth_helper_distribution(
+            codex_helper_manifest,
+            distribution=changed,
+        )
+    with pytest.raises(UsageError, match="does not record"):
+        host._resolve_codex_auth_helper_distribution(
+            manifest,
+            distribution=codex_auth_helper_distribution,
+        )
+
 
 def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
     modules = {
@@ -2536,6 +3438,7 @@ def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
             **_: Any,
         ) -> None:
             self.logs_dir = logs_dir
+            self.logger = logging.getLogger("kedi.tests.harbor")
             self.model_name = model_name
             self.environment_logs_dir = environment_logs_dir or PurePosixPath("/logs/agent")
             self.skills_dir = skills_dir
@@ -2578,6 +3481,60 @@ def _install_fake_harbor(monkeypatch: pytest.MonkeyPatch) -> type[Any]:
     return BaseInstalledAgent
 
 
+@pytest.mark.parametrize(
+    ("policy", "explicit", "expected"),
+    [
+        ({}, None, 900),
+        ({"timeout_multiplier": 2}, None, 1800),
+        ({"timeout_multiplier": 3, "agent_timeout_multiplier": 0.5}, None, 450),
+        (
+            {
+                "agent": {"override_timeout_sec": 1000, "max_timeout_sec": 800},
+                "agent_timeout_multiplier": 2,
+            },
+            None,
+            1600,
+        ),
+        ({}, 120, 120),
+        ({}, 1200, 900),
+    ],
+)
+def test_harbor_agent_resolves_task_deadline_and_accounts_for_preparation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    policy: dict[str, Any],
+    explicit: int | None,
+    expected: float,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor import agent as agent_module
+
+    logs = tmp_path / "trial" / "agent"
+    logs.mkdir(parents=True)
+    (logs.parent / "config.json").write_text(json.dumps(policy))
+    environment_dir = tmp_path / "task" / "environment"
+    environment_dir.mkdir(parents=True)
+    (environment_dir.parent / "task.toml").write_text("[agent]\ntimeout_sec = 900\n")
+    env = SimpleNamespace(environment_dir=environment_dir, configs=[], agent_calls=[])
+    agent = agent_module.KediAgent(
+        logs_dir=logs, model_name="openai/test", runner_timeout_seconds=explicit
+    )
+    clock = [1000.0]
+    monkeypatch.setattr(agent_module.time, "time", lambda: clock[0])
+
+    async def upload(_: Any, **kwargs: Any) -> None:
+        env.configs.append(kwargs)
+        clock[0] += 7
+
+    monkeypatch.setattr(agent, "_upload_config_text", upload)
+    asyncio.run(agent.run("task", env, SimpleNamespace(metadata=None)))
+    call = env.agent_calls[-1]
+    assert f"--trial-timeout-seconds {expected}" in call["command"]
+    assert f"--trial-deadline-unix {1000.0 + expected}" in call["command"]
+    assert call["timeout_sec"] == expected - 7 + 30
+
+
 def test_harbor_agent_lifecycle_and_context_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2609,6 +3566,8 @@ def test_harbor_agent_lifecycle_and_context_projection(
 
     wheel = tmp_path / "kedi.whl"
     wheel.write_bytes(b"wheel")
+    kedi_otel_distribution = tmp_path / "opentelemetry_instrumentation_kedi.whl"
+    kedi_otel_distribution.write_bytes(b"instrumentation")
     tree_sitter_distribution = tmp_path / "tree-sitter-kedi.tar.gz"
     tree_sitter_distribution.write_bytes(b"source distribution")
     environment = SimpleNamespace(
@@ -2633,6 +3592,7 @@ def test_harbor_agent_lifecycle_and_context_projection(
         logs_dir=tmp_path / "logs",
         model_name="openrouter/test-model",
         kedi_wheel=wheel,
+        kedi_otel_distribution=kedi_otel_distribution,
         history_enabled=False,
         prefix_cache_enabled=False,
         artifacts_enabled=False,
@@ -2644,6 +3604,7 @@ def test_harbor_agent_lifecycle_and_context_projection(
     asyncio.run(agent.install(environment))
     assert environment.uploaded[0][1].endswith("/kedi.whl")
     assert environment.uploaded[1][1].endswith("/tree-sitter-kedi.tar.gz")
+    assert environment.uploaded[2][1].endswith("/opentelemetry_instrumentation_kedi.whl")
     assert "python_venv" in environment.dependencies
     assert "build_tools" in environment.dependencies
     install_command = environment.root_calls[-1]["command"]
@@ -2653,8 +3614,11 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert "python3 -m venv /installed-agent/kedi-bootstrap" in install_command
     assert "python3 -m venv /installed-agent/kedi &&" not in install_command
     assert "uv==0.11.21" in install_command
+    assert install_command.count("--retries 20 --timeout 120") == 2
     assert "uv venv --python 3.11 --managed-python --seed" in install_command
     assert "logfire[httpx]==4.41.0" in install_command
+    assert "/installed-agent/opentelemetry_instrumentation_kedi.whl" in install_command
+    assert "opentelemetry-instrumentation-kedi==0.1.0" not in install_command
 
     revision_environment = SimpleNamespace(
         dependencies=(),
@@ -2683,8 +3647,13 @@ def test_harbor_agent_lifecycle_and_context_projection(
     run_call = environment.agent_calls[-1]
     assert run_call["timeout_sec"] == 40
     assert run_call["command"].startswith("set -o pipefail; ")
+    assert "/installed-agent/kedi-runner.pid" in run_call["command"]
+    assert "| tee" not in run_call["command"]
     assert "--no-history-enabled" in run_call["command"]
     assert "--no-artifacts-enabled" in run_call["command"]
+    assert "--no-codemode-enabled" in run_call["command"]
+    assert "--model-request-limit 512" in run_call["command"]
+    assert "--model-cumulative-input-tokens 50000000" in run_call["command"]
     assert "sk-provider-secret-value" not in run_call["command"]
     assert "logfire-test-token" not in run_call["command"]
     assert run_call["env"]["KEDI_HARBOR_LOGFIRE"] == "1"
@@ -2717,6 +3686,332 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert context.n_output_tokens == 10
     assert context.cost_usd == 0.01
     assert context.metadata["kedi_state"] == "completed"
+
+
+def test_harbor_agent_installs_pinned_codex_helper_distribution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("KEDI_HARBOR_LOGFIRE", raising=False)
+    base = _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    KediAgent = importlib.import_module("kedi.integrations.harbor.agent").KediAgent
+    assert issubclass(KediAgent, base)
+
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text("{}", encoding="utf-8")
+    helper_wheel = tmp_path / "codex_auth_helper-1.8.0-py3-none-any.whl"
+    helper_wheel.write_bytes(b"local helper")
+    environment = SimpleNamespace(
+        dependencies=(),
+        root_calls=[],
+        agent_calls=[],
+        configs=[],
+        uploaded=[],
+    )
+
+    async def upload_file(local: Path, remote: str) -> None:
+        environment.uploaded.append((Path(local), remote))
+
+    environment.upload_file = upload_file
+    agent = KediAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="codex/gpt-test",
+        kedi_package="kedi",
+        codex_auth_file=auth_file,
+        codex_auth_helper_distribution=helper_wheel,
+    )
+    asyncio.run(agent.install(environment))
+
+    assert environment.uploaded == [
+        (helper_wheel.resolve(), "/installed-agent/codex_auth_helper-1.8.0-py3-none-any.whl")
+    ]
+    install_command = environment.root_calls[-1]["command"]
+    assert "/installed-agent/codex_auth_helper-1.8.0-py3-none-any.whl" in install_command
+    assert "codex-auth-helper[websocket]==1.8.0" not in install_command
+
+    with pytest.raises(ValueError, match="requires a codex/ model"):
+        KediAgent(
+            logs_dir=tmp_path / "invalid-logs",
+            model_name="openai/gpt-test",
+            kedi_package="kedi",
+            codex_auth_helper_distribution=helper_wheel,
+        )
+
+
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_harbor_runner_wrapper_records_actual_process_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    import kedi.integrations.harbor.agent as agent_module
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    runtime = tmp_path / "runtime"
+    (runtime / "bin").mkdir(parents=True)
+    executable = runtime / "bin" / "python"
+    executable.write_text(f"#!/bin/sh\nprintf 'runner-output\\n'\nexit {exit_code}\n")
+    executable.chmod(0o700)
+    pid_file = tmp_path / "runner.pid"
+    monkeypatch.setattr(agent_module, "_RUNNER_PID", PurePosixPath(pid_file))
+    monkeypatch.setattr(agent_module.KediAgent, "_VENV", PurePosixPath(runtime))
+    agent = agent_module.KediAgent(
+        logs_dir=logs, environment_logs_dir=PurePosixPath(logs), model_name="openai/test"
+    )
+    environment = SimpleNamespace(configs=[], agent_calls=[])
+
+    async def no_skills(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(agent, "_install_skills", no_skills)
+    asyncio.run(agent.run("fixture", environment, SimpleNamespace()))
+    command = environment.agent_calls[-1]["command"]
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=5)
+    assert result.returncode == exit_code
+    record = json.loads((logs / "runner-exit.json").read_text())
+    assert record["exit_code"] == exit_code
+    assert record["finished_at"].endswith("Z")
+    assert (logs / "kedi.txt").read_text() == "runner-output\n"
+    assert not pid_file.exists()
+    assert not (logs / ".runner-exit.tmp").exists()
+
+
+def test_harbor_agent_finalizes_remote_runner_when_harbor_cancels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    KediAgent = importlib.import_module("kedi.integrations.harbor.agent").KediAgent
+    agent = KediAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="openai/test",
+        kedi_package="kedi",
+    )
+    calls: list[dict[str, Any]] = []
+
+    async def no_upload(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def cancel_then_finalize(*_args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise asyncio.CancelledError
+        return SimpleNamespace(return_code=0)
+
+    monkeypatch.setattr(agent, "_upload_config_text", no_upload)
+    monkeypatch.setattr(agent, "_install_skills", no_upload)
+    monkeypatch.setattr(agent, "exec_as_agent", cancel_then_finalize)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(agent.run("solve", SimpleNamespace(), SimpleNamespace(metadata=None)))
+
+    assert len(calls) == 2
+    assert "/installed-agent/kedi-runner.pid" in calls[0]["command"]
+    assert "kill -TERM" in calls[1]["command"]
+    assert "kedi.integrations.harbor.runner" in calls[1]["command"]
+    assert calls[1]["timeout_sec"] == 25
+
+
+def test_harbor_agent_bounds_unresponsive_remote_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    agent_module = importlib.import_module("kedi.integrations.harbor.agent")
+    monkeypatch.setattr(agent_module, "_RUNNER_FINALIZATION_TIMEOUT_SECONDS", 0.05, raising=False)
+    agent = agent_module.KediAgent(
+        logs_dir=tmp_path / "logs", model_name="openai/test", kedi_package="kedi"
+    )
+    cleaned = False
+
+    async def stalled_exec(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal cleaned
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned = True
+
+    monkeypatch.setattr(agent, "exec_as_agent", stalled_exec)
+
+    async def check() -> None:
+        task = asyncio.create_task(agent._finalize_cancelled_runner(SimpleNamespace(), "trial"))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=0.5)
+            assert task in done, "remote cleanup has no host-side deadline"
+            with pytest.raises(TimeoutError):
+                task.result()
+            assert cleaned
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(check())
+
+
+def test_harbor_agent_repeated_cancellation_does_not_leave_cleanup_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    agent_module = importlib.import_module("kedi.integrations.harbor.agent")
+    agent = agent_module.KediAgent(
+        logs_dir=tmp_path / "logs", model_name="openai/test", kedi_package="kedi"
+    )
+
+    async def no_upload(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(agent, "_upload_config_text", no_upload)
+    monkeypatch.setattr(agent, "_install_skills", no_upload)
+
+    async def check() -> None:
+        finalizing = asyncio.Event()
+        cleaned = asyncio.Event()
+        calls = 0
+
+        async def remote(*_args: Any, **_kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise asyncio.CancelledError
+            finalizing.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned.set()
+
+        monkeypatch.setattr(agent, "exec_as_agent", remote)
+        task = asyncio.create_task(agent.run("solve", SimpleNamespace(), SimpleNamespace()))
+        await asyncio.wait_for(finalizing.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert cleaned.is_set()
+        assert not [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize("exit_code", [0, 23])
+def test_harbor_setup_records_phases_and_preserves_exit_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor.agent import _setup_command
+
+    log = tmp_path / "new logs" / "setup with spaces.log"
+    command = _setup_command(
+        (
+            ("bootstrap", "printf 'bootstrap-output\\n'"),
+            ("runtime", f"printf 'runtime-output\\n'; (exit {exit_code})"),
+            ("last", "printf 'last-output\\n'"),
+        ),
+        PurePosixPath(log),
+    )
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=5)
+    assert result.returncode == exit_code
+    assert result.stdout == log.read_text()
+    assert "phase=bootstrap state=completed" in result.stdout
+    assert "runtime-output" in result.stdout
+    assert ("phase=runtime state=completed" in result.stdout) is (exit_code == 0)
+    assert ("last-output" in result.stdout) is (exit_code == 0)
+
+
+def test_harbor_setup_keeps_partial_output_when_install_is_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor.agent import _setup_command
+
+    log = tmp_path / "setup.log"
+    command = _setup_command(
+        (("bootstrap", "printf 'before-wait\\n'; sleep 30"), ("last", "true")),
+        PurePosixPath(log),
+    )
+    process = subprocess.Popen(
+        ["bash", "-c", command],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 3
+        while not log.exists() or "before-wait" not in log.read_text():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert process.poll() is None
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate(timeout=3)
+    output = log.read_text()
+    assert "phase=bootstrap state=started" in output
+    assert "before-wait" in output
+    assert "state=completed" not in output
+    assert "phase=last" not in output
+
+
+def test_harbor_setup_stops_when_an_early_and_list_command_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    from kedi.integrations.harbor.agent import _setup_command
+
+    log = tmp_path / "setup.log"
+    command = _setup_command(
+        (("bootstrap", "false && printf 'must-not-install'"), ("runtime", "true")),
+        PurePosixPath(log),
+    )
+    result = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 1
+    assert "phase=bootstrap state=started" in result.stdout
+    assert "state=completed" not in result.stdout
+    assert "phase=runtime" not in result.stdout
+    assert "must-not-install" not in result.stdout
+
+
+def test_harbor_agent_preserves_cancellation_when_remote_finalization_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    KediAgent = importlib.import_module("kedi.integrations.harbor.agent").KediAgent
+    agent = KediAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="openai/test",
+        kedi_package="kedi",
+    )
+    calls = 0
+
+    async def no_upload(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def fail_finalization(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise asyncio.CancelledError
+        raise RuntimeError("remote environment already closed")
+
+    monkeypatch.setattr(agent, "_upload_config_text", no_upload)
+    monkeypatch.setattr(agent, "_install_skills", no_upload)
+    monkeypatch.setattr(agent, "exec_as_agent", fail_finalization)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(agent.run("solve", SimpleNamespace(), SimpleNamespace(metadata=None)))
+
+    assert calls == 2
 
 
 def test_harbor_logfire_token_resolution_is_optional_and_env_first(
@@ -2833,7 +4128,7 @@ def test_harbor_agent_transfers_codex_auth_privately(
 
     asyncio.run(agent.install(environment))
     install_command = environment.root_calls[-1]["command"]
-    assert "codex-auth-helper==1.6.1" in install_command
+    assert "codex-auth-helper[websocket]==1.8.0" in install_command
     assert source_secret not in install_command
 
     asyncio.run(agent.run("solve", environment, SimpleNamespace(metadata=None)))
@@ -2888,9 +4183,11 @@ def test_harbor_agent_rejects_missing_codex_auth(
         )
 
 
+@pytest.mark.parametrize("archival", [False, True])
 def test_harbor_agent_full_configuration_and_failure_projection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    archival: bool,
 ) -> None:
     _install_fake_harbor(monkeypatch)
     monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
@@ -2953,9 +4250,10 @@ def test_harbor_agent_full_configuration_and_failure_projection(
         kedi_package="kedi==fixture",
         effort="high",
         model_settings={"temperature": 0},
-        compaction_mode="native",
-        compaction_threshold=1000,
+        compaction_mode="disabled" if archival else "native",
+        compaction_threshold=None if archival else 1000,
         skills_dir="/skills",
+        history_archive_threshold_tokens=32000 if archival else None,
         mcp_servers=[mcp],
     )
     assert "from kedi import __version__" in cast(str, agent.get_version_command())
@@ -2973,7 +4271,8 @@ def test_harbor_agent_full_configuration_and_failure_projection(
     assert "--mcp-config" in command
     assert "--model-settings" in command
     assert "--effort high" in command
-    assert "--compaction-threshold 1000" in command
+    assert ("--compaction-threshold 1000" in command) is not archival
+    assert ("--history-archive-threshold-tokens 32000" in command) is archival
 
     missing_context = SimpleNamespace(metadata={"existing": True})
     agent.populate_context_post_run(missing_context)

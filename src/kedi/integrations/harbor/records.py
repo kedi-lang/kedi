@@ -94,17 +94,24 @@ def atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
 class HarnessPolicy:
     artifacts: bool = True
     history: bool = True
+    codemode: bool = False
+    batching_guidance: bool = False
+    request_observation: bool = False
     prefix_cache: bool = True
     compaction_mode: Literal["disabled", "native"] = "disabled"
     compaction_threshold: int | None = None
+    history_archive_threshold_tokens: int | None = None
+    history_archive_preserve_tokens: int = 12_000
     subagents: bool = False
     dynamic_workflows: bool = False
     artifact_threshold_bytes: int = 16_384
     artifact_quota_bytes: int = 256_000_000
-    command_timeout_seconds: float = 120.0
+    command_timeout_seconds: float = 600.0
     terminal_preview_bytes: int = 32_768
     terminal_output_limit_bytes: int = 512_000_000
     retained_process_timeout_seconds: float = 3_600.0
+    model_request_limit: int = 512
+    model_cumulative_input_tokens: int = 50_000_000
 
     def __post_init__(self) -> None:
         if self.compaction_mode not in {"disabled", "native"}:
@@ -122,6 +129,25 @@ class HarnessPolicy:
             raise ValueError("compaction_threshold must be positive")
         if self.compaction_mode == "disabled" and self.compaction_threshold is not None:
             raise ValueError("compaction_threshold requires native compaction")
+        if self.history_archive_threshold_tokens is not None:
+            if self.history_archive_threshold_tokens <= 0:
+                raise ValueError("history_archive_threshold_tokens must be positive")
+            if not self.history:
+                raise ValueError("history archival requires history")
+            if not self.artifacts:
+                raise ValueError("history archival requires artifacts")
+            if self.compaction_mode != "disabled":
+                raise ValueError("history archival and native compaction are mutually exclusive")
+        if self.history_archive_preserve_tokens <= 0:
+            raise ValueError("history_archive_preserve_tokens must be positive")
+        if (
+            self.history_archive_threshold_tokens is not None
+            and self.history_archive_preserve_tokens >= self.history_archive_threshold_tokens
+        ):
+            raise ValueError(
+                "history_archive_preserve_tokens must be lower than "
+                "history_archive_threshold_tokens"
+            )
         if self.subagents or self.dynamic_workflows:
             raise ValueError(
                 "the Terminal-Bench profile does not define subagents or dynamic workflows"
@@ -141,6 +167,10 @@ class HarnessPolicy:
             or self.retained_process_timeout_seconds <= 0
         ):
             raise ValueError("retained_process_timeout_seconds must be positive")
+        if self.model_request_limit <= 0:
+            raise ValueError("model_request_limit must be positive")
+        if self.model_cumulative_input_tokens <= 0:
+            raise ValueError("model_cumulative_input_tokens must be positive")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -195,6 +225,8 @@ class RunManifest:
     kedi_dirty: bool
     kedi_package: str | None = None
     kedi_wheel_sha256: str | None = None
+    codex_auth_helper_distribution_sha256: str | None = None
+    kedi_otel_distribution_sha256: str | None = None
     tree_sitter_kedi_revision: str | None = None
     tree_sitter_kedi_distribution_sha256: str | None = None
     model: str
@@ -222,6 +254,20 @@ class RunManifest:
             r"[0-9a-f]{64}", self.kedi_wheel_sha256
         ):
             raise ValueError("kedi_wheel_sha256 must be a lowercase SHA-256 digest")
+        if self.codex_auth_helper_distribution_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.codex_auth_helper_distribution_sha256
+        ):
+            raise ValueError(
+                "codex_auth_helper_distribution_sha256 must be a lowercase SHA-256 digest"
+            )
+        if self.codex_auth_helper_distribution_sha256 is not None and not self.model.startswith(
+            "codex/"
+        ):
+            raise ValueError("codex_auth_helper_distribution_sha256 requires a codex/ model")
+        if self.kedi_otel_distribution_sha256 is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.kedi_otel_distribution_sha256
+        ):
+            raise ValueError("kedi_otel_distribution_sha256 must be a lowercase SHA-256 digest")
         if self.tree_sitter_kedi_revision is not None and not re.fullmatch(
             r"[0-9a-f]{40}", self.tree_sitter_kedi_revision
         ):
@@ -276,6 +322,13 @@ class RunManifest:
         material.pop("created_at", None)
         if material.get("tree_sitter_kedi_distribution_sha256") is None:
             material.pop("tree_sitter_kedi_distribution_sha256", None)
+        if material.get("kedi_otel_distribution_sha256") is None:
+            material.pop("kedi_otel_distribution_sha256", None)
+        if material.get("codex_auth_helper_distribution_sha256") is None:
+            material.pop("codex_auth_helper_distribution_sha256", None)
+        policy = material.get("policy")
+        if isinstance(policy, dict) and policy.get("batching_guidance") is False:
+            policy.pop("batching_guidance", None)
         return hashlib.sha256(
             json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -389,6 +442,7 @@ class TrialRecord:
     verification: Mapping[str, Any]
     terminal: Mapping[str, Any]
     policy: Mapping[str, Any]
+    request_observation: Mapping[str, Any] = field(default_factory=lambda: {"enabled": False})
     result_summary: str | None = None
     failure_phase: str | None = None
     error_type: str | None = None

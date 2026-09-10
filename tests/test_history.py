@@ -1283,7 +1283,7 @@ def test_langchain_replays_complete_message_history_including_tool_results(
     payloads: list[list[Any]] = []
 
     class FakeAgent:
-        async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(self, payload: dict[str, Any], config: Any = None) -> dict[str, Any]:
             messages = list(payload["messages"])
             payloads.append(messages)
             if len(payloads) == 1:

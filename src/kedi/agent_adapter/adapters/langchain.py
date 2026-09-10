@@ -21,6 +21,7 @@ from typing import (
 
 from pydantic import BaseModel
 from pydantic_ai.output import OutputDataT
+from pydantic_ai import UsageLimits
 
 from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.compaction import (
@@ -31,7 +32,6 @@ from ...agent_profile.settings import (
     langchain_model_settings,
 )
 from ...effort import pydantic_effort_value
-from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_langchain
 from ...resolved_types import ResolvedKediType
 from .._schema import build_output_model
@@ -44,6 +44,7 @@ from ..codemode.tool_specs import (
     codemode_projection,
 )
 from ..conversation import AdapterConversationContext
+from ..compaction.archive import HistoryArchiveSettings
 from ..events import AgentMessageResolver, agent_event_run
 from ..hooks import (
     HookDeniedError,
@@ -62,11 +63,12 @@ from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..native_compaction import langchain_settings_with_native_compaction
 from ..prefix_cache import langchain_cache_settings, langchain_provider_cache_policy
+from ..responses_session import model_responses_session, model_responses_turn
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
-from ..subagents.runs import safe_subagent_error_message
 from ..telemetry import mcp_initialization_span
+from ..tool_errors import correctable_tool_error
 from ..tool_override import (
     ToolScope,
     ToolSpec,
@@ -117,13 +119,21 @@ class LangChainAdapter(HookRegistrationMixin):
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
         hook_handler: HookHandler | None = None,
+        default_usage_limits: UsageLimits | None = None,
+        history_archive: HistoryArchiveSettings | None = None,
+        tool_retries: int = 3,
         **kwargs: Any,
     ) -> None:
         self._init_hook_registration(hook_handler)
+        if isinstance(tool_retries, bool) or not isinstance(tool_retries, int) or tool_retries < 0:
+            raise ValueError("tool_retries must be a non-negative integer")
+        self._default_usage_limits = default_usage_limits
+        self._history_archive = history_archive
+        self._tool_retries = tool_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = normalize_for_langchain(model) if isinstance(model, str) else model
-        self._model_settings = langchain_model_settings(model_settings or {})
+        self._model_settings = dict(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
         self._subagent_failure_policy = subagent_failure_policy
         self.codemode = normalize_codemode_settings(codemode)
@@ -191,6 +201,8 @@ class LangChainAdapter(HookRegistrationMixin):
             raise ValueError("Output spec must be provided.")
 
         instructions = cast(str | None, kwargs.pop("instructions", None))
+        if instructions is None:
+            instructions = self.active_profile.system
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
@@ -210,7 +222,8 @@ class LangChainAdapter(HookRegistrationMixin):
                 ),
             )
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
-            result = await self._invoke_agent(agent, payload, emit_final=False)
+            async with model_responses_turn(model):
+                result = await self._invoke_agent(agent, payload, emit_final=False)
             return cast(OutputDataT, _langchain_structured_response(result))
 
     @hooked_agent_run("template")
@@ -224,6 +237,8 @@ class LangChainAdapter(HookRegistrationMixin):
         from langchain.agents.structured_output import ToolStrategy
 
         instructions = cast(str | None, kwargs.pop("instructions", None))
+        if instructions is None:
+            instructions = self.active_profile.system
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
@@ -243,9 +258,10 @@ class LangChainAdapter(HookRegistrationMixin):
                 ),
             )
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
-            result = _langchain_structured_response(
-                await self._invoke_agent(agent, payload, emit_final=False)
-            )
+            async with model_responses_turn(model):
+                result = _langchain_structured_response(
+                    await self._invoke_agent(agent, payload, emit_final=False)
+                )
             if not isinstance(result, Mapping):
                 raise TypeError("LangChain subagent structured output must be an object")
             return result
@@ -257,7 +273,7 @@ class LangChainAdapter(HookRegistrationMixin):
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
                 append_codemode_instructions(
-                    instructions or self.active_profile.system,
+                    instructions if instructions is not None else self.active_profile.system,
                     enabled=projection.enabled,
                 ),
                 model=model,
@@ -275,9 +291,19 @@ class LangChainAdapter(HookRegistrationMixin):
                 ),
             )
             payload = {"messages": self._messages_for_prompt(prompt, model=model), **kwargs}
-            return _langchain_text_response(
-                await self._invoke_agent(agent, payload, emit_final=True)
-            )
+            async with model_responses_turn(model):
+                return _langchain_text_response(
+                    await self._invoke_agent(agent, payload, emit_final=True)
+                )
+
+    @asynccontextmanager
+    async def responses_session(self) -> AsyncIterator[None]:
+        """Share a supported model transport across sequential adapter calls."""
+        model = self._model_for_run()
+        if not callable(getattr(model, "responses_session", None)):
+            raise TypeError("The selected model does not support Responses sessions")
+        async with model_responses_session(model):
+            yield
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from ..utils import run_sync
@@ -346,7 +372,15 @@ class LangChainAdapter(HookRegistrationMixin):
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
-        return {"recursion_limit": limits.request_limit * 2 + 1}
+        return {
+            "usage_limits": UsageLimits(
+                request_limit=limits.request_limit,
+                tool_calls_limit=limits.tool_calls_limit,
+                input_tokens_limit=limits.input_tokens_limit,
+                output_tokens_limit=limits.output_tokens_limit,
+                total_tokens_limit=limits.total_tokens_limit,
+            )
+        }
 
     async def _invoke_agent(
         self,
@@ -355,19 +389,39 @@ class LangChainAdapter(HookRegistrationMixin):
         *,
         emit_final: bool,
     ) -> Any:
+        from .langchain_runtime import langchain_run_scope
+
+        payload = dict(payload)
+        limits = payload.pop("usage_limits", self._default_usage_limits)
+        config = dict(payload.pop("config", None) or {})
+        recursion_limit = payload.pop("recursion_limit", None)
+        if recursion_limit is not None:
+            config["recursion_limit"] = recursion_limit
+        elif "recursion_limit" not in config:
+            request_limit = limits.request_limit if limits is not None else 50
+            if request_limit is not None:
+                config["recursion_limit"] = request_limit * 3 + 5
         with (
+            langchain_run_scope(limits) as run_state,
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
         ):
-            if resolver is None:
-                result = await agent.ainvoke(dict(payload))
-            else:
-                result = await agent.ainvoke(
-                    dict(payload),
-                    config={"callbacks": [_langchain_event_handler(resolver)]},
-                )
+            if resolver is not None:
+                callbacks = config.get("callbacks")
+                callback = _langchain_event_handler(resolver)
+                if callbacks is None or isinstance(callbacks, list):
+                    config["callbacks"] = [*(callbacks or []), callback]
+                else:
+                    callbacks = callbacks.copy()
+                    callbacks.add_handler(callback)
+                    config["callbacks"] = callbacks
+            try:
+                result = await agent.ainvoke(payload, config=config)
+            finally:
+                if invocation_observer() is not None and run_state.usage.requests:
+                    report_invocation(run_state.usage)
             self._capture_conversation_messages(result)
-            if invocation_observer() is not None:
+            if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
                     _langchain_invocation_usage(
                         result,
@@ -389,11 +443,20 @@ class LangChainAdapter(HookRegistrationMixin):
         return self._model
 
     def _settings_for_run(self, model: str | Any) -> dict[str, Any]:
-        settings = {
-            **dict(self._model_extra_kwargs),
-            **dict(self._model_settings),
-            **langchain_model_settings(self.active_profile.settings),
-        }
+        settings: dict[str, Any] = {}
+        native_kwargs = getattr(model, "model_kwargs", None)
+        if isinstance(native_kwargs, Mapping):
+            settings["model_kwargs"] = dict(native_kwargs)
+        for layer in (
+            self._model_extra_kwargs,
+            self._model_settings,
+            langchain_model_settings(self.active_profile.settings),
+        ):
+            for key, value in layer.items():
+                if key == "model_kwargs" and isinstance(value, Mapping):
+                    settings[key] = {**settings.get(key, {}), **value}
+                else:
+                    settings[key] = value
         _apply_langchain_effort_settings(settings, model, self.active_profile.effort)
         compaction = self.active_profile.compaction
         if self.active_profile.history is True and compaction is not None:
@@ -414,36 +477,50 @@ class LangChainAdapter(HookRegistrationMixin):
         model = self._model_for_run()
         settings = self._settings_for_run(model)
         if not isinstance(model, str):
-            compaction = self.active_profile.compaction
-            conversation = self._conversation_var.get()
-            if (
-                (
-                    self.active_profile.history is True
-                    and compaction is not None
-                    and compaction.mode == "native"
+            if not settings:
+                return model
+            copy_model = getattr(model, "model_copy", None)
+            if not callable(copy_model):
+                raise CompactionSettingsError(
+                    "LangChain model settings require a model that supports model_copy"
                 )
-                or conversation is not None
-                or "model_kwargs" in settings
-                or "session_id" in settings
-            ):
-                copy_model = getattr(model, "model_copy", None)
-                if not callable(copy_model):
-                    raise CompactionSettingsError(
-                        "stateful LangChain model settings require a model that supports model_copy"
+            fields = getattr(type(model), "model_fields", {})
+            aliases = {field.alias: name for name, field in fields.items() if field.alias}
+            updates: dict[str, Any] = {}
+            for key, value in settings.items():
+                target = aliases.get(key, key)
+                if (
+                    getattr(model, "root_async_client", None) is not None
+                    and target
+                    in {
+                        "openai_api_key",
+                        "openai_api_base",
+                        "openai_organization",
+                        "openai_proxy",
+                        "http_client",
+                        "http_async_client",
+                        "request_timeout",
+                        "max_retries",
+                        "default_headers",
+                        "default_query",
+                    }
+                    and value != getattr(model, target, None)
+                ):
+                    raise ValueError(
+                        f"Configure transport setting {key!r} on the native model constructor; "
+                        "copying an initialized model does not rebuild its clients."
                     )
-                updates = {
-                    key: settings[key]
-                    for key in (
-                        "context_management",
-                        "betas",
-                        "model_kwargs",
-                        "session_id",
-                        "use_previous_response_id",
-                    )
-                    if key in settings
-                }
-                return copy_model(update=updates)
-            return model
+                if fields and target not in fields:
+                    if "model_kwargs" not in fields:
+                        raise ValueError(f"Unsupported LangChain model setting: {key!r}")
+                    updates.setdefault("model_kwargs", dict(settings.get("model_kwargs", {})))[
+                        key
+                    ] = value
+                elif target == "model_kwargs":
+                    updates[target] = {**value, **updates.get(target, {})}
+                else:
+                    updates[target] = value
+            return copy_model(update=updates)
         try:
             from langchain.chat_models import init_chat_model
         except ImportError as exc:
@@ -562,7 +639,10 @@ class LangChainAdapter(HookRegistrationMixin):
         *,
         codemode_enabled: bool = False,
     ) -> list[Any]:
+        from .langchain_runtime import LangChainRunMiddleware
+
         return [
+            LangChainRunMiddleware(archive=self._history_archive, tool_retries=self._tool_retries),
             *_langchain_cache_middleware(
                 model,
                 enabled=self._conversation_var.get() is not None,
@@ -720,9 +800,14 @@ def _langchain_tool_from_spec(tool: ToolSpec) -> Any:
         "description": description,
         "args_schema": tool.json_schema,
     }
-    if tool.metadata is not None and tool.metadata.get("kind") in {
+    metadata = tool.metadata or {}
+    if (metadata.get("kedi_tool_kind") or metadata.get("kind")) in {
         "subagent",
         "codemode_control",
+        "artifact_management",
+        "filesystem",
+        "terminal",
+        "dynamic_workflow",
     }:
         kwargs["handle_tool_error"] = True
     if _is_async_callable(tool.fn):
@@ -794,11 +879,11 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             if inspect.isawaitable(result):
                 return run_sync(cast(Coroutine[Any, Any, Any], result))
             return result
-        except KediExecutionError as exc:
-            _raise_langchain_subagent_error(tool, exc)
-            raise
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
+        except Exception as exc:
+            _raise_langchain_tool_error(tool, exc)
+            raise
 
     return _tool
 
@@ -811,13 +896,21 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             if inspect.isawaitable(result):
                 return await result
             return result
-        except KediExecutionError as exc:
-            _raise_langchain_subagent_error(tool, exc)
-            raise
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
+        except Exception as exc:
+            _raise_langchain_tool_error(tool, exc)
+            raise
 
     return _tool
+
+
+def _raise_langchain_tool_error(tool: ToolSpec, exc: Exception) -> None:
+    message = correctable_tool_error(tool, exc)
+    if message is not None:
+        from langchain_core.tools import ToolException
+
+        raise ToolException(message) from exc
 
 
 def _raise_langchain_codemode_error(exc: CodeModeError) -> NoReturn:
@@ -924,7 +1017,11 @@ def _langchain_approval_middleware(
                     duration_seconds=monotonic() - started,
                 )
                 return result
-            if tool.artifact_result != "never" and not tool_has_artifact_boundary(tool):
+            if (
+                tool.artifact_result != "never"
+                and not tool_has_artifact_boundary(tool)
+                and (tool.metadata or {}).get("kedi_codemode_control") is not True
+            ):
                 result = await _langchain_admit_native_tool_result(
                     result,
                     tool_name=tool_name,
@@ -1067,14 +1164,6 @@ def _langchain_hook_origin(tool: ToolSpec, native_tool: Any) -> ToolOrigin:
     if isinstance(metadata, Mapping) and metadata.get("kedi_origin") == "mcp":
         return "mcp"
     return "adapter_native"
-
-
-def _raise_langchain_subagent_error(tool: ToolSpec, exc: KediExecutionError) -> None:
-    if tool.metadata is None or tool.metadata.get("kind") != "subagent":
-        return
-    from langchain_core.tools import ToolException
-
-    raise ToolException(safe_subagent_error_message(exc) or "Subagent failed") from exc
 
 
 def _langchain_event_handler(resolver: AgentMessageResolver) -> Any:
@@ -1297,8 +1386,10 @@ def _apply_langchain_effort_settings(
     if effort is None:
         return
     mapped = pydantic_effort_value(effort)
-    if isinstance(model, str) and model.startswith("openrouter:"):
-        existing = settings.get("reasoning")
+    existing = settings.get("reasoning", getattr(model, "reasoning", None))
+    if (isinstance(model, str) and model.startswith("openrouter:")) or isinstance(
+        existing, Mapping
+    ):
         reasoning = dict(existing) if isinstance(existing, Mapping) else {}
         reasoning["effort"] = mapped
         settings["reasoning"] = reasoning

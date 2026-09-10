@@ -19,6 +19,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import (
     DeferredToolRequests,
@@ -128,6 +129,46 @@ def test_native_call_arguments_have_documented_precedence() -> None:
 
     assert result.output == "ok"
     assert observed == [("Explicit instruction.", {"temperature": 0.9, "seed": 7})]
+
+
+def test_constructor_preserves_native_provider_model_settings() -> None:
+    settings = {
+        "openai_prompt_cache_key": "stable-conversation",
+        "openai_reasoning_effort": "high",
+        "anthropic_cache_instructions": True,
+    }
+    observed: list[dict[str, Any]] = []
+
+    async def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        observed.append(dict(info.model_settings or {}))
+        return ModelResponse(parts=[TextPart("ok")])
+
+    async def respond_stream(_messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        observed.append(dict(info.model_settings or {}))
+        yield "ok"
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond, stream_function=respond_stream), model_settings=settings
+    )
+
+    async def run() -> None:
+        assert (await adapter.run("run")).output == "ok"
+        async with adapter.iter("iter") as agent_run:
+            async for _node in agent_run:
+                pass
+        async with adapter.run_stream("stream") as stream:
+            assert await stream.get_output() == "ok"
+        with adapter.profile_override(AgentProfile(settings={"temperature": 0.2})):
+            await adapter.run("profile")
+        await adapter.run(
+            "override", model_settings=OpenAIResponsesModelSettings(openai_prompt_cache_key="other")
+        )
+
+    asyncio.run(run())
+    assert observed[:3] == [settings] * 3
+    assert observed[3] == {**settings, "temperature": 0.2}
+    assert observed[4] == {**settings, "openai_prompt_cache_key": "other"}
+    assert settings["openai_prompt_cache_key"] == "stable-conversation"
 
 
 def test_native_run_preserves_pydantic_name_inference() -> None:
@@ -970,6 +1011,7 @@ def test_pydantic_adapter_default_usage_limits_preserve_explicit_overrides() -> 
 def test_pydantic_adapter_default_tool_retries_recover_from_correctable_calls() -> None:
     model_calls = 0
     tool_calls = 0
+    hook_events: list[str] = []
 
     async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
         nonlocal model_calls
@@ -985,13 +1027,24 @@ def test_pydantic_adapter_default_tool_retries_recover_from_correctable_calls() 
             raise ModelRetry(f"invalid patch attempt {attempt}")
         return "patched"
 
-    adapter = PydanticAdapter(FunctionModel(respond))
+    adapter = PydanticAdapter(
+        FunctionModel(respond),
+        hook_handler=lambda event: hook_events.append(event.event),
+    )
     with adapter.tool_scope((ToolSpec(patch, "patch", risk="read_only"),)):
         result = adapter.run_sync("Apply the patch.")
 
     assert result.output == "done"
     assert model_calls == 4
     assert tool_calls == 3
+    assert [event for event in hook_events if "tool_use" in event] == [
+        "pre_tool_use",
+        "post_tool_use_failure",
+        "pre_tool_use",
+        "post_tool_use_failure",
+        "pre_tool_use",
+        "post_tool_use",
+    ]
 
 
 def test_pydantic_adapter_default_tool_retries_remain_bounded() -> None:

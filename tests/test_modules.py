@@ -653,6 +653,41 @@ def test_internal_filesystem_apply_patch_rejects_ambiguous_update(
         rt.run_main()
 
 
+@pytest.mark.parametrize(
+    "operation,old_text,expected",
+    [
+        ("update", "missing", "not found"),
+        ("update", "same", "2 matches"),
+        ("update", "", "must not be empty"),
+        ("add", "", "already exists"),
+        ("replace", "same", "one of: add, update, append"),
+    ],
+)
+def test_agent_patch_rejections_preserve_file_and_do_not_raise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    old_text: str,
+    expected: str,
+) -> None:
+    from kedi.tool_context import kedi_tool_call_context
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data.txt"
+    data.write_text("same\nsame\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: filesystem\n\n"
+        f'= <apply_patch(`{operation!r}`, `"data.txt"`, `"new"`, `{old_text!r}`, `"new"`)>\n',
+        encoding="utf-8",
+    )
+    with kedi_tool_call_context():
+        result = _compile_file(main).run_main()
+    assert result.startswith("Patch rejected; no changes made:")
+    assert expected in result
+    assert data.read_text(encoding="utf-8") == "same\nsame\n"
+
+
 def test_internal_filesystem_rejects_out_of_root_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

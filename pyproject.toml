@@ -62,7 +62,7 @@ claude = [
     "claude-agent-sdk==0.2.148",
 ]
 codex-model = [
-    "codex-auth-helper==1.6.1; python_version >= '3.11'",
+    "codex-auth-helper[websocket]==1.8.0; python_version >= '3.11'",
 ]
 dspy = [
     "dspy==3.3.1",
@@ -89,7 +89,7 @@ playground = [
     "uvicorn>=0.47,<0.48",
 ]
 terminal-bench = [
-    "codex-auth-helper==1.6.1; python_version >= '3.12'",
+    "codex-auth-helper==1.8.0; python_version >= '3.12'",
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 
@@ -118,6 +118,10 @@ conflicts = [
     [
         { extra = "terminal-bench" },
         { group = "dev" },
+    ],
+    [
+        { extra = "terminal-bench" },
+        { extra = "codex-model" },
     ],
 ]
 

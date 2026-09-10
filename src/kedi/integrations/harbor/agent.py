@@ -2,12 +2,15 @@ from __future__ import annotations
 
 # pyright: reportMissingImports=false
 
+import asyncio
 import json
 import math
 import os
 import re
 import shlex
 import tempfile
+import time
+import tomllib  # ty: ignore[unresolved-import]  # Harbor hosts require Python 3.12+.
 from datetime import timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, cast
@@ -22,6 +25,26 @@ from .records import HarnessPolicy
 
 
 _LOGFIRE_CREDENTIALS_FILENAME = "logfire_credentials.json"
+_RUNNER_PID = PurePosixPath("/installed-agent/kedi-runner.pid")
+_RUNNER_SHUTDOWN_GRACE_SECONDS = 20
+_RUNNER_FINALIZATION_TIMEOUT_SECONDS = _RUNNER_SHUTDOWN_GRACE_SECONDS + 5
+
+
+def _setup_command(steps: tuple[tuple[str, str], ...], log_path: PurePosixPath) -> str:
+    commands = ["set -e"]
+    for phase, command in steps:
+        for state, operation in (("started", command), ("completed", None)):
+            marker = shlex.quote(f"[kedi-setup] phase={phase} state={state} at=%s\\n")
+            commands.append(f'printf {marker} "$(date -u +%Y-%m-%dT%H:%M:%SZ)"')
+            if operation is not None:
+                commands.append(f"({operation})")
+    quoted_log = shlex.quote(log_path.as_posix())
+    return (
+        f"mkdir -p -- {shlex.quote(log_path.parent.as_posix())} || exit; "
+        "(" + "; ".join(commands) + f") > {quoted_log} 2>&1; "
+        'setup_status="$?"; '
+        f'cat -- {quoted_log}; exit "$setup_status"'
+    )
 
 
 def _resolve_logfire_token() -> str | None:
@@ -49,9 +72,11 @@ class KediAgent(BaseInstalledAgent):
     _CODEX_AUTH = PurePosixPath("/installed-agent/kedi-codex-auth.json")
     _KEDI_HOME = PurePosixPath("/installed-agent/kedi-home")
     _PYDANTIC_RUNTIME = "pydantic-ai-slim[anthropic,google,openai,openrouter]==2.36.0"
-    _CODEX_RUNTIME = "codex-auth-helper==1.6.1"
+    _CODEX_RUNTIME = "codex-auth-helper[websocket]==1.8.0"
     _LOGFIRE_RUNTIME = "logfire[httpx]==4.41.0"
+    _KEDI_OTEL_RUNTIME = "opentelemetry-instrumentation-kedi==0.1.0"
     _UV_RUNTIME = "uv==0.11.21"
+    _PIP_NETWORK_OPTIONS = "--retries 20 --timeout 120"
     _MANAGED_PYTHON = "3.11"
     _BOOTSTRAP_VENV = PurePosixPath("/installed-agent/kedi-bootstrap")
     _TREE_SITTER_KEDI_REPOSITORY = "https://github.com/kedi-lang/tree-sitter-kedi.git"
@@ -61,20 +86,29 @@ class KediAgent(BaseInstalledAgent):
         *args: Any,
         kedi_package: str | None = None,
         kedi_wheel: str | Path | None = None,
+        codex_auth_helper_distribution: str | Path | None = None,
+        kedi_otel_distribution: str | Path | None = None,
         adapter: str = "pydantic",
         effort: str | None = None,
         model_settings: dict[str, Any] | None = None,
         history_enabled: bool = True,
         artifacts_enabled: bool = True,
+        codemode_enabled: bool = False,
+        batching_guidance_enabled: bool = False,
+        request_observation: bool = False,
         prefix_cache_enabled: bool | None = None,
         compaction_mode: str = "disabled",
         compaction_threshold: int | None = None,
+        history_archive_threshold_tokens: int | None = None,
+        history_archive_preserve_tokens: int = 12_000,
         artifact_threshold_bytes: int = 16_384,
         artifact_quota_bytes: int = 256_000_000,
-        command_timeout_seconds: float = 120.0,
+        command_timeout_seconds: float = 600.0,
         terminal_preview_bytes: int = 32_768,
         terminal_output_limit_bytes: int = 512_000_000,
         retained_process_timeout_seconds: float = 3_600.0,
+        model_request_limit: int = 512,
+        model_cumulative_input_tokens: int = 50_000_000,
         runner_timeout_seconds: int | None = None,
         task_root: str | None = None,
         manifest_digest: str | None = None,
@@ -90,20 +124,42 @@ class KediAgent(BaseInstalledAgent):
         self._kedi_wheel = Path(kedi_wheel).expanduser().resolve() if kedi_wheel else None
         if self._kedi_wheel is not None and not self._kedi_wheel.is_file():
             raise FileNotFoundError(self._kedi_wheel)
+        self._codex_auth_helper_distribution = (
+            Path(codex_auth_helper_distribution).expanduser().resolve()
+            if codex_auth_helper_distribution
+            else None
+        )
+        if (
+            self._codex_auth_helper_distribution is not None
+            and not self._codex_auth_helper_distribution.is_file()
+        ):
+            raise FileNotFoundError(self._codex_auth_helper_distribution)
+        self._kedi_otel_distribution = (
+            Path(kedi_otel_distribution).expanduser().resolve() if kedi_otel_distribution else None
+        )
+        if self._kedi_otel_distribution is not None and not self._kedi_otel_distribution.is_file():
+            raise FileNotFoundError(self._kedi_otel_distribution)
         policy = HarnessPolicy(
             history=history_enabled,
             artifacts=artifacts_enabled,
+            codemode=codemode_enabled,
+            batching_guidance=batching_guidance_enabled,
+            request_observation=request_observation,
             prefix_cache=(
                 history_enabled if prefix_cache_enabled is None else prefix_cache_enabled
             ),
             compaction_mode=cast(Literal["disabled", "native"], compaction_mode),
             compaction_threshold=compaction_threshold,
+            history_archive_threshold_tokens=history_archive_threshold_tokens,
+            history_archive_preserve_tokens=history_archive_preserve_tokens,
             artifact_threshold_bytes=artifact_threshold_bytes,
             artifact_quota_bytes=artifact_quota_bytes,
             command_timeout_seconds=command_timeout_seconds,
             terminal_preview_bytes=terminal_preview_bytes,
             terminal_output_limit_bytes=terminal_output_limit_bytes,
             retained_process_timeout_seconds=retained_process_timeout_seconds,
+            model_request_limit=model_request_limit,
+            model_cumulative_input_tokens=model_cumulative_input_tokens,
         )
         if runner_timeout_seconds is not None and (
             not math.isfinite(runner_timeout_seconds) or runner_timeout_seconds <= 0
@@ -114,18 +170,27 @@ class KediAgent(BaseInstalledAgent):
         self._model_settings = dict(model_settings or {})
         self._history_enabled = policy.history
         self._artifacts_enabled = policy.artifacts
+        self._codemode_enabled = policy.codemode
+        self._batching_guidance_enabled = policy.batching_guidance
+        self._request_observation = policy.request_observation
         self._compaction_mode = policy.compaction_mode
         self._compaction_threshold = policy.compaction_threshold
+        self._history_archive_threshold_tokens = policy.history_archive_threshold_tokens
+        self._history_archive_preserve_tokens = policy.history_archive_preserve_tokens
         self._artifact_threshold_bytes = policy.artifact_threshold_bytes
         self._artifact_quota_bytes = policy.artifact_quota_bytes
         self._command_timeout_seconds = policy.command_timeout_seconds
         self._terminal_preview_bytes = policy.terminal_preview_bytes
         self._terminal_output_limit_bytes = policy.terminal_output_limit_bytes
         self._retained_process_timeout_seconds = policy.retained_process_timeout_seconds
+        self._model_request_limit = policy.model_request_limit
+        self._model_cumulative_input_tokens = policy.model_cumulative_input_tokens
         self._runner_timeout_seconds = runner_timeout_seconds
         self._task_root = task_root
         self._manifest_digest = manifest_digest
         self._codex_auth_file = self._resolve_codex_auth_file(codex_auth_file)
+        if self._codex_auth_helper_distribution is not None and self._codex_auth_file is None:
+            raise ValueError("codex_auth_helper_distribution requires a codex/ model")
         if tree_sitter_kedi_revision is not None and not re.fullmatch(
             r"[0-9a-f]{40}", tree_sitter_kedi_revision
         ):
@@ -190,28 +255,86 @@ class KediAgent(BaseInstalledAgent):
                 f"{self._TREE_SITTER_KEDI_REPOSITORY}@{self._tree_sitter_kedi_revision}"
             )
         if self._codex_auth_file is not None:
-            runtime_packages.append(self._CODEX_RUNTIME)
+            if self._codex_auth_helper_distribution is None:
+                runtime_packages.append(self._CODEX_RUNTIME)
+            else:
+                remote_codex_helper = (
+                    PurePosixPath("/installed-agent") / self._codex_auth_helper_distribution.name
+                )
+                await environment.upload_file(
+                    self._codex_auth_helper_distribution,
+                    remote_codex_helper.as_posix(),
+                )
+                runtime_packages.append(remote_codex_helper.as_posix())
         logfire_enabled = os.getenv("KEDI_HARBOR_LOGFIRE") == "1"
         if logfire_enabled:
             runtime_packages.append(self._LOGFIRE_RUNTIME)
-        create_runtime = (
+            if self._kedi_otel_distribution is None:
+                runtime_packages.append(self._KEDI_OTEL_RUNTIME)
+            else:
+                remote_kedi_otel = (
+                    PurePosixPath("/installed-agent") / self._kedi_otel_distribution.name
+                )
+                await environment.upload_file(
+                    self._kedi_otel_distribution,
+                    remote_kedi_otel.as_posix(),
+                )
+                runtime_packages.append(remote_kedi_otel.as_posix())
+        bootstrap = (
             f"rm -rf {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
             f"python3 -m venv {shlex.quote(self._BOOTSTRAP_VENV.as_posix())} && "
             f"{self._BOOTSTRAP_VENV}/bin/python -m pip install "
-            f"--disable-pip-version-check {shlex.quote(self._UV_RUNTIME)} && "
+            f"--disable-pip-version-check {self._PIP_NETWORK_OPTIONS} "
+            f"{shlex.quote(self._UV_RUNTIME)}"
+        )
+        create_runtime = (
+            f"rm -rf {shlex.quote(self._VENV.as_posix())} && "
             f"{self._BOOTSTRAP_VENV}/bin/uv venv "
             f"--python {shlex.quote(self._MANAGED_PYTHON)} --managed-python --seed "
             f"{shlex.quote(self._VENV.as_posix())}"
         )
         await self.exec_as_root(
             environment,
-            command=(
-                f"rm -rf {shlex.quote(self._VENV.as_posix())} && "
-                f"{create_runtime} && "
-                f"{self._VENV}/bin/python -m pip install --disable-pip-version-check "
-                + " ".join(shlex.quote(package) for package in runtime_packages)
+            command=_setup_command(
+                (
+                    ("bootstrap", bootstrap),
+                    ("managed-python", create_runtime),
+                    (
+                        "runtime-packages",
+                        f"{self._VENV}/bin/python -m pip install --disable-pip-version-check "
+                        f"{self._PIP_NETWORK_OPTIONS} "
+                        + " ".join(shlex.quote(package) for package in runtime_packages),
+                    ),
+                ),
+                self.environment_logs_dir / "setup-runtime.log",
             ),
         )
+
+    def _execution_timeout(self, environment: BaseEnvironment) -> float | None:
+        """Read single-step Harbor timing policy without exposing task metadata to the agent."""
+        timeout = self._runner_timeout_seconds
+        config_path = self.logs_dir.parent / "config.json"
+        if not config_path.is_file():
+            return timeout
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        task_path = environment.environment_dir.parent / "task.toml"
+        with task_path.open("rb") as source:
+            task = tomllib.load(source)
+        if task.get("steps"):
+            # A phase-specific budget cannot be inferred from the whole-task budget.
+            self.logger.warning("Automatic runner deadlines only support single-step tasks")
+            return timeout
+        agent = config.get("agent", {})
+        base = agent.get("override_timeout_sec") or task.get("agent", {}).get("timeout_sec")
+        if base is None:
+            return timeout
+        multiplier = config.get("agent_timeout_multiplier")
+        if multiplier is None:
+            multiplier = config.get("timeout_multiplier", 1.0)
+        resolved = min(base, agent.get("max_timeout_sec") or math.inf) * multiplier
+        if not math.isfinite(resolved) or resolved <= 0:
+            raise ValueError("Harbor agent timeout must be positive and finite")
+        return min(timeout, resolved) if timeout is not None else resolved
 
     async def run(
         self,
@@ -221,6 +344,8 @@ class KediAgent(BaseInstalledAgent):
     ) -> None:
         if not self.model_name:
             raise ValueError("KediAgent requires a Harbor model name")
+        timeout_seconds = self._execution_timeout(environment)
+        deadline_unix = time.time() + timeout_seconds if timeout_seconds is not None else None
         await self._upload_config_text(
             environment,
             content=self.render_instruction(instruction),
@@ -278,6 +403,13 @@ class KediAgent(BaseInstalledAgent):
             self._compaction_mode,
             "--history-enabled" if self._history_enabled else "--no-history-enabled",
             "--artifacts-enabled" if self._artifacts_enabled else "--no-artifacts-enabled",
+            "--codemode-enabled" if self._codemode_enabled else "--no-codemode-enabled",
+            (
+                "--batching-guidance-enabled"
+                if self._batching_guidance_enabled
+                else "--no-batching-guidance-enabled"
+            ),
+            ("--request-observation" if self._request_observation else "--no-request-observation"),
             "--artifact-threshold-bytes",
             str(self._artifact_threshold_bytes),
             "--artifact-quota-bytes",
@@ -290,6 +422,10 @@ class KediAgent(BaseInstalledAgent):
             str(self._terminal_output_limit_bytes),
             "--retained-process-timeout-seconds",
             str(self._retained_process_timeout_seconds),
+            "--model-request-limit",
+            str(self._model_request_limit),
+            "--model-cumulative-input-tokens",
+            str(self._model_cumulative_input_tokens),
         ]
         if self.mcp_servers:
             command.extend(("--mcp-config", self._MCP_CONFIG.as_posix()))
@@ -299,27 +435,93 @@ class KediAgent(BaseInstalledAgent):
             command.extend(("--effort", self._effort))
         if self._compaction_threshold is not None:
             command.extend(("--compaction-threshold", str(self._compaction_threshold)))
-        if self._runner_timeout_seconds is not None:
-            command.extend(("--trial-timeout-seconds", str(self._runner_timeout_seconds)))
+        if self._history_archive_threshold_tokens is not None:
+            command.extend(
+                (
+                    "--history-archive-threshold-tokens",
+                    str(self._history_archive_threshold_tokens),
+                    "--history-archive-preserve-tokens",
+                    str(self._history_archive_preserve_tokens),
+                )
+            )
+        if timeout_seconds is not None:
+            command.extend(("--trial-timeout-seconds", str(timeout_seconds)))
+            command.extend(("--trial-deadline-unix", str(deadline_unix)))
         if self._manifest_digest is not None:
             command.extend(("--manifest-digest", self._manifest_digest))
         shell_prefix = "set -o pipefail; "
         if self._codex_auth_file is not None:
             cleanup = f"rm -f -- {shlex.quote(self._CODEX_AUTH.as_posix())}"
             shell_prefix += f"trap {shlex.quote(cleanup)} EXIT; "
+        quoted_pid_path = shlex.quote(_RUNNER_PID.as_posix())
+        exit_path = shlex.quote((self.environment_logs_dir / "runner-exit.json").as_posix())
+        exit_temp_path = shlex.quote((self.environment_logs_dir / ".runner-exit.tmp").as_posix())
         shell_command = (
-            shell_prefix + f"{shlex.join(command)} 2>&1 | tee {shlex.quote(output_path.as_posix())}"
+            shell_prefix
+            + f"rm -f -- {quoted_pid_path} {exit_path} {exit_temp_path}; "
+            + f"{shlex.join(command)} > {shlex.quote(output_path.as_posix())} 2>&1 & "
+            + 'runner_pid="$!"; '
+            + f"printf '%s\\n' \"$runner_pid\" > {quoted_pid_path}; "
+            + 'wait "$runner_pid"; runner_status="$?"; '
+            + 'printf \'{"schema_version":1,"exit_code":%s,"finished_at":"%s"}\\n\' '
+            + f'"$runner_status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > {exit_temp_path} && '
+            + f"mv -- {exit_temp_path} {exit_path}; "
+            + f'rm -f -- {quoted_pid_path}; exit "$runner_status"'
         )
-        await self.exec_as_agent(
-            environment,
-            command=shell_command,
-            env=env,
-            cwd=self._task_root,
-            timeout_sec=(
-                self._runner_timeout_seconds + 30
-                if self._runner_timeout_seconds is not None
-                else None
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=shell_command,
+                env=env,
+                cwd=self._task_root,
+                timeout_sec=(
+                    math.ceil(max(0.0, deadline_unix - time.time())) + 30
+                    if deadline_unix is not None
+                    else None
+                ),
+            )
+        except asyncio.CancelledError:
+            try:
+                await self._finalize_cancelled_runner(environment, trial_id)
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                self.logger.warning(
+                    "Remote runner cleanup did not finish (%s); Harbor still owns sandbox teardown",
+                    type(exc).__name__,
+                )
+            raise
+
+    async def _finalize_cancelled_runner(
+        self,
+        environment: BaseEnvironment,
+        trial_id: str,
+    ) -> None:
+        pid_path = shlex.quote(_RUNNER_PID.as_posix())
+        expected_trial = shlex.quote(trial_id)
+        command = (
+            f"pid=$(cat {pid_path} 2>/dev/null || true); "
+            "case \"$pid\" in ''|*[!0-9]*) exit 0;; esac; "
+            '[ -r "/proc/$pid/cmdline" ] || exit 0; '
+            "tr '\\000' '\\n' < \"/proc/$pid/cmdline\" "
+            "| grep -Fx -- 'kedi.integrations.harbor.runner' >/dev/null || exit 0; "
+            f"tr '\\000' '\\n' < \"/proc/$pid/cmdline\" | grep -Fx -- {expected_trial} "
+            ">/dev/null || exit 0; "
+            'kill -TERM "$pid" 2>/dev/null || true; '
+            'remaining=200; while kill -0 "$pid" 2>/dev/null && '
+            '[ "$remaining" -gt 0 ]; do sleep 0.1; remaining=$((remaining - 1)); done; '
+            'kill -KILL "$pid" 2>/dev/null || true; '
+            f"rm -f -- {pid_path}"
+        )
+        # The remote command timeout cannot bound a stalled transport or log poll.
+        await asyncio.wait_for(
+            self.exec_as_agent(
+                environment,
+                command=command,
+                cwd=self._task_root,
+                timeout_sec=_RUNNER_FINALIZATION_TIMEOUT_SECONDS,
             ),
+            timeout=_RUNNER_FINALIZATION_TIMEOUT_SECONDS,
         )
 
     def _resolve_codex_auth_file(self, configured: str | Path | None) -> Path | None:
@@ -360,7 +562,7 @@ class KediAgent(BaseInstalledAgent):
         if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
             raise RuntimeError("Codex auth source is unavailable")
 
-        from codex_auth_helper import (  # ty: ignore[unresolved-import]
+        from codex_auth_helper import (
             CodexAuthConfig,
             CodexAuthState,
             CodexAuthStore,

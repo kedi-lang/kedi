@@ -36,6 +36,14 @@ def cli() -> None:
 @click.option("--kedi-wheel", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-package")
 @click.option(
+    "--codex-auth-helper-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--kedi-otel-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
     "--tree-sitter-kedi-distribution",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
 )
@@ -99,15 +107,39 @@ def cli() -> None:
     show_default=True,
 )
 @click.option("--compaction-threshold", type=click.IntRange(min=1))
+@click.option(
+    "--history-archive-threshold-tokens",
+    type=click.IntRange(min=1),
+)
+@click.option(
+    "--history-archive-preserve-tokens",
+    type=click.IntRange(min=1),
+    default=12_000,
+    show_default=True,
+)
 @click.option("--history/--no-history", default=True, show_default=True)
 @click.option("--artifacts/--no-artifacts", default=True, show_default=True)
+@click.option("--codemode/--no-codemode", default=False, show_default=True)
+@click.option("--batching-guidance/--no-batching-guidance", default=False, show_default=True)
+@click.option(
+    "--request-observation/--no-request-observation",
+    default=False,
+    show_default=True,
+)
 @click.option("--artifact-threshold-bytes", type=click.IntRange(min=1), default=16_384)
 @click.option("--artifact-quota-bytes", type=click.IntRange(min=1), default=256_000_000)
-@click.option("--command-timeout-seconds", type=float, default=120.0, show_default=True)
+@click.option("--command-timeout-seconds", type=float, default=600.0, show_default=True)
 @click.option(
     "--retained-process-timeout-seconds",
     type=click.FloatRange(min=0, min_open=True),
     default=3_600.0,
+    show_default=True,
+)
+@click.option("--model-request-limit", type=click.IntRange(min=1), default=512, show_default=True)
+@click.option(
+    "--model-cumulative-input-tokens",
+    type=click.IntRange(min=1),
+    default=50_000_000,
     show_default=True,
 )
 @click.option("--kedi-root", type=click.Path(path_type=Path), default=Path("."))
@@ -119,6 +151,8 @@ def create_manifest(
     tasks: tuple[str, ...],
     kedi_wheel: Path | None,
     kedi_package: str | None,
+    codex_auth_helper_distribution: Path | None,
+    kedi_otel_distribution: Path | None,
     tree_sitter_kedi_distribution: Path | None,
     allow_dirty: bool,
     environment: str,
@@ -138,12 +172,19 @@ def create_manifest(
     retry_all_exceptions: bool,
     compaction_mode: str,
     compaction_threshold: int | None,
+    history_archive_threshold_tokens: int | None,
+    history_archive_preserve_tokens: int,
     history: bool,
     artifacts: bool,
+    codemode: bool,
+    batching_guidance: bool,
+    request_observation: bool,
     artifact_threshold_bytes: int,
     artifact_quota_bytes: int,
     command_timeout_seconds: float,
     retained_process_timeout_seconds: float,
+    model_request_limit: int,
+    model_cumulative_input_tokens: int,
     kedi_root: Path,
 ) -> None:
     if kedi_wheel is not None and kedi_package is not None:
@@ -165,6 +206,14 @@ def create_manifest(
         kedi_dirty=dirty,
         kedi_package=kedi_package,
         kedi_wheel_sha256=sha256_file(kedi_wheel) if kedi_wheel is not None else None,
+        codex_auth_helper_distribution_sha256=(
+            sha256_file(codex_auth_helper_distribution)
+            if codex_auth_helper_distribution is not None
+            else None
+        ),
+        kedi_otel_distribution_sha256=(
+            sha256_file(kedi_otel_distribution) if kedi_otel_distribution is not None else None
+        ),
         tree_sitter_kedi_revision=(
             current_gitlink_revision(kedi_root.resolve(), "tree-sitter-kedi")
             if kedi_wheel is not None or tree_sitter_kedi_distribution is not None
@@ -196,13 +245,20 @@ def create_manifest(
         policy=HarnessPolicy(
             artifacts=artifacts,
             history=history,
+            codemode=codemode,
+            batching_guidance=batching_guidance,
+            request_observation=request_observation,
             prefix_cache=history,
             compaction_mode=cast(Literal["disabled", "native"], compaction_mode),
             compaction_threshold=compaction_threshold,
+            history_archive_threshold_tokens=history_archive_threshold_tokens,
+            history_archive_preserve_tokens=history_archive_preserve_tokens,
             artifact_threshold_bytes=artifact_threshold_bytes,
             artifact_quota_bytes=artifact_quota_bytes,
             command_timeout_seconds=command_timeout_seconds,
             retained_process_timeout_seconds=retained_process_timeout_seconds,
+            model_request_limit=model_request_limit,
+            model_cumulative_input_tokens=model_cumulative_input_tokens,
         ),
     )
     manifest.write(output.resolve())
@@ -213,6 +269,14 @@ def create_manifest(
 @click.argument("manifest_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-wheel", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--kedi-package")
+@click.option(
+    "--codex-auth-helper-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--kedi-otel-distribution",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
 @click.option(
     "--tree-sitter-kedi-distribution",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -226,6 +290,8 @@ def run_manifest(
     *,
     kedi_wheel: Path | None,
     kedi_package: str | None,
+    codex_auth_helper_distribution: Path | None,
+    kedi_otel_distribution: Path | None,
     tree_sitter_kedi_distribution: Path | None,
     jobs_dir: Path | None,
     job_name: str | None,
@@ -244,6 +310,14 @@ def run_manifest(
         manifest,
         distribution=tree_sitter_kedi_distribution,
     )
+    resolved_codex_auth_helper_distribution = _resolve_codex_auth_helper_distribution(
+        manifest,
+        distribution=codex_auth_helper_distribution,
+    )
+    resolved_kedi_otel_distribution = _resolve_kedi_otel_distribution(
+        manifest,
+        distribution=kedi_otel_distribution,
+    )
     executable = _resolve_executable(harbor_command, allow_missing=dry_run)
     effective_jobs_dir = (jobs_dir or Path("jobs")).resolve()
     effective_job_name = job_name or f"kedi-{manifest.material_digest[:12]}"
@@ -252,6 +326,8 @@ def run_manifest(
         harbor_command=executable,
         kedi_wheel=resolved_wheel,
         kedi_package=resolved_package,
+        codex_auth_helper_distribution=resolved_codex_auth_helper_distribution,
+        kedi_otel_distribution=resolved_kedi_otel_distribution,
         jobs_dir=effective_jobs_dir,
         job_name=effective_job_name,
         tree_sitter_kedi_distribution=resolved_tree_sitter_distribution,
@@ -292,6 +368,8 @@ def _harbor_run_command(
     harbor_command: str,
     kedi_wheel: Path | None,
     kedi_package: str | None,
+    codex_auth_helper_distribution: Path | None = None,
+    kedi_otel_distribution: Path | None = None,
     jobs_dir: Path | None,
     job_name: str | None,
     tree_sitter_kedi_distribution: Path | None = None,
@@ -333,6 +411,12 @@ def _harbor_run_command(
         "--agent-kwarg",
         f"artifacts_enabled={json.dumps(manifest.policy.artifacts)}",
         "--agent-kwarg",
+        f"codemode_enabled={json.dumps(manifest.policy.codemode)}",
+        "--agent-kwarg",
+        f"batching_guidance_enabled={json.dumps(manifest.policy.batching_guidance)}",
+        "--agent-kwarg",
+        f"request_observation={json.dumps(manifest.policy.request_observation)}",
+        "--agent-kwarg",
         f"prefix_cache_enabled={json.dumps(manifest.policy.prefix_cache)}",
         "--agent-kwarg",
         f"artifact_threshold_bytes={manifest.policy.artifact_threshold_bytes}",
@@ -347,8 +431,41 @@ def _harbor_run_command(
         "--agent-kwarg",
         f"retained_process_timeout_seconds={manifest.policy.retained_process_timeout_seconds}",
         "--agent-kwarg",
+        f"model_request_limit={manifest.policy.model_request_limit}",
+        "--agent-kwarg",
+        f"model_cumulative_input_tokens={manifest.policy.model_cumulative_input_tokens}",
+        "--agent-kwarg",
         f"manifest_digest={manifest.material_digest}",
     ]
+    if kedi_otel_distribution is not None:
+        command.extend(
+            (
+                "--agent-kwarg",
+                f"kedi_otel_distribution={kedi_otel_distribution.resolve()}",
+            )
+        )
+    if codex_auth_helper_distribution is not None:
+        command.extend(
+            (
+                "--agent-kwarg",
+                (f"codex_auth_helper_distribution={codex_auth_helper_distribution.resolve()}"),
+            )
+        )
+    if manifest.policy.history_archive_threshold_tokens is not None:
+        command.extend(
+            (
+                "--agent-kwarg",
+                (
+                    "history_archive_threshold_tokens="
+                    f"{manifest.policy.history_archive_threshold_tokens}"
+                ),
+                "--agent-kwarg",
+                (
+                    "history_archive_preserve_tokens="
+                    f"{manifest.policy.history_archive_preserve_tokens}"
+                ),
+            )
+        )
     for exception_name in manifest.harbor_policy.retry_include_exceptions:
         command.extend(("--retry-include", exception_name))
     for exception_name in manifest.harbor_policy.retry_exclude_exceptions:
@@ -486,6 +603,52 @@ def _resolve_tree_sitter_kedi_distribution(
     if sha256_file(resolved) != expected:
         raise click.ClickException(
             "tree-sitter-kedi distribution SHA-256 does not match the immutable run manifest"
+        )
+    return resolved
+
+
+def _resolve_codex_auth_helper_distribution(
+    manifest: RunManifest,
+    *,
+    distribution: Path | None,
+) -> Path | None:
+    expected = manifest.codex_auth_helper_distribution_sha256
+    if expected is None:
+        if distribution is not None:
+            raise click.UsageError(
+                "the manifest does not record a codex-auth-helper distribution digest; "
+                "recreate it with --codex-auth-helper-distribution"
+            )
+        return None
+    if distribution is None:
+        raise click.UsageError("this manifest requires --codex-auth-helper-distribution")
+    resolved = distribution.expanduser().resolve()
+    if sha256_file(resolved) != expected:
+        raise click.ClickException(
+            "codex-auth-helper distribution SHA-256 does not match the immutable run manifest"
+        )
+    return resolved
+
+
+def _resolve_kedi_otel_distribution(
+    manifest: RunManifest,
+    *,
+    distribution: Path | None,
+) -> Path | None:
+    expected = manifest.kedi_otel_distribution_sha256
+    if expected is None:
+        if distribution is not None:
+            raise click.UsageError(
+                "the manifest does not record a kedi-otel distribution digest; "
+                "recreate it with --kedi-otel-distribution"
+            )
+        return None
+    if distribution is None:
+        raise click.UsageError("this manifest requires --kedi-otel-distribution")
+    resolved = distribution.expanduser().resolve()
+    if sha256_file(resolved) != expected:
+        raise click.ClickException(
+            "kedi-otel distribution SHA-256 does not match the immutable run manifest"
         )
     return resolved
 

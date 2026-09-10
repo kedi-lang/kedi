@@ -251,20 +251,11 @@ def test_pydantic_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> N
 
     with adapter.profile_override(AgentProfile(effort="max")):
         pass
-    assert entered[-1] == {
-        "spec": {
-            "capabilities": [
-                {
-                    "name": "Thinking",
-                    "arguments": {"effort": "xhigh"},
-                }
-            ]
-        }
-    }
+    assert entered == [{"model": "anthropic:claude"}]
 
     with adapter.profile_override(AgentProfile(effort="low")):
         pass
-    assert entered[-1]["spec"]["capabilities"][0]["arguments"] == {"effort": "low"}
+    assert entered == [{"model": "anthropic:claude"}]
 
 
 def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:

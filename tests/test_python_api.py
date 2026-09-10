@@ -731,7 +731,7 @@ def test_async_query_yields_event_loop_while_blocked() -> None:
 
 
 def test_query_runs_under_parallel_context(adapter: ApiAdapter) -> None:
-    # kedi.parallel() opts the query into the threaded engine; a single-template query still
+    # kedi.parallel() overrides the shared worker bound; a single-template query still
     # returns its concrete result (drained + forced at the API boundary).
     @kedi.query
     def answer() -> str:

@@ -109,7 +109,7 @@ class _APIConfig:
     tools: Mapping[str, Callable[..., Any]] = field(default_factory=dict)
     env: Mapping[str, Any] = field(default_factory=dict)
     conversation: ConversationState | None = None
-    parallel: bool = False
+    parallel: bool | None = None
     max_workers: int = 8
     loop_iteration_limit: int = 10_000
 
@@ -122,6 +122,17 @@ class CacheInfo:
 
 _DEFAULT_CONFIG = _APIConfig()
 _config_var: ContextVar[_APIConfig] = ContextVar("kedi_api_config", default=_DEFAULT_CONFIG)
+
+
+def _execution_engine(config: _APIConfig) -> Any:
+    from .core import _default_engine, shared_thread_engine
+    from .engine import SequentialEngine
+
+    if config.parallel is False:
+        return SequentialEngine()
+    if config.parallel is True:
+        return shared_thread_engine(max_workers=config.max_workers)
+    return _default_engine(max_workers=config.max_workers)
 
 
 def _callable_name(fn: Callable[..., Any]) -> str:
@@ -574,16 +585,11 @@ def _decorate_kedi_program(
                 assert cache_flight is not None
                 return cast(R, _isolate_cached(cache_flight.future.result()))
         try:
-            engine = None
-            if config.parallel:
-                from .core import shared_thread_engine
-
-                engine = shared_thread_engine(max_workers=config.max_workers)
             runtime = compile_program(
                 active_program,
                 adapter=active_adapter,
                 runtime_globals=runtime_globals,
-                engine=engine,
+                engine=_execution_engine(config),
                 conversation_state=conversation,
                 loop_iteration_limit=config.loop_iteration_limit,
             )
@@ -739,7 +745,7 @@ def _build_config(
     if load_env:
         dotenv.load_dotenv()
 
-    base_parallel = False if base is None else base.parallel
+    base_parallel = None if base is None else base.parallel
     base_max_workers = 8 if base is None else base.max_workers
     resolved_parallel = base_parallel if parallel is None else parallel
     resolved_max_workers = base_max_workers if max_workers is None else max_workers
@@ -865,8 +871,8 @@ def configure(
 ) -> None:
     """Set the default Python API configuration for the current context.
 
-    ``parallel=True`` runs independent template calls concurrently (promise pipelining); it is
-    opt-in. ``max_workers`` bounds the shared worker pool.
+    Independent template calls run concurrently by default (promise pipelining).
+    ``parallel=False`` selects sequential execution; ``max_workers`` bounds the shared pool.
     """
     _config_var.set(
         _build_config(
@@ -1075,7 +1081,6 @@ def interactive(
     **adapter_kwargs: Any,
 ) -> InteractiveSession:
     """Create a process-local incremental Kedi execution session."""
-    from .core import shared_thread_engine
     from .interactive_session import InteractiveSession
 
     config = _build_config(
@@ -1104,9 +1109,7 @@ def interactive(
     owns_conversation = active_conversation is None
     if active_conversation is None:
         active_conversation = ConversationState()
-    active_engine = engine
-    if active_engine is None and config.parallel:
-        active_engine = shared_thread_engine(max_workers=config.max_workers)
+    active_engine = engine if engine is not None else _execution_engine(config)
     return InteractiveSession(
         adapter=_build_adapter(config),
         executor=executor,

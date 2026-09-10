@@ -11,6 +11,7 @@ from kedi.agent_adapter.request_budget import (
     ModelRequestBudgetError,
     ModelRequestBudgetLimits,
     estimate_request_tokens,
+    use_model_request_budget_limits,
 )
 
 
@@ -36,6 +37,17 @@ from kedi.agent_adapter.request_budget import (
 def test_model_request_budget_limits_validate(kwargs: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         ModelRequestBudgetLimits(**kwargs)  # type: ignore[arg-type]
+
+
+def test_model_request_budget_limits_can_be_scoped_without_changing_defaults() -> None:
+    scoped = _limits(request_limit=512, cumulative_input_tokens=50_000_000)
+    explicit = _limits(request_limit=7)
+
+    with use_model_request_budget_limits(scoped):
+        assert ModelRequestBudget().limits is scoped
+        assert ModelRequestBudget(explicit).limits is explicit
+
+    assert ModelRequestBudget().limits == ModelRequestBudgetLimits()
 
 
 def _limits(**kwargs: object) -> ModelRequestBudgetLimits:

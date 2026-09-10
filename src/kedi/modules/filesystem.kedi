@@ -10,6 +10,11 @@ _MAX_READ_BYTES = 1_000_000
 _MAX_READ_CHARS = 65_536
 _MAX_DIRECTORY_ENTRIES = 1_000
 
+def _reject_patch(message: str, error_type: type[Exception] = ValueError) -> str:
+    if inside_kedi_tool_call():
+        return f"Patch rejected; no changes made: {message}. Read the current file and use a unique exact old_text for update."
+    raise error_type(message)
+
 def _is_secret_file(path: Path) -> bool:
     return path.name == ".env" or path.name.startswith(".env.")
 
@@ -124,25 +129,26 @@ def _read_text_chunks(path: Path, *, offset: int, limit: int | None):
 
     Returns:
         str: Summary of applied file operations.
+            Expected edit conflicts return 'Patch rejected; no changes made' to agents.
     ###
     = ```
     op = operation.strip().lower()
     path = _safe_path(file_path)
     if op == "add":
         if path.exists():
-            raise FileExistsError(f"file already exists: {file_path}")
+            return _reject_patch(f"file already exists: {file_path}", FileExistsError)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return f"added {path}"
     if op == "update":
         if old_text == "":
-            raise ValueError("old_text must not be empty for update")
+            return _reject_patch("old_text must not be empty for update")
         text = path.read_text(encoding="utf-8")
         matches = text.count(old_text)
         if matches == 0:
-            raise ValueError(f"old_text not found in {file_path}")
+            return _reject_patch(f"old_text not found in {file_path}")
         if matches > 1:
-            raise ValueError(f"old_text is ambiguous in {file_path}")
+            return _reject_patch(f"old_text is ambiguous in {file_path} ({matches} matches)")
         path.write_text(text.replace(old_text, new_text, 1), encoding="utf-8")
         return f"updated {path}"
     if op == "append":
@@ -150,7 +156,7 @@ def _read_text_chunks(path: Path, *, offset: int, limit: int | None):
         with path.open("a", encoding="utf-8") as handle:
             handle.write(content)
         return f"appended {path}"
-    raise ValueError("operation must be one of: add, update, append")
+    return _reject_patch("operation must be one of: add, update, append")
     ```
 
 @path_exists(path: str) -> bool:

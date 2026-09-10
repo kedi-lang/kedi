@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -11,12 +12,20 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import wraps
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
 from ... import ArtifactStream, tool
-from ...agent_adapter.hooks import HookEvent, PostToolUseEvent
+from ...agent_adapter.hooks import (
+    HookEvent,
+    PostToolUseEvent,
+    PostToolUseFailureEvent,
+    PreToolUseRequest,
+)
+from .process_groups import finish_process_group
 from .records import VerificationState, atomic_write_json, is_secret_name, redact_text, utc_now
 
 OutputStream = Literal["stdout", "stderr", "combined"]
@@ -59,11 +68,22 @@ _READ_ONLY_COMMANDS = frozenset({"cat", "file", "head", "ls", "pwd", "stat", "ta
 _READ_ONLY_GIT_COMMANDS = frozenset(
     {"diff", "grep", "log", "ls-files", "rev-parse", "show", "status"}
 )
+_TOOL_AUDIT_PREVIEW_CHARS = 4_096
+_TOOL_AUDIT_KEY_CHARS = 256
+_TOOL_AUDIT_MAX_ITEMS = 32
+_TOOL_AUDIT_MAX_DEPTH = 4
 
 
 def _terminal_tool(*, risk: Literal["read_only", "mutating"]) -> Any:
     def decorate(fn: Any) -> Any:
-        wrapped = tool(risk=risk)(fn)
+        @wraps(fn)
+        def invoke(self: TerminalSession, *args: Any, **kwargs: Any) -> Any:
+            result = fn(self, *args, **kwargs)
+            if isinstance(result, dict):
+                self._add_time_notice(result)
+            return result
+
+        wrapped = tool(risk=risk)(invoke)
         setattr(wrapped, "__kedi_tool_kind__", "terminal")
         return wrapped
 
@@ -87,13 +107,14 @@ class _BytePreview:
             del self.tail[: len(self.tail) - self.limit]
 
     def render(self) -> tuple[str, bool, bool]:
-        truncated = self.total_bytes > len(self.head)
+        has_tail = self.total_bytes > len(self.head)
+        truncated = self.total_bytes > len(self.head) + len(self.tail)
         payload = bytes(self.head)
-        if self.total_bytes > len(self.head) + len(self.tail):
+        if truncated:
             omitted = self.total_bytes - len(self.head) - len(self.tail)
             payload += f"\n... {omitted} bytes omitted ...\n".encode()
             payload += bytes(self.tail)
-        elif truncated:
+        elif has_tail:
             overlap = max(0, len(self.head) + len(self.tail) - self.total_bytes)
             payload += bytes(self.tail[overlap:])
         invalid_utf8 = False
@@ -134,6 +155,7 @@ class _ManagedProcess:
     output_limited: bool = False
     limit_termination_started: bool = False
     recorded: bool = False
+    verification_recorded: bool = False
 
 
 class TerminalSession:
@@ -144,15 +166,20 @@ class TerminalSession:
         *,
         root: Path,
         records_dir: Path,
-        command_timeout_seconds: float = 120.0,
+        cwd_root: Path | None = None,
+        command_timeout_seconds: float = 600.0,
         preview_bytes: int = 32_768,
         output_limit_bytes: int = 512_000_000,
         deadline_monotonic: float | None = None,
+        agent_deadline_monotonic: float | None = None,
         finalization_reserve_seconds: float = 0.0,
         artifacts_enabled: bool = True,
         retained_process_timeout_seconds: float = 3_600.0,
     ) -> None:
         self.root = root.resolve()
+        self.cwd_root = (cwd_root or self.root).resolve()
+        if not self.root.is_relative_to(self.cwd_root):
+            raise ValueError("root must be inside cwd_root")
         self.records_dir = records_dir.resolve()
         self.output_dir = self.records_dir / "terminal"
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -163,8 +190,18 @@ class TerminalSession:
         self.command_timeout_seconds = command_timeout_seconds
         self.preview_bytes = preview_bytes
         self.output_limit_bytes = output_limit_bytes
-        self.deadline_monotonic = deadline_monotonic
+        self._execution_deadline_monotonic = deadline_monotonic
+        deadlines = [
+            value for value in (deadline_monotonic, agent_deadline_monotonic) if value is not None
+        ]
+        self.deadline_monotonic = min(deadlines) if deadlines else None
         self.finalization_reserve_seconds = finalization_reserve_seconds
+        self._time_notice_threshold = (
+            min(120.0, max(0.0, self.deadline_monotonic - time.monotonic()) * 0.2)
+            if self.deadline_monotonic is not None
+            else 0.0
+        )
+        self._time_notice_sent = False
         self.artifacts_enabled = artifacts_enabled
         if (
             not math.isfinite(retained_process_timeout_seconds)
@@ -184,6 +221,24 @@ class TerminalSession:
         self._verification_updated_at: str | None = None
         self._commands: list[dict[str, Any]] = []
         self._events_path = self.records_dir / "terminal-events.jsonl"
+        self._tool_events_path = self.records_dir / "tool-events.jsonl"
+        self._tool_event_count = 0
+        self._tool_failure_count = 0
+        self._tool_audit_errors = 0
+
+    def _add_time_notice(self, result: dict[str, Any]) -> None:
+        if self.deadline_monotonic is None:
+            return
+        with self._lock:
+            remaining = self.deadline_monotonic - time.monotonic()
+            if self._time_notice_sent or remaining > self._time_notice_threshold:
+                return
+            result["execution_budget"] = {
+                "remaining_seconds": max(0, math.floor(remaining)),
+                "finalization_reserve_seconds": self.finalization_reserve_seconds,
+                "notice": "Execution time is nearly exhausted; the deadline has not changed.",
+            }
+            self._time_notice_sent = True
 
     @property
     def tools(self) -> tuple[Any, ...]:
@@ -194,6 +249,7 @@ class TerminalSession:
             self.start_shell,
             self.retain_process,
             self.process_status,
+            self.wait_process,
             self.read_process_output,
             self.write_process_input,
             self.stop_process,
@@ -201,10 +257,11 @@ class TerminalSession:
             self.verification_status,
         )
         if self.artifacts_enabled:
-            return (*tools[:7], self.stream_process_output, *tools[7:])
+            return (*tools[:8], self.stream_process_output, *tools[8:])
         return tools
 
     def hook_handler(self, event: HookEvent) -> None:
+        self._record_tool_event(event)
         if isinstance(event, PostToolUseEvent) and event.tool_name in _WRITE_TOOLS:
             self.invalidate_verification(f"{event.tool_name} changed the workspace")
 
@@ -217,15 +274,19 @@ class TerminalSession:
     ) -> dict[str, Any]:
         """Run one foreground command without shell expansion.
 
+        Use ``start_process`` instead for servers, emulators, daemons, and other
+        commands that are expected to keep running after startup.
+
         Args:
             argv: Exact executable and arguments, such as ["pytest", "-q"].
-            cwd: Working directory inside the assigned task root.
-            timeout_seconds: Optional timeout bounded by the configured ceiling and trial deadline.
+            cwd: Working directory inside the configured execution scope.
+            timeout_seconds: Optional shorter timeout. Omit it for long builds and test
+                suites so the configured command ceiling and trial deadline apply.
         """
         normalized = _validated_argv(argv)
         managed = self._start(normalized, cwd=cwd, shell=False, background=False)
         if isinstance(managed, dict):
-            return managed
+            return _foreground_result(managed)
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
     @_terminal_tool(risk="mutating")
@@ -235,17 +296,26 @@ class TerminalSession:
         cwd: str = ".",
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """Run a foreground Bash command when pipes, redirects, or expansion are required."""
+        """Run a foreground Bash command when pipes, redirects, or expansion are required.
+
+        Use ``start_shell`` instead for servers, emulators, daemons, and other
+        commands that are expected to keep running after startup.
+        Omit ``timeout_seconds`` for long builds and test suites so the configured
+        command ceiling and trial deadline apply.
+        """
         if not command.strip():
             raise ValueError("shell command cannot be empty")
         managed = self._start(command, cwd=cwd, shell=True, background=False)
         if isinstance(managed, dict):
-            return managed
+            return _foreground_result(managed)
         return self._wait(managed, timeout_seconds=timeout_seconds)
 
     @_terminal_tool(risk="mutating")
     def start_process(self, argv: list[str], cwd: str = ".") -> dict[str, Any]:
-        """Start a background process without shell expansion and return its process ID."""
+        """Start a background command without shell expansion.
+
+        Use this for services or finite jobs that will be followed with ``wait_process``.
+        """
         managed = self._start(
             _validated_argv(argv),
             cwd=cwd,
@@ -259,7 +329,10 @@ class TerminalSession:
 
     @_terminal_tool(risk="mutating")
     def start_shell(self, command: str, cwd: str = ".") -> dict[str, Any]:
-        """Start a background Bash command when shell syntax is required."""
+        """Start a background Bash command when shell syntax is required.
+
+        Use this for services or finite jobs that will be followed with ``wait_process``.
+        """
         if not command.strip():
             raise ValueError("shell command cannot be empty")
         managed = self._start(command, cwd=cwd, shell=True, background=True)
@@ -297,6 +370,51 @@ class TerminalSession:
         return self._snapshot(self._process(process_id))
 
     @_terminal_tool(risk="read_only")
+    def wait_process(
+        self,
+        process_id: str,
+        timeout_seconds: float = 300.0,
+    ) -> dict[str, Any]:
+        """Wait boundedly for a background process without stopping it on timeout.
+
+        Use this for builds and other finite jobs started with ``start_process`` or
+        ``start_shell``. The result returns immediately when the process finishes;
+        otherwise it reports compact progress after the requested wait. Use
+        ``process_status`` separately only when partial output must be inspected.
+        """
+        managed = self._process(process_id)
+        if not managed.background:
+            raise ValueError("only background processes can be waited on")
+        timeout = self._bounded_timeout(timeout_seconds)
+        wait_started = time.monotonic()
+        try:
+            managed.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            finish_process_group(managed.target_pgid or managed.process.pid)
+            self._join_readers(managed)
+            self._record_process(managed)
+            self._update_verification(managed)
+        snapshot = self._snapshot(managed)
+        waited_seconds = round(time.monotonic() - wait_started, 3)
+        if snapshot["status"] == "running":
+            return {
+                "process_id": process_id,
+                "status": "running",
+                "wait_completed": False,
+                "waited_seconds": waited_seconds,
+                "duration_seconds": round(float(snapshot["duration_seconds"]), 3),
+                "stdout_bytes": snapshot["stdout_bytes"],
+                "stderr_bytes": snapshot["stderr_bytes"],
+            }
+        result = _foreground_result(snapshot)
+        result["status"] = snapshot["status"]
+        result["wait_completed"] = True
+        result["waited_seconds"] = waited_seconds
+        return result
+
+    @_terminal_tool(risk="read_only")
     def read_process_output(
         self,
         process_id: str,
@@ -307,6 +425,9 @@ class TerminalSession:
         """Read a bounded byte range from a process output log.
 
         Binary data is returned as base64 while text data is returned as UTF-8.
+        When a terminal result reports a truncated stream, continue from the exact
+        process, stream, and offset arguments returned with that result instead of
+        rerunning the command.
         """
         if offset_bytes < 0:
             raise ValueError("offset_bytes must not be negative")
@@ -425,6 +546,10 @@ class TerminalSession:
                     for item in snapshots
                 ),
                 "verification": self.verification_status(),
+                "tool_events": self._tool_event_count,
+                "tool_failures": self._tool_failure_count,
+                "tool_audit_errors": self._tool_audit_errors,
+                "tool_events_path": str(self._tool_events_path),
                 "records": list(self._commands),
             }
 
@@ -447,6 +572,7 @@ class TerminalSession:
                 self._record_retained_process(managed)
                 continue
             self._terminate(managed, grace_seconds=1.0)
+        self._flush_tool_events()
 
     def close(self) -> None:
         with self._lock:
@@ -462,6 +588,7 @@ class TerminalSession:
             else:
                 self._join_readers(managed)
                 self._record_process(managed)
+        self._flush_tool_events()
 
     def _start(
         self,
@@ -578,8 +705,8 @@ class TerminalSession:
         state_path = stdout_path.parent / "state.json"
         control_path = stdout_path.parent / "control.json"
         retention_deadline = started_monotonic + self.retained_process_timeout_seconds
-        if self.deadline_monotonic is not None:
-            retention_deadline = min(retention_deadline, self.deadline_monotonic)
+        if self._execution_deadline_monotonic is not None:
+            retention_deadline = min(retention_deadline, self._execution_deadline_monotonic)
         atomic_write_json(control_path, {"retained": False})
         config = {
             "command": list(popen_command),
@@ -849,10 +976,13 @@ class TerminalSession:
         except subprocess.TimeoutExpired:
             managed.timed_out = True
             self._terminate(managed, grace_seconds=1.0)
+        else:
+            # A departed shell can leave descendants holding its output pipes open.
+            finish_process_group(managed.process.pid)
         self._join_readers(managed)
         self._record_process(managed)
         self._update_verification(managed)
-        return self._snapshot(managed)
+        return _foreground_result(self._snapshot(managed))
 
     def _terminate(self, managed: _ManagedProcess, *, grace_seconds: float) -> None:
         self._write_supervisor_control(managed, retained=False)
@@ -863,6 +993,7 @@ class TerminalSession:
             except subprocess.TimeoutExpired:
                 self._signal_process_group(managed, signal.SIGKILL)
                 managed.process.wait(timeout=5)
+            finish_process_group(managed.target_pgid or managed.process.pid)
         if managed.finished_monotonic is None:
             managed.finished_monotonic = time.monotonic()
         managed.stopped = True
@@ -939,7 +1070,7 @@ class TerminalSession:
             stderr, stderr_truncated, stderr_invalid = managed.stderr_preview.render()
             stdout_bytes = managed.stdout_preview.total_bytes
             stderr_bytes = managed.stderr_preview.total_bytes
-        return {
+        snapshot: dict[str, Any] = {
             "process_id": managed.process_id,
             "pid": managed.target_pid or managed.process.pid,
             "supervisor_pid": managed.process.pid if managed.background else None,
@@ -971,6 +1102,21 @@ class TerminalSession:
             "combined_path": str(managed.combined_path),
             "started_at": managed.started_at,
         }
+        for stream in ("stdout", "stderr"):
+            if not snapshot[f"{stream}_truncated"]:
+                continue
+            # Metadata sorts before stdout/stderr in the artifact JSON preview.
+            snapshot["output_excerpt"] = "head_tail"
+            snapshot.setdefault("output_continuations", {})[stream] = {
+                "tool": "read_process_output",
+                "arguments": {
+                    "process_id": managed.process_id,
+                    "stream": stream,
+                    "offset_bytes": 0,
+                    "max_bytes": 65_536,
+                },
+            }
+        return snapshot
 
     def _refresh_supervisor_state(self, managed: _ManagedProcess) -> dict[str, Any]:
         if managed.supervisor_state_path is None:
@@ -994,20 +1140,26 @@ class TerminalSession:
         atomic_write_json(managed.supervisor_control_path, {"retained": retained})
 
     def _update_verification(self, managed: _ManagedProcess) -> None:
-        if not _is_verification_command(managed.command, shell=managed.shell):
-            if not _is_read_only_command(managed.command, shell=managed.shell):
-                self.invalidate_verification("a command may have changed the workspace")
-            return
         with self._lock:
+            if managed.verification_recorded:
+                return
+            snapshot = self._snapshot(managed)
+            if snapshot["status"] == "running":
+                return
+            managed.verification_recorded = True
+            if not _is_verification_command(managed.command, shell=managed.shell):
+                if not _is_read_only_command(managed.command, shell=managed.shell):
+                    self.invalidate_verification("a command may have changed the workspace")
+                return
             self._verification_state = (
                 "passed"
-                if managed.process.returncode == 0
+                if snapshot["exit_code"] == 0
                 and not managed.timed_out
                 and not managed.output_limited
                 else "failed"
             )
             self._verification_command = managed.command
-            self._verification_exit_code = managed.process.returncode
+            self._verification_exit_code = snapshot["exit_code"]
             self._verification_updated_at = utc_now()
         self._write_event({"event": "verification_updated", **self.verification_status()})
 
@@ -1016,8 +1168,8 @@ class TerminalSession:
         if not path.is_absolute():
             path = self.root / path
         resolved = path.resolve()
-        if not resolved.is_relative_to(self.root):
-            raise PermissionError(f"working directory escapes task root: {raw}")
+        if not resolved.is_relative_to(self.cwd_root):
+            raise PermissionError(f"working directory escapes allowed cwd root: {raw}")
         if not resolved.is_dir():
             raise NotADirectoryError(str(resolved))
         return resolved
@@ -1081,6 +1233,179 @@ class TerminalSession:
                 handle.flush()
                 os.fsync(handle.fileno())
 
+    def _record_tool_event(self, event: HookEvent) -> None:
+        if not isinstance(event, (PreToolUseRequest, PostToolUseEvent, PostToolUseFailureEvent)):
+            return
+        try:
+            payload: dict[str, Any] = {
+                "timestamp": utc_now(),
+                "event": event.event,
+                "run_id": event.run_id,
+                "parent_run_id": event.parent_run_id,
+                "sequence": event.sequence,
+                "adapter": event.adapter_shortname,
+                "agent_name": event.agent_name,
+                "profile_name": event.profile_name,
+                "tool_call_id": event.tool_call_id,
+                "tool_name": event.tool_name,
+                "native_tool_name": event.native_tool_name,
+                "origin": event.origin,
+                "description": _audit_value(event.description),
+                "metadata": _audit_value(event.metadata),
+                "arguments": _audit_value(event.arguments),
+            }
+            if isinstance(event, PostToolUseEvent):
+                payload["result"] = _audit_value(event.result)
+            elif isinstance(event, PostToolUseFailureEvent):
+                payload.update(
+                    {
+                        "error_type": event.error_type,
+                        "error_message": _audit_value(event.error_message),
+                        "duration_seconds": event.duration_seconds,
+                        "interrupted": event.interrupted,
+                    }
+                )
+            line = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str) + "\n"
+            with self._lock:
+                next_count = self._tool_event_count + 1
+                with self._tool_events_path.open("a", encoding="utf-8") as handle:
+                    handle.write(line)
+                    handle.flush()
+                    if isinstance(event, PostToolUseFailureEvent) or next_count % 16 == 0:
+                        os.fsync(handle.fileno())
+                self._tool_event_count = next_count
+                if isinstance(event, PostToolUseFailureEvent):
+                    self._tool_failure_count += 1
+        except Exception:
+            with self._lock:
+                self._tool_audit_errors += 1
+
+    def _flush_tool_events(self) -> None:
+        try:
+            if not self._tool_events_path.is_file():
+                return
+            with self._tool_events_path.open("ab") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            with self._lock:
+                self._tool_audit_errors += 1
+
+
+def _audit_value(value: Any, *, depth: int = 0) -> Any:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return value
+        return {"kind": "float", "value": str(value)}
+    if isinstance(value, str):
+        return _audit_text(value)
+    if isinstance(value, bytes):
+        half = _TOOL_AUDIT_PREVIEW_CHARS // 2
+        preview = value if len(value) <= _TOOL_AUDIT_PREVIEW_CHARS else value[:half] + value[-half:]
+        text = preview.decode("utf-8", errors="replace")
+        return {
+            "kind": "bytes",
+            "size_bytes": len(value),
+            "sha256": hashlib.sha256(value).hexdigest(),
+            "preview": _audit_text(text),
+            "truncated": len(value) > _TOOL_AUDIT_PREVIEW_CHARS,
+        }
+    if isinstance(value, os.PathLike):
+        return _audit_text(os.fspath(value))
+    if depth >= _TOOL_AUDIT_MAX_DEPTH:
+        return {"kind": "depth_limit", "type": type(value).__name__}
+    if isinstance(value, Mapping):
+        output: dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= _TOOL_AUDIT_MAX_ITEMS:
+                break
+            name = str(key)
+            output[_audit_mapping_key(name)] = (
+                "[REDACTED]" if is_secret_name(name) else _audit_value(item, depth=depth + 1)
+            )
+        if len(value) > _TOOL_AUDIT_MAX_ITEMS:
+            output["__audit_truncated_items__"] = len(value) - _TOOL_AUDIT_MAX_ITEMS
+        return output
+    if isinstance(value, Sequence):
+        captured = [
+            _audit_value(value[index], depth=depth + 1)
+            for index in range(min(len(value), _TOOL_AUDIT_MAX_ITEMS))
+        ]
+        if len(value) <= _TOOL_AUDIT_MAX_ITEMS:
+            return captured
+        return {
+            "kind": "sequence",
+            "total_items": len(value),
+            "items": captured,
+            "truncated": True,
+        }
+    return _audit_text(repr(value))
+
+
+def _foreground_result(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a completed command into the compact result shown to the model."""
+
+    result = {
+        "process_id": snapshot["process_id"],
+        "exit_code": snapshot["exit_code"],
+        "duration_seconds": round(float(snapshot["duration_seconds"]), 3),
+        "stdout": snapshot["stdout"],
+        "stderr": snapshot["stderr"],
+    }
+    if "output_continuations" in snapshot:
+        result["output_continuations"] = snapshot["output_continuations"]
+        result["output_excerpt"] = snapshot["output_excerpt"]
+    for stream in ("stdout", "stderr"):
+        if snapshot[f"{stream}_truncated"] or snapshot["output_limited"]:
+            result[f"{stream}_bytes"] = snapshot[f"{stream}_bytes"]
+        if snapshot[f"{stream}_truncated"]:
+            result[f"{stream}_truncated"] = True
+        if snapshot[f"{stream}_invalid_utf8"]:
+            result[f"{stream}_invalid_utf8"] = True
+    for flag in ("timed_out", "output_limited"):
+        if snapshot[flag]:
+            result[flag] = True
+    if snapshot.get("status") == "failed_to_start":
+        result["status"] = "failed_to_start"
+        result["start_error_type"] = snapshot.get("start_error_type")
+    return result
+
+
+def _audit_mapping_key(value: str) -> str:
+    redacted = redact_text(value)
+    if len(redacted) <= _TOOL_AUDIT_KEY_CHARS:
+        return redacted
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    marker = f"...[sha256:{digest}]..."
+    preview_chars = _TOOL_AUDIT_KEY_CHARS - len(marker)
+    head_chars = preview_chars // 2
+    return redacted[:head_chars] + marker + redacted[-(preview_chars - head_chars) :]
+
+
+def _audit_text(value: str) -> str | dict[str, Any]:
+    if len(value) <= _TOOL_AUDIT_PREVIEW_CHARS:
+        return redact_text(value)
+    half = _TOOL_AUDIT_PREVIEW_CHARS // 2
+    preview = (
+        redact_text(value[:half]) + "\n... audit preview omitted ...\n" + redact_text(value[-half:])
+    )
+    digest = hashlib.sha256()
+    size_bytes = 0
+    for offset in range(0, len(value), 65_536):
+        chunk = value[offset : offset + 65_536].encode("utf-8")
+        digest.update(chunk)
+        size_bytes += len(chunk)
+    return {
+        "kind": "text",
+        "characters": len(value),
+        "size_bytes": size_bytes,
+        "sha256": digest.hexdigest(),
+        "preview": preview,
+        "truncated": True,
+    }
+
 
 def _validated_argv(argv: list[str]) -> tuple[str, ...]:
     if not argv or not all(isinstance(item, str) and item for item in argv):
@@ -1128,7 +1453,7 @@ def _preview_file(path: Path, limit: int) -> tuple[str, bool, bool, int]:
     except UnicodeDecodeError:
         text = payload.decode("utf-8", errors="replace")
         invalid_utf8 = True
-    return text, total > limit, invalid_utf8, total
+    return text, total > limit * 2, invalid_utf8, total
 
 
 def _close_process_input(process: subprocess.Popen[bytes]) -> None:

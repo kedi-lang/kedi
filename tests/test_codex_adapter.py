@@ -801,6 +801,30 @@ def test_codex_adapter_returns_tool_failures_to_app_server(tmp_path: Path) -> No
     assert result == ToolAnswer(answer="ValueError: bad input", success=False)
 
 
+def test_codex_artifact_error_response_allows_next_corrected_call(tmp_path: Path) -> None:
+    from kedi.artifacts import ArtifactHandle, ArtifactManager, ArtifactPolicy, artifact_tool_specs
+
+    adapter, _ = _adapter(tmp_path)
+    manager = ArtifactManager()
+    try:
+        artifact = manager.artifactize({"stdout": "row"}, policy=ArtifactPolicy(threshold_bytes=1))
+        assert isinstance(artifact, ArtifactHandle)
+        read = next(tool for tool in artifact_tool_specs(manager) if tool.name == "read_artifact")
+        with adapter.tool_scope((read,)):
+            bad = json.dumps({"ref_id": artifact.ref.ref_id, "pattern": "row", "path": "/stdout"})
+            error = adapter.produce_sync(f"tool:read_artifact:{bad}", output_type=ToolAnswer)
+            assert error.success is False
+            assert "ArtifactInputError" in error.answer
+            assert "JSON Pointer" in error.answer
+            good = json.dumps({"ref_id": artifact.ref.ref_id, "path": "/stdout"})
+            result = adapter.produce_sync(f"tool:read_artifact:{good}", output_type=ToolAnswer)
+            assert result.success is True
+            assert json.loads(json.loads(result.answer)["content"]) == "row"
+    finally:
+        adapter.close()
+        manager.close()
+
+
 def test_codex_adapter_reconnects_only_before_thread_creation(tmp_path: Path) -> None:
     reconnect_file = tmp_path / "disconnected-once"
     adapter, log_path = _adapter(

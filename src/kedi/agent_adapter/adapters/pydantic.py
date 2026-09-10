@@ -77,7 +77,6 @@ from ...agent_profile.settings import (
     pydantic_model_settings,
 )
 from ...effort import pydantic_effort_value
-from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_pydantic_ai
 from ...resolved_types import ResolvedKediType
 from .._schema import build_output_model
@@ -91,6 +90,7 @@ from ..approval import (
 from ..codemode import CodeModeLimits
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
 from ..conversation import AdapterConversationContext
+from ..compaction.archive import HistoryArchiveSettings
 from ..events import AgentMessageResolver, agent_event_run, current_agent_run_identity
 from ..hooks import (
     HookDeniedError,
@@ -110,6 +110,8 @@ from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from ..models import codex_responses_model, is_codex_model_id
 from ..native_compaction import with_pydantic_native_compaction
 from ..prefix_cache import has_response_cache_settings, pydantic_cache_settings
+from ..responses_session import model_responses_session as _model_responses_session
+from ..responses_session import model_responses_turn as _model_responses_turn
 from ..subagents import SubagentConversationContext, SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -136,6 +138,7 @@ from ._pydantic_compat import (
     application_toolset_count,
     application_toolsets,
     build_base_toolset_list,
+    effective_model,
     has_application_tools,
     infer_agent_name,
 )
@@ -143,6 +146,20 @@ from ._pydantic_compat import (
 if TYPE_CHECKING:
     from pydantic_ai.agent import AgentRunResult
     from pydantic_ai.tools import Tool as PydanticTool
+
+
+def _responses_session_model(
+    agent: Agent[Any, Any],
+    model: Model | str | None,
+) -> Model | None:
+    if not (
+        hasattr(agent, "_model")
+        and hasattr(agent, "_override_root_capability")
+        and callable(getattr(agent, "_get_model_outside_run", None))
+    ):
+        return cast("Model", model) if callable(getattr(model, "responses_session", None)) else None
+    selected_model = effective_model(agent, model)
+    return selected_model if callable(getattr(selected_model, "responses_session", None)) else None
 
 
 class _KediTelemetryCapability(AbstractCapability[Any]):
@@ -348,38 +365,63 @@ class _KediHookCapability(AbstractCapability[Any]):
             ApprovalRequired,
             CallDeferred,
             SkipToolExecution,
+        ):
+            self.adapter._consume_hook_started(call.tool_call_id)
+            raise
+        except (
             ToolRetryError,
             ToolFailedError,
             ToolFailed,
             ModelRetry,
-        ):
-            self.adapter._consume_hook_started(call.tool_call_id)
+        ) as exc:
+            await self._dispatch_failure(
+                call=call,
+                tool_def=tool_def,
+                args=args,
+                error=exc,
+            )
             raise
         except BaseException as exc:
             if isinstance(exc, Exception):
                 raise
-            tool, origin = self.adapter._hook_tool_for_call_id(
-                call.tool_call_id,
-                self.adapter._hook_tool_for_call(call.tool_name, tool_def),
-                consume=True,
-            )
-            duration = self.adapter._consume_hook_started(call.tool_call_id)
-            await dispatch_post_tool_use_failure(
-                tool,
-                self.adapter._hook_arguments_for_call(
-                    call.tool_call_id,
-                    args,
-                    consume=True,
-                ),
-                exc,
-                adapter_shortname=self.adapter.shortname,
-                tool_call_id=call.tool_call_id,
-                origin=origin,
-                native_tool_name=call.tool_name,
-                duration_seconds=duration,
-                interrupted=is_tool_execution_interrupted(exc),
+            await self._dispatch_failure(
+                call=call,
+                tool_def=tool_def,
+                args=args,
+                error=exc,
             )
             raise
+
+    async def _dispatch_failure(
+        self,
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: ValidatedToolArgs,
+        error: BaseException,
+    ) -> None:
+        tool, origin = self.adapter._hook_tool_for_call_id(
+            call.tool_call_id,
+            self.adapter._hook_tool_for_call(call.tool_name, tool_def),
+            consume=True,
+        )
+        final_arguments = self.adapter._hook_arguments_for_call(
+            call.tool_call_id,
+            args,
+            consume=True,
+        )
+        duration = self.adapter._consume_hook_started(call.tool_call_id)
+        await dispatch_post_tool_use_failure(
+            tool,
+            final_arguments,
+            error,
+            adapter_shortname=self.adapter.shortname,
+            tool_call_id=call.tool_call_id,
+            origin=origin,
+            native_tool_name=call.tool_name,
+            duration_seconds=duration,
+            interrupted=is_tool_execution_interrupted(error),
+        )
 
     async def after_tool_execute(
         self,
@@ -425,27 +467,11 @@ class _KediHookCapability(AbstractCapability[Any]):
         del ctx
         if isinstance(error, (ApprovalRequired, HookDeniedError, ToolApprovalDenied)):
             raise error
-        tool, origin = self.adapter._hook_tool_for_call_id(
-            call.tool_call_id,
-            self.adapter._hook_tool_for_call(call.tool_name, tool_def),
-            consume=True,
-        )
-        final_arguments = self.adapter._hook_arguments_for_call(
-            call.tool_call_id,
-            args,
-            consume=True,
-        )
-        duration = self.adapter._consume_hook_started(call.tool_call_id)
-        await dispatch_post_tool_use_failure(
-            tool,
-            final_arguments,
-            error,
-            adapter_shortname=self.adapter.shortname,
-            tool_call_id=call.tool_call_id,
-            origin=origin,
-            native_tool_name=call.tool_name,
-            duration_seconds=duration,
-            interrupted=is_tool_execution_interrupted(error),
+        await self._dispatch_failure(
+            call=call,
+            tool_def=tool_def,
+            args=args,
+            error=error,
         )
         raise error
 
@@ -522,6 +548,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         codemode: bool | CodeModeSettings = False,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
+        history_archive: HistoryArchiveSettings | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -592,10 +619,17 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         self._agent_model_arg = model
         self._default_model = logical_model
         if model_settings:
-            filtered_settings = pydantic_model_settings(model_settings)
-            if filtered_settings:
-                kwargs["model_settings"] = filtered_settings
+            # Native constructor settings include provider-specific keys, unlike DSL settings.
+            kwargs["model_settings"] = dict(model_settings)
         kwargs.setdefault("retries", {"tools": _DEFAULT_TOOL_RETRIES})
+        if history_archive is not None:
+            from ..compaction.pydantic_archive import PydanticArtifactHistoryCapability
+
+            kwargs["capabilities"] = _with_capability(
+                kwargs.get("capabilities"),
+                PydanticArtifactHistoryCapability,
+                lambda: PydanticArtifactHistoryCapability(history_archive),
+            )
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 
@@ -691,6 +725,15 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             yield
         finally:
             self._subagent_conversation_var.reset(token)
+
+    @asynccontextmanager
+    async def responses_session(self) -> AsyncGenerator[None]:
+        """Own one Responses connection across sequential runs in the current task."""
+        model = _responses_session_model(self, None)
+        if model is None:
+            raise TypeError("The active model does not support Responses sessions.")
+        async with _model_responses_session(model):
+            yield
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -928,7 +971,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     capability_list = list(cast("Sequence[Any]", capabilities or ()))
                     capability_list.append(_KediAgentEventCapability(event_resolver))
                     run_kwargs["capabilities"] = capability_list
-                async with super().iter(hooked_prompt, **cast(Any, run_kwargs)) as agent_run:
+                selected_model = _responses_session_model(
+                    self,
+                    cast("Model | str | None", run_kwargs.get("model")),
+                )
+                async with (
+                    _model_responses_turn(selected_model),
+                    super().iter(hooked_prompt, **cast(Any, run_kwargs)) as agent_run,
+                ):
                     yield agent_run
                     if agent_run.result is not None:
                         self._capture_conversation_messages(conversation, agent_run)
@@ -974,7 +1024,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     usage = RunUsage()
                     run_kwargs["usage"] = usage
             try:
-                result = await agent.run(prompt, **cast(Any, run_kwargs))
+                selected_model = _responses_session_model(
+                    agent,
+                    cast("Model | str | None", run_kwargs.get("model")),
+                )
+                # This adapter's native iter() owns the turn when agent is self.
+                model_scope = _model_responses_session if agent is self else _model_responses_turn
+                async with model_scope(selected_model):
+                    result = await agent.run(prompt, **cast(Any, run_kwargs))
                 self._capture_conversation_messages(conversation, result)
             finally:
                 if usage is not None:
@@ -1076,6 +1133,8 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if self.active_profile.system is not None and run_kwargs.get("instructions") is None:
             run_kwargs["instructions"] = self.active_profile.system
         model_settings = pydantic_model_settings(self.active_profile.settings)
+        if self.active_profile.effort is not None:
+            model_settings["thinking"] = pydantic_effort_value(self.active_profile.effort)
         if model_settings:
             existing_settings = run_kwargs.get("model_settings")
             if callable(existing_settings):
@@ -1615,15 +1674,6 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             if profile.model is None:
                 raise RuntimeError("Profile requires a model override but no model is set.")
             override_kwargs["model"] = self._resolve_model(profile.model)
-        if profile.effort is not None:
-            override_kwargs["spec"] = {
-                "capabilities": [
-                    {
-                        "name": "Thinking",
-                        "arguments": {"effort": pydantic_effort_value(profile.effort)},
-                    }
-                ]
-            }
         return override_kwargs
 
     def _resolve_model(self, model: str) -> str | Model:
@@ -1898,59 +1948,12 @@ def _approval_request_payload(request: ApprovalRequest) -> dict[str, Any]:
 
 
 def _model_retry_for_tool_error(tool: ToolSpec, exc: Exception) -> Exception | None:
-    metadata = tool.metadata or {}
-    kind = metadata.get("kedi_tool_kind") or metadata.get("kind")
-    original = exc.original if isinstance(exc, KediExecutionError) else exc
-    if kind == "filesystem" and isinstance(
-        original,
-        (FileNotFoundError, IsADirectoryError, NotADirectoryError, PermissionError),
-    ):
-        from pydantic_ai import ModelRetry
+    from pydantic_ai import ModelRetry
 
-        return ModelRetry(
-            f"Filesystem request rejected: {original}. Use repository-relative paths only, "
-            "inspect unknown paths with get_file_info, use list_directory for directories, "
-            "and read_text_file only for regular files."
-        )
-    if kind == "filesystem":
-        from pydantic_ai import ModelRetry
+    from ..tool_errors import correctable_tool_error
 
-        return ModelRetry(
-            f"Filesystem operation failed: {original}. Correct the arguments, inspect the "
-            "target when needed, and retry the operation."
-        )
-    if kind == "terminal":
-        from pydantic_ai import ModelRetry
-
-        return ModelRetry(
-            f"Terminal request rejected: {original}. Keep working directories inside the "
-            "assigned task root, correct invalid arguments or process IDs, and retry."
-        )
-    if kind == "dynamic_workflow":
-        from pydantic_ai import ModelRetry
-
-        from ..subagents.workflow import WorkflowError
-
-        if isinstance(exc, WorkflowError):
-            return ModelRetry(str(exc))
-    if kind == "subagent" and isinstance(exc, KediExecutionError):
-        from pydantic_ai import ModelRetry
-
-        from ..subagents.runs import safe_subagent_error_message
-
-        message = safe_subagent_error_message(exc) or "Subagent failed"
-        return ModelRetry(message)
-    if kind == "artifact_management":
-        from pydantic_ai import ModelRetry
-
-        from kedi.artifacts import ArtifactCodeError
-
-        if isinstance(exc, ArtifactCodeError):
-            return ModelRetry(
-                f"{exc}. Correct the artifact Python using the documented helper signatures "
-                "and retry."
-            )
-    return None
+    message = correctable_tool_error(tool, exc)
+    return ModelRetry(message) if message is not None else None
 
 
 def _validated_tool_arguments(tool: ToolSpec, arguments: Mapping[str, Any]) -> dict[str, Any]:

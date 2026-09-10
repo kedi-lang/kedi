@@ -6,6 +6,7 @@ from kedi.agent_adapter.tool_override import ToolSpec
 
 from .codemode import artifact_code_provenance
 from .codemode import run_artifact_code as execute_artifact_code
+from .errors import ArtifactInputError
 from .manager import ArtifactManager
 from .models import ArtifactHandle
 from .policy import ArtifactPolicy
@@ -27,13 +28,17 @@ def artifact_tool_specs(
         pattern: str | None = None,
         max_matches: int = 20,
     ) -> dict[str, Any] | list[dict[str, Any]]:
-        """Read a bounded chunk from an artifact in the active session."""
+        """Read or search bounded artifact content in the active session."""
 
         if pattern is not None:
             if offset != 0 or offset_from != "start":
-                raise ValueError("artifact pattern search cannot be combined with an offset")
+                raise ArtifactInputError(
+                    "artifact pattern search cannot be combined with an offset"
+                )
             if path is not None:
-                raise ValueError("artifact pattern search does not support JSON Pointer path")
+                raise ArtifactInputError(
+                    "artifact pattern search does not support JSON Pointer path"
+                )
             return manager.find(ref_id, pattern, max_matches=max_matches)
         return manager.read(
             ref_id,
@@ -99,8 +104,12 @@ def artifact_tool_specs(
             fn=read_artifact,
             name="read_artifact",
             description=(
-                "Read a bounded artifact chunk. Use offset for pagination and an RFC 6901 "
-                "JSON Pointer path to select structured content."
+                "Read a bounded artifact chunk. A requested max_chars can be capped by policy; "
+                "inspect applied_max_chars and complete. If complete is false, call the exact "
+                "continuation returned in the result when more content is relevant instead of "
+                "rerunning the source tool. Use an RFC 6901 JSON Pointer path for structured "
+                "content, or pattern for literal search without path or offsets. For filtering "
+                "or aggregation across a large artifact, prefer run_artifact_code."
             ),
             json_schema={
                 "type": "object",
@@ -120,11 +129,15 @@ def artifact_tool_specs(
                     "path": {
                         "anyOf": [{"type": "string"}, {"type": "null"}],
                         "default": None,
+                        "description": "RFC 6901 JSON Pointer for JSON artifacts; omit when using pattern.",
                     },
                     "pattern": {
                         "anyOf": [{"type": "string"}, {"type": "null"}],
                         "default": None,
-                        "description": "Optional literal substring to find in the artifact.",
+                        "description": (
+                            "Optional non-empty literal substring. Requires path=null, "
+                            "offset=0 and offset_from='start'; do not combine with pagination."
+                        ),
                     },
                     "max_matches": {
                         "type": "integer",

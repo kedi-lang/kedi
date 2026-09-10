@@ -13,6 +13,7 @@ from . import telemetry
 from .cleanup import cleanup_service
 from .errors import (
     ArtifactExpiredError,
+    ArtifactInputError,
     ArtifactQuotaExceededError,
     ArtifactReleasedError,
     ToolOutputTooLargeError,
@@ -302,9 +303,9 @@ class ArtifactManager:
         """Find literal text with bounded store reads and cross-chunk matching."""
 
         if not pattern:
-            raise ValueError("artifact search pattern cannot be empty")
+            raise ArtifactInputError("artifact search pattern cannot be empty")
         if max_matches <= 0:
-            raise ValueError("artifact max_matches must be positive")
+            raise ArtifactInputError("artifact max_matches must be positive")
         max_matches = min(max_matches, 100)
         with self._lease(ref_id) as (store, record):
             policy = self._ref_policies[ref_id]
@@ -361,11 +362,14 @@ class ArtifactManager:
             session_id=self.session_id,
             ref_id=ref_id,
             offset=offset,
+            offset_from=offset_from,
+            requested_max_chars=max_chars,
+            json_path=path is not None,
         ):
             if offset < 0:
-                raise ValueError("artifact read offset must not be negative")
+                raise ArtifactInputError("artifact read offset must not be negative")
             if offset_from not in {"start", "end"}:
-                raise ValueError("artifact offset_from must be 'start' or 'end'")
+                raise ArtifactInputError("artifact offset_from must be 'start' or 'end'")
             with self._lease(ref_id) as (store, record):
                 policy = self._ref_policies[ref_id]
                 limit = (
@@ -374,7 +378,7 @@ class ArtifactManager:
                     else min(max_chars, policy.read_max_chars)
                 )
                 if limit <= 0:
-                    raise ValueError("artifact max_chars must be -1 or positive")
+                    raise ArtifactInputError("artifact max_chars must be -1 or positive")
                 if path is None:
                     content, next_offset, complete = store.read_projection(
                         self.session_id,
@@ -392,6 +396,20 @@ class ArtifactManager:
                         offset_from=offset_from,
                         max_chars=limit,
                     )
+                continuation = None
+                if not complete and next_offset is not None:
+                    continuation_arguments: dict[str, Any] = {
+                        "ref_id": ref_id,
+                        "offset": next_offset,
+                        "offset_from": offset_from,
+                        "max_chars": limit,
+                    }
+                    if path is not None:
+                        continuation_arguments["path"] = path
+                    continuation = {
+                        "tool": "read_artifact",
+                        "arguments": continuation_arguments,
+                    }
                 chunk = ArtifactChunk(
                     ref_id=ref_id,
                     content=content,
@@ -401,13 +419,21 @@ class ArtifactManager:
                     media_type=record.ref.media_type,
                     path=path,
                     offset_from=offset_from,
+                    requested_max_chars=max_chars,
+                    applied_max_chars=limit,
+                    returned_chars=len(content),
+                    continuation=continuation,
                 )
                 self.history.append(
                     "artifact_read",
                     ref_id=ref_id,
                     data={
                         "offset": offset,
+                        "requested_max_chars": max_chars,
+                        "applied_max_chars": limit,
                         "chars": len(content),
+                        "returned_chars": len(content),
+                        "next_offset": None if complete else next_offset,
                         "complete": complete,
                         "path": path,
                         "offset_from": offset_from,
@@ -429,7 +455,7 @@ class ArtifactManager:
             has_query=query is not None,
         ) as span:
             if limit <= 0:
-                raise ValueError("artifact search limit must be positive")
+                raise ArtifactInputError("artifact search limit must be positive")
             self.cleanup_expired()
             needle = query.casefold() if query else None
             records = sorted(

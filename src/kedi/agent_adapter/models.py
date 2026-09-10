@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from importlib.util import find_spec
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -14,6 +14,8 @@ else:
     CodexModel: TypeAlias = Any
 
 CodexModelAdapter = Literal["pydantic", "langchain"]
+CodexResponsesConnection = Literal["http", "websocket"]
+CodexResponsesFallback = Literal["error", "http"]
 CODEX_MODEL_PREFIX = "codex/"
 CODEX_DEFAULT_INSTRUCTIONS = (
     "You are a precise assistant running through Kedi. Follow the active instructions, "
@@ -30,6 +32,10 @@ def is_codex_model_id(model_id: str) -> bool:
 def codex_responses_model(
     model_id: str,
     adapter: CodexModelAdapter,
+    *,
+    connection: CodexResponsesConnection = "http",
+    fallback: CodexResponsesFallback = "error",
+    transport_observer: Callable[[object], None] | None = None,
 ) -> CodexModel:
     """Build a Codex-authenticated model for a supported agent framework.
 
@@ -38,28 +44,57 @@ def codex_responses_model(
     """
 
     model_name = _codex_model_name(model_id)
-    if find_spec("codex_auth_helper") is None:
+    try:
+        import codex_auth_helper
+    except ModuleNotFoundError as exc:
+        if exc.name != "codex_auth_helper":
+            raise
         raise ModuleNotFoundError(
-            "Codex-backed models require Python 3.11+ and codex-auth-helper==1.6.1. "
+            "Codex-backed models require Python 3.11+ and codex-auth-helper[websocket]==1.8.0. "
             "Install Kedi with: uv add 'kedi[codex-model]'"
-        )
+        ) from exc
 
-    helper = cast(Any, __import__("codex_auth_helper"))
+    if connection not in {"http", "websocket"}:
+        raise ValueError(f"Unsupported Codex Responses connection: {connection!r}")
+    if fallback not in {"error", "http"}:
+        raise ValueError(f"Unsupported Codex Responses fallback: {fallback!r}")
+    if connection == "http" and fallback != "error":
+        raise ValueError("`fallback` applies only when `connection='websocket'`.")
+    if connection == "websocket" and not hasattr(
+        codex_auth_helper,
+        "CodexResponsesConnection",
+    ):
+        raise RuntimeError(
+            "Codex Responses WebSocket support requires a newer codex-auth-helper build."
+        )
+    if transport_observer is not None and not hasattr(
+        codex_auth_helper,
+        "CodexResponsesTransportEvent",
+    ):
+        raise RuntimeError(
+            "Codex Responses transport observation requires a newer codex-auth-helper build."
+        )
 
     factory_kwargs: dict[str, Any] = {"instructions": CODEX_DEFAULT_INSTRUCTIONS}
     if auth_path := os.environ.get("KEDI_CODEX_AUTH_FILE"):
-        factory_kwargs["config"] = helper.CodexAuthConfig(
+        factory_kwargs["config"] = codex_auth_helper.CodexAuthConfig(
             auth_path=Path(auth_path).expanduser(),
         )
+    if connection != "http":
+        factory_kwargs["connection"] = connection
+    if fallback != "error":
+        factory_kwargs["fallback"] = fallback
+    if transport_observer is not None:
+        factory_kwargs["transport_observer"] = transport_observer
 
     try:
         if adapter == "pydantic":
-            return helper.create_codex_responses_model(
+            return codex_auth_helper.create_codex_responses_model(
                 model_name,
                 **factory_kwargs,
             )
         if adapter == "langchain":
-            return helper.create_codex_chat_openai(
+            return codex_auth_helper.create_codex_chat_openai(
                 model_name,
                 **factory_kwargs,
             )
@@ -86,6 +121,8 @@ __all__ = [
     "CODEX_MODEL_PREFIX",
     "CodexModel",
     "CodexModelAdapter",
+    "CodexResponsesConnection",
+    "CodexResponsesFallback",
     "codex_responses_model",
     "is_codex_model_id",
 ]

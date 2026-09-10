@@ -172,8 +172,9 @@ def test_retry_after_of_variants() -> None:
 @pytest.mark.parametrize(
     "value,parallel",
     [
-        (None, False),
-        ("", False),
+        (None, True),
+        ("", True),
+        ("  ", True),
         ("0", False),
         ("-1", False),
         ("false", False),

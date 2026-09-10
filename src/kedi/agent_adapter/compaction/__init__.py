@@ -1,6 +1,8 @@
 """Deterministic, adapter-neutral conversation compaction primitives."""
 
 from .backends import CompactionBackend, resolve_compaction_backend
+from .archive import HistoryArchiveSettings
+from .langchain_archive import LangChainArtifactHistoryProcessor
 from .codecs import AdapterHistoryCodec, HistoryCodecRegistry
 from .conversation import (
     ConversationCompactionTransaction,
@@ -33,6 +35,11 @@ from .models import (
 )
 from .native_backend import NativeCompactionBackend
 from .processor import HistoryProcessor
+from .pydantic_archive import (
+    PydanticArtifactHistoryCapability,
+    PydanticArtifactHistoryProcessor,
+    PydanticHistoryArchiveSettings,
+)
 from .pydantic_codec import PydanticHistoryCodec
 
 __all__ = [
@@ -54,6 +61,8 @@ __all__ = [
     "ConversationCompactionTransaction",
     "HistoryCodecRegistry",
     "HistoryProcessor",
+    "HistoryArchiveSettings",
+    "LangChainArtifactHistoryProcessor",
     "HistoryRange",
     "HistoryReductionPlan",
     "HistoryReductionPolicy",
@@ -67,6 +76,9 @@ __all__ = [
     "PreparedCompaction",
     "PreparedConversationCompaction",
     "ProcessedHistory",
+    "PydanticArtifactHistoryCapability",
+    "PydanticArtifactHistoryProcessor",
+    "PydanticHistoryArchiveSettings",
     "PydanticHistoryCodec",
     "resolve_compaction_backend",
 ]

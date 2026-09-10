@@ -185,7 +185,10 @@ def _langchain_provider(model: str | object) -> str:
         return provider if separator else "unknown"
     module = type(model).__module__
     name = type(model).__name__
-    if module.startswith("langchain_openai") and name == "ChatOpenAI":
+    if any(
+        base.__module__.startswith("langchain_openai") and base.__name__ == "ChatOpenAI"
+        for base in type(model).__mro__
+    ):
         return "openai"
     if module.startswith("langchain_anthropic") and name == "ChatAnthropic":
         return "anthropic"
