@@ -173,5 +173,6 @@ dev = [
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
     "ruff==0.15.16",
+    "tomli==2.4.1; python_version < '3.11'",
     "ty==0.0.44",
 ]
