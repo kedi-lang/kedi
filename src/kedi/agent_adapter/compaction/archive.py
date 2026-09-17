@@ -1,13 +1,16 @@
 """Shared exact-history archival; native bridges retain message ownership."""
 
 from __future__ import annotations
+
 import re
 from abc import ABC, abstractmethod
 from collections import Counter
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Generic, TypeVar, cast
+
 from kedi.artifacts import ArtifactError, ArtifactHandle, ArtifactPolicy
+
 from ..tool_override import current_artifact_admission
 from .checkpoint import render_checkpoint
 from .codecs import AdapterHistoryCodec, conservative_token_estimate, fingerprint_sequence

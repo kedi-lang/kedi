@@ -2574,8 +2574,9 @@ def test_wait_subagent_can_observe_result_outside_delegation_scope(monkeypatch):
 
 
 def test_waiter_cancellation_does_not_fail_still_running_child(monkeypatch):
-    from kedi.agent_adapter import subagents
     from types import SimpleNamespace
+
+    from kedi.agent_adapter import subagents
 
     _adapter, runtime, tools = _manager_tools()
 

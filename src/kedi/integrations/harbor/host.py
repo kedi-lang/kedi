@@ -16,8 +16,8 @@ from .records import (
     HarborRunPolicy,
     HarnessPolicy,
     RunManifest,
-    current_gitlink_revision,
     current_git_state,
+    current_gitlink_revision,
     load_manifest,
     sha256_file,
 )

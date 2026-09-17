@@ -1,8 +1,7 @@
 """Deterministic, adapter-neutral conversation compaction primitives."""
 
-from .backends import CompactionBackend, resolve_compaction_backend
 from .archive import HistoryArchiveSettings
-from .langchain_archive import LangChainArtifactHistoryProcessor
+from .backends import CompactionBackend, resolve_compaction_backend
 from .codecs import AdapterHistoryCodec, HistoryCodecRegistry
 from .conversation import (
     ConversationCompactionTransaction,
@@ -10,6 +9,7 @@ from .conversation import (
 )
 from .coordinator import CompactionCoordinator
 from .kedi_backend import KediCompactionTransaction, PreparedCompaction
+from .langchain_archive import LangChainArtifactHistoryProcessor
 from .langchain_codec import LangChainHistoryCodec
 from .models import (
     CheckpointAcceptancePolicy,

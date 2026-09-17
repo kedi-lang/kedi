@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic_ai.messages import (
-    NativeToolReturnPart,
     ModelRequest,
     ModelResponse,
+    NativeToolReturnPart,
     RetryPromptPart,
     ToolCallPart,
     UserPromptPart,

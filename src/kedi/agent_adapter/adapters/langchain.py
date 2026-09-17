@@ -20,8 +20,8 @@ from typing import (
 )
 
 from pydantic import BaseModel
-from pydantic_ai.output import OutputDataT
 from pydantic_ai import UsageLimits
+from pydantic_ai.output import OutputDataT
 
 from ...agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from ...agent_profile.compaction import (
@@ -43,8 +43,8 @@ from ..codemode.tool_specs import (
     approval_policies,
     codemode_projection,
 )
-from ..conversation import AdapterConversationContext
 from ..compaction.archive import HistoryArchiveSettings
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run
 from ..hooks import (
     HookDeniedError,

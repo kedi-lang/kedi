@@ -20,8 +20,8 @@ from kedi.agent_adapter.compaction import HistoryArchiveSettings, LangChainArtif
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.invocation import observe_invocations
 from kedi.agent_adapter.tool_override import ToolSpec, artifact_admission_scope
-from kedi.artifacts import ArtifactManager, ArtifactPolicy
 from kedi.agent_profile import AgentProfile
+from kedi.artifacts import ArtifactManager, ArtifactPolicy
 
 
 class ScriptedModel(BaseChatModel):
@@ -244,6 +244,7 @@ def test_archive_no_storage_and_unresolved_lifecycle_are_noops() -> None:
 
 def test_archive_settings_are_shared_with_pydantic() -> None:
     from pydantic_ai.models.test import TestModel
+
     from kedi.agent_adapter.compaction import PydanticHistoryArchiveSettings
 
     assert PydanticHistoryArchiveSettings is HistoryArchiveSettings
@@ -252,6 +253,7 @@ def test_archive_settings_are_shared_with_pydantic() -> None:
 
 def test_archive_exact_payload_retained_prefix_tail_and_quota_failure(tmp_path: Path) -> None:
     import json
+
     from langchain_core.messages import messages_to_dict
 
     settings = HistoryArchiveSettings(

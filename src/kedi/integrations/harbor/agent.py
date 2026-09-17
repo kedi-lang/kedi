@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # pyright: reportMissingImports=false
-
 import asyncio
 import json
 import math
@@ -27,7 +26,6 @@ from harbor.models.agent.context import AgentContext  # ty: ignore[unresolved-im
 
 from ..._version import __version__
 from .records import HarnessPolicy, invocation_usage_dict
-
 
 _LOGFIRE_CREDENTIALS_FILENAME = "logfire_credentials.json"
 _RUNNER_PID = PurePosixPath("/installed-agent/kedi-runner.pid")

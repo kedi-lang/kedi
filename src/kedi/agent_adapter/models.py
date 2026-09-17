@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 # pyright: reportMissingImports=false
-
 import os
 from collections.abc import Callable
 from pathlib import Path

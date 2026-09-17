@@ -7,7 +7,8 @@ import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, is_dataclass
-from datetime import date, datetime, time as datetime_time, timezone
+from datetime import date, datetime, timezone
+from datetime import time as datetime_time
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path

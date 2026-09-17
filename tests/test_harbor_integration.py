@@ -14,8 +14,7 @@ import time
 from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
-from pathlib import Path
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import ModuleType, SimpleNamespace
 from typing import Any, Iterator, cast
 
@@ -34,21 +33,21 @@ from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
 from kedi.agent_adapter.utils import python_callable_tool_spec
 from kedi.integrations.harbor import host, runner
 from kedi.integrations.harbor import process_supervisor as harbor_process_supervisor
+from kedi.integrations.harbor import terminal as harbor_terminal
 from kedi.integrations.harbor.records import (
     HarborRunPolicy,
     HarnessPolicy,
     RunManifest,
     TrialRecord,
     atomic_write_json,
-    current_gitlink_revision,
     current_git_state,
-    is_secret_name,
+    current_gitlink_revision,
     invocation_usage_dict,
+    is_secret_name,
     load_manifest,
     redact_text,
     sha256_file,
 )
-from kedi.integrations.harbor import terminal as harbor_terminal
 from kedi.integrations.harbor.terminal import TerminalSession
 from kedi.lang.parser import parse_program
 

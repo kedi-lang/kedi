@@ -12,13 +12,12 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.models.openai import OpenAIResponsesModel
+from pydantic_ai.profiles import ModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RequestUsage
 
 from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.agent_profile import AgentProfile
 from kedi.agent_adapter.request import (
     ConversationCoordinates,
     RawPromptBuilder,
@@ -26,6 +25,7 @@ from kedi.agent_adapter.request import (
     TextOutput,
     lower_request_sync,
 )
+from kedi.agent_profile import AgentProfile
 from kedi.integrations.harbor.request_observer import PydanticRequestEvidenceCapability
 
 

@@ -14,7 +14,6 @@ from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 
-
 SOURCE = (
     ">> First [first].\n>> Second [second].\n>> Join <first> and <second> as [joined].\n= <joined>"
 )

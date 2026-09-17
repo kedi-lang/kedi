@@ -81,8 +81,9 @@ def test_unscoped_middleware_preserves_requests_and_rotates_only_existing_keys(s
     ],
 )
 def test_native_run_recursion_configuration_is_preserved(config, limits, explicit, monkeypatch):
-    from kedi.agent_adapter.adapters import langchain as module
     from contextlib import contextmanager
+
+    from kedi.agent_adapter.adapters import langchain as module
 
     @contextmanager
     def events(*args):

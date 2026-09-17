@@ -89,8 +89,8 @@ from ..approval import (
 )
 from ..codemode import CodeModeLimits
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
-from ..conversation import AdapterConversationContext
 from ..compaction.archive import HistoryArchiveSettings
+from ..conversation import AdapterConversationContext
 from ..events import AgentMessageResolver, agent_event_run, current_agent_run_identity
 from ..hooks import (
     HookDeniedError,
