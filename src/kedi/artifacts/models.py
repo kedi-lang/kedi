@@ -35,7 +35,9 @@ class ArtifactRef(BaseModel, Generic[T]):
     usage_hint: str = (
         "Copy this exact ref_id into artifact tools; never use a source or tool name as an ID. "
         "Use read_artifact for a known literal or bounded inspection; use run_artifact_code for "
-        "filtering, aggregation, joins, or multi-artifact transformations. Release when done."
+        "filtering, aggregation, joins, or multi-artifact transformations. A read with "
+        "complete=false is partial; follow its continuation only when more content is relevant. "
+        "Release when done."
     )
 
 
@@ -50,6 +52,10 @@ class ArtifactChunk(BaseModel):
     media_type: str
     path: str | None = None
     offset_from: Literal["start", "end"] = "start"
+    requested_max_chars: int = Field(ge=-1)
+    applied_max_chars: int = Field(gt=0)
+    returned_chars: int = Field(ge=0)
+    continuation: dict[str, Any] | None = None
 
 
 class ArtifactSearchResult(BaseModel):

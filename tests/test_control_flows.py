@@ -12,7 +12,7 @@ import kedi
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import current_block_agent_profile
-from kedi.engine import ThreadEngine
+from kedi.engine import SequentialEngine, ThreadEngine
 from kedi.lang import (
     AssignmentStmt,
     ConditionalLoopStmt,
@@ -271,7 +271,7 @@ def test_map_continues_each_iteration_frame_without_leaking_locals() -> None:
         )
     )
 
-    assert runtime.run_main() == [2, 4, 6]
+    assert sorted(runtime.run_main()) == [2, 4, 6]
     assert "item" not in runtime._globals_env
     assert "doubled" not in runtime._globals_env
 
@@ -1207,7 +1207,8 @@ def test_procedure_map_and_both_assignment_forms_share_iteration_scope() -> None
             "    `results.append(doubled)`\n"
             "  = `results + [total]`\n\n"
             "= `collect()`\n"
-        )
+        ),
+        engine=SequentialEngine(),
     )
 
     assert runtime.run_main() == [2, 4, 6, 12]

@@ -187,7 +187,12 @@ def test_semantic_tokens_cover_approval_directive_values():
 
 
 def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
-    src = "> artifacts:\n  threshold: 100kb\n  cleanup_interval: `timedelta(seconds=5)`\n"
+    src = (
+        "> artifacts:\n"
+        "  query_artifacts: enabled\n"
+        "  threshold: 100kb\n"
+        "  cleanup_interval: `timedelta(seconds=5)`\n"
+    )
     tokens = decode_semantic_tokens(
         features.compute_semantic_tokens_full(src, "/tmp/artifacts.kedi").data
     )
@@ -205,11 +210,15 @@ def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
         for line, col, _, token_type, _ in tokens
     )
     assert any(
-        line == 1 and col == len("  threshold: ") and token_type == string_type
+        line == 1 and col == len("  query_artifacts: ") and token_type == keyword_type
         for line, col, _, token_type, _ in tokens
     )
     assert any(
-        line == 2 and col > len("  cleanup_interval: `") and token_type == variable_type
+        line == 2 and col == len("  threshold: ") and token_type == string_type
+        for line, col, _, token_type, _ in tokens
+    )
+    assert any(
+        line == 3 and col > len("  cleanup_interval: `") and token_type == variable_type
         for line, col, _, token_type, _ in tokens
     )
 
@@ -315,8 +324,8 @@ def test_tree_sitter_highlights_capture_both_template_angle_delimiters_special()
     assert ">" in special
 
 
-def test_tree_sitter_highlights_capture_artifacts_directive_keyword():
-    source = b"> artifacts:\n  enabled: true\n"
+def test_tree_sitter_highlights_capture_artifacts_syntax():
+    source = b"> artifacts:\n  query_artifacts: enabled\n"
     root = Path(__file__).resolve().parents[1]
     language = Language(tree_sitter_kedi.language())
 
@@ -329,8 +338,18 @@ def test_tree_sitter_highlights_capture_artifacts_directive_keyword():
         keywords = {
             source[node.start_byte : node.end_byte].decode("utf-8") for node in captures["keyword"]
         }
+        properties = {
+            source[node.start_byte : node.end_byte].decode("utf-8") for node in captures["property"]
+        }
+        constants = {
+            source[node.start_byte : node.end_byte].decode("utf-8")
+            for capture in ("constant.builtin", "constant")
+            for node in captures.get(capture, [])
+        }
 
         assert "artifacts" in keywords
+        assert "query_artifacts" in properties
+        assert "enabled" in constants
 
 
 def test_tree_sitter_highlights_capture_workflow_and_compaction_settings() -> None:

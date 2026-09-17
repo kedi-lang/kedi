@@ -353,6 +353,16 @@ def subagent_tool_specs(
         attempt = active_delegation_attempt_for_run(run_id)
         try:
             result = await rt._wait_subagent(run_id, timeout=timeout)
+        except TimeoutError:
+            status = rt._subagent_status(run_id)
+            if status == "running":
+                run = rt._subagent_coordinator.runs.get(run_id)
+                return {
+                    "run_id": run.run_id,
+                    "subagent": run.profile_name,
+                    "status": status,
+                }
+            raise
         except BaseException as exc:
             if attempt is not None:
                 status = rt._subagent_status(run_id)
@@ -389,7 +399,9 @@ def subagent_tool_specs(
                 name="wait_subagent",
                 description=(
                     "Wait for a background subagent and return its task_summary and "
-                    "final_result. Completed runs may be waited more than once."
+                    "final_result. When a caller timeout expires while the child is still "
+                    "running, return its running handle instead of failing the parent turn; "
+                    "call wait_subagent again. Completed runs may be waited more than once."
                 ),
                 json_schema={
                     "type": "object",
@@ -403,7 +415,12 @@ def subagent_tool_specs(
                     "required": ["run_id"],
                     "additionalProperties": False,
                 },
-                return_schema=_delegation_result_schema(),
+                return_schema={
+                    "oneOf": [
+                        _delegation_result_schema(),
+                        _subagent_handle_schema(),
+                    ]
+                },
                 metadata={"source": "kedi", "kind": "subagent_lifecycle"},
                 risk="read_only",
             ),

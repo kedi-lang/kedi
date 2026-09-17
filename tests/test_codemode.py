@@ -52,6 +52,7 @@ from kedi.agent_adapter.codemode.core import _name_score, _SequentialDispatchGat
 from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeToolset
 from kedi.agent_adapter.tool_override import (
     ToolSpec,
+    artifact_admission_scope,
     current_required_tool_calls,
     with_artifact_result,
 )
@@ -887,7 +888,10 @@ def test_pydantic_codemode_artifactizes_only_final_result(
 
     adapter = PydanticAdapter(FunctionModel(respond), codemode=True)
     try:
-        with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        with (
+            artifact_admission_scope(manager=manager, policy=policy),
+            adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        ):
             result = adapter.run_sync(
                 "Reduce the large result.",
                 toolsets=[pydantic_toolset_from_specs([spec])],

@@ -54,7 +54,13 @@ from .meta import (
     HookEventCapability,
     T,
 )
-from .models import CodexModel, CodexModelAdapter, codex_responses_model
+from .models import (
+    CodexModel,
+    CodexModelAdapter,
+    CodexResponsesConnection,
+    CodexResponsesFallback,
+    codex_responses_model,
+)
 from .subagents import SubagentUsageLimits
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tool_override import SupportsToolRegistration, ToolSpec
@@ -161,6 +167,8 @@ __all__ = [
     "CodexAdapter",
     "CodexModel",
     "CodexModelAdapter",
+    "CodexResponsesConnection",
+    "CodexResponsesFallback",
     "ConversationState",
     "ConversationTurn",
     "DSPyAdapter",

@@ -18,7 +18,14 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 from pydantic_ai.capabilities import HandleDeferredToolCalls
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturn,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolDenied
@@ -299,11 +306,11 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
     PydanticAdapter(model=TestModel())
     PydanticAdapter(
         model="openai/gpt-4o-mini",
-        model_settings={"temperature": 0.1, "num_retries": 2},
+        model_settings={"temperature": 0.1, "openai_prompt_cache_key": "conversation"},
     )
     PydanticAdapter(
         model="openai/gpt-4o-mini",
-        model_settings={"num_retries": 2},
+        model_settings={"openai_reasoning_effort": "high"},
     )
 
     async def fake_run(template: str, *, output_type: type[Any], **kwargs: Any) -> Any:
@@ -322,8 +329,11 @@ def test_pydantic_adapter_builds_types_and_produces_with_schema_or_type(
 
     assert initialized_models[0] == "openai-chat:gpt-4o-mini"
     assert isinstance(initialized_models[1], TestModel)
-    assert initialized_kwargs[2]["model_settings"] == {"temperature": 0.1}
-    assert "model_settings" not in initialized_kwargs[3]
+    assert initialized_kwargs[2]["model_settings"] == {
+        "temperature": 0.1,
+        "openai_prompt_cache_key": "conversation",
+    }
+    assert initialized_kwargs[3]["model_settings"] == {"openai_reasoning_effort": "high"}
 
     built = PydanticAdapter.type_builder({"answer": int})
     assert issubclass(built, BaseModel)
@@ -446,7 +456,9 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
     monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
-    assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
+    assert created_agents == [
+        {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
+    ]
 
 
 def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -461,7 +473,7 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
         def __init__(self, **kwargs: Any) -> None:
             self.kwargs = kwargs
 
-        async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(self, payload: dict[str, Any], config: Any = None) -> dict[str, Any]:
             events["payload"] = payload
             response_format = self.kwargs.get("response_format")
             if response_format is None:
@@ -506,7 +518,9 @@ def _install_fake_langchain_modules(monkeypatch: pytest.MonkeyPatch) -> dict[str
 
     setattr(chat_models, "init_chat_model", fake_init_chat_model)
     setattr(agents, "create_agent", fake_create_agent)
-    setattr(middleware, "AgentMiddleware", type("AgentMiddleware", (), {}))
+    from langchain.agents.middleware import AgentMiddleware
+
+    setattr(middleware, "AgentMiddleware", AgentMiddleware)
     setattr(
         messages,
         "ToolMessage",
@@ -571,6 +585,7 @@ def test_langchain_adapter_produces_with_structured_output_and_profile(
             "settings": {
                 "temperature": 0.1,
                 "parallel_tool_calls": False,
+                "num_retries": 2,
                 "max_tokens": 12,
                 "reasoning_effort": "xhigh",
             },
@@ -668,7 +683,9 @@ def test_langchain_codemode_projects_and_executes_tools(
     exposed = {tool.name for tool in events["agents"][-1]["tools"]}
     assert exposed == {"search_tools", "get_tool_schema", "execute_code"}
     assert "CodeMode" in events["agents"][-1]["system_prompt"]
-    assert events["agents"][-1]["middleware"] == []
+    assert [type(item).__name__ for item in events["agents"][-1]["middleware"]] == [
+        "LangChainRunMiddleware"
+    ]
 
 
 def test_langchain_codemode_materializes_profile_mcp_tools(
@@ -940,8 +957,9 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
     seen: dict[str, Any] = {}
 
     class FakeAgent:
-        async def ainvoke(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(self, payload: dict[str, Any], config: Any = None) -> dict[str, Any]:
             seen["payload"] = payload
+            seen["config"] = config
             return {
                 "structured_response": {
                     "task_summary": "done",
@@ -988,7 +1006,9 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
             )
 
     assert result["final_result"] == {"value": 9}
-    assert seen["payload"]["recursion_limit"] == 9
+    assert "recursion_limit" not in seen["payload"]
+    assert "usage_limits" not in seen["payload"]
+    assert seen["config"]["recursion_limit"] == 17
     assert isinstance(seen["agent_kwargs"]["response_format"], FakeToolStrategy)
     assert seen["agent_kwargs"]["system_prompt"] == "child system"
     assert adapter.telemetry_model_name() is None
@@ -1003,7 +1023,7 @@ def test_langchain_subagent_execution_contract(monkeypatch: pytest.MonkeyPatch) 
     ]
 
     class BadAgent:
-        async def ainvoke(self, _payload: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(self, _payload: dict[str, Any], config: Any = None) -> dict[str, Any]:
             return {"structured_response": "bad"}
 
     monkeypatch.setattr(adapter, "_create_agent", lambda **_kwargs: BadAgent())
@@ -1313,6 +1333,51 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
         == "tool result"
     )
     assert len(calls) == 3
+
+
+def test_pydantic_tool_return_crosses_artifact_boundary_and_keeps_metadata() -> None:
+    observed: list[ToolReturnPart] = []
+    step = 0
+
+    def respond(messages: list[Any], _info: AgentInfo) -> ModelResponse:
+        nonlocal step
+        step += 1
+        if step == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("large_result", {}, tool_call_id="native-call")]
+            )
+        observed.extend(
+            part
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "large_result"
+        )
+        return ModelResponse(parts=[TextPart("done")])
+
+    def large_result() -> ToolReturn:
+        return ToolReturn(
+            return_value="x" * 10_000,
+            metadata={"source": "native-tool"},
+        )
+
+    manager = ArtifactManager(session_id="pydantic-tool-return")
+    adapter = PydanticAdapter(FunctionModel(respond), tools=[large_result])
+    try:
+        with (
+            artifact_admission_scope(
+                manager=manager,
+                policy=ArtifactPolicy(threshold_bytes=100),
+            ),
+            adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        ):
+            result = adapter.run_sync("Call the large result tool.")
+
+        assert result.output == "done"
+        assert len(observed) == 1
+        assert observed[0].content["ref_id"] == "tool_call_result_1"
+        assert observed[0].metadata == {"source": "native-tool"}
+    finally:
+        manager.close()
 
 
 def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id() -> None:
@@ -3351,7 +3416,9 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
         with kedi_tool_call_context():
             assert adapter.invoke_sync(prompt="raw") == "fresh raw"
 
-    assert created_agents == [{"model": "openai-chat:gpt-4o-mini", "kwargs": {}}]
+    assert created_agents == [
+        {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
+    ]
 
 
 def test_pydantic_adapter_profile_override_rejects_broken_model_profile() -> None:

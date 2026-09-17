@@ -2546,6 +2546,54 @@ def test_background_subagent_must_be_observed_before_parent_finishes() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failure", [TimeoutError("child timed out"), RuntimeError("wait failed")])
+def test_wait_subagent_propagates_terminal_errors_without_delegation_attempt(monkeypatch, failure):
+    _adapter, runtime, tools = _manager_tools()
+
+    async def wait(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(runtime, "_wait_subagent", wait)
+    monkeypatch.setattr(runtime, "_subagent_status", lambda _: "timed_out")
+    with pytest.raises(type(failure), match=str(failure)):
+        asyncio.run(tools["wait_subagent"].fn(run_id="untracked"))
+
+
+def test_wait_subagent_can_observe_result_outside_delegation_scope(monkeypatch):
+    _adapter, runtime, tools = _manager_tools()
+
+    class Result:
+        def as_tool_result(self):
+            return {"status": "completed"}
+
+    async def wait(*args, **kwargs):
+        return Result()
+
+    monkeypatch.setattr(runtime, "_wait_subagent", wait)
+    assert asyncio.run(tools["wait_subagent"].fn(run_id="restored")) == {"status": "completed"}
+
+
+def test_waiter_cancellation_does_not_fail_still_running_child(monkeypatch):
+    from kedi.agent_adapter import subagents
+    from types import SimpleNamespace
+
+    _adapter, runtime, tools = _manager_tools()
+
+    async def wait(*args, **kwargs):
+        raise asyncio.CancelledError()
+
+    def fail(**kwargs):
+        pytest.fail("waiter cancellation must not fail the child")
+
+    monkeypatch.setattr(runtime, "_wait_subagent", wait)
+    monkeypatch.setattr(runtime, "_subagent_status", lambda _: "running")
+    monkeypatch.setattr(
+        subagents, "active_delegation_attempt_for_run", lambda _: SimpleNamespace(fail=fail)
+    )
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(tools["wait_subagent"].fn(run_id="running-child"))
+
+
 def test_background_subagent_cancel_and_timeout_are_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2583,8 +2631,15 @@ def test_background_subagent_cancel_and_timeout_are_fail_closed(
                 background=True,
             )
             await started.wait()
-            with pytest.raises(TimeoutError):
-                await tools["wait_subagent"].fn(run_id=handle["run_id"], timeout=0.001)
+            wait_result = await tools["wait_subagent"].fn(
+                run_id=handle["run_id"],
+                timeout=0.001,
+            )
+            assert wait_result == {
+                "run_id": handle["run_id"],
+                "subagent": "worker",
+                "status": "running",
+            }
             assert tools["cancel_subagent"].fn(run_id=handle["run_id"])["cancel_requested"] is True
             with pytest.raises(asyncio.CancelledError):
                 await tools["wait_subagent"].fn(run_id=handle["run_id"])

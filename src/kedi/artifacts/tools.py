@@ -6,6 +6,7 @@ from kedi.agent_adapter.tool_override import ToolSpec
 
 from .codemode import artifact_code_provenance
 from .codemode import run_artifact_code as execute_artifact_code
+from .errors import ArtifactInputError
 from .manager import ArtifactManager
 from .models import ArtifactHandle
 from .policy import ArtifactPolicy
@@ -14,8 +15,13 @@ from .policy import ArtifactPolicy
 def artifact_tool_specs(
     manager: ArtifactManager,
     policy: ArtifactPolicy | None = None,
+    *,
+    query_artifact: bool = False,
 ) -> tuple[ToolSpec, ...]:
     """Build artifact management tools bound to one runtime-owned session."""
+
+    if policy is not None:
+        query_artifact = policy.queries_enabled(default=query_artifact)
 
     def read_artifact(
         *,
@@ -27,13 +33,17 @@ def artifact_tool_specs(
         pattern: str | None = None,
         max_matches: int = 20,
     ) -> dict[str, Any] | list[dict[str, Any]]:
-        """Read a bounded chunk from an artifact in the active session."""
+        """Read or search bounded artifact content in the active session."""
 
         if pattern is not None:
             if offset != 0 or offset_from != "start":
-                raise ValueError("artifact pattern search cannot be combined with an offset")
+                raise ArtifactInputError(
+                    "artifact pattern search cannot be combined with an offset"
+                )
             if path is not None:
-                raise ValueError("artifact pattern search does not support JSON Pointer path")
+                raise ArtifactInputError(
+                    "artifact pattern search does not support JSON Pointer path"
+                )
             return manager.find(ref_id, pattern, max_matches=max_matches)
         return manager.read(
             ref_id,
@@ -94,13 +104,17 @@ def artifact_tool_specs(
             "Never substitute a source name, tool name, summary, or guessed ID."
         ),
     }
-    return (
+    specs = (
         ToolSpec(
             fn=read_artifact,
             name="read_artifact",
             description=(
-                "Read a bounded artifact chunk. Use offset for pagination and an RFC 6901 "
-                "JSON Pointer path to select structured content."
+                "Read a bounded artifact chunk. A requested max_chars can be capped by policy; "
+                "inspect applied_max_chars and complete. If complete is false, call the exact "
+                "continuation returned in the result when more content is relevant instead of "
+                "rerunning the source tool. Use an RFC 6901 JSON Pointer path for structured "
+                "content, or pattern for literal search without path or offsets. For filtering "
+                "or aggregation across a large artifact, prefer run_artifact_code."
             ),
             json_schema={
                 "type": "object",
@@ -120,11 +134,15 @@ def artifact_tool_specs(
                     "path": {
                         "anyOf": [{"type": "string"}, {"type": "null"}],
                         "default": None,
+                        "description": "RFC 6901 JSON Pointer for JSON artifacts; omit when using pattern.",
                     },
                     "pattern": {
                         "anyOf": [{"type": "string"}, {"type": "null"}],
                         "default": None,
-                        "description": "Optional literal substring to find in the artifact.",
+                        "description": (
+                            "Optional non-empty literal substring. Requires path=null, "
+                            "offset=0 and offset_from='start'; do not combine with pagination."
+                        ),
                     },
                     "max_matches": {
                         "type": "integer",
@@ -214,6 +232,50 @@ def artifact_tool_specs(
                     },
                 },
                 "required": ["code", "artifact_refs"],
+                "additionalProperties": False,
+            },
+            metadata=metadata,
+            risk="read_only",
+            artifact_result="never",
+        ),
+    )
+    if not query_artifact:
+        return specs
+
+    def query_artifact_content(
+        *, ref_id: str, query: str, max_chars: int = -1, top_k: int = 3
+    ) -> dict[str, Any]:
+        return manager.query(ref_id, query, max_chars=max_chars, top_k=top_k)
+
+    return (
+        *specs,
+        ToolSpec(
+            fn=query_artifact_content,
+            name="query_artifact",
+            description=(
+                "Find relevant passages in one existing artifact by lexical BM25 search. "
+                "Use keywords or identifiers when the location is unknown. "
+                "Returns ranked, verbatim artifact excerpts with zero-based character offsets; "
+                "end_offset is exclusive. If the excerpts answer the question, answer directly; "
+                "do not reread them just to confirm their wording. Use read_artifact for missing "
+                "context, or run_artifact_code for exhaustive filtering or aggregation. "
+                "max_chars caps total excerpt characters subject to read policy. "
+                "Results are not exhaustive; no matches does not prove absence. "
+                "Scores indicate relative relevance, not confidence."
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "ref_id": ref_id_schema,
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "max_chars": {
+                        "type": "integer",
+                        "default": -1,
+                        "description": "Total excerpt characters; -1 uses the read limit.",
+                    },
+                    "top_k": {"type": "integer", "default": 3, "minimum": 1, "maximum": 10},
+                },
+                "required": ["ref_id", "query"],
                 "additionalProperties": False,
             },
             metadata=metadata,

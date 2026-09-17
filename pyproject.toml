@@ -55,13 +55,14 @@ Tracker = "https://github.com/kedi-lang/kedi/issues"
 [project.scripts]
 kedi = "kedi.__main__:main"
 kedi-lsp = "kedi.lsp.server:main"
+kedi-terminal-bench = "kedi.integrations.harbor.host:main"
 
 [project.optional-dependencies]
 claude = [
     "claude-agent-sdk==0.2.148",
 ]
 codex-model = [
-    "codex-auth-helper==1.6.1; python_version >= '3.11'",
+    "codex-auth-helper[websocket]==1.8.0; python_version >= '3.11'",
 ]
 dspy = [
     "dspy==3.3.1",
@@ -87,6 +88,10 @@ playground = [
     "fastapi>=0.138.1,<0.139",
     "uvicorn>=0.47,<0.48",
 ]
+terminal-bench = [
+    "codex-auth-helper==1.8.0; python_version >= '3.12'",
+    "harbor[daytona]==0.22.0; python_version >= '3.12'",
+]
 
 [tool.hatch.build]
 include-package-data = true
@@ -106,6 +111,18 @@ include = [
 [tool.hatch.build.targets.wheel]
 packages = [
     "src/kedi",
+]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "terminal-bench" },
+        { group = "dev" },
+    ],
+    [
+        { extra = "terminal-bench" },
+        { extra = "codex-model" },
+    ],
 ]
 
 [tool.uv.sources]
@@ -156,5 +173,6 @@ dev = [
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
     "ruff==0.15.16",
+    "tomli==2.4.1; python_version < '3.11'",
     "ty==0.0.44",
 ]

@@ -111,10 +111,14 @@ class ClaudeAdapter(HookRegistrationMixin):
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        query_artifact: bool = False,
         hook_handler: HookHandler | None = None,
         **kwargs: Any,
     ) -> None:
         self._init_hook_registration(hook_handler)
+        if not isinstance(query_artifact, bool):
+            raise TypeError("query_artifact must be a boolean")
+        self.query_artifact = query_artifact
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
         self._model = model
@@ -720,6 +724,8 @@ def _claude_sdk_mcp_server(sdk: Any, tools: Sequence[ToolSpec]) -> Any:
 
 
 def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
+    from kedi.artifacts.errors import ArtifactError, artifact_tool_error_message
+
     decorator = getattr(sdk, "tool")
     json_schema = tool.json_schema or {"type": "object", "properties": {}}
     description = tool.description or tool.name
@@ -742,6 +748,14 @@ def _claude_sdk_tool(sdk: Any, tool: ToolSpec) -> Any:
                 ],
                 "is_error": True,
             }
+        except ArtifactError as exc:
+            metadata = tool.metadata or {}
+            if (metadata.get("kedi_tool_kind") or metadata.get("kind")) != "artifact_management":
+                raise
+            message = artifact_tool_error_message(exc)
+            if message is None:
+                raise
+            return {"content": [{"type": "text", "text": message}], "is_error": True}
         return {
             "content": [
                 {

@@ -14,6 +14,7 @@ ArtifactStoreKind: TypeAlias = Literal["memory", "file"]
 _ALL_POLICY_FIELDS = frozenset(
     {
         "enabled",
+        "query_artifacts",
         "store",
         "path",
         "threshold_bytes",
@@ -36,6 +37,7 @@ _INPUT_ALIASES = {
 ARTIFACT_POLICY_INPUT_FIELDS = frozenset(
     {
         "enabled",
+        "query_artifacts",
         "store",
         "path",
         "threshold",
@@ -72,6 +74,8 @@ class ArtifactPolicy:
     """Normalized artifact policy with field-aware overlay semantics."""
 
     enabled: bool = True
+    # Unset inherits the adapter default; a resolved standalone policy defaults to disabled.
+    query_artifacts: Literal["enabled", "disabled"] | None = None
     store: ArtifactStoreKind = "memory"
     path: Path = Path(".kedi/artifacts")
     threshold_bytes: int = 100_000
@@ -113,7 +117,14 @@ class ArtifactPolicy:
         return replace(self, **updates, _specified_fields=specified)
 
     def resolved(self) -> ArtifactPolicy:
-        return replace(self, _specified_fields=_ALL_POLICY_FIELDS)
+        return replace(
+            self,
+            query_artifacts=self.query_artifacts or "disabled",
+            _specified_fields=_ALL_POLICY_FIELDS,
+        )
+
+    def queries_enabled(self, *, default: bool = False) -> bool:
+        return default if self.query_artifacts is None else self.query_artifacts == "enabled"
 
     @property
     def is_explicit(self) -> bool:
@@ -122,6 +133,7 @@ class ArtifactPolicy:
     def as_cache_key(self) -> tuple[object, ...]:
         return (
             self.enabled,
+            self.query_artifacts,
             self.store,
             str(self.path),
             self.threshold_bytes,
@@ -217,6 +229,10 @@ def parse_duration(
 
 
 def _normalize_policy_value(name: str, value: object) -> object:
+    if name == "query_artifacts":
+        if not isinstance(value, str) or value not in {"enabled", "disabled"}:
+            raise ArtifactPolicyError("query_artifacts must be 'enabled' or 'disabled'")
+        return value
     if name in {"threshold_bytes", "session_quota_bytes"}:
         return parse_byte_size(value, field_name=name)
     if name in {"ttl_seconds", "cleanup_interval_seconds"}:
@@ -249,6 +265,8 @@ def _positive_int(value: object, *, field_name: str) -> int:
 
 
 def _validate_policy(policy: ArtifactPolicy) -> None:
+    if policy.query_artifacts is not None:
+        _normalize_policy_value("query_artifacts", policy.query_artifacts)
     if policy.store not in {"memory", "file"}:
         raise ArtifactPolicyError("store must be 'memory' or 'file'")
     if policy.threshold_bytes < 0:

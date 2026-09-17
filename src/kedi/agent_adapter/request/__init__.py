@@ -1,4 +1,5 @@
 from .assembler import RunRequestAssembler, conversation_lane_identity
+from .context import agent_run_request_scope, current_agent_run_request
 from .diagnostics import RequestDiagnostics, request_diagnostics
 from .lowering import RequestLoweringAdapter, lower_request_sync
 from .models import (
@@ -40,6 +41,8 @@ __all__ = [
     "TextOutput",
     "ToolDefinition",
     "TypedOutput",
+    "agent_run_request_scope",
+    "current_agent_run_request",
     "request_diagnostics",
     "conversation_lane_identity",
     "lower_request_sync",

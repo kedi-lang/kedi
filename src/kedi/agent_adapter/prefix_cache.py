@@ -133,16 +133,12 @@ def has_response_cache_settings(settings: Mapping[str, Any]) -> bool:
 def pydantic_provider_cache_policy(model: object) -> ProviderCachePolicy:
     """Return the cache behavior available through a Pydantic AI model."""
 
-    from pydantic_ai.models.anthropic import AnthropicModel
-    from pydantic_ai.models.google import GoogleModel
-    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
-    from pydantic_ai.models.openrouter import OpenRouterModel
-
     provider = _normalize_provider(getattr(model, "system", None))
-    if isinstance(model, OpenRouterModel) or provider == "openrouter":
+    model_kind = _pydantic_model_kind(model)
+    if model_kind == "openrouter" or provider == "openrouter":
         return _OPENROUTER_POLICY
     if provider == "azure":
-        if isinstance(model, OpenAIResponsesModel):
+        if model_kind == "openai_responses":
             return _AZURE_RESPONSES_POLICY
         return _AZURE_CHAT_POLICY
     if provider == "moonshot":
@@ -157,15 +153,33 @@ def pydantic_provider_cache_policy(model: object) -> ProviderCachePolicy:
         return _DEEPSEEK_POLICY
     if provider == "xai":
         return _XAI_POLICY
-    if isinstance(model, OpenAIResponsesModel) or provider == "openai_responses":
+    if model_kind == "openai_responses" or provider == "openai_responses":
         return _OPENAI_RESPONSES_POLICY
-    if isinstance(model, OpenAIChatModel) or provider == "openai":
+    if model_kind == "openai_chat" or provider == "openai":
         return _OPENAI_CHAT_POLICY
-    if isinstance(model, AnthropicModel) or provider == "anthropic":
+    if model_kind == "anthropic" or provider == "anthropic":
         return _ANTHROPIC_POLICY
-    if isinstance(model, GoogleModel) or provider == "google":
+    if model_kind == "google" or provider == "google":
         return _GOOGLE_POLICY
     return _UNKNOWN_POLICY
+
+
+def _pydantic_model_kind(model: object) -> str | None:
+    """Identify built-in Pydantic models without importing optional providers."""
+
+    kinds = {
+        "AnthropicModel": "anthropic",
+        "GoogleModel": "google",
+        "OpenAIChatModel": "openai_chat",
+        "OpenAIResponsesModel": "openai_responses",
+        "OpenRouterModel": "openrouter",
+    }
+    for model_type in type(model).__mro__:
+        if model_type.__module__.startswith("pydantic_ai.models."):
+            kind = kinds.get(model_type.__name__)
+            if kind is not None:
+                return kind
+    return None
 
 
 def langchain_provider_cache_policy(model: str | object) -> ProviderCachePolicy:
@@ -322,7 +336,9 @@ def langchain_cache_settings(
     model_kwargs = (
         dict(configured_model_kwargs) if isinstance(configured_model_kwargs, Mapping) else {}
     )
-    model_kwargs.setdefault("prompt_cache_key", conversation.cache_key)
+    model_kwargs.setdefault(
+        "prompt_cache_key", result.get("prompt_cache_key", conversation.cache_key)
+    )
     result["model_kwargs"] = model_kwargs
     if policy.continuation and not _langchain_response_storage_disabled(result, model):
         result.setdefault("use_previous_response_id", True)
@@ -337,10 +353,13 @@ def _langchain_provider(model: str | object) -> str:
         return _normalize_provider(provider)
     module = type(model).__module__
     name = type(model).__name__
+    if any(
+        base.__module__.startswith("langchain_openai") and base.__name__ == "ChatOpenAI"
+        for base in type(model).__mro__
+    ):
+        return _openai_compatible_provider(model)
     if module.startswith("langchain_openrouter") and name == "ChatOpenRouter":
         return "openrouter"
-    if module.startswith("langchain_openai") and name == "ChatOpenAI":
-        return _openai_compatible_provider(model)
     if module.startswith("langchain_openai") and name == "AzureChatOpenAI":
         return "azure"
     if module.startswith("langchain_anthropic") and name == "ChatAnthropic":

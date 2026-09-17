@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from .invocation import InvocationUsage
 
@@ -13,6 +15,7 @@ _DEFAULT_OUTPUT_RESERVE_TOKENS = 16_384
 _DEFAULT_CUMULATIVE_INPUT_TOKENS = 1_000_000
 _DEFAULT_REQUEST_LIMIT = 128
 _REQUEST_OVERHEAD_TOKENS = 2_048
+_LIMITS_OVERRIDE: ContextVar[ModelRequestBudgetLimits | None]
 
 
 class ModelRequestBudgetError(RuntimeError):
@@ -45,6 +48,20 @@ class ModelRequestBudgetLimits:
     def safe_input_tokens(self) -> int:
         utilized = int(self.context_limit_tokens * self.safe_context_utilization)
         return utilized - self.output_reserve_tokens
+
+
+_LIMITS_OVERRIDE = ContextVar("kedi_model_request_budget_limits", default=None)
+
+
+@contextmanager
+def use_model_request_budget_limits(limits: ModelRequestBudgetLimits) -> Iterator[None]:
+    """Apply host limits to budgets created in the current execution context."""
+
+    token = _LIMITS_OVERRIDE.set(limits)
+    try:
+        yield
+    finally:
+        _LIMITS_OVERRIDE.reset(token)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -84,7 +101,7 @@ class ModelRequestBudget:
     """Thread-safe host ceiling for all model requests in one outer Kedi run."""
 
     def __init__(self, limits: ModelRequestBudgetLimits | None = None) -> None:
-        self.limits = limits or ModelRequestBudgetLimits()
+        self.limits = limits or _LIMITS_OVERRIDE.get() or ModelRequestBudgetLimits()
         self._lock = RLock()
         self._requests = 0
         self._cumulative_input_tokens = 0
@@ -154,7 +171,9 @@ class ModelRequestBudget:
         raise_on_exceeded: bool,
     ) -> ModelRequestBudgetSnapshot:
         actual_requests = max(1, usage.requests)
-        actual_input_tokens = usage.input_tokens if usage.input_tokens > 0 else estimated_tokens
+        actual_input_tokens = (
+            usage.uncached_input_tokens if usage.input_tokens > 0 else estimated_tokens
+        )
         with self._lock:
             self._requests += actual_requests - 1
             self._cumulative_input_tokens += actual_input_tokens - estimated_tokens
@@ -196,7 +215,8 @@ def _exceeded_message(
     if snapshot.cumulative_input_tokens > limits.cumulative_input_tokens:
         return (
             "model run used "
-            f"{snapshot.cumulative_input_tokens} cumulative input tokens, exceeding the host "
+            f"{snapshot.cumulative_input_tokens} cumulative uncached input tokens, "
+            "exceeding the host "
             f"limit of {limits.cumulative_input_tokens}"
         )
     return None

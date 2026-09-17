@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from pydantic_ai import ModelRetry, ModelSettings
+from pydantic_ai import ModelRetry, ModelSettings, UsageLimits
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -17,6 +19,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.openai import OpenAIResponsesModelSettings
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import (
     DeferredToolRequests,
@@ -48,6 +51,7 @@ from kedi.agent_adapter.approval import (
     ApprovalPolicy,
     ApprovalRequest,
 )
+from kedi.agent_adapter.hooks.tool_wrapper import with_hook_lifecycle
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
@@ -125,6 +129,46 @@ def test_native_call_arguments_have_documented_precedence() -> None:
 
     assert result.output == "ok"
     assert observed == [("Explicit instruction.", {"temperature": 0.9, "seed": 7})]
+
+
+def test_constructor_preserves_native_provider_model_settings() -> None:
+    settings = {
+        "openai_prompt_cache_key": "stable-conversation",
+        "openai_reasoning_effort": "high",
+        "anthropic_cache_instructions": True,
+    }
+    observed: list[dict[str, Any]] = []
+
+    async def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        observed.append(dict(info.model_settings or {}))
+        return ModelResponse(parts=[TextPart("ok")])
+
+    async def respond_stream(_messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        observed.append(dict(info.model_settings or {}))
+        yield "ok"
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond, stream_function=respond_stream), model_settings=settings
+    )
+
+    async def run() -> None:
+        assert (await adapter.run("run")).output == "ok"
+        async with adapter.iter("iter") as agent_run:
+            async for _node in agent_run:
+                pass
+        async with adapter.run_stream("stream") as stream:
+            assert await stream.get_output() == "ok"
+        with adapter.profile_override(AgentProfile(settings={"temperature": 0.2})):
+            await adapter.run("profile")
+        await adapter.run(
+            "override", model_settings=OpenAIResponsesModelSettings(openai_prompt_cache_key="other")
+        )
+
+    asyncio.run(run())
+    assert observed[:3] == [settings] * 3
+    assert observed[3] == {**settings, "temperature": 0.2}
+    assert observed[4] == {**settings, "openai_prompt_cache_key": "other"}
+    assert settings["openai_prompt_cache_key"] == "stable-conversation"
 
 
 def test_native_run_preserves_pydantic_name_inference() -> None:
@@ -823,6 +867,71 @@ def test_public_pydantic_tool_conversion_preserves_description_without_schema() 
     assert tool.description == "Return the supplied value."
 
 
+def test_public_pydantic_tool_conversion_preserves_stream_wrapper_annotations() -> None:
+    def stream_output(process_id: str) -> ArtifactStream[str]:
+        return ArtifactStream.text([process_id])
+
+    spec = with_hook_lifecycle(
+        python_callable_tool_spec("stream_output", stream_output),
+        adapter_shortname="pydantic",
+    )
+    tool = pydantic_tool_from_spec(spec)
+
+    assert tool.tool_def.parameters_json_schema == {
+        "additionalProperties": False,
+        "properties": {"process_id": {"type": "string"}},
+        "required": ["process_id"],
+        "type": "object",
+    }
+    assert cast(Any, tool.function)(process_id="process_1").logical_type == "str"
+
+
+def test_pydantic_tool_introspection_preserves_annotation_fallbacks() -> None:
+    def unresolved(value: Any) -> Any:
+        return value
+
+    unresolved.__annotations__ = {
+        "value": "MissingType",
+        "return": "MissingType",
+    }
+
+    def unresolved_wrapper(**kwargs: Any) -> dict[str, Any]:
+        return kwargs
+
+    preserved = pydantic_adapter_module._preserve_tool_introspection(
+        unresolved_wrapper,
+        unresolved,
+    )
+    assert preserved.__annotations__ == {
+        "value": "MissingType",
+        "return": "MissingType",
+    }
+
+    def signature_only(**kwargs: Any) -> dict[str, Any]:
+        return kwargs
+
+    setattr(
+        signature_only,
+        "__signature__",
+        inspect.Signature(
+            parameters=[
+                inspect.Parameter(
+                    "process_id",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    annotation=str,
+                )
+            ],
+            return_annotation=str,
+        ),
+    )
+    signature_only.__annotations__ = {}
+    preserved = pydantic_adapter_module._preserve_tool_introspection(
+        lambda **kwargs: kwargs,
+        signature_only,
+    )
+    assert preserved.__annotations__ == {"process_id": str, "return": str}
+
+
 def test_bundled_filesystem_path_errors_are_model_retries() -> None:
     def missing_file(*, file_path: str) -> str:
         raise FileNotFoundError(file_path)
@@ -853,6 +962,149 @@ def test_filesystem_permission_errors_are_reported_without_bypassing_the_boundar
 
     with pytest.raises(ModelRetry, match="Use repository-relative paths only"):
         cast(Any, tool.function)(file_path="secret.env")
+
+
+def test_bundled_filesystem_operation_errors_are_model_retries() -> None:
+    def ambiguous_edit(*, file_path: str) -> str:
+        raise ValueError(f"old_text is ambiguous in {file_path}")
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=ambiguous_edit,
+            name="edit_file",
+            metadata={"kedi_tool_kind": "filesystem"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="old_text is ambiguous"):
+        cast(Any, tool.function)(file_path="module.py")
+
+
+def test_terminal_boundary_errors_are_model_retries() -> None:
+    def rejected_command(*, cwd: str) -> dict[str, object]:
+        raise PermissionError(f"working directory escapes task root: {cwd}")
+
+    tool = pydantic_tool_from_spec(
+        ToolSpec(
+            fn=rejected_command,
+            name="run_command",
+            metadata={"kedi_tool_kind": "terminal"},
+        )
+    )
+
+    with pytest.raises(ModelRetry, match="assigned task root"):
+        cast(Any, tool.function)(cwd="/tmp")
+
+
+def test_pydantic_adapter_default_usage_limits_preserve_explicit_overrides() -> None:
+    default_limits = UsageLimits(request_limit=128)
+    explicit_limits = UsageLimits(request_limit=3)
+    adapter = PydanticAdapter(default_usage_limits=default_limits)
+
+    assert adapter._run_kwargs({}, tool_specs=())["usage_limits"] is default_limits
+    assert (
+        adapter._run_kwargs({"usage_limits": explicit_limits}, tool_specs=())["usage_limits"]
+        is explicit_limits
+    )
+
+
+def test_pydantic_adapter_default_tool_retries_recover_from_correctable_calls() -> None:
+    model_calls = 0
+    tool_calls = 0
+    hook_events: list[str] = []
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if tool_calls < 3:
+            return ModelResponse(parts=[ToolCallPart("patch", {"attempt": model_calls})])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def patch(*, attempt: int) -> str:
+        nonlocal tool_calls
+        tool_calls += 1
+        if tool_calls < 3:
+            raise ModelRetry(f"invalid patch attempt {attempt}")
+        return "patched"
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond),
+        hook_handler=lambda event: hook_events.append(event.event),
+    )
+    with adapter.tool_scope((ToolSpec(patch, "patch", risk="read_only"),)):
+        result = adapter.run_sync("Apply the patch.")
+
+    assert result.output == "done"
+    assert model_calls == 4
+    assert tool_calls == 3
+    assert [event for event in hook_events if "tool_use" in event] == [
+        "pre_tool_use",
+        "post_tool_use_failure",
+        "pre_tool_use",
+        "post_tool_use_failure",
+        "pre_tool_use",
+        "post_tool_use",
+    ]
+
+
+def test_pydantic_adapter_default_tool_retries_remain_bounded() -> None:
+    tool_calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart("patch", {})])
+
+    def patch() -> None:
+        nonlocal tool_calls
+        tool_calls += 1
+        raise ModelRetry("still invalid")
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    with adapter.tool_scope((ToolSpec(patch, "patch", risk="read_only"),)):
+        with pytest.raises(UnexpectedModelBehavior, match="max retries count of 3"):
+            adapter.run_sync("Apply the patch.")
+
+    assert tool_calls == 4
+
+
+def test_filesystem_tool_errors_allow_corrected_read_in_same_run() -> None:
+    attempts = 0
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if attempts < 3:
+            return ModelResponse(parts=[ToolCallPart("read_text_file", {})])
+        assert any(
+            isinstance(part, ToolReturnPart) and part.content == "G1 X10 Y20"
+            for message in messages
+            for part in message.parts
+        )
+        return ModelResponse(parts=[TextPart("read completed")])
+
+    def read_text_file() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise IsADirectoryError("expected a regular file")
+        if attempts == 2:
+            raise ValueError("file is too large for an unbounded read; use offset and max_chars")
+        return "G1 X10 Y20"
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    spec = ToolSpec(
+        read_text_file,
+        "read_text_file",
+        risk="read_only",
+        metadata={"kedi_tool_kind": "filesystem"},
+    )
+    with adapter.tool_scope((spec,)):
+        assert adapter.invoke_sync(prompt="Read the file") == "read completed"
+    assert attempts == 3
+
+
+def test_pydantic_adapter_explicit_retry_policy_overrides_kedi_default() -> None:
+    adapter = PydanticAdapter(TestModel(), retries=1)
+
+    assert adapter._max_tool_retries == 1
+    assert adapter._max_output_retries == 1
 
 
 @pytest.mark.parametrize("placement", ["constructor", "caller"])

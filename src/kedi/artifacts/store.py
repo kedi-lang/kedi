@@ -17,6 +17,7 @@ from typing import Any, BinaryIO, Literal, NoReturn, Protocol, cast
 
 from .errors import (
     ArtifactAccessError,
+    ArtifactInputError,
     ArtifactNotFoundError,
     ArtifactSerializationError,
 )
@@ -146,7 +147,7 @@ class InMemoryArtifactStore:
     ) -> tuple[str, int | None, bool]:
         record = self.get_record(session_id, ref_id)
         if record.codec != "json":
-            raise ArtifactSerializationError("JSON paths can only be read from JSON artifacts")
+            raise ArtifactInputError("JSON paths can only be read from JSON artifacts")
         selected = resolve_json_pointer(self.get_value(session_id, ref_id), pointer)
         return _slice_projection(
             render_artifact_content(record.codec, selected),
@@ -312,23 +313,23 @@ class FileArtifactStore:
         max_chars: int,
     ) -> tuple[str, int | None, bool]:
         if pointer and not pointer.startswith("/"):
-            raise ValueError("artifact JSON path must be an RFC 6901 pointer")
+            raise ArtifactInputError("artifact JSON path must be an RFC 6901 pointer")
         with self._lock:
             self._restore_session(session_id)
             record = _owned_record(self._records, session_id, ref_id)
             if record.codec != "json":
-                raise ArtifactSerializationError("JSON paths can only be read from JSON artifacts")
+                raise ArtifactInputError("JSON paths can only be read from JSON artifacts")
             index = self._read_projection_index(session_id, ref_id)
             pointer_range = index.json_pointer_ranges.get(pointer) if index is not None else None
             if pointer_range is None:
                 if index is not None and index.json_pointer_index_complete:
-                    raise ValueError(f"artifact JSON path {pointer!r} was not found")
+                    raise ArtifactInputError(f"artifact JSON path {pointer!r} was not found")
                 pointer_range = _locate_json_pointer_range(
                     self._payload_path(session_id, ref_id),
                     pointer,
                 )
                 if pointer_range is None:
-                    raise ValueError(f"artifact JSON path {pointer!r} was not found")
+                    raise ArtifactInputError(f"artifact JSON path {pointer!r} was not found")
 
             _, _, char_start, char_end = pointer_range
             total_chars = char_end - char_start
@@ -680,7 +681,8 @@ def _slice_projection(
     limit: int,
 ) -> tuple[str, int | None, bool]:
     start = _projection_start(len(rendered), offset, offset_from, limit)
-    content = rendered[start : start + limit]
+    length = _projection_length(len(rendered), start, offset, offset_from, limit)
+    content = rendered[start : start + length]
     return _projection_page(content, start, len(rendered), offset, offset_from)
 
 

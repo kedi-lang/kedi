@@ -188,7 +188,7 @@ def test_profile_codec_round_trips_full_portable_profile() -> None:
         compaction=CompactionSettings(mode="native", threshold=1_000),
         codemode=CodeModeSettings(enabled=True),
         output_type=int,
-        artifacts=ArtifactPolicy.patch({"enabled": False}),
+        artifacts=ArtifactPolicy.patch({"enabled": False, "query_artifacts": "enabled"}),
     )
     encoder = SessionValueEncoder(kedi_models={})
     encoded = persistence.encode_profile(

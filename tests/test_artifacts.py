@@ -41,6 +41,7 @@ from kedi.artifacts import (
     ArtifactExpiredError,
     ArtifactHandle,
     ArtifactHistory,
+    ArtifactInputError,
     ArtifactManager,
     ArtifactPolicy,
     ArtifactPolicyError,
@@ -810,7 +811,7 @@ def test_manager_rejects_invalid_json_pointer(manager: ArtifactManager) -> None:
 
     with pytest.raises(ValueError, match="RFC 6901"):
         manager.read(artifact.ref.ref_id, path="value")
-    with pytest.raises(KeyError):
+    with pytest.raises(ArtifactInputError, match="was not found"):
         manager.read(artifact.ref.ref_id, path="/missing")
 
 

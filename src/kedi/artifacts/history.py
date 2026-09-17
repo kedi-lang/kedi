@@ -20,6 +20,7 @@ EventKind: TypeAlias = Literal[
     "tool_result",
     "artifact_created",
     "artifact_read",
+    "artifact_query",
     "artifact_released",
     "artifact_expired",
 ]

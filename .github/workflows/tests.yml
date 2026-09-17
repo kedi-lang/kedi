@@ -105,3 +105,53 @@ jobs:
           assert 'kedi_notebook/static/vendor/pyodide/python_stdlib.zip' in names;
           assert 'kedi_notebook/static/vendor/pyodide/pydantic-2.12.5-py3-none-any.whl' in names;
           assert 'kedi_notebook/static/grammars/kedi/tree-sitter-kedi.wasm' in names"
+
+  terminal-bench:
+    name: Python 3.12 Harbor integration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.21"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Kedi with Harbor support
+        run: uv sync --locked --no-dev --extra terminal-bench --python 3.12
+
+      - name: Run Harbor integration tests
+        run: >-
+          uv run --no-dev --extra terminal-bench --with pytest==9.0.3 --python 3.12
+          --with 'cassetter[httpx]==0.5.0'
+          pytest tests/test_harbor_integration.py -q -p no:cov
+
+      - name: Verify Terminal-Bench CLI
+        run: >-
+          uv run --no-dev --extra terminal-bench --python 3.12
+          kedi-terminal-bench --help
+
+      - name: Build Kedi wheel
+        run: uv build --wheel
+
+      - name: Verify Harbor wheel assets
+        run: >-
+          uv run --no-dev --extra terminal-bench --python 3.12 python -c
+          "import glob, zipfile;
+          wheel = glob.glob('dist/kedi-*.whl')[0];
+          names = set(zipfile.ZipFile(wheel).namelist());
+          required = {
+          'kedi/integrations/harbor/benchmark_agent.kedi',
+          'kedi/integrations/harbor/agent.py',
+          'kedi/integrations/harbor/host.py',
+          'kedi/integrations/harbor/runner.py',
+          'kedi/integrations/harbor/terminal.py'};
+          assert required <= names, sorted(required - names)"

@@ -4015,6 +4015,10 @@ def _artifacts_field_markdown(field: ArtifactsField) -> str:
     value = _artifacts_field_value_preview(field)
     descriptions = {
         "enabled": "Enable artifact creation and agent-facing artifact tools.",
+        "query_artifacts": (
+            "Expose the bounded lexical `query_artifact` tool: `enabled` or `disabled`. "
+            "Defaults to `disabled`; an explicit scoped value overrides the adapter default."
+        ),
         "store": "Payload backend: `memory` or `file`.",
         "path": "Root directory used by the file artifact store.",
         "threshold": "Minimum payload size before a value becomes an artifact.",

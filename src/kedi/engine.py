@@ -4,10 +4,9 @@ An engine decides *when* a produce job (one LLM request + validation) runs and h
 result Future is fulfilled. The promise/dataflow layer (``promise.py``) decides *readiness*
 (a job's dependency promises must resolve first); the engine decides *admission*.
 
-- :class:`SequentialEngine` (the default) runs each job inline the moment it is scheduled and
-  returns an already-completed Future. With promises disabled this reproduces today's behavior
-  byte-for-byte.
-- :class:`ThreadEngine` (opt-in) schedules each job as a continuation of its dependency Futures
+- :class:`SequentialEngine` (opt-out of concurrency) runs each job inline the moment it is
+  scheduled and returns an already-completed Future.
+- :class:`ThreadEngine` (the default) schedules each job as a continuation of its dependency Futures
   (via :func:`when_all`, so no worker ever blocks waiting on a dependency) and runs it on a
   bounded ``ThreadPoolExecutor`` under a snapshot of the submitting context. A job triggered
   re-entrantly from a worker (a tool that issues a nested template) runs inline to avoid

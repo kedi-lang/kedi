@@ -515,6 +515,8 @@ def test_internal_filesystem_module_exports_profile_and_tools(
     assert rt.run_main() == "hello filesystem"
     assert "filesystem" in rt._profile_registry
     assert "read_text_file" in rt._procedures
+    assert "remove_file" in rt._procedures
+    assert "remove_directory" in rt._procedures
 
     from kedi.artifacts import ArtifactStream
     from kedi.tool_context import kedi_tool_call_context
@@ -651,10 +653,46 @@ def test_internal_filesystem_apply_patch_rejects_ambiguous_update(
         rt.run_main()
 
 
+@pytest.mark.parametrize(
+    "operation,old_text,expected",
+    [
+        ("update", "missing", "not found"),
+        ("update", "same", "2 matches"),
+        ("update", "", "must not be empty"),
+        ("add", "", "already exists"),
+        ("replace", "same", "one of: add, update, append"),
+    ],
+)
+def test_agent_patch_rejections_preserve_file_and_do_not_raise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    old_text: str,
+    expected: str,
+) -> None:
+    from kedi.tool_context import kedi_tool_call_context
+
+    monkeypatch.chdir(tmp_path)
+    data = tmp_path / "data.txt"
+    data.write_text("same\nsame\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        "> import: filesystem\n\n"
+        f'= <apply_patch(`{operation!r}`, `"data.txt"`, `"new"`, `{old_text!r}`, `"new"`)>\n',
+        encoding="utf-8",
+    )
+    with kedi_tool_call_context():
+        result = _compile_file(main).run_main()
+    assert result.startswith("Patch rejected; no changes made:")
+    assert expected in result
+    assert data.read_text(encoding="utf-8") == "same\nsame\n"
+
+
 def test_internal_filesystem_rejects_out_of_root_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("KEDI_WORKSPACE_POLICY", raising=False)
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside.txt"
     main = tmp_path / "main.kedi"
@@ -669,12 +707,71 @@ def test_internal_filesystem_rejects_out_of_root_path(
         rt.run_main()
 
 
+def test_internal_filesystem_strict_policy_rejects_out_of_root_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "strict")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    with pytest.raises(Exception, match="path escapes filesystem root"):
+        _compile_file(main).run_main()
+
+
+def test_internal_filesystem_none_policy_allows_out_of_root_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "none")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    assert _compile_file(main).run_main() == "outside"
+
+
+def test_internal_filesystem_none_policy_keeps_secret_file_protection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "none")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / ".env.outside"
+    outside.write_text("SECRET=value", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    with pytest.raises(Exception, match="refusing to read secret file"):
+        _compile_file(main).run_main()
+
+
+def test_internal_filesystem_rejects_invalid_workspace_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "relaxed")
+    monkeypatch.chdir(tmp_path)
+    main = _compile_fs_module_with_call(tmp_path, '= <path_exists(`"."`)>')
+
+    with pytest.raises(Exception, match="Invalid KEDI_WORKSPACE_POLICY.*none\\|strict"):
+        _compile_file(main).run_main()
+
+
 def _compile_fs_module_with_call(tmp_path: Path, call: str) -> Path:
-    # remove_directory is intentionally not exported / not in the default profile, so exercise the
-    # real module code by compiling the actual filesystem.kedi source with an appended return.
-    src = Path(internal_module_path("filesystem")).read_text(encoding="utf-8")
     main = tmp_path / "main.kedi"
-    main.write_text(f"{src}\n{call}\n", encoding="utf-8")
+    main.write_text(f"> import: filesystem\n\n{call}\n", encoding="utf-8")
     return main
 
 
@@ -832,6 +929,8 @@ def test_internal_filesystem_profile_registers_tool_names(tmp_path: Path) -> Non
             "path_exists",
             "list_directory",
             "create_directory",
+            "remove_file",
+            "remove_directory",
             "get_file_info",
             "read_artifact",
             "search_artifacts",

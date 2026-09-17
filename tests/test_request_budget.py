@@ -11,6 +11,7 @@ from kedi.agent_adapter.request_budget import (
     ModelRequestBudgetError,
     ModelRequestBudgetLimits,
     estimate_request_tokens,
+    use_model_request_budget_limits,
 )
 
 
@@ -36,6 +37,17 @@ from kedi.agent_adapter.request_budget import (
 def test_model_request_budget_limits_validate(kwargs: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         ModelRequestBudgetLimits(**kwargs)  # type: ignore[arg-type]
+
+
+def test_model_request_budget_limits_can_be_scoped_without_changing_defaults() -> None:
+    scoped = _limits(request_limit=512, cumulative_input_tokens=50_000_000)
+    explicit = _limits(request_limit=7)
+
+    with use_model_request_budget_limits(scoped):
+        assert ModelRequestBudget().limits is scoped
+        assert ModelRequestBudget(explicit).limits is explicit
+
+    assert ModelRequestBudget().limits == ModelRequestBudgetLimits()
 
 
 def _limits(**kwargs: object) -> ModelRequestBudgetLimits:
@@ -73,6 +85,24 @@ def test_model_request_budget_tracks_estimates_and_actual_usage() -> None:
     assert snapshot.estimated_request_tokens == estimated
     with pytest.raises(RuntimeError, match="already closed"):
         reservation.finish()
+
+
+def test_model_request_budget_reconciles_cached_input_as_uncached_usage() -> None:
+    budget = ModelRequestBudget(_limits(cumulative_input_tokens=500_000, request_limit=128))
+    reservation = budget.reserve("prompt")
+
+    reservation.observe(
+        InvocationUsage(
+            requests=58,
+            input_tokens=2_029_375,
+            cache_read_tokens=1_628_928,
+        )
+    )
+
+    snapshot = reservation.finish()
+
+    assert snapshot.requests == 58
+    assert snapshot.cumulative_input_tokens == 400_447
 
 
 def test_invocation_usage_aggregates_cache_and_cost_without_negative_uncached_tokens() -> None:
@@ -144,7 +174,7 @@ def test_model_request_budget_rejects_request_and_cumulative_limits() -> None:
     ("usage", "message"),
     [
         (InvocationUsage(requests=2, input_tokens=10), "used 2 requests"),
-        (InvocationUsage(requests=1, input_tokens=4_101), "cumulative input tokens"),
+        (InvocationUsage(requests=1, input_tokens=4_101), "cumulative uncached input tokens"),
     ],
 )
 def test_model_request_budget_reports_provider_side_overrun(

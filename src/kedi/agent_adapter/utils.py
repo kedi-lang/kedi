@@ -4,7 +4,9 @@ import asyncio
 import contextvars
 import copy
 import inspect
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
 from typing import (
@@ -13,6 +15,7 @@ from typing import (
     Callable,
     Coroutine,
     Mapping,
+    Iterator,
     TypeVar,
     cast,
     get_type_hints,
@@ -39,6 +42,33 @@ from .tool_override import ToolSpec
 
 _DSPY_SYNC_TOOL_MARKER = "__kedi_dspy_sync_tool__"
 _T = TypeVar("_T")
+_RUN_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "kedi_run_deadline", default=None
+)
+
+
+class RunDeadlineExceeded(TimeoutError):
+    """The enclosing execution deadline expired after cancelling async work."""
+
+
+@contextmanager
+def use_run_deadline(deadline_monotonic: float | None) -> Iterator[None]:
+    """Apply an absolute deadline to adapter calls, including copied worker contexts."""
+    parent = _RUN_DEADLINE.get()
+    deadline = (
+        min(parent, deadline_monotonic)
+        if parent is not None and deadline_monotonic is not None
+        else parent
+        if deadline_monotonic is None
+        else deadline_monotonic
+    )
+    token = _RUN_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _RUN_DEADLINE.reset(token)
+
+
 _FILESYSTEM_READ_ONLY_PROCEDURES = frozenset(
     {"read_text_file", "path_exists", "list_directory", "get_file_info"}
 )
@@ -53,7 +83,19 @@ def run_sync(awaitable: Awaitable[_T]) -> _T:
     """
 
     async def resolve() -> _T:
-        return await awaitable
+        deadline = _RUN_DEADLINE.get()
+        if deadline is None:
+            return await awaitable
+        task = asyncio.ensure_future(awaitable)
+        try:
+            return await asyncio.wait_for(
+                task,
+                timeout=max(0.0, deadline - time.monotonic()),
+            )
+        except asyncio.TimeoutError as exc:
+            if task.cancelled():
+                raise RunDeadlineExceeded("adapter execution deadline elapsed") from exc
+            raise
 
     try:
         asyncio.get_running_loop()
@@ -130,6 +172,10 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
     risk = getattr(fn, "__kedi_tool_risk__", "mutating")
     if risk not in ("read_only", "mutating", "sensitive"):
         raise ValueError(f"invalid Kedi tool risk {risk!r} for {name!r}")
+    metadata: dict[str, Any] = {}
+    kind = getattr(fn, "__kedi_tool_kind__", None)
+    if isinstance(kind, str):
+        metadata["kedi_tool_kind"] = kind
     return ToolSpec(
         fn=tool_fn,
         name=name,
@@ -137,6 +183,7 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
         return_schema=(
             TypeAdapter(logical_return).json_schema() if logical_return is not None else None
         ),
+        metadata=metadata,
         risk=risk,
         argument_validator=_python_callable_argument_validator(tool_fn),
     )

@@ -20,6 +20,7 @@ from kedi.artifacts import (
     ArtifactAccessError,
     ArtifactExpiredError,
     ArtifactHandle,
+    ArtifactInputError,
     ArtifactManager,
     ArtifactNotFoundError,
     ArtifactPolicy,
@@ -176,7 +177,7 @@ def test_policy_normalization_and_cache_key() -> None:
     assert normalize_artifact_policy(None, base=base) is base
     assert normalize_artifact_policy(base) is base
     assert normalize_artifact_policy(False, base=base).enabled is False  # type: ignore[union-attr]
-    assert len(base.resolved().as_cache_key()) == 11
+    assert len(base.resolved().as_cache_key()) == 12
     with pytest.raises(ArtifactPolicyError, match="mapping"):
         normalize_artifact_policy("enabled")  # type: ignore[arg-type]
 
@@ -682,7 +683,7 @@ def test_store_projection_helpers_cover_binary_unicode_and_invalid_payloads(tmp_
 def test_file_and_memory_projection_reject_invalid_codec_or_json_path(tmp_path: Path) -> None:
     memory = InMemoryArtifactStore()
     memory.put(_record(), serialize_artifact("value", preview_chars=10))
-    with pytest.raises(ArtifactSerializationError, match="JSON paths"):
+    with pytest.raises(ArtifactInputError, match="JSON paths"):
         memory.read_json_pointer_projection(
             "session",
             "art_test",
@@ -819,6 +820,65 @@ def test_manager_find_and_read_reject_invalid_arguments_and_cap_results() -> Non
         with pytest.raises(ValueError, match="offset_from"):
             manager.read(artifact.ref.ref_id, offset_from="middle")  # type: ignore[arg-type]
         assert len(manager.find(artifact.ref.ref_id, "alpha", max_matches=1)) == 1
+        first = manager.read(artifact.ref.ref_id, max_chars=100)
+        assert first.requested_max_chars == 100
+        assert first.applied_max_chars == 5
+        assert first.returned_chars == 5
+        assert first.complete is False
+        assert first.continuation == {
+            "tool": "read_artifact",
+            "arguments": {
+                "ref_id": artifact.ref.ref_id,
+                "offset": first.next_offset,
+                "offset_from": "start",
+                "max_chars": 5,
+            },
+        }
+        second = manager.read(**first.continuation["arguments"])
+        assert second.offset == first.next_offset
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("store", ["memory", "file"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_artifact_tail_continuation_has_no_overlap(
+    tmp_path: Path, store: str, structured: bool
+) -> None:
+    manager = ArtifactManager(session_id=f"tail-{store}-{structured}")
+    value = "abcdefghij"
+    try:
+        artifact = manager.artifactize(
+            {"value": value} if structured else value,
+            policy=policy(store=store, path=tmp_path, read_max_chars=4),
+        )
+        assert isinstance(artifact, ArtifactHandle)
+        arguments: dict[str, Any] = {
+            "ref_id": artifact.ref.ref_id,
+            "offset_from": "end",
+            "max_chars": 100,
+        }
+        if structured:
+            arguments["path"] = "/value"
+        pages: list[str] = []
+        while True:
+            chunk = manager.read(**arguments)
+            pages.append(chunk.content)
+            if chunk.complete:
+                assert chunk.continuation is None
+                break
+            assert chunk.continuation is not None
+            arguments = chunk.continuation["arguments"]
+        assert "".join(reversed(pages)) == (json.dumps(value) if structured else value)
+        assert (
+            manager.read(
+                artifact.ref.ref_id,
+                offset=100,
+                offset_from="end",
+                path="/value" if structured else None,
+            ).content
+            == ""
+        )
     finally:
         manager.close()
 
@@ -1014,7 +1074,7 @@ def test_file_json_pointer_rejects_invalid_non_json_and_missing_paths(tmp_path: 
                 offset_from="start",
                 max_chars=10,
             )
-        with pytest.raises(ArtifactSerializationError, match="JSON paths"):
+        with pytest.raises(ArtifactInputError, match="JSON paths"):
             store.read_json_pointer_projection(
                 "session",
                 "art_text",

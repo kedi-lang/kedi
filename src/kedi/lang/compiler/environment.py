@@ -478,7 +478,7 @@ def assert_kedienv_routing() -> None:
         raise RuntimeError(
             "KediEnv routing self-check failed: this Python build does not route LOAD_GLOBAL "
             "through KediEnv.__getitem__, so parallel mode cannot resolve promises lazily. "
-            "Run Kedi sequentially (unset KEDI_PARALLEL / do not use kedi.parallel())."
+            "Run Kedi sequentially (KEDI_PARALLEL=0 or kedi.configure(parallel=False))."
         )
 
 

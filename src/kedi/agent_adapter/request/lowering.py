@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from .context import agent_run_request_scope
 from .models import AdapterCallOptions, AgentRunRequest, SchemaOutput, TextOutput, TypedOutput
 
 
@@ -22,21 +23,22 @@ def lower_request_sync(
     kwargs = dict(options.native_kwargs) if options is not None else {}
     if request.instruction_text is not None:
         kwargs["instructions"] = request.instruction_text
-    if isinstance(request.output, TextOutput):
-        return adapter.invoke_sync(prompt=request.prompt.content, **kwargs)
-    if isinstance(request.output, SchemaOutput):
-        return adapter.produce_sync(
-            template=request.prompt.content,
-            output_schema=dict(request.output.schema),
-            **kwargs,
-        )
-    if isinstance(request.output, TypedOutput):
-        return adapter.produce_sync(
-            template=request.prompt.content,
-            output_type=request.output.output_type,
-            **kwargs,
-        )
-    raise TypeError(f"Unsupported Kedi output contract: {type(request.output).__name__}")
+    with agent_run_request_scope(request):
+        if isinstance(request.output, TextOutput):
+            return adapter.invoke_sync(prompt=request.prompt.content, **kwargs)
+        if isinstance(request.output, SchemaOutput):
+            return adapter.produce_sync(
+                template=request.prompt.content,
+                output_schema=dict(request.output.schema),
+                **kwargs,
+            )
+        if isinstance(request.output, TypedOutput):
+            return adapter.produce_sync(
+                template=request.prompt.content,
+                output_type=request.output.output_type,
+                **kwargs,
+            )
+        raise TypeError(f"Unsupported Kedi output contract: {type(request.output).__name__}")
 
 
 __all__ = ["RequestLoweringAdapter", "lower_request_sync"]

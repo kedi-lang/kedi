@@ -1698,13 +1698,35 @@ def test_pydantic_hook_capability_maps_denial_failure_and_cancellation() -> None
                     error=ValueError("tool failed"),
                 )
 
+            retry_call = ToolCallPart("native_tool", {"value": 4}, "retry-call")
+            await capability.before_tool_execute(
+                cast(Any, SimpleNamespace(tool_call_approved=False)),
+                call=retry_call,
+                tool_def=tool_def,
+                args={"value": 4},
+            )
+
+            async def retry(_args: Any) -> Any:
+                raise ModelRetry("correct the arguments")
+
+            with pytest.raises(ModelRetry, match="correct the arguments"):
+                await capability.wrap_tool_execute(
+                    cast(Any, SimpleNamespace()),
+                    call=retry_call,
+                    tool_def=tool_def,
+                    args={"value": 4},
+                    handler=cast(Any, retry),
+                )
+
     asyncio.run(fail_and_cancel())
     assert [event.event for event in observed] == [
+        "post_tool_use_failure",
         "post_tool_use_failure",
         "post_tool_use_failure",
     ]
     assert observed[0].interrupted is True
     assert observed[1].interrupted is False
+    assert observed[2].error_type == "ModelRetry"
 
     async def pass_through_framework_errors() -> None:
         async def fail(_args: Any) -> Any:

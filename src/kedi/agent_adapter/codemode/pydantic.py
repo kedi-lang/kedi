@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import Field, TypeAdapter
-from pydantic_ai.capabilities import AbstractCapability, CapabilityOrdering
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.exceptions import ApprovalRequired, CallDeferred, ModelRetry, UserError
 from pydantic_ai.messages import InstructionPart, ToolCallPart, ToolReturn, ToolReturnPart
 from pydantic_ai.models import ModelRequestContext
@@ -240,11 +240,14 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
                 name=name,
                 description=description,
                 parameters_json_schema=schema,
-                metadata=(
-                    {"code_arg_name": "code", "code_arg_language": "python"}
-                    if kind == "execute"
-                    else None
-                ),
+                metadata={
+                    "kedi_codemode_control": True,
+                    **(
+                        {"code_arg_name": "code", "code_arg_language": "python"}
+                        if kind == "execute"
+                        else {}
+                    ),
+                },
                 sequential=True,
             ),
             max_retries=3,
@@ -329,9 +332,6 @@ class PydanticCodeModeCapability(AbstractCapability[Any]):
     """Pydantic projection of Kedi's adapter-neutral CodeMode core."""
 
     limits: CodeModeLimits = field(default_factory=CodeModeLimits)
-
-    def get_ordering(self) -> CapabilityOrdering:
-        return CapabilityOrdering(position="outermost")
 
     def get_wrapper_toolset(
         self,

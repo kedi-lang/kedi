@@ -57,7 +57,7 @@ _SHARED_PARALLEL_ENGINES: Dict[int, Any] = {}
 _SHARED_PARALLEL_LOCK = Lock()
 
 _PARALLEL_TRUE = frozenset({"1", "true", "yes", "on"})
-_PARALLEL_FALSE = frozenset({"", "0", "false", "no", "off"})
+_PARALLEL_FALSE = frozenset({"0", "false", "no", "off"})
 DEFAULT_LOOP_ITERATION_LIMIT = 10_000
 _CLAIM_OUTPUT_DESCRIPTION = (
     "Whether the claim can be established as true from the available context."
@@ -95,10 +95,10 @@ def _shutdown_shared_engines() -> None:
         engine.shutdown()
 
 
-def _default_engine() -> Any:
-    """Default engine: sequential unless parallel is explicitly opted into via ``KEDI_PARALLEL``.
+def _default_engine(*, max_workers: int = 8) -> Any:
+    """Default to bounded concurrency, with an optional ``KEDI_PARALLEL`` override.
 
-    ``0/false/no/off`` (or unset) -> sequential; ``1/true/yes/on`` -> parallel (default workers);
+    ``0/false/no/off`` -> sequential; unset/empty or ``1/true/yes/on`` -> parallel;
     a positive integer -> parallel with that many workers; anything else raises (no silent flip).
     """
     from .engine import SequentialEngine
@@ -107,8 +107,8 @@ def _default_engine() -> Any:
     low = raw.lower()
     if low in _PARALLEL_FALSE:
         return SequentialEngine()
-    if low in _PARALLEL_TRUE:
-        return shared_thread_engine(max_workers=8)
+    if not low or low in _PARALLEL_TRUE:
+        return shared_thread_engine(max_workers=max_workers)
     try:
         workers = int(raw)
     except ValueError:
@@ -1086,8 +1086,7 @@ class KediRuntime:
                         lane_identity=lane_identity,
                     )
 
-        # Sequential default: run inline on the main thread and return concrete values. This is the
-        # hot path, so the parallel-only env snapshot and job closure below are NOT built here.
+        # Explicit sequential execution avoids a worker and returns concrete values.
         if not parallel:
             try:
                 result_map = _produce()  # raises on the main thread, wrapped by the trace frame
@@ -1678,7 +1677,11 @@ class KediRuntime:
                 raise ArtifactCapabilityError(
                     "Active adapter does not support Kedi artifact references and tools"
                 )
-            management_specs = artifact_tool_specs(self.artifacts, artifact_policy)
+            management_specs = artifact_tool_specs(
+                self.artifacts,
+                artifact_policy,
+                query_artifact=getattr(adapter, "query_artifact", False),
+            )
             if not self._adapter_uses_native_approvals(adapter):
                 management_specs = tuple(
                     with_approval(
@@ -1887,7 +1890,11 @@ class KediRuntime:
                 InstructionPart(
                     identity="artifacts.instructions",
                     source="artifacts",
-                    content=artifact_instructions(),
+                    content=artifact_instructions(
+                        query_artifact=profile.artifacts.queries_enabled(
+                            default=getattr(adapter, "query_artifact", False),
+                        ),
+                    ),
                 )
             )
         return tuple(parts)
