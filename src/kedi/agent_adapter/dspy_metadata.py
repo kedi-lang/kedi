@@ -3,7 +3,6 @@ from __future__ import annotations
 from ..agent_profile.settings import DSPY_LM_SETTING_KEYS
 from .meta import AdapterCapabilities, AdapterDescriptor
 
-
 DSPY_ADAPTER = AdapterDescriptor(
     kind="agent-framework",
     shortname="dspy",
