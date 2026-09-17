@@ -546,6 +546,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         subagent_approval_resolution: PydanticApprovalResolution | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        query_artifact: bool = False,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -559,6 +560,9 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         deferred for an outer controller such as an ACP runtime.
         """
         self._init_hook_registration(hook_handler)
+        if not isinstance(query_artifact, bool):
+            raise TypeError("query_artifact must be a boolean")
+        self.query_artifact = query_artifact
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(

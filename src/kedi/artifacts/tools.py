@@ -15,8 +15,13 @@ from .policy import ArtifactPolicy
 def artifact_tool_specs(
     manager: ArtifactManager,
     policy: ArtifactPolicy | None = None,
+    *,
+    query_artifact: bool = False,
 ) -> tuple[ToolSpec, ...]:
     """Build artifact management tools bound to one runtime-owned session."""
+
+    if policy is not None:
+        query_artifact = policy.queries_enabled(default=query_artifact)
 
     def read_artifact(
         *,
@@ -99,7 +104,7 @@ def artifact_tool_specs(
             "Never substitute a source name, tool name, summary, or guessed ID."
         ),
     }
-    return (
+    specs = (
         ToolSpec(
             fn=read_artifact,
             name="read_artifact",
@@ -227,6 +232,50 @@ def artifact_tool_specs(
                     },
                 },
                 "required": ["code", "artifact_refs"],
+                "additionalProperties": False,
+            },
+            metadata=metadata,
+            risk="read_only",
+            artifact_result="never",
+        ),
+    )
+    if not query_artifact:
+        return specs
+
+    def query_artifact_content(
+        *, ref_id: str, query: str, max_chars: int = -1, top_k: int = 3
+    ) -> dict[str, Any]:
+        return manager.query(ref_id, query, max_chars=max_chars, top_k=top_k)
+
+    return (
+        *specs,
+        ToolSpec(
+            fn=query_artifact_content,
+            name="query_artifact",
+            description=(
+                "Find relevant passages in one existing artifact by lexical BM25 search. "
+                "Use keywords or identifiers when the location is unknown. "
+                "Returns ranked, verbatim artifact excerpts with zero-based character offsets; "
+                "end_offset is exclusive. If the excerpts answer the question, answer directly; "
+                "do not reread them just to confirm their wording. Use read_artifact for missing "
+                "context, or run_artifact_code for exhaustive filtering or aggregation. "
+                "max_chars caps total excerpt characters subject to read policy. "
+                "Results are not exhaustive; no matches does not prove absence. "
+                "Scores indicate relative relevance, not confidence."
+            ),
+            json_schema={
+                "type": "object",
+                "properties": {
+                    "ref_id": ref_id_schema,
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "max_chars": {
+                        "type": "integer",
+                        "default": -1,
+                        "description": "Total excerpt characters; -1 uses the read limit.",
+                    },
+                    "top_k": {"type": "integer", "default": 3, "minimum": 1, "maximum": 10},
+                },
+                "required": ["ref_id", "query"],
                 "additionalProperties": False,
             },
             metadata=metadata,

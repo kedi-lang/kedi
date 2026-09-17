@@ -442,6 +442,74 @@ class ArtifactManager:
                 telemetry.record_read(bytes_returned=len(content.encode("utf-8")))
                 return chunk
 
+    def query(
+        self,
+        ref_id: str,
+        query: str,
+        *,
+        max_chars: int = -1,
+        top_k: int = 3,
+    ) -> dict[str, Any]:
+        """Return ranked lexical passages within one artifact's read budget."""
+        from .query import query_passages
+
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 10:
+            raise ArtifactInputError("artifact top_k must be an integer from 1 to 10")
+        if (
+            isinstance(max_chars, bool)
+            or not isinstance(max_chars, int)
+            or (max_chars != -1 and max_chars <= 0)
+        ):
+            raise ArtifactInputError("artifact max_chars must be -1 or a positive integer")
+        with telemetry.artifact_span("query", session_id=self.session_id, ref_id=ref_id):
+            with self._lease(ref_id) as (store, record):
+                policy = self._ref_policies[ref_id]
+                limit = (
+                    policy.read_max_chars
+                    if max_chars == -1
+                    else min(max_chars, policy.read_max_chars)
+                )
+
+                def blocks() -> Iterator[str]:
+                    offset = 0
+                    while True:
+                        content, next_offset, complete = store.read_projection(
+                            self.session_id,
+                            record.ref_id,
+                            offset=offset,
+                            offset_from="start",
+                            max_chars=65_536,
+                        )
+                        yield content
+                        if complete or next_offset is None:
+                            break
+                        offset = next_offset
+
+                result = query_passages(blocks(), query=query, max_chars=limit, top_k=top_k)
+                result.update(
+                    ref_id=ref_id,
+                    media_type=record.ref.media_type,
+                    retrieval="lexical_bm25",
+                    requested_max_chars=max_chars,
+                    applied_max_chars=limit,
+                    exhaustive=False,
+                )
+                self.history.append(
+                    "artifact_query",
+                    ref_id=ref_id,
+                    data={
+                        "returned_chars": result["returned_chars"],
+                        "matches": len(result["matches"]),
+                        "applied_max_chars": limit,
+                    },
+                )
+                telemetry.record_read(
+                    bytes_returned=sum(
+                        len(item["content"].encode("utf-8")) for item in result["matches"]
+                    )
+                )
+                return result
+
     def search(
         self,
         query: str | None = None,

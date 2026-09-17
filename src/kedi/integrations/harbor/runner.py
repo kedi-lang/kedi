@@ -26,6 +26,7 @@ from ...agent_adapter.request_budget import (
     ModelRequestBudgetLimits,
     use_model_request_budget_limits,
 )
+from ...agent_adapter.utils import RunDeadlineExceeded, use_run_deadline
 from ...agent_profile import McpServerSpec
 from ...agent_profile.mcp import mcp_spec_from_mapping
 from ...artifacts import ArtifactPolicy
@@ -197,6 +198,8 @@ def run_trial(
     source_path: Path | None = None
     conversation: ConversationState | None = None
     request_evidence: Any | None = None
+    request_usage_recovery: Any | None = None
+    request_usage_was_recovered = False
     request_limit = model_request_limit
     phase = "setup"
     cleanup_errors: list[str] = []
@@ -329,7 +332,13 @@ def run_trial(
             )
 
         phase = "agent"
-        with use_model_request_budget_limits(budget_limits), observe_invocations(observe):
+        with (
+            use_model_request_budget_limits(budget_limits),
+            observe_invocations(observe),
+            use_run_deadline(
+                deadline - finalization_reserve_seconds if deadline is not None else None
+            ),
+        ):
             result_summary = solve(instruction)
         result_summary = redact_text(result_summary)
     except _TrialTimedOut as exc:
@@ -343,7 +352,10 @@ def run_trial(
         error_type = type(exc).__name__
         error_message = "trial cancelled"
     except BaseException as exc:
-        if timed_out := _find_wrapped_exception(exc, _TrialTimedOut):
+        if timed_out := (
+            _find_wrapped_exception(exc, _TrialTimedOut)
+            or _find_wrapped_exception(exc, RunDeadlineExceeded)
+        ):
             state = "timed_out"
             failure_phase = phase
             error_type = type(timed_out).__name__
@@ -405,6 +417,17 @@ def run_trial(
             error_type = "CleanupError"
             error_message = cleanup_message
 
+    if request_evidence is not None:
+        from .request_observer import recover_request_usage
+
+        request_usage_recovery = recover_request_usage(request_evidence.event_path)
+        if (
+            request_usage_recovery is not None
+            and request_usage_recovery.usage.requests > usage.requests
+        ):
+            usage = request_usage_recovery.usage
+            request_usage_was_recovered = True
+
     terminal_summary = terminal.summary()
     duration = max(0.0, time.monotonic() - started_monotonic)
     record = TrialRecord(
@@ -449,7 +472,27 @@ def run_trial(
             "cumulative_input_tokens": model_cumulative_input_tokens,
         },
         request_observation=(
-            {"enabled": False} if request_evidence is None else request_evidence.summary().to_dict()
+            {"enabled": False}
+            if request_evidence is None
+            else {
+                **request_evidence.summary().to_dict(),
+                "usage_recovered": request_usage_was_recovered,
+                "recovered_model_requests": (
+                    None
+                    if request_usage_recovery is None
+                    else request_usage_recovery.usage.requests
+                ),
+                "recovery_invalid_events": (
+                    None
+                    if request_usage_recovery is None
+                    else request_usage_recovery.invalid_events
+                ),
+                "recovery_events_without_cost": (
+                    None
+                    if request_usage_recovery is None
+                    else request_usage_recovery.events_without_cost
+                ),
+            }
         ),
         result_summary=result_summary,
         failure_phase=failure_phase,
@@ -464,7 +507,7 @@ def _configure_logfire() -> bool:
     if os.getenv("KEDI_HARBOR_LOGFIRE") != "1":
         return False
     import logfire
-    from opentelemetry.instrumentation.kedi import (  # ty: ignore[unresolved-import]
+    from opentelemetry.instrumentation.kedi import (  # ty: ignore[unresolved-import, unused-ignore-comment]
         KediInstrumentor,
     )
 

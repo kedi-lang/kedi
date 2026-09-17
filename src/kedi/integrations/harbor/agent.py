@@ -26,7 +26,7 @@ from harbor.environments.base import BaseEnvironment  # ty: ignore[unresolved-im
 from harbor.models.agent.context import AgentContext  # ty: ignore[unresolved-import]
 
 from ..._version import __version__
-from .records import HarnessPolicy
+from .records import HarnessPolicy, invocation_usage_dict
 
 
 _LOGFIRE_CREDENTIALS_FILENAME = "logfire_credentials.json"
@@ -567,7 +567,7 @@ class KediAgent(BaseInstalledAgent):
         if self._codex_auth_file is None:  # pragma: no cover - guarded by caller
             raise RuntimeError("Codex auth source is unavailable")
 
-        from codex_auth_helper import (  # ty: ignore[unresolved-import]  # Optional TB extra.
+        from codex_auth_helper import (  # ty: ignore[unresolved-import, unused-ignore-comment]  # Optional TB extra.
             CodexAuthConfig,
             CodexAuthState,
             CodexAuthStore,
@@ -604,39 +604,60 @@ class KediAgent(BaseInstalledAgent):
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         result_path = self.logs_dir / "kedi-result.json"
+        payload: dict[str, Any] | None = None
+        metadata = {**(context.metadata or {})}
         if not result_path.is_file():
-            context.metadata = {
-                **(context.metadata or {}),
-                "kedi_state": "integration_failure",
-                "kedi_result_present": False,
-            }
+            metadata.update(kedi_state="integration_failure", kedi_result_present=False)
+        else:
+            try:
+                value = json.loads(result_path.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise TypeError("Kedi result must be a JSON object")
+                payload = value
+            except (OSError, TypeError, ValueError) as exc:
+                metadata.update(
+                    kedi_state="integration_failure",
+                    kedi_result_present=True,
+                    kedi_result_error=type(exc).__name__,
+                )
+
+        usage = payload.get("usage") if payload is not None else None
+        if not isinstance(usage, dict):
+            usage = {}
+        from .request_observer import recover_request_usage
+
+        recovery = recover_request_usage(self.logs_dir / "model-requests.jsonl")
+        if payload is None and recovery is None:
+            context.metadata = metadata
             return
-        try:
-            payload = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            context.metadata = {
-                **(context.metadata or {}),
-                "kedi_state": "integration_failure",
-                "kedi_result_present": True,
-                "kedi_result_error": type(exc).__name__,
-            }
-            return
-        usage = payload.get("usage") or {}
+        recorded_requests = _optional_int(usage.get("requests")) or 0
+        if recovery is not None and recovery.usage.requests > recorded_requests:
+            usage = invocation_usage_dict(recovery.usage)
+            metadata.update(
+                kedi_usage_source="model_request_evidence",
+                kedi_usage_recovered=True,
+                kedi_usage_recovery_invalid_events=recovery.invalid_events,
+                kedi_usage_recovery_events_without_cost=recovery.events_without_cost,
+            )
+
         context.n_input_tokens = _optional_int(usage.get("input_tokens"))
         context.n_cache_tokens = _optional_int(usage.get("cache_read_tokens"))
         context.n_output_tokens = _optional_int(usage.get("output_tokens"))
         context.cost_usd = _optional_float(usage.get("cost_usd"))
-        context.metadata = {
-            **(context.metadata or {}),
-            "kedi_state": payload.get("state"),
-            "kedi_result_present": True,
-            "kedi_adapter": payload.get("adapter"),
-            "kedi_requests": usage.get("requests"),
-            "kedi_tool_calls": usage.get("tool_calls"),
-            "kedi_cache_write_tokens": usage.get("cache_write_tokens"),
-            "kedi_uncached_input_tokens": usage.get("uncached_input_tokens"),
-            "kedi_verification": payload.get("verification"),
-        }
+        if payload is not None:
+            metadata.update(
+                kedi_state=payload.get("state"),
+                kedi_result_present=True,
+                kedi_adapter=payload.get("adapter"),
+                kedi_verification=payload.get("verification"),
+            )
+        metadata.update(
+            kedi_requests=usage.get("requests"),
+            kedi_tool_calls=usage.get("tool_calls"),
+            kedi_cache_write_tokens=usage.get("cache_write_tokens"),
+            kedi_uncached_input_tokens=usage.get("uncached_input_tokens"),
+        )
+        context.metadata = metadata
 
     async def _install_skills(
         self,

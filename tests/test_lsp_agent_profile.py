@@ -761,6 +761,7 @@ def test_artifact_directive_and_profile_field_hovers() -> None:
     source = (
         "> artifacts:\n"
         "  enabled: true\n"
+        "  query_artifacts: enabled\n"
         "  threshold: `args.threshold`\n"
         "\n"
         "> profile: compact:\n"
@@ -772,8 +773,9 @@ def test_artifact_directive_and_profile_field_hovers() -> None:
         source, "artifacts.kedi", "artifacts", occurrence=1
     )
     assert "Minimum payload size" in hover_text_at(source, "artifacts.kedi", "threshold")
+    assert "bounded lexical" in hover_text_at(source, "artifacts.kedi", "query_artifacts")
     assert "Artifact policy stored in this profile" in hover_text_at(
-        source, "artifacts.kedi", "artifacts", occurrence=2
+        source, "artifacts.kedi", "artifacts", occurrence=3
     )
     assert "Payload backend" in hover_text_at(source, "artifacts.kedi", "store")
 

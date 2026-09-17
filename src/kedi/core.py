@@ -1677,7 +1677,11 @@ class KediRuntime:
                 raise ArtifactCapabilityError(
                     "Active adapter does not support Kedi artifact references and tools"
                 )
-            management_specs = artifact_tool_specs(self.artifacts, artifact_policy)
+            management_specs = artifact_tool_specs(
+                self.artifacts,
+                artifact_policy,
+                query_artifact=getattr(adapter, "query_artifact", False),
+            )
             if not self._adapter_uses_native_approvals(adapter):
                 management_specs = tuple(
                     with_approval(
@@ -1886,7 +1890,11 @@ class KediRuntime:
                 InstructionPart(
                     identity="artifacts.instructions",
                     source="artifacts",
-                    content=artifact_instructions(),
+                    content=artifact_instructions(
+                        query_artifact=profile.artifacts.queries_enabled(
+                            default=getattr(adapter, "query_artifact", False),
+                        ),
+                    ),
                 )
             )
         return tuple(parts)

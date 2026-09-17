@@ -177,7 +177,7 @@ def test_policy_normalization_and_cache_key() -> None:
     assert normalize_artifact_policy(None, base=base) is base
     assert normalize_artifact_policy(base) is base
     assert normalize_artifact_policy(False, base=base).enabled is False  # type: ignore[union-attr]
-    assert len(base.resolved().as_cache_key()) == 11
+    assert len(base.resolved().as_cache_key()) == 12
     with pytest.raises(ArtifactPolicyError, match="mapping"):
         normalize_artifact_policy("enabled")  # type: ignore[arg-type]
 

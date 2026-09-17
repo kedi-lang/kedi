@@ -118,6 +118,7 @@ class LangChainAdapter(HookRegistrationMixin):
         model_settings: dict[str, Any] | None = None,
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
+        query_artifact: bool = False,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -125,6 +126,9 @@ class LangChainAdapter(HookRegistrationMixin):
         **kwargs: Any,
     ) -> None:
         self._init_hook_registration(hook_handler)
+        if not isinstance(query_artifact, bool):
+            raise TypeError("query_artifact must be a boolean")
+        self.query_artifact = query_artifact
         if isinstance(tool_retries, bool) or not isinstance(tool_retries, int) or tool_retries < 0:
             raise ValueError("tool_retries must be a non-negative integer")
         self._default_usage_limits = default_usage_limits

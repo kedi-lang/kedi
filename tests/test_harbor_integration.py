@@ -2077,6 +2077,60 @@ def test_runner_writes_durable_completed_and_failed_records(
     assert "sk-do-not" not in cast(str, failed.error_message)
 
 
+def test_runner_recovers_usage_when_timeout_interrupts_the_invocation_observer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result_path = tmp_path / "timeout" / "kedi-result.json"
+
+    def interrupted_bind(**_: Any) -> Any:
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                event = {
+                    "event": "model_request_completed",
+                    "response": {
+                        "parts": [{"kind": "tool-call"}],
+                        "usage": {
+                            "input_tokens": 120,
+                            "cache_read_tokens": 80,
+                            "cache_write_tokens": 0,
+                            "output_tokens": 12,
+                            "total_tokens": 132,
+                            "cost_usd": 0.004,
+                        },
+                    },
+                }
+                (result_path.parent / "model-requests.jsonl").write_text(
+                    json.dumps(event) + "\n",
+                    encoding="utf-8",
+                )
+                raise runner._TrialTimedOut("fixture timeout")  # noqa: SLF001
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", interrupted_bind)
+    record = runner.run_trial(
+        instruction="run until timeout",
+        model="openai/test",
+        adapter="pydantic",
+        workspace=tmp_path,
+        result_path=result_path,
+        trial_id="timeout-usage",
+        request_observation=True,
+    )
+
+    assert record.state == "timed_out"
+    assert record.usage["requests"] == 1
+    assert record.usage["tool_calls"] == 1
+    assert record.usage["input_tokens"] == 120
+    assert record.usage["cache_read_tokens"] == 80
+    assert record.usage["output_tokens"] == 12
+    assert record.usage["cost_usd"] == 0.004
+    assert record.request_observation["usage_recovered"] is True
+
+
 def test_runner_scopes_generous_configurable_model_budgets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2237,6 +2291,58 @@ def test_runner_hands_off_retained_processes_only_after_success(
     assert failed.state == "agent_failure"
     assert failed.terminal["retained_processes"] == 0
     assert terminals[1].list_processes()[0]["status"] == "finished"
+
+
+@pytest.mark.parametrize("adapter", ["pydantic", "langchain"])
+def test_runner_unwinds_active_turn_before_deadline_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
+) -> None:
+    from kedi.agent_adapter.utils import run_sync
+    from kedi.engine import ThreadEngine
+
+    events: list[str] = []
+
+    def fake_bind(**kwargs: Any) -> Any:
+        conversation = kwargs["conversation"]
+
+        def decorate(_: Any) -> Any:
+            def invoke(_: str) -> str:
+                async def work() -> str:
+                    try:
+                        await asyncio.sleep(10)
+                        return "late"
+                    finally:
+                        events.append("async closed")
+
+                def job() -> str:
+                    with conversation.adapter_turn(adapter):
+                        return run_sync(work())
+
+                engine = ThreadEngine(max_workers=1)
+                try:
+                    return engine.schedule([], job).result()
+                finally:
+                    engine.shutdown()
+
+            return invoke
+
+        return decorate
+
+    monkeypatch.setattr(runner.kedi, "bind", fake_bind)
+    record = runner.run_trial(
+        instruction="wait",
+        model="openai/test",
+        adapter=adapter,
+        workspace=tmp_path,
+        result_path=tmp_path / "result.json",
+        trial_id="deadline",
+        trial_timeout_seconds=1,
+    )
+    assert events == ["async closed"]
+    assert record.state == "timed_out"
+    assert record.error_type == "RunDeadlineExceeded"
+    assert not (tmp_path / "cleanup-errors.txt").exists()
+    assert json.loads((tmp_path / "result.json").read_text())["state"] == "timed_out"
 
 
 def test_runner_classifies_setup_failure_and_enforces_local_timeout(
@@ -2900,6 +3006,76 @@ def test_host_persists_manifest_next_to_harbor_job(
     assert calls and calls[0][:2] == ["harbor", "run"]
     persisted = load_manifest(tmp_path / "jobs" / "pilot" / "kedi-manifest.json")
     assert persisted.material_digest == manifest.material_digest
+
+
+def test_host_run_resumes_the_same_started_job_and_skips_a_completed_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = RunManifest(
+        harbor_revision="harbor-commit",
+        kedi_commit="kedi-commit",
+        kedi_dirty=False,
+        model="openai/gpt-test",
+        task_names=("task-a",),
+    )
+    manifest_path = tmp_path / "manifest.json"
+    manifest.write(manifest_path)
+    job_dir = tmp_path / "jobs" / "pilot"
+    job_dir.mkdir(parents=True)
+    manifest.write(job_dir / "kedi-manifest.json")
+    (job_dir / "lock.json").write_text("{}", encoding="utf-8")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(host, "_resolve_executable", lambda *_args, **_kwargs: "harbor")
+    monkeypatch.setattr(host, "_validate_harbor_version", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        host.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or SimpleNamespace(returncode=0),
+    )
+    arguments = [
+        "run",
+        str(manifest_path),
+        "--jobs-dir",
+        str(tmp_path / "jobs"),
+        "--job-name",
+        "pilot",
+    ]
+
+    resumed = CliRunner().invoke(host.cli, arguments)
+
+    assert resumed.exit_code == 0, resumed.output
+    assert calls == [["harbor", "job", "resume", "-p", str(job_dir.resolve())]]
+
+    (job_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "finished_at": "2026-09-11T00:00:00Z",
+                "n_total_trials": 1,
+                "stats": {
+                    "n_completed_trials": 1,
+                    "n_errored_trials": 1,
+                    "n_cancelled_trials": 0,
+                    "n_pending_trials": 0,
+                    "n_running_trials": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    completed = CliRunner().invoke(host.cli, arguments)
+
+    assert completed.exit_code == 0, completed.output
+    assert "already complete" in completed.output
+    assert len(calls) == 1
+
+    explicit_resume = CliRunner().invoke(host.cli, ["resume", str(job_dir)])
+    assert explicit_resume.exit_code == 0, explicit_resume.output
+    assert "already complete" in explicit_resume.output
+    assert len(calls) == 1
+
+    (job_dir / "result.json").write_text("{broken", encoding="utf-8")
+    assert host._job_is_complete(job_dir) is False
 
 
 def test_host_rejects_a_different_harbor_version(
@@ -4292,6 +4468,11 @@ def test_harbor_agent_full_configuration_and_failure_projection(
     agent.populate_context_post_run(invalid_context)
     assert invalid_context.metadata["kedi_result_error"] == "JSONDecodeError"
 
+    result_path.write_text("[]", encoding="utf-8")
+    non_object_context = SimpleNamespace(metadata=None)
+    agent.populate_context_post_run(non_object_context)
+    assert non_object_context.metadata["kedi_result_error"] == "TypeError"
+
     result_path.write_text(
         json.dumps(
             {
@@ -4317,6 +4498,95 @@ def test_harbor_agent_full_configuration_and_failure_projection(
     missing_model = KediAgent(logs_dir=tmp_path, model_name=None, kedi_package="kedi")
     with pytest.raises(ValueError, match="requires a Harbor model"):
         asyncio.run(missing_model.run("solve", environment, SimpleNamespace()))
+
+
+def test_harbor_agent_recovers_newer_request_usage_after_runner_finalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_harbor(monkeypatch)
+    monkeypatch.delitem(sys.modules, "kedi.integrations.harbor.agent", raising=False)
+    KediAgent = importlib.import_module("kedi.integrations.harbor.agent").KediAgent
+    agent = KediAgent(logs_dir=tmp_path / "logs", model_name="openai/test")
+    agent.logs_dir.mkdir(parents=True)
+    (agent.logs_dir / "kedi-result.json").write_text(
+        json.dumps(
+            {
+                "state": "timed_out",
+                "adapter": "pydantic",
+                "usage": {
+                    "requests": 0,
+                    "tool_calls": 0,
+                    "input_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                    "uncached_input_tokens": 0,
+                    "cost_usd": None,
+                },
+                "verification": {"state": "not_run"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    events = [
+        {
+            "event": "model_request_completed",
+            "response": {
+                "parts": [{"kind": "tool-call"}],
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_tokens": 60,
+                    "cache_write_tokens": 5,
+                    "output_tokens": 10,
+                    "total_tokens": 110,
+                    "cost_usd": 0.01,
+                },
+            },
+        },
+        {
+            "event": "model_request_completed",
+            "response": {
+                "parts": [{"kind": "text"}],
+                "usage": {
+                    "input_tokens": 200,
+                    "cache_read_tokens": 150,
+                    "cache_write_tokens": 0,
+                    "output_tokens": 20,
+                    "total_tokens": 220,
+                    "cost_usd": 0.02,
+                },
+            },
+        },
+    ]
+    (agent.logs_dir / "model-requests.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+    context = SimpleNamespace(metadata={"harbor": "preserved"})
+
+    agent.populate_context_post_run(context)
+
+    assert context.n_input_tokens == 300
+    assert context.n_cache_tokens == 210
+    assert context.n_output_tokens == 30
+    assert context.cost_usd == pytest.approx(0.03)
+    assert context.metadata["harbor"] == "preserved"
+    assert context.metadata["kedi_state"] == "timed_out"
+    assert context.metadata["kedi_requests"] == 2
+    assert context.metadata["kedi_tool_calls"] == 1
+    assert context.metadata["kedi_uncached_input_tokens"] == 90
+    assert context.metadata["kedi_usage_source"] == "model_request_evidence"
+    assert context.metadata["kedi_usage_recovered"] is True
+
+    (agent.logs_dir / "kedi-result.json").unlink()
+    evidence_only_context = SimpleNamespace(metadata=None)
+    agent.populate_context_post_run(evidence_only_context)
+    assert evidence_only_context.n_input_tokens == 300
+    assert evidence_only_context.metadata["kedi_state"] == "integration_failure"
+    assert evidence_only_context.metadata["kedi_result_present"] is False
+    assert evidence_only_context.metadata["kedi_usage_recovered"] is True
 
 
 def test_real_harbor_contract_when_extra_is_installed(

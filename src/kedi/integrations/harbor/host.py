@@ -339,9 +339,16 @@ def run_manifest(
     job_dir = effective_jobs_dir / effective_job_name
     job_dir.mkdir(parents=True, exist_ok=True)
     manifest.write(job_dir / "kedi-manifest.json")
+    if _job_is_complete(job_dir):
+        click.echo(f"Harbor job is already complete: {job_dir}")
+        return
+    resuming = _job_has_started(job_dir)
+    if resuming:
+        command = [executable, "job", "resume", "-p", str(job_dir)]
     completed = subprocess.run(command, check=False)
     if completed.returncode:
-        raise click.ClickException(f"Harbor exited with status {completed.returncode}")
+        message = "Harbor resume" if resuming else "Harbor"
+        raise click.ClickException(f"{message} exited with status {completed.returncode}")
 
 
 @cli.command("resume")
@@ -354,12 +361,39 @@ def resume_job(job_dir: Path, *, harbor_command: str) -> None:
         raise click.ClickException(f"Kedi run manifest is missing from Harbor job: {manifest_path}")
     manifest = load_manifest(manifest_path)
     _validate_harbor_version(executable, expected=manifest.harbor_version)
+    if _job_is_complete(job_dir):
+        click.echo(f"Harbor job is already complete: {job_dir.resolve()}")
+        return
     completed = subprocess.run(
         [executable, "job", "resume", "-p", str(job_dir.resolve())],
         check=False,
     )
     if completed.returncode:
         raise click.ClickException(f"Harbor resume exited with status {completed.returncode}")
+
+
+def _job_has_started(job_dir: Path) -> bool:
+    return (job_dir / "lock.json").is_file() or (job_dir / "config.json").is_file()
+
+
+def _job_is_complete(job_dir: Path) -> bool:
+    result_path = job_dir / "result.json"
+    if not result_path.is_file():
+        return False
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        stats = result["stats"]
+        total = result["n_total_trials"]
+        return (
+            isinstance(total, int)
+            and not isinstance(total, bool)
+            and result.get("finished_at") is not None
+            and stats["n_pending_trials"] == 0
+            and stats["n_running_trials"] == 0
+            and stats["n_completed_trials"] == total
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
 
 
 def _harbor_run_command(

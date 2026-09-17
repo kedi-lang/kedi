@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
@@ -83,7 +84,12 @@ def test_request_observer_correlates_semantic_and_native_requests(tmp_path: Path
     async def respond(_messages: list[Any], _info: AgentInfo) -> ModelResponse:
         return ModelResponse(
             parts=[TextPart("unchanged result")],
-            usage=RequestUsage(input_tokens=19, cache_read_tokens=7, output_tokens=3),
+            usage=RequestUsage(
+                input_tokens=19,
+                cache_read_tokens=7,
+                output_tokens=3,
+                cost=Decimal("0.0125"),
+            ),
         )
 
     capability = PydanticRequestEvidenceCapability(
@@ -124,6 +130,7 @@ def test_request_observer_correlates_semantic_and_native_requests(tmp_path: Path
     assert "session-secret" not in capability.event_path.read_text(encoding="utf-8")
     assert "cache-secret" not in capability.event_path.read_text(encoding="utf-8")
     assert events[1]["response"]["usage"]["cache_read_tokens"] == 7
+    assert events[1]["response"]["usage"]["cost_usd"] == 0.0125
     assert capability.summary().usable is True
 
 

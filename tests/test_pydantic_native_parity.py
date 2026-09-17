@@ -1066,6 +1066,40 @@ def test_pydantic_adapter_default_tool_retries_remain_bounded() -> None:
     assert tool_calls == 4
 
 
+def test_filesystem_tool_errors_allow_corrected_read_in_same_run() -> None:
+    attempts = 0
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if attempts < 3:
+            return ModelResponse(parts=[ToolCallPart("read_text_file", {})])
+        assert any(
+            isinstance(part, ToolReturnPart) and part.content == "G1 X10 Y20"
+            for message in messages
+            for part in message.parts
+        )
+        return ModelResponse(parts=[TextPart("read completed")])
+
+    def read_text_file() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise IsADirectoryError("expected a regular file")
+        if attempts == 2:
+            raise ValueError("file is too large for an unbounded read; use offset and max_chars")
+        return "G1 X10 Y20"
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    spec = ToolSpec(
+        read_text_file,
+        "read_text_file",
+        risk="read_only",
+        metadata={"kedi_tool_kind": "filesystem"},
+    )
+    with adapter.tool_scope((spec,)):
+        assert adapter.invoke_sync(prompt="Read the file") == "read completed"
+    assert attempts == 3
+
+
 def test_pydantic_adapter_explicit_retry_policy_overrides_kedi_default() -> None:
     adapter = PydanticAdapter(TestModel(), retries=1)
 

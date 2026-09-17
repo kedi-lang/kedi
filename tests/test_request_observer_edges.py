@@ -1,12 +1,147 @@
 from __future__ import annotations
 
+import json
 from datetime import date, time
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from kedi.integrations.harbor import request_observer as observer
+
+
+def test_completed_request_usage_can_be_recovered_from_partial_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "model-requests.jsonl"
+    completed = [
+        {
+            "event": "model_request_completed",
+            "response": {
+                "parts": [{"kind": "tool-call"}, {"kind": "thinking"}],
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_read_tokens": 60,
+                    "cache_write_tokens": 5,
+                    "output_tokens": 10,
+                    "total_tokens": 110,
+                    "cost_usd": 0.01,
+                },
+            },
+        },
+        {
+            "event": "model_request_completed",
+            "response": {
+                "parts": [{"kind": "tool-call"}, {"kind": "tool-call"}],
+                "usage": {
+                    "input_tokens": 200,
+                    "cache_read_tokens": 150,
+                    "cache_write_tokens": 0,
+                    "output_tokens": 20,
+                    "total_tokens": 220,
+                    "cost_usd": "0.02",
+                },
+            },
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(value) for value in [{"event": "model_request_started"}, *completed])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    recovered = observer.recover_request_usage(path)
+
+    assert recovered is not None
+    assert recovered.usage.requests == 2
+    assert recovered.usage.tool_calls == 3
+    assert recovered.usage.input_tokens == 300
+    assert recovered.usage.cache_read_tokens == 210
+    assert recovered.usage.cache_write_tokens == 5
+    assert recovered.usage.output_tokens == 30
+    assert recovered.usage.total_tokens == 330
+    assert recovered.usage.cost_usd == Decimal("0.03")
+    assert recovered.invalid_events == 0
+    assert recovered.events_without_cost == 0
+
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write("{truncated\n")
+        value = completed[0] | {
+            "response": completed[0]["response"]
+            | {"usage": completed[0]["response"]["usage"] | {"cost_usd": None}}
+        }
+        stream.write(json.dumps(value) + "\n")
+        stream.write(
+            json.dumps(
+                completed[0]
+                | {
+                    "response": completed[0]["response"]
+                    | {"usage": completed[0]["response"]["usage"] | {"input_tokens": True}}
+                }
+            )
+            + "\n"
+        )
+
+    partial = observer.recover_request_usage(path)
+    assert partial is not None
+    assert partial.usage.requests == 3
+    assert partial.usage.cost_usd is None
+    assert partial.invalid_events == 2
+    assert partial.events_without_cost == 1
+    assert observer.recover_request_usage(tmp_path / "missing.jsonl") is None
+
+
+def test_request_usage_recovery_rejects_unusable_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "model-requests.jsonl"
+    path.write_text(
+        json.dumps({"event": "model_request_completed", "response": None}) + "\n",
+        encoding="utf-8",
+    )
+    assert observer.recover_request_usage(path) is None
+
+    usage = {
+        "input_tokens": 10,
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 0,
+        "output_tokens": 2,
+        "total_tokens": 12,
+    }
+    events = [
+        {
+            "event": "model_request_completed",
+            "response": {"parts": "not-a-part-list", "usage": usage | {"cost_usd": "bad"}},
+        },
+        {
+            "event": "model_request_completed",
+            "response": {"parts": None, "usage": usage},
+        },
+    ]
+    path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    recovered = observer.recover_request_usage(path)
+
+    assert recovered is not None
+    assert recovered.usage.requests == 2
+    assert recovered.usage.tool_calls == 0
+    assert recovered.usage.cost_usd is None
+    assert recovered.events_without_cost == 2
+    assert observer._normalized_usage_values(None) is None
+    assert observer._nonnegative_decimal("NaN") is None
+
+    original_open = Path.open
+
+    def fail_for_evidence(candidate: Path, *args, **kwargs):
+        if candidate == path:
+            raise OSError("unreadable evidence")
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_for_evidence)
+    assert observer.recover_request_usage(path) is None
 
 
 def test_observer_bounded_records_and_capture_failure(tmp_path: Path, monkeypatch) -> None:

@@ -8,6 +8,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import date, datetime, time as datetime_time, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import RunContext
 from pydantic_core import to_json
 
+from ...agent_adapter.invocation import InvocationUsage
 from ...agent_adapter.request import current_agent_run_request, request_diagnostics
 
 _SCHEMA_VERSION = 1
@@ -110,6 +112,86 @@ class RequestEvidenceSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "usable": self.usable}
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecoveredRequestUsage:
+    usage: InvocationUsage
+    invalid_events: int
+    events_without_cost: int
+
+
+def recover_request_usage(path: Path) -> RecoveredRequestUsage | None:
+    """Recover completed request usage from append-only request evidence."""
+
+    if not path.is_file():
+        return None
+    requests = 0
+    tool_calls = 0
+    input_tokens = 0
+    cache_read_tokens = 0
+    cache_write_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    cost_usd = Decimal(0)
+    invalid_events = 0
+    events_without_cost = 0
+    try:
+        lines = path.open(encoding="utf-8")
+    except OSError:
+        return None
+    with lines:
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                invalid_events += 1
+                continue
+            if not isinstance(event, Mapping) or event.get("event") != "model_request_completed":
+                continue
+            response = event.get("response")
+            if not isinstance(response, Mapping):
+                invalid_events += 1
+                continue
+            usage = response.get("usage")
+            values = _normalized_usage_values(usage)
+            if values is None:
+                invalid_events += 1
+                continue
+            requests += 1
+            input_tokens += values["input_tokens"]
+            cache_read_tokens += values["cache_read_tokens"]
+            cache_write_tokens += values["cache_write_tokens"]
+            output_tokens += values["output_tokens"]
+            total_tokens += values["total_tokens"]
+            parts = response.get("parts")
+            if isinstance(parts, Sequence) and not isinstance(parts, (str, bytes, bytearray)):
+                tool_calls += sum(
+                    isinstance(part, Mapping) and part.get("kind") == "tool-call" for part in parts
+                )
+            recovered_cost = _nonnegative_decimal(
+                usage.get("cost_usd") if isinstance(usage, Mapping) else None
+            )
+            if recovered_cost is None:
+                events_without_cost += 1
+            else:
+                cost_usd += recovered_cost
+    if requests == 0:
+        return None
+    return RecoveredRequestUsage(
+        usage=InvocationUsage(
+            requests=requests,
+            tool_calls=tool_calls,
+            input_tokens=input_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            cost_usd=None if events_without_cost else cost_usd,
+        ),
+        invalid_events=invalid_events,
+        events_without_cost=events_without_cost,
+    )
 
 
 class PydanticRequestEvidenceCapability(AbstractCapability[Any]):
@@ -493,10 +575,39 @@ def _response_summary(response: ModelResponse) -> dict[str, Any]:
             "cache_write_tokens": usage.cache_write_tokens,
             "output_tokens": usage.output_tokens,
             "total_tokens": usage.total_tokens,
+            "cost_usd": float(usage.cost) if usage.cost is not None else None,
             "details": details,
             "provenance": "pydantic_ai_normalized_response_usage",
         },
     }
+
+
+def _normalized_usage_values(value: Any) -> dict[str, int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    result: dict[str, int] = {}
+    for name in (
+        "input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "output_tokens",
+        "total_tokens",
+    ):
+        item = value.get(name)
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            return None
+        result[name] = item
+    return result
+
+
+def _nonnegative_decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        result = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    return result if result.is_finite() and result >= 0 else None
 
 
 def _part_fingerprint(part: Any) -> _PartFingerprint:
