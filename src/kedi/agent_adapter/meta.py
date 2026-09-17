@@ -159,6 +159,15 @@ class AdapterCapabilities:
         return bool(values[feature])
 
 
+@dataclass(frozen=True, slots=True)
+class AdapterDescriptor:
+    """Import-safe metadata for an adapter implementation."""
+
+    kind: AgentAdapterKind
+    shortname: str
+    capabilities: AdapterCapabilities
+
+
 @runtime_checkable
 class AgentAdapter(Protocol[T]):
     kind: AgentAdapterKind

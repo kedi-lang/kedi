@@ -19,16 +19,17 @@ import dspy
 from pydantic import TypeAdapter
 
 from ...agent_profile import AgentProfile
-from ...agent_profile.settings import DSPY_LM_SETTING_KEYS, dspy_lm_settings
+from ...agent_profile.settings import dspy_lm_settings
 from ...dynamic_models import build_dynamic_model
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_litellm
 from ...resolved_types import ResolvedKediType
 from .._schema import output_field_metadata
 from ..approval import ApprovalPolicy
+from ..dspy_metadata import DSPY_ADAPTER
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..llm_wrapper import ThinkingStrippingLM
-from ..meta import AdapterCapabilities, AgentAdapterKind
+from ..meta import AgentAdapterKind
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
@@ -38,25 +39,9 @@ from ..tool_override import ToolScope, ToolSpec, with_approval
 
 
 class DSPyAdapter:
-    kind: AgentAdapterKind = "agent-framework"
-    shortname = "dspy"
-    capabilities = AdapterCapabilities(
-        supports_structured_output=True,
-        supports_tool_registration=True,
-        supports_mcp=True,
-        supports_profile_override=True,
-        supports_model_override=True,
-        supports_effort=True,
-        supports_settings=True,
-        supports_subagents=True,
-        supports_background_subagents=False,
-        supports_artifacts=True,
-        supports_native_artifacts=False,
-        supports_stateful_history=False,
-        supports_history_replay=False,
-        supports_stream_events=False,
-        settings=DSPY_LM_SETTING_KEYS,
-    )
+    kind: AgentAdapterKind = DSPY_ADAPTER.kind
+    shortname = DSPY_ADAPTER.shortname
+    capabilities = DSPY_ADAPTER.capabilities
 
     # Class-level defaults so the LM config is readable via native attribute access
     # even on adapters built without __init__ (e.g. test doubles).
