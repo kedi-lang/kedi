@@ -92,6 +92,9 @@ terminal-bench = [
     "codex-auth-helper==1.8.0; python_version >= '3.12'",
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
+typesafe = [
+    "kedi-typesafe==0.1.0",
+]
 
 [tool.hatch.build]
 include-package-data = true
@@ -128,6 +131,7 @@ conflicts = [
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 kedi-notebook = { path = "notebook", editable = true }
+kedi-typesafe = { git = "https://github.com/kedi-lang/kedi-typesafe.git", rev = "781b3d03d952b7356a3f6794d612b079b3f19463" }
 
 [tool.ruff]
 line-length = 100
@@ -168,6 +172,7 @@ dev = [
     "langchain-mcp-adapters==0.3.2",
     "langchain-openai==1.6.0",
     "langchain-openrouter==0.2.8",
+    "kedi-typesafe==0.1.0",
     "pre-commit==4.6.0",
     "pydantic-ai==2.36.0",
     "pytest==9.0.3",

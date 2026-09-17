@@ -2,9 +2,9 @@ from __future__ import annotations
 
 # pyright: reportMissingImports=false
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -18,6 +18,7 @@ CodexModelAdapter = Literal["pydantic", "langchain"]
 CodexResponsesConnection = Literal["http", "websocket"]
 CodexResponsesFallback = Literal["error", "http"]
 CODEX_MODEL_PREFIX = "codex/"
+TYPESAFE_MODEL_PREFIX = "typesafe/"
 CODEX_DEFAULT_INSTRUCTIONS = (
     "You are a precise assistant running through Kedi. Follow the active instructions, "
     "available tools, and output contract."
@@ -28,6 +29,57 @@ def is_codex_model_id(model_id: str) -> bool:
     """Return whether a model id selects the Codex-authenticated model bridge."""
 
     return model_id.startswith(CODEX_MODEL_PREFIX)
+
+
+def is_typesafe_model_id(model_id: str) -> bool:
+    """Return whether a model id selects the TypeSafe Jev bridge."""
+
+    return model_id.startswith(TYPESAFE_MODEL_PREFIX)
+
+
+def typesafe_pydantic_model(model_id: str) -> Model:
+    """Build the optional TypeSafe Jev model for Pydantic AI."""
+
+    model_name = _typesafe_model_name(model_id)
+    try:
+        from kedi_typesafe.integrations.pydantic import TypeSafeModel
+    except ModuleNotFoundError as exc:
+        if exc.name != "kedi_typesafe":
+            raise
+        raise ModuleNotFoundError(
+            "TypeSafe-backed models require kedi-typesafe==0.1.0. "
+            "Install Kedi with: uv add 'kedi[typesafe]'"
+        ) from exc
+    return TypeSafeModel(model_name)
+
+
+def typesafe_langchain_model(model_id: str) -> BaseChatModel:
+    """Build the optional TypeSafe Jev chat model for LangChain."""
+
+    model_name = _typesafe_model_name(model_id)
+    try:
+        from kedi_typesafe.integrations.langchain import TypeSafeChatModel
+    except ModuleNotFoundError as exc:
+        if exc.name not in {"kedi_typesafe", "langchain_core"}:
+            raise
+        raise ModuleNotFoundError(
+            "TypeSafe-backed LangChain models require kedi-typesafe==0.1.0 and LangChain. "
+            "Install Kedi with: uv add 'kedi[langchain,typesafe]'"
+        ) from exc
+    return TypeSafeChatModel(model_name)
+
+
+async def close_typesafe_model_current(model: object) -> None:
+    """Close a TypeSafe transport before its current event loop exits."""
+
+    if (
+        getattr(model, "system", None) != "typesafe"
+        and getattr(model, "_llm_type", None) != "typesafe-jev"
+    ):
+        return
+    close_current = getattr(model, "aclose_current", None)
+    if callable(close_current):
+        await cast(Callable[[], Awaitable[None]], close_current)()
 
 
 def codex_responses_model(
@@ -46,7 +98,7 @@ def codex_responses_model(
 
     model_name = _codex_model_name(model_id)
     try:
-        import codex_auth_helper  # ty: ignore[unresolved-import, unused-ignore-comment]  # Optional codex-model extra.
+        import codex_auth_helper  # ty: ignore[unresolved-import]  # Optional codex-model extra.
     except ModuleNotFoundError as exc:
         if exc.name != "codex_auth_helper":
             raise
@@ -117,13 +169,30 @@ def _codex_model_name(model_id: str) -> str:
     return model_name
 
 
+def _typesafe_model_name(model_id: str) -> str:
+    model_name = (
+        model_id[len(TYPESAFE_MODEL_PREFIX) :] if is_typesafe_model_id(model_id) else model_id
+    )
+    model_name = model_name.strip()
+    if not model_name:
+        raise ValueError("TypeSafe model id must name a model after 'typesafe/'")
+    if "://" in model_name or model_name.startswith("/"):
+        raise ValueError(f"Invalid TypeSafe model id: {model_id!r}")
+    return model_name
+
+
 __all__ = [
     "CODEX_DEFAULT_INSTRUCTIONS",
     "CODEX_MODEL_PREFIX",
+    "TYPESAFE_MODEL_PREFIX",
     "CodexModel",
     "CodexModelAdapter",
     "CodexResponsesConnection",
     "CodexResponsesFallback",
     "codex_responses_model",
+    "close_typesafe_model_current",
     "is_codex_model_id",
+    "is_typesafe_model_id",
+    "typesafe_langchain_model",
+    "typesafe_pydantic_model",
 ]

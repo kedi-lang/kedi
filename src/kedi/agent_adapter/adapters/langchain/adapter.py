@@ -5,13 +5,14 @@ from contextvars import ContextVar
 from typing import (
     Any,
     AsyncIterator,
+    Callable,
     Iterator,
     Mapping,
     Sequence,
     cast,
 )
 
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 from pydantic_ai import UsageLimits
 from pydantic_ai.output import OutputDataT
 
@@ -55,6 +56,11 @@ from kedi.agent_adapter.hooks import (
 )
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from kedi.agent_adapter.models import (
+    close_typesafe_model_current,
+    is_typesafe_model_id,
+    typesafe_langchain_model,
+)
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
@@ -102,6 +108,13 @@ class LangChainAdapter(HookRegistrationMixin):
         settings=LANGCHAIN_MODEL_SETTING_KEYS,
     )
 
+    def supports_artifact_contract(self, profile: AgentProfile) -> bool:
+        """Return whether the active model can receive artifact management tools."""
+
+        if profile.model is not None:
+            return not is_typesafe_model_id(profile.model)
+        return getattr(self._model, "_llm_type", None) != "typesafe-jev"
+
     def __init__(
         self,
         model: Any = None,
@@ -127,7 +140,9 @@ class LangChainAdapter(HookRegistrationMixin):
         self._tool_retries = tool_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
-        self._model = normalize_for_langchain(model) if isinstance(model, str) else model
+        self._model_overrides: dict[str, Any] = {}
+        self._default_model = model if isinstance(model, str) else None
+        self._model = self._resolve_model(model) if isinstance(model, str) else model
         self._model_settings = dict(model_settings or {})
         self._model_extra_kwargs = dict(kwargs)
         self._subagent_failure_policy = subagent_failure_policy
@@ -195,6 +210,7 @@ class LangChainAdapter(HookRegistrationMixin):
         if resolved_output_type is None:
             raise ValueError("Output spec must be provided.")
 
+        response_format, unwrap_response = _langchain_typed_output(resolved_output_type)
         instructions = cast(str | None, kwargs.pop("instructions", None))
         if instructions is None:
             instructions = self.active_profile.system
@@ -208,7 +224,7 @@ class LangChainAdapter(HookRegistrationMixin):
             agent = self._create_agent(
                 model=model,
                 tools=tools,
-                response_format=resolved_output_type,
+                response_format=response_format,
                 system_prompt=system_prompt,
                 middleware=self._middleware_for_run(
                     model,
@@ -219,7 +235,8 @@ class LangChainAdapter(HookRegistrationMixin):
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
             async with model_responses_turn(model):
                 result = await self._invoke_agent(agent, payload, emit_final=False)
-            return cast(OutputDataT, _langchain_structured_response(result))
+            structured = _langchain_structured_response(result)
+            return cast(OutputDataT, unwrap_response(structured))
 
     @hooked_agent_run("template")
     async def produce_subagent(
@@ -303,7 +320,15 @@ class LangChainAdapter(HookRegistrationMixin):
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from kedi.agent_adapter.execution import run_sync
 
-        return run_sync(self.invoke(prompt=prompt, **kwargs))
+        model = self._model_for_run()
+
+        async def invoke_and_close() -> str:
+            try:
+                return await self.invoke(prompt=prompt, **kwargs)
+            finally:
+                await close_typesafe_model_current(model)
+
+        return run_sync(invoke_and_close())
 
     def produce_sync(
         self,
@@ -314,13 +339,23 @@ class LangChainAdapter(HookRegistrationMixin):
     ) -> OutputDataT:
         from kedi.agent_adapter.execution import run_sync
 
-        return run_sync(
-            self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
-        )
+        model = self._model_for_run()
+
+        async def produce_and_close() -> OutputDataT:
+            try:
+                return await self.produce(
+                    template,
+                    output_schema=output_schema,
+                    output_type=output_type,
+                    **kwargs,
+                )
+            finally:
+                await close_typesafe_model_current(model)
+
+        return run_sync(produce_and_close())
 
     def default_model(self) -> str | None:
-        model = self._model
-        return model if isinstance(model, str) else None
+        return self._default_model
 
     def telemetry_model_name(self) -> str | None:
         return self.default_model()
@@ -432,10 +467,19 @@ class LangChainAdapter(HookRegistrationMixin):
     def _model_for_run(self) -> str | Any:
         profile = self.active_profile
         if profile.model is not None:
-            return normalize_for_langchain(profile.model)
+            return self._resolve_model(profile.model)
         if self._model is None:
             raise RuntimeError("LangChain adapter requires a model.")
         return self._model
+
+    def _resolve_model(self, model: str) -> str | Any:
+        if not is_typesafe_model_id(model):
+            return normalize_for_langchain(model)
+        resolved = self._model_overrides.get(model)
+        if resolved is None:
+            resolved = typesafe_langchain_model(model)
+            self._model_overrides[model] = resolved
+        return resolved
 
     def _settings_for_run(self, model: str | Any) -> dict[str, Any]:
         settings: dict[str, Any] = {}
@@ -716,3 +760,12 @@ class LangChainAdapter(HookRegistrationMixin):
                 {"kedi.mcp.tool_count": len(tools)},
             )
             return tools
+
+
+def _langchain_typed_output(
+    output_type: type[Any],
+) -> tuple[type[BaseModel], Callable[[Any], Any]]:
+    if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+        return output_type, lambda value: value
+    wrapper = create_model("KediTypedOutput", response=(output_type, ...))
+    return wrapper, lambda value: value.response

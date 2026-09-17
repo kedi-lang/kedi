@@ -267,6 +267,16 @@ def _artifact_contract_needed(
     policy = getattr(profile, "artifacts", None)
     if policy is None or not policy.resolved().enabled:
         return False
+    supports_contract = getattr(adapter, "supports_artifact_contract", None)
+    if callable(supports_contract) and not supports_contract(profile):
+        if policy.is_explicit:
+            from kedi.artifacts import ArtifactCapabilityError
+
+            raise ArtifactCapabilityError(
+                "Active model does not support artifact management tools; "
+                "disable artifacts for this profile"
+            )
+        return False
     from kedi.agent_adapter.meta import AdapterCapabilities
 
     capabilities = getattr(adapter, "capabilities", None)
