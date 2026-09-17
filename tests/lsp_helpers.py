@@ -6,7 +6,11 @@ from collections.abc import Sequence
 
 from lsprotocol import types as lsp
 
-from kedi.lsp import features
+import kedi.lsp.features.diagnostics as lsp_diagnostics_module
+import kedi.lsp.features.document as lsp_document_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.navigation as lsp_navigation_module
+import kedi.lsp.features.signatures as lsp_signatures_module
 
 
 def decode_semantic_tokens(
@@ -47,7 +51,7 @@ def hover_at(
 ) -> lsp.Hover | None:
     """Compute hover at the first occurrence of ``needle`` in ``source``."""
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_hover(source, source_path, pos)
+    return lsp_hover_module.compute_hover(source, source_path, pos)
 
 
 def hover_text_at(
@@ -62,7 +66,7 @@ def hover_text_at(
 
 
 def diagnostics_for(source: str, source_path: str) -> list:
-    return features.compute_diagnostics(source, source_path)
+    return lsp_diagnostics_module.compute_diagnostics(source, source_path)
 
 
 def position_at_line(line: int, character: int = 0) -> lsp.Position:
@@ -101,7 +105,7 @@ def definition_at(
     offset: int = 0,
 ) -> lsp.Location | None:
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_definition(source, uri, source_path, pos)
+    return lsp_navigation_module.compute_definition(source, uri, source_path, pos)
 
 
 def references_at(
@@ -115,7 +119,9 @@ def references_at(
     offset: int = 0,
 ) -> list[lsp.Location]:
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_references(source, uri, source_path, pos, include_declaration)
+    return lsp_navigation_module.compute_references(
+        source, uri, source_path, pos, include_declaration
+    )
 
 
 def prepare_rename_at(
@@ -127,7 +133,7 @@ def prepare_rename_at(
     offset: int = 0,
 ) -> lsp.Range | None:
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_prepare_rename(source, source_path, pos)
+    return lsp_navigation_module.compute_prepare_rename(source, source_path, pos)
 
 
 def rename_at(
@@ -141,7 +147,7 @@ def rename_at(
     offset: int = 0,
 ) -> lsp.WorkspaceEdit | None:
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_rename(source, uri, source_path, pos, new_name)
+    return lsp_navigation_module.compute_rename(source, uri, source_path, pos, new_name)
 
 
 def signature_help_at(
@@ -153,7 +159,7 @@ def signature_help_at(
     offset: int = 0,
 ) -> lsp.SignatureHelp | None:
     pos = position_of(source, needle, occurrence=occurrence, offset=offset)
-    return features.compute_signature_help(source, source_path, pos)
+    return lsp_signatures_module.compute_signature_help(source, source_path, pos)
 
 
 def inlay_hints_for_lines(
@@ -162,8 +168,10 @@ def inlay_hints_for_lines(
     start_line: int,
     end_line: int,
 ) -> list[lsp.InlayHint]:
-    return features.compute_inlay_hints(source, source_path, line_range(start_line, end_line))
+    return lsp_signatures_module.compute_inlay_hints(
+        source, source_path, line_range(start_line, end_line)
+    )
 
 
 def document_symbols_for(source: str, source_path: str) -> list:
-    return features.compute_document_symbols(source, source_path)
+    return lsp_document_module.compute_document_symbols(source, source_path)

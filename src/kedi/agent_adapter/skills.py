@@ -24,7 +24,7 @@ from kedi.telemetry import (
     record_asset,
 )
 
-from .tool_override import ToolSpec
+from .tools.specs import ToolSpec
 
 _SKILL_FILE_NAME = "SKILL.md"
 MAX_SKILL_LIST_LIMIT = 100

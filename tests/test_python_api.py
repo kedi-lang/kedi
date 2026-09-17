@@ -13,7 +13,11 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 import kedi
 import kedi.agent_adapter.registry as adapter_registry
-import kedi.api as api_module
+import kedi.api.cache as api_cache_module
+import kedi.api.configuration as api_configuration_module
+import kedi.api.decorators as api_decorators_module
+import kedi.api.registration as api_registration_module
+import kedi.api.state as api_state_module
 from kedi import (
     bind,
     cache_info,
@@ -27,8 +31,6 @@ from kedi import (
 from kedi import type as kedi_type
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
 from kedi.artifacts import artifact_instructions
@@ -158,8 +160,8 @@ class AddressReprValue:
 
 @pytest.fixture
 def adapter() -> ApiAdapter:
-    api_module._PARSE_CACHE.clear()
-    api_module._RESPONSE_CACHE.clear()
+    api_cache_module._PARSE_CACHE.clear()
+    api_cache_module._RESPONSE_CACHE.clear()
     configured = ApiAdapter()
     configure(model="configured:model", adapter=configured)
     return configured
@@ -182,16 +184,16 @@ def test_query_binds_arguments_and_defaults(adapter: ApiAdapter) -> None:
 def test_query_parse_cache_reuses_identical_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api_module._PARSE_CACHE.clear()
+    api_cache_module._PARSE_CACHE.clear()
     calls = 0
-    real_parse = api_module.parse_program
+    real_parse = api_cache_module.parse_program
 
     def counting_parse(*args: Any, **kwargs: Any) -> Any:
         nonlocal calls
         calls += 1
         return real_parse(*args, **kwargs)
 
-    monkeypatch.setattr(api_module, "parse_program", counting_parse)
+    monkeypatch.setattr(api_cache_module, "parse_program", counting_parse)
 
     @query
     def first() -> str:
@@ -389,36 +391,38 @@ def test_response_cache_releases_waiters_after_a_producer_error(adapter: ApiAdap
 def test_response_cache_private_flights_handle_recursion_and_clear_races() -> None:
     clear_cache()
     cache_key = "private-flight"
-    _, flight, owns_flight = api_module._claim_response_cache_key(cache_key)
+    _, flight, owns_flight = api_cache_module._claim_response_cache_key(cache_key)
     assert owns_flight
     assert flight is not None
 
     with pytest.raises(RuntimeError, match="Recursive Kedi response cache request"):
-        api_module._claim_response_cache_key(cache_key)
+        api_cache_module._claim_response_cache_key(cache_key)
 
     clear_cache()
-    api_module._finish_response_flight(cache_key, flight, result={"answer": "stale"})
-    assert cache_key not in api_module._RESPONSE_CACHE
+    api_cache_module._finish_response_flight(cache_key, flight, result={"answer": "stale"})
+    assert cache_key not in api_cache_module._RESPONSE_CACHE
     assert flight.future.result() == {"answer": "stale"}
 
-    _, orphaned_flight, owns_orphaned_flight = api_module._claim_response_cache_key(
+    _, orphaned_flight, owns_orphaned_flight = api_cache_module._claim_response_cache_key(
         "orphaned-flight"
     )
     assert owns_orphaned_flight
     assert orphaned_flight is not None
-    with api_module._RESPONSE_CACHE_LOCK:
-        api_module._RESPONSE_IN_FLIGHT.pop("orphaned-flight")
-    api_module._finish_response_flight(
+    with api_cache_module._RESPONSE_CACHE_LOCK:
+        api_cache_module._RESPONSE_IN_FLIGHT.pop("orphaned-flight")
+    api_cache_module._finish_response_flight(
         "orphaned-flight",
         orphaned_flight,
         result={"answer": "orphaned"},
     )
     assert orphaned_flight.future.result() == {"answer": "orphaned"}
 
-    _, failed_flight, owns_failed_flight = api_module._claim_response_cache_key("failed-flight")
+    _, failed_flight, owns_failed_flight = api_cache_module._claim_response_cache_key(
+        "failed-flight"
+    )
     assert owns_failed_flight
     assert failed_flight is not None
-    api_module._finish_response_flight(
+    api_cache_module._finish_response_flight(
         "failed-flight",
         failed_flight,
         error=ValueError("cache producer failed"),
@@ -464,7 +468,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         "tool_names": (),
     }
     assert repr(kwargs_a["value"]) != repr(kwargs_b["value"])
-    assert api_module._response_cache_key(
+    assert api_cache_module._response_cache_key(
         kind="query",
         inner=sample,
         source_id="sample",
@@ -474,7 +478,7 @@ def test_response_cache_key_normalizes_memory_addresses() -> None:
         config_env={},
         env={},
         **identity,
-    ) == api_module._response_cache_key(
+    ) == api_cache_module._response_cache_key(
         kind="query",
         inner=sample,
         source_id="sample",
@@ -574,10 +578,10 @@ def test_isolate_cached_falls_back_for_non_copyable() -> None:
     import threading
 
     lock = threading.Lock()  # not deep-copyable
-    assert api_module._isolate_cached(lock) is lock
+    assert api_cache_module._isolate_cached(lock) is lock
 
     data = {"a": [1, 2]}
-    copied = api_module._isolate_cached(data)
+    copied = api_cache_module._isolate_cached(data)
     assert copied == data and copied is not data
 
 
@@ -638,7 +642,7 @@ def test_kedi_type_inject_false_skips_auto_env(adapter: ApiAdapter) -> None:
         age: int
 
     assert dataclasses.is_dataclass(HiddenPerson)
-    assert "HiddenPerson" not in api_module._auto_type_env(
+    assert "HiddenPerson" not in api_registration_module._auto_type_env(
         test_kedi_type_inject_false_skips_auto_env
     )
 
@@ -664,7 +668,7 @@ def test_auto_type_env_ignores_callables_without_module_name() -> None:
 
     local.__module__ = None  # type: ignore[assignment]
 
-    assert api_module._auto_type_env(local) == {}
+    assert api_registration_module._auto_type_env(local) == {}
 
 
 def test_query_namespace_object_matches_decorator_api(adapter: ApiAdapter) -> None:
@@ -694,8 +698,8 @@ def test_async_query_yields_event_loop_while_blocked() -> None:
     # serving other coroutines instead of freezing for the duration of the model call.
     import threading
 
-    api_module._PARSE_CACHE.clear()
-    api_module._RESPONSE_CACHE.clear()
+    api_cache_module._PARSE_CACHE.clear()
+    api_cache_module._RESPONSE_CACHE.clear()
     in_produce = threading.Event()
     release = threading.Event()
 
@@ -854,13 +858,13 @@ def test_reset_config_restores_default_config(monkeypatch: pytest.MonkeyPatch) -
 
     configure(adapter=ApiAdapter())
     reset_config()
-    monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.PydanticAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
 
@@ -942,7 +946,7 @@ def test_tool_direct_decorator_without_docstring() -> None:
     wrapped = tool(bare)
 
     assert wrapped() == "ok"
-    assert not hasattr(wrapped, api_module._TOOL_DESCRIPTION_ATTR)
+    assert not hasattr(wrapped, api_registration_module._TOOL_DESCRIPTION_ATTR)
 
 
 def test_tool_sync_retry_exhaustion_raises_last_error() -> None:
@@ -1034,9 +1038,9 @@ def test_bind_parse_cache_reuses_identical_file_source(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    api_module._PARSE_CACHE.clear()
+    api_cache_module._PARSE_CACHE.clear()
     calls = 0
-    real_parse = api_module.parse_program
+    real_parse = api_cache_module.parse_program
     source = tmp_path / "answer.kedi"
     source.write_text(">> Return [answer].\n= <answer>\n", encoding="utf-8")
 
@@ -1045,7 +1049,7 @@ def test_bind_parse_cache_reuses_identical_file_source(
         calls += 1
         return real_parse(*args, **kwargs)
 
-    monkeypatch.setattr(api_module, "parse_program", counting_parse)
+    monkeypatch.setattr(api_cache_module, "parse_program", counting_parse)
 
     @bind(file=source)
     def first() -> str: ...
@@ -1160,7 +1164,7 @@ def test_bind_file_resolves_relative_to_python_source_file(
         ">> Return [answer] about <topic>.\n= <answer>\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(api_module.inspect, "getsourcefile", lambda fn: str(owner))
+    monkeypatch.setattr(api_decorators_module.inspect, "getsourcefile", lambda fn: str(owner))
 
     @bind(file="relative.kedi")
     def answer(topic: str) -> str: ...
@@ -1240,13 +1244,13 @@ def test_configure_builds_default_adapter_lazily(
         seen_models.append(model)
         return adapter
 
-    monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.PydanticAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     configure()
@@ -1277,11 +1281,11 @@ def test_configure_uses_adapter_env_when_not_explicit(
     monkeypatch.setenv("KEDI_ADAPTER_MODEL", "openrouter:env-model")
     monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     configure(temperature=0.1)
 
     @query
@@ -1306,13 +1310,13 @@ def test_configure_explicit_model_overrides_env(
         return adapter
 
     monkeypatch.setenv("KEDI_ADAPTER_MODEL", "openrouter:env-model")
-    monkeypatch.setattr(pydantic_adapter_module, "PydanticAdapter", fake_adapter)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.PydanticAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     configure(model=None)
 
     @query
@@ -1336,7 +1340,7 @@ def test_configure_builds_dspy_adapter_lazily(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(dspy_adapter_module, "DSPyAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
@@ -1364,9 +1368,9 @@ def test_configure_builds_langchain_adapter_lazily(
         seen.append((model, kwargs))
         return adapter
 
-    monkeypatch.setattr(langchain_adapter_module, "LangChainAdapter", fake_adapter)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.langchain.LangChainAdapter", fake_adapter)
     monkeypatch.setattr(
-        api_module,
+        api_configuration_module,
         "adapter_capabilities",
         lambda _shortname: AdapterCapabilities(),
     )
@@ -1385,7 +1389,7 @@ def test_configure_builds_langchain_adapter_lazily(
 
 
 def test_configure_dspy_requires_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     configure(adapter="dspy")
@@ -1530,13 +1534,13 @@ def test_response_cache_splits_by_adapter_instance() -> None:
 
 
 def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.delenv("KEDI_ADAPTER", raising=False)
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
     configure()
 
-    config = api_module._config_var.get()
+    config = api_state_module._config_var.get()
     assert config.adapter_kind == "agent-harness"
     assert config.adapter_shortname == "claude"
     assert config.adapter is not None
@@ -1547,7 +1551,7 @@ def test_configure_reads_agent_from_environment(monkeypatch: pytest.MonkeyPatch)
 def test_configure_rejects_conflicting_environment_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(api_module.dotenv, "load_dotenv", lambda: False)
+    monkeypatch.setattr(api_configuration_module.dotenv, "load_dotenv", lambda: False)
     monkeypatch.setenv("KEDI_ADAPTER", "pydantic")
     monkeypatch.setenv("KEDI_AGENT", "claude")
 
@@ -1571,9 +1575,9 @@ def test_profile_cache_identity_includes_adapter_selection_and_command() -> None
         agent_command=("uv", "run", "agent"),
     )
 
-    assert api_module._profile_identity(base) != api_module._profile_identity(selected)
+    assert api_cache_module._profile_identity(base) != api_cache_module._profile_identity(selected)
 
 
 def test_public_python_api_exports_adapter_types_and_mcp_spec() -> None:
-    assert kedi.AdapterLike is api_module.AdapterLike
+    assert kedi.AdapterLike is api_state_module.AdapterLike
     assert kedi.McpServerSpec.__name__ == "McpServerSpec"

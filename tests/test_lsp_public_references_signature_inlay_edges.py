@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import kedi.lang.ast as lang_ast_module
+import kedi.lsp.features.signatures as lsp_signatures_module
 from kedi.lang.ast import CallArg, CallSegment, Stmt
-from kedi.lsp import features
 from tests.lsp_helpers import (
     inlay_hints_for_lines,
     line_range,
@@ -58,47 +59,55 @@ def test_inlay_hints_and_helper_branches() -> None:
     assert inlay_hints_for_lines(">> Value [answer: int]\n= <answer>\n", "/tmp/x.kedi", 0, 3) == []
 
     assert (
-        features._in_range(
-            features.Span(0, 1, 1, 1, 1, 2),
+        lsp_signatures_module._in_range(
+            lang_ast_module.Span(0, 1, 1, 1, 1, 2),
             line_range(2, 3),
         )
         is False
     )
     assert (
-        features._in_range(
-            features.Span(0, 1, 5, 1, 5, 2),
+        lsp_signatures_module._in_range(
+            lang_ast_module.Span(0, 1, 5, 1, 5, 2),
             line_range(0, 3),
         )
         is False
     )
     assert (
-        features._active_param_index(
+        lsp_signatures_module._active_param_index(
             CallSegment(name="p", args=cast(Any, None)),
             position_at_line(0, 0),
         )
         == 0
     )
-    assert features._innermost_call_at(Stmt(), position_at_line(0, 0)) is None
-    nested_arg = CallArg(loc=features.Span(0, 10, 1, 1, 1, 20))
+    assert lsp_signatures_module._innermost_call_at(Stmt(), position_at_line(0, 0)) is None
+    nested_arg = CallArg(loc=lang_ast_module.Span(0, 10, 1, 1, 1, 20))
     setattr(
         nested_arg,
         "__call_segment__",
-        CallSegment(name="deep", args=[], loc=features.Span(0, 10, 1, 5, 1, 12)),
+        CallSegment(name="deep", args=[], loc=lang_ast_module.Span(0, 10, 1, 5, 1, 12)),
     )
-    innermost = features._innermost_call_in_segment(
-        CallSegment(name="outer", args=[nested_arg], loc=features.Span(0, 20, 1, 1, 1, 21)),
+    innermost = lsp_signatures_module._innermost_call_in_segment(
+        CallSegment(
+            name="outer",
+            args=[nested_arg],
+            loc=lang_ast_module.Span(0, 20, 1, 1, 1, 21),
+        ),
         position_at_line(0, 6),
     )
     assert innermost is not None and innermost.name == "deep"
 
-    rendered_arg = CallArg(loc=features.Span(0, 10, 1, 1, 1, 20))
+    rendered_arg = CallArg(loc=lang_ast_module.Span(0, 10, 1, 1, 1, 20))
     setattr(
         rendered_arg,
         "__render_segments__",
-        [CallSegment(name="rendered", args=[], loc=features.Span(0, 10, 1, 5, 1, 12))],
+        [CallSegment(name="rendered", args=[], loc=lang_ast_module.Span(0, 10, 1, 5, 1, 12))],
     )
-    rendered_innermost = features._innermost_call_in_segment(
-        CallSegment(name="outer", args=[rendered_arg], loc=features.Span(0, 20, 1, 1, 1, 21)),
+    rendered_innermost = lsp_signatures_module._innermost_call_in_segment(
+        CallSegment(
+            name="outer",
+            args=[rendered_arg],
+            loc=lang_ast_module.Span(0, 20, 1, 1, 1, 21),
+        ),
         position_at_line(0, 6),
     )
     assert rendered_innermost is not None and rendered_innermost.name == "rendered"

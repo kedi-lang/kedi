@@ -7,8 +7,8 @@ from typing import Any, Tuple
 
 from .agent_adapter.adapters import ACPAdapter, LangChainAdapter, PydanticAdapter
 from .agent_adapter.adapters.lazy import LazyAdapter
-from .agent_adapter.approval import ApprovalPolicy
-from .agent_adapter.cli_approval import CliApprovalHandler
+from .agent_adapter.approvals.cli import CliApprovalHandler
+from .agent_adapter.approvals.policy import ApprovalPolicy
 from .agent_adapter.meta import AgentAdapter
 from .agent_adapter.registry import adapter_capabilities, adapter_factory, build_adapter
 from .agent_profile import AgentProfile

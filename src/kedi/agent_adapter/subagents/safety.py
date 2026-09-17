@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ...agent_profile import AgentProfile
 from ...errors import KediExecutionError
-from ..approval import ApprovalPolicy
+from ..approvals.policy import ApprovalPolicy
 
 _SANDBOX_RANK = {
     "read-only": 0,

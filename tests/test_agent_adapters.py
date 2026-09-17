@@ -10,6 +10,7 @@ import threading
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from importlib import import_module
 from re import Pattern
 from types import ModuleType, SimpleNamespace
 from typing import Annotated, Any, cast
@@ -31,6 +32,16 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai.tools import DeferredToolRequests, ToolApproved, ToolDenied
 from pydantic_ai.toolsets import ApprovalRequiredToolset, FunctionToolset
 
+import kedi.agent_adapter.adapters.claude.adapter as claude_adapter_module
+import kedi.agent_adapter.adapters.claude.hooks as claude_hooks_module
+import kedi.agent_adapter.adapters.claude.messages as claude_messages_module
+import kedi.agent_adapter.adapters.claude.tools as claude_tools_module
+import kedi.agent_adapter.adapters.langchain.messages as langchain_messages_module
+import kedi.agent_adapter.adapters.langchain.middleware as langchain_middleware_module
+import kedi.agent_adapter.adapters.langchain.tools as langchain_tools_module
+import kedi.agent_adapter.adapters.pydantic.adapter as pydantic_adapter_module
+import kedi.agent_adapter.adapters.pydantic.tools as pydantic_tools_module
+import kedi.api.configuration as api_configuration_module
 from kedi.agent_adapter import ACPAdapter as ExportedACPAdapter
 from kedi.agent_adapter import AdapterCapabilities, WebGPUAdapter
 from kedi.agent_adapter import ClaudeAdapter as ExportedClaudeAdapter
@@ -38,7 +49,6 @@ from kedi.agent_adapter import DSPyAdapter as ExportedDSPyAdapter
 from kedi.agent_adapter import LangChainAdapter as ExportedLangChainAdapter
 from kedi.agent_adapter import PydanticAdapter as ExportedPydanticAdapter
 from kedi.agent_adapter import adapters as adapters_module
-from kedi.agent_adapter._schema import _portable_output_json_schema, output_field_metadata
 from kedi.agent_adapter.adapters import (
     ACPAdapter,
     ClaudeAdapter,
@@ -48,11 +58,9 @@ from kedi.agent_adapter.adapters import (
     PydanticAdapter,
     make_repr,
 )
-from kedi.agent_adapter.adapters import claude as claude_adapter_module
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.adapters.dspy_tools import dspy_sync_tool_function
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.codemode import CodeModeExecutionError
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import (
@@ -61,31 +69,26 @@ from kedi.agent_adapter.events import (
     observe_agent_events,
 )
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations, report_invocation
+from kedi.agent_adapter.output_schema import _portable_output_json_schema, output_field_metadata
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
 )
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tool_override import (
-    SupportsToolRegistration,
-    ToolScope,
-    ToolSpec,
+from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec, python_callable_tool_spec
+from kedi.agent_adapter.tools.execution import (
     approval_request_for_tool,
     arguments_target_secret_file,
-    artifact_admission_scope,
 )
-from kedi.agent_adapter.utils import (
-    dspy_sync_tool_function,
-    kedi_procedure_tool_spec,
-    kedi_tool_call_context,
-    python_callable_tool_spec,
-)
+from kedi.agent_adapter.tools.scope import ToolScope, artifact_admission_scope
+from kedi.agent_adapter.tools.specs import SupportsToolRegistration, ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compaction import CompactionSettings, CompactionSettingsError
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
+from kedi.tool_context import kedi_tool_call_context
 
 
 class DirectOutput(BaseModel):
@@ -105,6 +108,58 @@ class FormattedClaudeOutput(BaseModel):
     email: EmailStr
     site: HttpUrl
     file: FileUrl
+
+
+@pytest.mark.parametrize(
+    ("module_name", "expected"),
+    [
+        (
+            "pydantic",
+            {
+                "PydanticAdapter",
+                "KEDI_APPROVAL_METADATA_KEY",
+                "PydanticApprovalResolution",
+                "pydantic_approval_request_from_deferred",
+                "pydantic_deferred_results_from_decisions",
+                "pydantic_tool_from_spec",
+                "pydantic_toolset_from_specs",
+            },
+        ),
+        ("langchain", {"LangChainAdapter"}),
+        (
+            "claude",
+            {
+                "ClaudeAdapter",
+                "OutputDataT",
+                "CLAUDE_CODE_TOOLS_PRESET",
+                "CLAUDE_CODE_SYSTEM_PROMPT_PRESET",
+                "CLAUDE_CODE_PERMISSION_MODE",
+            },
+        ),
+        (
+            "codex",
+            {
+                "CodexAdapter",
+                "OutputDataT",
+                "CODEX_DEFAULT_SANDBOX",
+                "CODEX_SUPPORTED_STRING_FORMATS",
+            },
+        ),
+    ],
+)
+def test_adapter_package_public_exports_are_independent_of_import_order(
+    module_name: str, expected: set[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = import_module(f"kedi.agent_adapter.adapters.{module_name}")
+    values = {name: getattr(module, name) for name in expected}
+    for name in expected:
+        monkeypatch.delattr(module, name)
+
+    namespace: dict[str, Any] = {}
+    exec(f"from {module.__name__} import *", namespace)
+
+    assert expected <= namespace.keys()
+    assert all(namespace[name] is value for name, value in values.items())
 
 
 def test_artifact_capabilities_require_structured_tool_adapters() -> None:
@@ -453,7 +508,7 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
             )
             return SimpleNamespace(output=output_type(x="Konya"))
 
-    monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.run_config.Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
     assert created_agents == [
@@ -667,7 +722,7 @@ def test_langchain_codemode_projects_and_executes_tools(
             async with adapter._projected_tools_for_run() as projection:
                 tools = {
                     tool.name: tool
-                    for tool in langchain_adapter_module._langchain_projection_tools(projection)
+                    for tool in langchain_tools_module._langchain_projection_tools(projection)
                 }
                 assert set(tools) == {"search_tools", "get_tool_schema", "execute_code"}
                 assert tools["search_tools"].func()["tool_names"] == ["double"]
@@ -720,7 +775,7 @@ def test_langchain_codemode_materializes_profile_mcp_tools(
             async with adapter._projected_tools_for_run() as projection:
                 tools = {
                     tool.name: tool
-                    for tool in langchain_adapter_module._langchain_projection_tools(projection)
+                    for tool in langchain_tools_module._langchain_projection_tools(projection)
                 }
                 assert tools["search_tools"].func()["tool_names"] == ["mcp_lookup"]
                 tools["get_tool_schema"].func(tool_names=["mcp_lookup"])
@@ -738,7 +793,7 @@ def test_langchain_codemode_returns_sandbox_errors_to_the_model() -> None:
         del code, restart
         raise CodeModeExecutionError("mapping methods are unavailable")
 
-    tool = langchain_adapter_module._langchain_tool_from_spec(
+    tool = langchain_tools_module._langchain_tool_from_spec(
         ToolSpec(
             fn=fail_code,
             name="execute_code",
@@ -763,7 +818,7 @@ def test_langchain_codemode_returns_sandbox_errors_to_the_model() -> None:
         del code, restart
         raise CodeModeExecutionError("sync mapping failure")
 
-    sync_tool = langchain_adapter_module._langchain_tool_from_spec(
+    sync_tool = langchain_tools_module._langchain_tool_from_spec(
         ToolSpec(
             fn=fail_sync,
             name="execute_code",
@@ -784,11 +839,11 @@ def test_langchain_native_codemode_tool_variants() -> None:
         value: int
 
     with pytest.raises(TypeError, match="non-empty name"):
-        langchain_adapter_module._langchain_tool_spec_from_native(
+        langchain_tools_module._langchain_tool_spec_from_native(
             SimpleNamespace(name="", args_schema=None)
         )
 
-    immediate = langchain_adapter_module._langchain_tool_spec_from_native(
+    immediate = langchain_tools_module._langchain_tool_spec_from_native(
         SimpleNamespace(
             name="immediate",
             description=None,
@@ -805,7 +860,7 @@ def test_langchain_native_codemode_tool_variants() -> None:
     async def delayed() -> int:
         return 5
 
-    awaiting = langchain_adapter_module._langchain_tool_spec_from_native(
+    awaiting = langchain_tools_module._langchain_tool_spec_from_native(
         SimpleNamespace(
             name="awaiting",
             description="Await a value.",
@@ -817,7 +872,7 @@ def test_langchain_native_codemode_tool_variants() -> None:
     assert awaiting.json_schema == {"type": "object", "properties": {}}
     assert asyncio.run(awaiting.fn()) == 5
 
-    synchronous = langchain_adapter_module._langchain_tool_spec_from_native(
+    synchronous = langchain_tools_module._langchain_tool_spec_from_native(
         SimpleNamespace(
             name="synchronous",
             description="Return a value.",
@@ -828,7 +883,7 @@ def test_langchain_native_codemode_tool_variants() -> None:
     )
     assert asyncio.run(synchronous.fn()) == 7
 
-    missing = langchain_adapter_module._langchain_tool_spec_from_native(
+    missing = langchain_tools_module._langchain_tool_spec_from_native(
         SimpleNamespace(name="missing", description="Missing.", args_schema=None)
     )
     with pytest.raises(TypeError, match="not invokable"):
@@ -893,7 +948,7 @@ def test_langchain_stream_handler_accepts_supported_content_shapes() -> None:
         with observe_agent_events(streamed.append):
             with pydantic_adapter_module.agent_event_run("langchain") as resolver:
                 assert resolver is not None
-                callback = langchain_adapter_module._langchain_event_handler(resolver)
+                callback = langchain_messages_module._langchain_event_handler(resolver)
                 await callback.on_llm_end(
                     SimpleNamespace(generations=object()),
                     run_id="invalid",
@@ -932,13 +987,13 @@ def test_langchain_stream_handler_accepts_supported_content_shapes() -> None:
 
 def test_langchain_completed_message_text_handles_scalar_and_empty_content() -> None:
     assert (
-        langchain_adapter_module._langchain_completed_message_text(
+        langchain_messages_module._langchain_completed_message_text(
             SimpleNamespace(content=" done ")
         )
         == "done"
     )
     assert (
-        langchain_adapter_module._langchain_completed_message_text(SimpleNamespace(content=None))
+        langchain_messages_module._langchain_completed_message_text(SimpleNamespace(content=None))
         == ""
     )
 
@@ -1052,7 +1107,7 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
 
     subagent = ToolSpec(fn=fail, name="delegate_task", metadata={"kind": "subagent"})
     with pytest.raises(ToolException, match="child failed"):
-        langchain_adapter_module._langchain_sync_tool_function(subagent)()
+        langchain_tools_module._langchain_sync_tool_function(subagent)()
 
     async def async_fail() -> str:
         raise KediExecutionError("async child failed")
@@ -1063,25 +1118,25 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
         metadata={"kind": "subagent"},
     )
     with pytest.raises(ToolException, match="async child failed"):
-        asyncio.run(langchain_adapter_module._langchain_async_tool_function(async_subagent)())
+        asyncio.run(langchain_tools_module._langchain_async_tool_function(async_subagent)())
 
     ordinary = ToolSpec(fn=fail, name="ordinary")
     with pytest.raises(KediExecutionError, match="child failed"):
-        langchain_adapter_module._langchain_sync_tool_function(ordinary)()
+        langchain_tools_module._langchain_sync_tool_function(ordinary)()
     with pytest.raises(KediExecutionError, match="async child failed"):
         asyncio.run(
-            langchain_adapter_module._langchain_async_tool_function(
+            langchain_tools_module._langchain_async_tool_function(
                 ToolSpec(fn=async_fail, name="ordinary_async")
             )()
         )
 
-    assert langchain_adapter_module._langchain_invocation_usage("plain") == InvocationUsage(
+    assert langchain_messages_module._langchain_invocation_usage("plain") == InvocationUsage(
         requests=1
     )
-    assert langchain_adapter_module._langchain_invocation_usage({"messages": "bad"}) == (
+    assert langchain_messages_module._langchain_invocation_usage({"messages": "bad"}) == (
         InvocationUsage(requests=1)
     )
-    assert langchain_adapter_module._langchain_invocation_usage(
+    assert langchain_messages_module._langchain_invocation_usage(
         {
             "messages": [
                 SimpleNamespace(usage_metadata=None, tool_calls="invalid"),
@@ -1092,7 +1147,7 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
             ]
         }
     ) == InvocationUsage(requests=1, total_tokens=9)
-    assert langchain_adapter_module._langchain_invocation_usage(
+    assert langchain_messages_module._langchain_invocation_usage(
         {
             "messages": [
                 SimpleNamespace(
@@ -1133,7 +1188,7 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
         },
         tool_calls=[],
     )
-    assert langchain_adapter_module._langchain_invocation_usage(
+    assert langchain_messages_module._langchain_invocation_usage(
         {
             "messages": [
                 SimpleNamespace(type="human", content="prompt"),
@@ -1155,18 +1210,18 @@ def test_langchain_subagent_tool_errors_and_usage_helpers(
         total_tokens=130,
     )
 
-    assert langchain_adapter_module._langchain_current_messages(
+    assert langchain_messages_module._langchain_current_messages(
         [current], [historical, current]
     ) == [current]
-    assert langchain_adapter_module._langchain_current_messages(
+    assert langchain_messages_module._langchain_current_messages(
         [current], [{"role": "assistant", "content": "different"}]
     ) == [current]
-    assert langchain_adapter_module._same_langchain_message(current, current)
-    assert langchain_adapter_module._same_langchain_message(
+    assert langchain_messages_module._same_langchain_message(current, current)
+    assert langchain_messages_module._same_langchain_message(
         {"role": "assistant", "content": "same"},
         {"role": "assistant", "content": "same"},
     )
-    assert langchain_adapter_module._usage_int({"value": False}, "value") == 0
+    assert langchain_messages_module._usage_int({"value": False}, "value") == 0
 
 
 def test_langchain_adapter_requires_output_spec() -> None:
@@ -1257,7 +1312,7 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
 
     tool = python_callable_tool_spec("update_count", update_count)
     edit_policy = ApprovalPolicy.dynamic(lambda _request: ApprovalDecision.edit({"count": 3}))
-    edit_middleware = langchain_adapter_module._langchain_approval_middleware(
+    edit_middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=edit_policy),
         tools=(tool,),
     )
@@ -1278,7 +1333,7 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
         }
     ]
 
-    deny_middleware = langchain_adapter_module._langchain_approval_middleware(
+    deny_middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=ApprovalPolicy.deny()),
         tools=(tool,),
     )
@@ -1291,7 +1346,7 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
     assert "denied" in denied.content
     assert len(calls) == 1
 
-    external = langchain_adapter_module._langchain_approval_middleware(
+    external = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile.empty(),
         tools=(),
     )
@@ -1303,7 +1358,7 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
     assert denied_external.status == "error"
     assert len(calls) == 1
 
-    allowed_external = langchain_adapter_module._langchain_approval_middleware(
+    allowed_external = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=ApprovalPolicy.allow()),
         tools=(),
     )
@@ -1318,7 +1373,7 @@ def test_langchain_approval_middleware_applies_allow_deny_and_edits() -> None:
     )
     assert len(calls) == 2
 
-    inherited_ceiling = langchain_adapter_module._langchain_approval_middleware(
+    inherited_ceiling = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile.empty(),
         tools=(tool,),
         approval_ceiling=(ApprovalPolicy.allow(),),
@@ -1400,7 +1455,7 @@ def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id(
 
     manager = ArtifactManager(session_id="langchain-native")
     policy = ArtifactPolicy(threshold_bytes=10)
-    middleware = langchain_adapter_module._langchain_approval_middleware(
+    middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=ApprovalPolicy.allow()),
         tools=(),
     )
@@ -1442,7 +1497,7 @@ def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id(
         name="wrapped_tool",
         metadata={"kedi_artifact_wrapped": True},
     )
-    wrapped_middleware = langchain_adapter_module._langchain_approval_middleware(
+    wrapped_middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=ApprovalPolicy.allow()),
         tools=(wrapped_tool,),
     )
@@ -1458,7 +1513,7 @@ def test_langchain_native_results_cross_artifact_boundary_once_and_keep_call_id(
 
     with artifact_admission_scope(manager=manager, policy=policy):
         raw = asyncio.run(
-            langchain_adapter_module._langchain_admit_native_tool_result(
+            langchain_middleware_module._langchain_admit_native_tool_result(
                 "raw-result" * 20,
                 tool_name="raw_tool",
                 call_id="raw-call",
@@ -1503,7 +1558,7 @@ def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -
 
     manager = ArtifactManager(session_id="langchain-command")
     policy = ArtifactPolicy(threshold_bytes=10)
-    middleware = langchain_adapter_module._langchain_approval_middleware(
+    middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile(approval=ApprovalPolicy.allow()),
         tools=(),
     )
@@ -1552,7 +1607,7 @@ def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -
     )
     with artifact_admission_scope(manager=manager, policy=policy):
         tuple_result = asyncio.run(
-            langchain_adapter_module._langchain_admit_native_tool_result(
+            langchain_middleware_module._langchain_admit_native_tool_result(
                 tuple_command,
                 tool_name="native_tool",
                 call_id="tuple-call",
@@ -1566,7 +1621,7 @@ def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -
     with artifact_admission_scope(manager=manager, policy=policy):
         assert (
             asyncio.run(
-                langchain_adapter_module._langchain_admit_native_tool_result(
+                langchain_middleware_module._langchain_admit_native_tool_result(
                     without_messages,
                     tool_name="native_tool",
                     call_id="unused-call",
@@ -1581,7 +1636,7 @@ def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -
     with artifact_admission_scope(manager=manager, policy=policy):
         assert (
             asyncio.run(
-                langchain_adapter_module._langchain_admit_native_tool_result(
+                langchain_middleware_module._langchain_admit_native_tool_result(
                     unmatched,
                     tool_name="native_tool",
                     call_id="expected-call",
@@ -1600,21 +1655,21 @@ def test_langchain_command_results_preserve_graph_updates_and_tool_causality() -
         }
     )
     assert (
-        langchain_adapter_module._langchain_tool_message_for_call(
+        langchain_middleware_module._langchain_tool_message_for_call(
             mixed_messages,
             "expected-call",
         )
         is expected_message
     )
     assert (
-        langchain_adapter_module._langchain_tool_message_for_call(
+        langchain_middleware_module._langchain_tool_message_for_call(
             unmatched,
             "expected-call",
         )
         is None
     )
     assert (
-        langchain_adapter_module._langchain_tool_message_for_call(
+        langchain_middleware_module._langchain_tool_message_for_call(
             Command(update={"messages": None}),
             "expected-call",
         )
@@ -1636,21 +1691,21 @@ def test_langchain_raw_message_admission_preserves_model_shape(
         return next(admitted_values)
 
     monkeypatch.setattr(
-        langchain_adapter_module,
+        langchain_middleware_module,
         "admit_current_artifact_result",
         admit,
     )
 
     original = AIMessage(content="large native result")
     mapped = asyncio.run(
-        langchain_adapter_module._langchain_admit_native_tool_result(
+        langchain_middleware_module._langchain_admit_native_tool_result(
             original,
             tool_name="native_tool",
             call_id="native-call",
         )
     )
     scalar = asyncio.run(
-        langchain_adapter_module._langchain_admit_native_tool_result(
+        langchain_middleware_module._langchain_admit_native_tool_result(
             original,
             tool_name="native_tool",
             call_id="native-call",
@@ -1684,17 +1739,17 @@ def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
 
             return result()
 
-    sync_wrapper = langchain_adapter_module._langchain_sync_tool_function(
+    sync_wrapper = langchain_tools_module._langchain_sync_tool_function(
         ToolSpec(fn=SyncCallableReturningAwaitable(), name="sync_wrapper")
     )
     assert sync_wrapper(query="docs") == "async:docs"
 
-    async_wrapper = langchain_adapter_module._langchain_async_tool_function(
+    async_wrapper = langchain_tools_module._langchain_async_tool_function(
         ToolSpec(fn=lambda *, query: query, name="async_wrapper")
     )
     assert asyncio.run(async_wrapper(query="docs")) == "docs"
 
-    middleware = langchain_adapter_module._langchain_approval_middleware(
+    middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile.empty(), tools=()
     )
     malformed = asyncio.run(
@@ -1708,7 +1763,7 @@ def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
     def invalid_arguments(_arguments: Any) -> dict[str, Any]:
         raise ValueError("invalid arguments")
 
-    failing_middleware = langchain_adapter_module._langchain_approval_middleware(
+    failing_middleware = langchain_middleware_module._langchain_approval_middleware(
         profile=AgentProfile.empty(),
         tools=(ToolSpec(fn=lookup, name="lookup", argument_validator=invalid_arguments),),
     )
@@ -1726,7 +1781,7 @@ def test_langchain_native_approval_helpers_cover_validation_and_async_edges(
 
     monkeypatch.setitem(sys.modules, "langchain.agents.middleware", None)
     with pytest.raises(ModuleNotFoundError, match="approval support requires langchain"):
-        langchain_adapter_module._langchain_approval_middleware(
+        langchain_middleware_module._langchain_approval_middleware(
             profile=AgentProfile.empty(), tools=()
         )
 
@@ -1737,30 +1792,30 @@ def test_claude_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) ->
             self.kwargs = kwargs
 
     with pytest.raises(RuntimeError, match="does not expose"):
-        claude_adapter_module._claude_hook_matcher_class(SimpleNamespace())
+        claude_hooks_module._claude_hook_matcher_class(SimpleNamespace())
     assert (
-        claude_adapter_module._claude_hook_matcher_class(
+        claude_hooks_module._claude_hook_matcher_class(
             SimpleNamespace(HookMatcher=FallbackHookMatcher)
         )
         is FallbackHookMatcher
     )
 
     with pytest.raises(TypeError, match="mapping"):
-        claude_adapter_module._with_kedi_approval_hook(
+        claude_hooks_module._with_kedi_approval_hook(
             SimpleNamespace(HookMatcher=FallbackHookMatcher),
             "invalid",
             profile=AgentProfile.empty(),
             tools=(),
         )
     with pytest.raises(TypeError, match="lists or tuples"):
-        claude_adapter_module._with_kedi_approval_hook(
+        claude_hooks_module._with_kedi_approval_hook(
             SimpleNamespace(HookMatcher=FallbackHookMatcher),
             {"PreToolUse": "invalid"},
             profile=AgentProfile.empty(),
             tools=(),
         )
 
-    preserved = claude_adapter_module._with_kedi_approval_hook(
+    preserved = claude_hooks_module._with_kedi_approval_hook(
         SimpleNamespace(HookMatcher=FallbackHookMatcher),
         {"PostToolUse": ("existing",)},
         profile=AgentProfile.empty(),
@@ -1768,7 +1823,7 @@ def test_claude_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert preserved["PostToolUse"] == ["existing"]
 
-    hook = claude_adapter_module._claude_pre_tool_use_hook(
+    hook = claude_hooks_module._claude_pre_tool_use_hook(
         profile=AgentProfile.empty(),
         tools=(),
     )
@@ -1789,7 +1844,7 @@ def test_claude_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) ->
     def invalid_arguments(_arguments: Any) -> dict[str, Any]:
         raise ValueError("invalid arguments")
 
-    invalid_hook = claude_adapter_module._claude_pre_tool_use_hook(
+    invalid_hook = claude_hooks_module._claude_pre_tool_use_hook(
         profile=AgentProfile.empty(),
         tools=(ToolSpec(fn=lookup, name="lookup", argument_validator=invalid_arguments),),
     )
@@ -1833,14 +1888,14 @@ def test_pydantic_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) 
     def sync_tool(*, query: str) -> str:
         return query
 
-    sync_wrapper = pydantic_adapter_module._validated_tool_function(
+    sync_wrapper = pydantic_tools_module._validated_tool_function(
         ToolSpec(fn=sync_tool, name="sync_tool")
     )
     with pytest.raises(TypeError, match="only accepts keyword"):
         sync_wrapper("docs")
 
-    monkeypatch.setattr(pydantic_adapter_module, "_is_async_callable", lambda _fn: True)
-    async_wrapper = pydantic_adapter_module._validated_tool_function(
+    monkeypatch.setattr(pydantic_tools_module, "_is_async_callable", lambda _fn: True)
+    async_wrapper = pydantic_tools_module._validated_tool_function(
         ToolSpec(fn=sync_tool, name="async_tool")
     )
     assert asyncio.run(async_wrapper(query="docs")) == "docs"
@@ -1851,15 +1906,15 @@ def test_pydantic_native_approval_helper_edges(monkeypatch: pytest.MonkeyPatch) 
         return f"async:{query}"
 
     monkeypatch.setattr(
-        pydantic_adapter_module,
+        pydantic_tools_module,
         "_is_async_callable",
-        pydantic_adapter_module._is_async_callable,
+        pydantic_tools_module._is_async_callable,
     )
-    actual_async_wrapper = pydantic_adapter_module._validated_tool_function(
+    actual_async_wrapper = pydantic_tools_module._validated_tool_function(
         ToolSpec(fn=async_tool, name="actual_async_tool")
     )
     assert asyncio.run(actual_async_wrapper(query="docs")) == "async:docs"
-    assert pydantic_adapter_module._validated_tool_arguments(
+    assert pydantic_tools_module._validated_tool_arguments(
         ToolSpec(fn=sync_tool, name="plain"), {"query": "docs"}
     ) == {"query": "docs"}
 
@@ -1872,7 +1927,7 @@ def test_pydantic_artifact_code_errors_are_model_retries() -> None:
     def fail_artifact_code(*, code: str) -> None:
         raise ArtifactCodeError(f"invalid artifact code: {code}")
 
-    wrapped = pydantic_adapter_module._validated_tool_function(
+    wrapped = pydantic_tools_module._validated_tool_function(
         ToolSpec(
             fn=fail_artifact_code,
             name="run_artifact_code",
@@ -1885,7 +1940,7 @@ def test_pydantic_artifact_code_errors_are_model_retries() -> None:
     def fail_unrelated(*, code: str) -> None:
         raise ValueError(f"unrelated failure: {code}")
 
-    unrelated = pydantic_adapter_module._validated_tool_function(
+    unrelated = pydantic_tools_module._validated_tool_function(
         ToolSpec(
             fn=fail_unrelated,
             name="run_artifact_code",
@@ -2018,7 +2073,7 @@ def test_langchain_structured_response_supports_mapping_and_object() -> None:
         == "block response"
     )
     assert (
-        langchain_adapter_module._langchain_completed_message_text(
+        langchain_messages_module._langchain_completed_message_text(
             SimpleNamespace(content=response_blocks)
         )
         == "block response"
@@ -2365,7 +2420,7 @@ def test_claude_adapter_supports_output_type_sync_and_tool_scope(
 
 def test_claude_codemode_system_prompt_shapes() -> None:
     unchanged: dict[str, Any] = {"system_prompt": "existing"}
-    claude_adapter_module._set_claude_system_prompt(
+    claude_messages_module._set_claude_system_prompt(
         unchanged,
         "ignored",
         codemode_enabled=False,
@@ -2373,7 +2428,7 @@ def test_claude_codemode_system_prompt_shapes() -> None:
     assert unchanged == {"system_prompt": "existing"}
 
     string_prompt: dict[str, Any] = {"system_prompt": "existing"}
-    claude_adapter_module._set_claude_system_prompt(
+    claude_messages_module._set_claude_system_prompt(
         string_prompt,
         None,
         codemode_enabled=True,
@@ -2384,7 +2439,7 @@ def test_claude_codemode_system_prompt_shapes() -> None:
     preset: dict[str, Any] = {
         "system_prompt": {"type": "preset", "preset": "claude_code", "append": "base"}
     }
-    claude_adapter_module._set_claude_system_prompt(
+    claude_messages_module._set_claude_system_prompt(
         preset,
         None,
         codemode_enabled=True,
@@ -2393,14 +2448,14 @@ def test_claude_codemode_system_prompt_shapes() -> None:
 
     invalid_append: dict[str, Any] = {"system_prompt": {"append": 3}}
     with pytest.raises(TypeError, match="append must be a string"):
-        claude_adapter_module._set_claude_system_prompt(
+        claude_messages_module._set_claude_system_prompt(
             invalid_append,
             None,
             codemode_enabled=True,
         )
 
     with pytest.raises(TypeError, match="string or preset mapping"):
-        claude_adapter_module._set_claude_system_prompt(
+        claude_messages_module._set_claude_system_prompt(
             {"system_prompt": 3},
             None,
             codemode_enabled=True,
@@ -2567,7 +2622,7 @@ def test_claude_stream_helpers_handle_message_boundaries(
             assert resolver is not None
             assistant = sdk["AssistantMessage"](" direct ")
             assert (
-                claude_adapter_module._observe_claude_message(
+                claude_messages_module._observe_claude_message(
                     SimpleNamespace(**sdk), assistant, resolver, 0
                 )
                 == 1
@@ -2576,20 +2631,20 @@ def test_claude_stream_helpers_handle_message_boundaries(
                 [sdk["ToolUseBlock"]("Read", {"file_path": "README.md"})]
             )
             assert (
-                claude_adapter_module._observe_claude_message(
+                claude_messages_module._observe_claude_message(
                     SimpleNamespace(**sdk), tool_only, resolver, 1
                 )
                 == 1
             )
             user = sdk["UserMessage"](["tool result"])
             assert (
-                claude_adapter_module._observe_claude_message(
+                claude_messages_module._observe_claude_message(
                     SimpleNamespace(**sdk), user, resolver, 1
                 )
                 == 1
             )
             assert (
-                claude_adapter_module._observe_claude_message(
+                claude_messages_module._observe_claude_message(
                     SimpleNamespace(**sdk), object(), resolver, 1
                 )
                 == 1
@@ -2597,14 +2652,16 @@ def test_claude_stream_helpers_handle_message_boundaries(
 
     fake_sdk = SimpleNamespace(TextBlock=None, ToolUseBlock=None)
     assert (
-        claude_adapter_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=object()))
+        claude_messages_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=object()))
         == ""
     )
-    assert claude_adapter_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=[])) == ""
-    assert not claude_adapter_module._claude_has_tool_use(
+    assert (
+        claude_messages_module._claude_assistant_text(fake_sdk, SimpleNamespace(content=[])) == ""
+    )
+    assert not claude_messages_module._claude_has_tool_use(
         fake_sdk, SimpleNamespace(content=object())
     )
-    assert not claude_adapter_module._claude_has_tool_use(fake_sdk, SimpleNamespace(content=[]))
+    assert not claude_messages_module._claude_has_tool_use(fake_sdk, SimpleNamespace(content=[]))
 
 
 def test_claude_subagent_continuation_resumes_captured_session(
@@ -2718,10 +2775,10 @@ def test_claude_session_fingerprint_serializes_dataclasses_and_opaque_values() -
     class CustomSetting:
         value: str
 
-    assert claude_adapter_module._claude_fingerprint_default(CustomSetting("value")) == {
+    assert claude_messages_module._claude_fingerprint_default(CustomSetting("value")) == {
         "value": "value"
     }
-    assert claude_adapter_module._claude_fingerprint_default(object()) == {
+    assert claude_messages_module._claude_fingerprint_default(object()) == {
         "type": "builtins.object"
     }
 
@@ -2886,7 +2943,7 @@ def test_claude_adapter_native_approval_hook_covers_builtin_mcp_and_kedi_tools(
 
 
 def test_claude_adapter_preserves_supported_string_formats() -> None:
-    properties = claude_adapter_module._output_json_schema(FormattedClaudeOutput)["properties"]
+    properties = claude_messages_module._output_json_schema(FormattedClaudeOutput)["properties"]
 
     assert properties["created_at"]["format"] == "date-time"
     assert properties["elapsed"]["format"] == "duration"
@@ -3012,19 +3069,19 @@ def test_claude_subagent_tool_errors_and_usage_helpers(
         name="delegate_task",
         metadata={"kind": "subagent"},
     )
-    native = claude_adapter_module._claude_sdk_tool(sdk, subagent_tool)
+    native = claude_tools_module._claude_sdk_tool(sdk, subagent_tool)
     result = asyncio.run(native({}))
     assert result["is_error"] is True
     assert "child details" in result["content"][0]["text"]
 
-    ordinary = claude_adapter_module._claude_sdk_tool(
+    ordinary = claude_tools_module._claude_sdk_tool(
         sdk,
         ToolSpec(fn=fail, name="ordinary"),
     )
     with pytest.raises(KediExecutionError, match="child details"):
         asyncio.run(ordinary({}))
 
-    usage = claude_adapter_module._claude_invocation_usage(
+    usage = claude_messages_module._claude_invocation_usage(
         SimpleNamespace(
             usage={"inputTokens": 2, "output_tokens": 3, "totalTokens": 0},
             num_turns=4,
@@ -3036,12 +3093,12 @@ def test_claude_subagent_tool_errors_and_usage_helpers(
         output_tokens=3,
         total_tokens=5,
     )
-    assert claude_adapter_module._claude_invocation_usage(
+    assert claude_messages_module._claude_invocation_usage(
         SimpleNamespace(usage={"totalTokens": 9}, num_turns=1)
     ) == InvocationUsage(requests=1, total_tokens=9)
-    assert claude_adapter_module._usage_int({"value": True}, "value") == 0
+    assert claude_messages_module._usage_int({"value": True}, "value") == 0
 
-    inherited_hook = claude_adapter_module._claude_pre_tool_use_hook(
+    inherited_hook = claude_hooks_module._claude_pre_tool_use_hook(
         profile=AgentProfile.empty(),
         tools=(),
         approval_ceiling=(ApprovalPolicy.allow(),),
@@ -3058,7 +3115,7 @@ def test_claude_subagent_tool_errors_and_usage_helpers(
 
 def test_claude_adapter_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(sys.modules, "claude_agent_sdk", raising=False)
-    monkeypatch.setattr(claude_adapter_module, "find_spec", lambda name: None)
+    monkeypatch.setattr(claude_tools_module, "find_spec", lambda name: None)
 
     with pytest.raises(ModuleNotFoundError, match="claude-agent-sdk"):
         asyncio.run(ClaudeAdapter(model="claude").produce("template", output_schema={"x": str}))
@@ -3080,10 +3137,10 @@ def test_claude_sdk_import_uses_find_spec_path(monkeypatch: pytest.MonkeyPatch) 
         return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.delitem(sys.modules, "claude_agent_sdk", raising=False)
-    monkeypatch.setattr(claude_adapter_module, "find_spec", lambda name: object())
+    monkeypatch.setattr(claude_tools_module, "find_spec", lambda name: object())
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
-    assert claude_adapter_module._claude_sdk() is sentinel
+    assert claude_tools_module._claude_sdk() is sentinel
 
 
 def test_claude_helpers_cover_mcp_and_serialization() -> None:
@@ -3136,23 +3193,23 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
     class Payload:
         value: str
 
-    assert claude_adapter_module._tool_result_text("already text") == "already text"
-    assert claude_adapter_module._tool_result_text(DirectAnswer(answer="ok")) == '{"answer": "ok"}'
-    assert claude_adapter_module._tool_result_text(Payload("ok")) == '{"value": "ok"}'
-    assert claude_adapter_module._tool_result_text([DirectAnswer(answer="ok")]) == (
+    assert claude_tools_module._tool_result_text("already text") == "already text"
+    assert claude_tools_module._tool_result_text(DirectAnswer(answer="ok")) == '{"answer": "ok"}'
+    assert claude_tools_module._tool_result_text(Payload("ok")) == '{"value": "ok"}'
+    assert claude_tools_module._tool_result_text([DirectAnswer(answer="ok")]) == (
         '[{"answer": "ok"}]'
     )
-    assert claude_adapter_module._claude_text_response(SimpleNamespace(result="text")) == "text"
-    assert claude_adapter_module._claude_text_response(SimpleNamespace(content="content")) == (
+    assert claude_messages_module._claude_text_response(SimpleNamespace(result="text")) == "text"
+    assert claude_messages_module._claude_text_response(SimpleNamespace(content="content")) == (
         "content"
     )
-    assert claude_adapter_module._claude_text_response(
+    assert claude_messages_module._claude_text_response(
         SimpleNamespace(result={"text": "dict"})
     ) == ("dict")
     with pytest.raises(ValueError, match="text response"):
-        claude_adapter_module._claude_text_response(SimpleNamespace(result=None))
+        claude_messages_module._claude_text_response(SimpleNamespace(result=None))
     with pytest.raises(ValueError, match="text response"):
-        claude_adapter_module._claude_text_response(SimpleNamespace(result={"text": 1}))
+        claude_messages_module._claude_text_response(SimpleNamespace(result={"text": 1}))
 
     with pytest.raises(ValueError, match="stdio transport requires a command"):
         adapters_module._claude_external_mcp_servers(
@@ -3173,13 +3230,12 @@ def test_claude_helpers_cover_mcp_and_serialization() -> None:
 
 
 def test_claude_adapter_is_available_from_runtime_builders() -> None:
-    from kedi import api as api_module
     from kedi import app as app_module
 
     runtime_adapter = app_module._build_runtime_adapter("claude", "claude-sonnet-4")
     assert isinstance(runtime_adapter, ClaudeAdapter)
 
-    lazy = api_module._lazy_adapter("claude", "claude-sonnet-4", {"max_turns": 2})
+    lazy = api_configuration_module._lazy_adapter("claude", "claude-sonnet-4", {"max_turns": 2})
     assert lazy.capabilities.supports("subagents")
     assert lazy.default_model() == "claude-sonnet-4"
 
@@ -3410,7 +3466,7 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
             assert kwargs["model"] == "openai-chat:gpt-4o"
             return SimpleNamespace(output="fresh raw")
 
-    monkeypatch.setattr(pydantic_adapter_module, "Agent", FreshAgent)
+    monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.run_config.Agent", FreshAgent)
 
     with adapter.profile_override(AgentProfile(model="openai:gpt-4o", system="Profile system.")):
         with kedi_tool_call_context():
@@ -4196,7 +4252,7 @@ def test_pydantic_external_tool_approval_elevates_secret_paths(
     arguments: dict[str, Any], expected_risk: str
 ) -> None:
     request = approval_request_for_tool(
-        pydantic_adapter_module._external_tool_spec("external_read"),
+        pydantic_tools_module._external_tool_spec("external_read"),
         arguments,
         "pydantic",
     )
@@ -4299,8 +4355,8 @@ def test_pydantic_adapter_wraps_native_toolset_overrides_and_nested_runs() -> No
         assert inherited_adapter._application_toolset_count() == 2
         assert inherited_adapter._has_native_approval_tools()
 
-    wrapped = pydantic_adapter_module._approval_required_toolset(FunctionToolset())
-    assert pydantic_adapter_module._approval_required_toolset(wrapped) is wrapped
+    wrapped = pydantic_tools_module._approval_required_toolset(FunctionToolset())
+    assert pydantic_tools_module._approval_required_toolset(wrapped) is wrapped
 
 
 def test_runtime_leaves_pydantic_tools_unwrapped_for_native_approval() -> None:

@@ -30,10 +30,12 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.providers.zai import ZaiProvider
 
+import kedi.agent_adapter.adapters.langchain.messages as langchain_messages_module
+import kedi.agent_adapter.adapters.langchain.middleware as langchain_middleware_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 from kedi.agent_adapter import prefix_cache as prefix_cache_module
-from kedi.agent_adapter.adapters import langchain as langchain_adapter_module
-from kedi.agent_adapter.adapters.langchain import LangChainAdapter
-from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
+from kedi.agent_adapter.adapters.langchain.adapter import LangChainAdapter
+from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.prefix_cache import (
@@ -51,7 +53,8 @@ from kedi.engine import ThreadEngine
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import HistoryDirectiveStmt, ProfileDefStmt
 from kedi.lang.parser.diagnostics import KediParseError
-from kedi.lsp.features import compute_diagnostics, compute_semantic_tokens_full
+from kedi.lsp.features.diagnostics import compute_diagnostics
+from kedi.lsp.features.semantic_tokens import compute_semantic_tokens_full
 from tests.lsp_helpers import decode_semantic_tokens, hover_text_at
 from tests.mock_adapter import MockAdapter
 
@@ -924,9 +927,9 @@ def test_langchain_bedrock_uses_native_prompt_cache_middleware() -> None:
         (),
         {"__module__": "langchain_aws.chat_models"},
     )()
-    assert langchain_adapter_module._langchain_cache_middleware(bedrock, enabled=False) == []
+    assert langchain_middleware_module._langchain_cache_middleware(bedrock, enabled=False) == []
 
-    middleware = langchain_adapter_module._langchain_cache_middleware(bedrock, enabled=True)
+    middleware = langchain_middleware_module._langchain_cache_middleware(bedrock, enabled=True)
     assert len(middleware) == 1
     assert isinstance(middleware[0], BedrockPromptCachingMiddleware)
 
@@ -1265,7 +1268,7 @@ def test_langchain_cache_blocks_cover_native_content_shapes_and_noop_paths() -> 
             "instructions"
         )
 
-    assert langchain_adapter_module._langchain_uses_explicit_cache_blocks(None) is False
+    assert langchain_messages_module._langchain_uses_explicit_cache_blocks(None) is False
 
     content_message = HumanMessage(
         content=[
@@ -1274,20 +1277,20 @@ def test_langchain_cache_blocks_cover_native_content_shapes_and_noop_paths() -> 
             {"type": "text", "text": "cache this"},
         ]
     )
-    marked = langchain_adapter_module._langchain_with_cache_control(content_message)
+    marked = langchain_messages_module._langchain_with_cache_control(content_message)
     assert marked.content[-1]["cache_control"] == {"type": "ephemeral"}
 
     image_only = HumanMessage(
         content=[{"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]
     )
-    assert langchain_adapter_module._langchain_with_cache_control(image_only) is image_only
+    assert langchain_messages_module._langchain_with_cache_control(image_only) is image_only
 
     unsupported = SimpleNamespace(content=object())
-    assert langchain_adapter_module._langchain_with_cache_control(unsupported) is unsupported
-    assert langchain_adapter_module._langchain_without_cache_control(unsupported) is unsupported
+    assert langchain_messages_module._langchain_with_cache_control(unsupported) is unsupported
+    assert langchain_messages_module._langchain_without_cache_control(unsupported) is unsupported
 
     unmarked = HumanMessage(content=["raw block", {"type": "text", "text": "plain"}])
-    assert langchain_adapter_module._langchain_without_cache_control(unmarked) is unmarked
+    assert langchain_messages_module._langchain_without_cache_control(unmarked) is unmarked
 
 
 def test_langchain_replays_complete_message_history_including_tool_results(
@@ -1369,7 +1372,7 @@ def test_langchain_history_does_not_commit_request_time_cache_markers() -> None:
 
     adapter = LangChainAdapter("anthropic:claude-sonnet-4-5")
     conversation = AdapterConversationContext()
-    marked = langchain_adapter_module._langchain_with_cache_control(
+    marked = langchain_messages_module._langchain_with_cache_control(
         HumanMessage(content="cache this turn")
     )
 
@@ -1393,10 +1396,9 @@ def test_history_lsp_hover_highlighting_and_unsupported_adapter_error() -> None:
 
     tokens = decode_semantic_tokens(compute_semantic_tokens_full(source, "/tmp/history.kedi").data)
     # Resolve through the public legend instead of coupling to hard-coded token positions.
-    from kedi.lsp import features
 
-    keyword = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    string = features.SEMANTIC_TOKEN_TYPES.index("string")
+    keyword = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    string = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
     assert any(line == 1 and token_type == keyword for line, _, _, token_type, _ in tokens)
     assert any(line == 1 and token_type == string for line, _, _, token_type, _ in tokens)
 

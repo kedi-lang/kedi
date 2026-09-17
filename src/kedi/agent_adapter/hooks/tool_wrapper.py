@@ -9,9 +9,10 @@ from functools import wraps
 from time import monotonic
 from typing import Any
 
-from ..approval import ToolApprovalDenied
+from ..approvals.policy import ToolApprovalDenied
 from ..events import current_agent_run_identity, current_bound_agent_run_identity
-from ..tool_override import ToolSpec, validate_tool_arguments
+from ..tools.execution import validate_tool_arguments
+from ..tools.specs import ToolSpec
 from .dispatcher import current_hook_dispatcher
 from .models import (
     HookDeniedError,

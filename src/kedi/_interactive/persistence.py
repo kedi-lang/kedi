@@ -21,7 +21,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from .._version import __version__
-from ..agent_adapter.approval import ApprovalPolicy
+from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_profile import AgentProfile
 from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings

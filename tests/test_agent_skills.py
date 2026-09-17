@@ -8,14 +8,14 @@ import pytest
 
 import kedi
 from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.skills import (
     MAX_SKILL_LIST_LIMIT,
     SkillStore,
     resolve_skill_store,
     skill_tool_specs,
 )
-from kedi.agent_adapter.tool_override import with_approval, with_artifact_result
+from kedi.agent_adapter.tools.execution import with_approval, with_artifact_result
 from kedi.agent_profile import AgentProfile, eval_skills_directive
 from kedi.agent_profile.skills import (
     MAX_SKILL_BYTES,

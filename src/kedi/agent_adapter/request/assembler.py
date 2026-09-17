@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from hashlib import sha256
 from typing import Iterable
 
-from ..tool_override import ToolSpec
+from ..tools.specs import ToolSpec
 from .models import (
     AgentRunRequest,
     CallKind,

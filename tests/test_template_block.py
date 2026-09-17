@@ -4,8 +4,13 @@ from typing import Any
 
 import pytest
 
+import kedi.lsp.features.scope as lsp_scope_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+import kedi.lsp.features.symbols as lsp_symbols_module
+import kedi.lsp.python_virtual.scope as virtual_scope_module
 from kedi.artifacts import artifact_instructions
-from kedi.core import KediRuntime, o
+from kedi.core.expressions import o
+from kedi.core.runtime import KediRuntime
 from kedi.engine import ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -21,13 +26,10 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.evaluation import merge_template_block_lines
 from kedi.lang.parser.diagnostics import KediParseError
-from kedi.lsp import features, python_virtual
-from kedi.lsp.features import (
-    compute_diagnostics,
-    compute_hover,
-    compute_semantic_tokens_full,
-)
-from kedi.lsp.python_virtual import compute_python_virtual_document
+from kedi.lsp.features.diagnostics import compute_diagnostics
+from kedi.lsp.features.hover import compute_hover
+from kedi.lsp.features.semantic_tokens import compute_semantic_tokens_full
+from kedi.lsp.python_virtual.document import compute_python_virtual_document
 from kedi.resolved_types import ResolvedKediType
 from tests.lsp_helpers import decode_semantic_tokens, hover_at, hover_value, position_of
 from tests.mock_adapter import MockAdapter
@@ -344,9 +346,9 @@ def test_raw_invoke_is_visible_in_virtual_python() -> None:
     assert any(symbol["name"] == "answer" for symbol in doc["symbols"])
     stmt = parse_program("[answer] << Hello <name>\n").toplevel_body[0]
     assert isinstance(stmt, RawInvokeStmt)
-    assert features._segments_of(stmt)
-    assert python_virtual._stmt_segments(stmt)
-    assert python_virtual._raw_invoke_name_range(RawInvokeStmt(name="x")) is None
+    assert lsp_scope_module._segments_of(stmt)
+    assert virtual_scope_module._stmt_segments(stmt)
+    assert virtual_scope_module._raw_invoke_name_range(RawInvokeStmt(name="x")) is None
 
 
 def test_raw_invoke_rejects_output_fields_and_non_string_capture_type() -> None:
@@ -364,7 +366,7 @@ def test_raw_invoke_str_capture_type_is_lsp_warning() -> None:
 
     assert any(
         d.code == "K-RAW-INVOKE-REDUNDANT-STR"
-        and d.severity == features.lsp.DiagnosticSeverity.Warning
+        and d.severity == lsp_symbols_module.lsp.DiagnosticSeverity.Warning
         for d in diags
     )
 
@@ -513,11 +515,11 @@ def test_top_level_template_block_semantic_tokens_match_screenshot_shape() -> No
     tokens = compute_semantic_tokens_full(src, "/tmp/tb.kedi")
     assert tokens.data, "template_block_stmt grammar must yield highlight captures"
     decoded = decode_semantic_tokens(tokens.data)
-    keyword = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    string_t = features.SEMANTIC_TOKEN_TYPES.index("string")
-    variable = features.SEMANTIC_TOKEN_TYPES.index("variable")
-    type_t = features.SEMANTIC_TOKEN_TYPES.index("type")
-    function = features.SEMANTIC_TOKEN_TYPES.index("function")
+    keyword = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    string_t = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
+    variable = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
+    type_t = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("type")
+    function = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("function")
     assert any(ln == 0 and token_type == keyword for ln, _, _, token_type, _ in decoded)
     assert any(ln == 0 and token_type == string_t for ln, _, _, token_type, _ in decoded)
     assert any(ln == 0 and token_type == variable for ln, _, _, token_type, _ in decoded)

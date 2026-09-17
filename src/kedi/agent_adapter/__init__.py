@@ -1,7 +1,7 @@
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from .approval import ApprovalCancelled
+from .approvals.policy import ApprovalCancelled
 from .conversation import (
     AdapterConversationContext,
     AdapterStateSnapshot,
@@ -63,7 +63,7 @@ from .models import (
 )
 from .subagents import SubagentUsageLimits
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
-from .tool_override import SupportsToolRegistration, ToolSpec
+from .tools.specs import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
     from . import adapters
@@ -117,13 +117,13 @@ def __getattr__(name: str) -> Any:
 
 
 def kedi_procedure_to_pydantic_tool(*args: Any, **kwargs: Any) -> Any:
-    from .utils import kedi_procedure_to_pydantic_tool as build_tool
+    from .adapters.pydantic.procedures import kedi_procedure_to_pydantic_tool as build_tool
 
     return build_tool(*args, **kwargs)
 
 
 def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
-    from .utils import kedi_program_to_pydantic_tools as build_tools
+    from .adapters.pydantic.procedures import kedi_program_to_pydantic_tools as build_tools
 
     return build_tools(*args, **kwargs)
 

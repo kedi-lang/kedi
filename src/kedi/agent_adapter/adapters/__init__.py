@@ -5,9 +5,9 @@ from typing import TYPE_CHECKING, Any
 # Public re-exports for adapter implementations and compatibility helpers.
 from pydantic_ai import Agent
 
-from .._schema import make_repr
-from .._schema import output_field_definition as _output_field_definition
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
+from ..output_schema import make_repr
+from ..output_schema import output_field_definition as _output_field_definition
 from . import acp, claude, codex, langchain, lazy, pydantic, webgpu
 from .acp import ACPAdapter
 from .claude import (

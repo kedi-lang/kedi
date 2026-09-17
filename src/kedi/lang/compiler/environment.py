@@ -20,7 +20,7 @@ from typing import Any
 import typing_extensions
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
-from ...agent_adapter.approval import ApprovalDecision, ApprovalRequest
+from ...agent_adapter.approvals.policy import ApprovalDecision, ApprovalRequest
 from ...core import KediRuntime
 from ..procedure_introspection import get_procedure_def, get_procedure_metadata
 

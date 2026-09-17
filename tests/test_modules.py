@@ -2045,7 +2045,7 @@ def test_static_import_analysis_covers_dynamic_exports_and_profile_helpers(tmp_p
 
 
 def test_profile_binding_skips_missing_private_subagent_and_merges_bindings() -> None:
-    from kedi.agent_profile.registry import ProfileDefinition, ProfileSubagentMember
+    from kedi.agent_profile.definitions import ProfileDefinition, ProfileSubagentMember
 
     compiler = ProgramCompiler(None)
     definition = ProfileDefinition(

@@ -23,7 +23,7 @@ from kedi.agent_adapter.subagents import (
     SupportsSubagentExecution,
 )
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.app import run_program_cli
 from kedi.utils import AttrDict

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 
 from .codemode import artifact_code_provenance
 from .codemode import run_artifact_code as execute_artifact_code

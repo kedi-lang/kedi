@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ast
 
-from kedi.lsp import features
-from kedi.lsp.python_virtual import compute_python_virtual_document
+import kedi.lsp.features.diagnostics as lsp_diagnostics_module
+import kedi.lsp.features.python_regions as python_regions_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+from kedi.lsp.python_virtual.document import compute_python_virtual_document
 from tests.lsp_helpers import (
     decode_semantic_tokens,
     definition_at,
@@ -170,7 +172,7 @@ def test_hover_on_regular_block_comment_stays_none():
 
 def test_python_ranges_include_header_inline_defaults():
     src = '@say_hi(name: str = `get_name()`) -> str:\n  = `f"Hello, {name}!"`\n'
-    ranges = features.compute_python_ranges(src)
+    ranges = python_regions_module.compute_python_ranges(src)
     assert ranges == [
         {
             "kind": "inline",
@@ -720,7 +722,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
     source_path = "/tmp/all_nodes.kedi"
     uri = "file:///tmp/all_nodes.kedi"
 
-    assert features.compute_diagnostics(src, source_path) == []
+    assert lsp_diagnostics_module.compute_diagnostics(src, source_path) == []
 
     hover_checks = [
         ("this", 1, 1, "**Module** `this`"),
@@ -802,10 +804,12 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
     hints = inlay_hints_for_lines(src, source_path, 0, 80)
     assert {str(hint.label) for hint in hints} >= {"language: ", "code: "}
 
-    decoded = decode_semantic_tokens(features.compute_semantic_tokens_full(src, source_path).data)
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
-    function_type = features.SEMANTIC_TOKEN_TYPES.index("function")
-    type_type = features.SEMANTIC_TOKEN_TYPES.index("type")
+    decoded = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, source_path).data
+    )
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
+    function_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("function")
+    type_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("type")
     assert any(
         line == 10 and length == len("global_note") and t == variable_type
         for line, _, length, t, _ in decoded

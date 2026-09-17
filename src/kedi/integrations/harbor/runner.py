@@ -17,15 +17,15 @@ from typing import Any, Mapping, NoReturn, Sequence, cast
 
 import kedi
 
-from ...agent_adapter.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from ...agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from ...agent_adapter.conversation import ConversationState
+from ...agent_adapter.execution import RunDeadlineExceeded, use_run_deadline
 from ...agent_adapter.invocation import InvocationUsage, observe_invocations
 from ...agent_adapter.request_budget import (
     ModelRequestBudgetError,
     ModelRequestBudgetLimits,
     use_model_request_budget_limits,
 )
-from ...agent_adapter.utils import RunDeadlineExceeded, use_run_deadline
 from ...agent_profile import McpServerSpec
 from ...agent_profile.mcp import mcp_spec_from_mapping
 from ...artifacts import ArtifactPolicy

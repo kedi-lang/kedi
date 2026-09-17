@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from kedi.agent_adapter.utils import RunDeadlineExceeded, run_sync, use_run_deadline
+from kedi.agent_adapter.execution import RunDeadlineExceeded, run_sync, use_run_deadline
 
 
 @pytest.mark.parametrize("inside_loop", [False, True])

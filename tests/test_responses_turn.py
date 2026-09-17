@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from pydantic_ai.models.test import TestModel
 
 from kedi.agent_adapter import LangChainAdapter, PydanticAdapter
-from kedi.agent_adapter.utils import python_callable_tool_spec
+from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
 
 
 class Result(BaseModel):

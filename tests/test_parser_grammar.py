@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import pytest
 
+import kedi.lang.ast as kedi_ast
 from kedi.lang import (
     KediDiagnostic,
     KediParseError,
@@ -51,6 +52,7 @@ from kedi.lang.ast import (
     UseDirectiveStmt,
     VariableInitStmt,
 )
+from kedi.lang.parser import cst_helpers, type_conversion
 
 cst_module = importlib.import_module("kedi.lang.parser.cst_to_ast")
 
@@ -112,16 +114,16 @@ def _fake_walker(source: bytes = b"name") -> Any:
 
 
 def test_cst_walker_defensive_edges(monkeypatch):
-    assert cst_module._decode_block_comment_body("###") == ""
+    assert cst_helpers._decode_block_comment_body("###") == ""
     leading_hyphen = _FakeNode("ERROR", end=8)
-    assert cst_module._hyphenated_identifier_from_error(b"-profile", leading_hyphen) == "-profile"
+    assert cst_helpers._hyphenated_identifier_from_error(b"-profile", leading_hyphen) == "-profile"
 
     field_child = _FakeNode("field_child")
     other_child = _FakeNode("other_child")
     field_parent = _FakeNode(
         "parent", children=[field_child, other_child], fields={"target": field_child}
     )
-    assert cst_module._fields(cast(Any, field_parent), "target") == [field_child]
+    assert cst_helpers._fields(cast(Any, field_parent), "target") == [field_child]
 
     bad_root = _FakeNode("not_source")
     with pytest.raises(KediParseError):
@@ -281,7 +283,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
         children=[_FakeNode("not_type_expr")],
         end=4,
     )
-    assert cst_module.TypeApply == TypeApply
+    assert type_conversion.TypeApply == TypeApply
     assert stmt_walker._walk_type_term(type_apply).args == []
 
     assert stmt_walker._sole_inline_python_expr(None) is None
@@ -683,7 +685,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
     )
     assert any(d.code == "K-PROFILE-EMPTY" for d in empty_profile_walker.diagnostics)
 
-    nested_proc = cst_module.ProcedureDef("proc", [])
+    nested_proc = kedi_ast.ProcedureDef("proc", [])
     assert stmt_walker._walk_stmt(_FakeNode("profile_directive"), nested_proc) is None
     assert any(d.code == "K-PROFILE-SCOPE" for d in stmt_walker.diagnostics)
 
@@ -710,7 +712,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert isinstance(test_suite, cst_module.TestSuite)
+    assert isinstance(test_suite, kedi_ast.TestSuite)
     ignored_test_body = _FakeNode("body", children=[_FakeNode("line_comment")])
     ignored_test_suite = validation_walker._walk_validation_block(
         _FakeNode(
@@ -722,7 +724,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert isinstance(ignored_test_suite, cst_module.TestSuite)
+    assert isinstance(ignored_test_suite, kedi_ast.TestSuite)
     assert ignored_test_suite.cases == []
 
     eval_walker = _fake_walker(b"eval")
@@ -740,7 +742,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert isinstance(eval_suite, cst_module.EvalSuite)
+    assert isinstance(eval_suite, kedi_ast.EvalSuite)
     ignored_eval_body = _FakeNode("body", children=[_FakeNode("line_comment")])
     ignored_eval_suite = eval_walker._walk_validation_block(
         _FakeNode(
@@ -752,7 +754,7 @@ def test_cst_walker_defensive_edges(monkeypatch):
             },
         )
     )
-    assert isinstance(ignored_eval_suite, cst_module.EvalSuite)
+    assert isinstance(ignored_eval_suite, kedi_ast.EvalSuite)
     assert (
         validation_walker._walk_test_case(
             _FakeNode("test_case", fields={"name": _FakeNode("identifier", start=0, end=4)})

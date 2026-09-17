@@ -8,15 +8,15 @@ from pydantic_ai.models.openai import OpenAIChatModel, OpenAICompaction, OpenAIR
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from kedi.agent_adapter.adapters._pydantic_compat import (
-    PydanticAICompatibilityError,
-    effective_model,
-)
 from kedi.agent_adapter.adapters.claude import ClaudeAdapter
 from kedi.agent_adapter.adapters.codex import CodexAdapter
 from kedi.agent_adapter.adapters.langchain import LangChainAdapter
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
-from kedi.agent_adapter.native_compaction import (
+from kedi.agent_adapter.adapters.pydantic.compat import (
+    PydanticAICompatibilityError,
+    effective_model,
+)
+from kedi.agent_adapter.compaction.native_settings import (
     codex_thread_params_with_native_compaction,
     langchain_settings_with_native_compaction,
     validate_claude_native_compaction,
@@ -28,7 +28,7 @@ from kedi.agent_profile.compaction import (
     CompactionSettingsError,
     normalize_compaction_settings,
 )
-from kedi.agent_profile.model import eval_history_directive
+from kedi.agent_profile.directives import eval_history_directive
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import parse_program

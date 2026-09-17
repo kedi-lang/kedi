@@ -7,7 +7,8 @@ from pathlib import Path
 import tree_sitter_kedi
 from tree_sitter import Language, Parser, Query, QueryCursor
 
-from kedi.lsp import features
+import kedi.lsp.features.python_regions as python_regions_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 from tests.lsp_helpers import decode_semantic_tokens
 
 # ---------------------------------------------------------------------
@@ -17,7 +18,7 @@ from tests.lsp_helpers import decode_semantic_tokens
 
 def test_semantic_tokens_full_emits_tokens():
     src = "@hello(name: str) -> str:\n  = <name>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert tokens.data, "expected at least one semantic token for a non-trivial doc"
     # Length is a multiple of 5 (LSP encoding).
     assert len(tokens.data) % 5 == 0
@@ -26,10 +27,10 @@ def test_semantic_tokens_full_emits_tokens():
 def test_semantic_tokens_cover_template_condition_text_and_inputs() -> None:
     src = "> if: <city> is in Turkey\n  [result] = yes\n"
     decoded = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
     )
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(line == 0 and token_type == string_type for line, _, _, token_type, _ in decoded)
     assert any(
@@ -39,39 +40,39 @@ def test_semantic_tokens_cover_template_condition_text_and_inputs() -> None:
 
 
 def test_semantic_tokens_legend_constants():
-    assert "function" in features.SEMANTIC_TOKEN_TYPES
-    assert "type" in features.SEMANTIC_TOKEN_TYPES
-    assert "declaration" in features.SEMANTIC_TOKEN_MODIFIERS
-    assert features.SEMANTIC_TOKEN_TYPES.index("function") == 12
-    assert features.SEMANTIC_TOKEN_TYPES.index("type") == 1
-    assert features.SEMANTIC_TOKEN_MODIFIERS.index("declaration") == 0
+    assert "function" in lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES
+    assert "type" in lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES
+    assert "declaration" in lsp_semantic_tokens_module.SEMANTIC_TOKEN_MODIFIERS
+    assert lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("function") == 12
+    assert lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("type") == 1
+    assert lsp_semantic_tokens_module.SEMANTIC_TOKEN_MODIFIERS.index("declaration") == 0
 
 
 def test_semantic_tokens_docstring_comment_uses_variable_token():
     src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
     assert any(line == 1 and token_type == variable_type for line, _, _, token_type, _ in decoded)
     assert any(line == 2 and token_type == variable_type for line, _, _, token_type, _ in decoded)
 
 
 def test_semantic_tokens_regular_block_comment_stays_comment_token():
     src = "@translate(text: str) -> str:\n  = <text>\n  ###\n  >> Not a docstring.\n  ###\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
-    comment_type = features.SEMANTIC_TOKEN_TYPES.index("comment")
+    comment_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("comment")
     assert any(line == 2 and token_type == comment_type for line, _, _, token_type, _ in decoded)
 
 
 def test_semantic_tokens_cover_module_directives():
     src = "> import: profiles\n\n> export:\n  xd\n  get_proc\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
-    namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    operator_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("operator")
+    namespace_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("namespace")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(line == 0 and token_type == operator_type for line, _, _, token_type, _ in decoded)
     assert any(line == 0 and token_type == namespace_type for line, _, _, token_type, _ in decoded)
@@ -82,9 +83,11 @@ def test_semantic_tokens_cover_module_directives():
 
 def test_semantic_tokens_cover_submodule_and_selective_imports():
     src = "> import: package/helpers:\n  selected\n"
-    decoded = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
-    namespace_type = features.SEMANTIC_TOKEN_TYPES.index("namespace")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    decoded = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi").data
+    )
+    namespace_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("namespace")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(
         line == 0
@@ -101,10 +104,10 @@ def test_semantic_tokens_cover_submodule_and_selective_imports():
 
 def test_semantic_tokens_cover_assignment_targets_and_args():
     src = "[x: str] = `args.country`\n= <args>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(
         line == 0 and col == 1 and length == 1 and token_type == variable_type
@@ -130,11 +133,11 @@ def test_semantic_tokens_cover_assignment_and_map_syntax() -> None:
         "  [value] := `copy`\n"
     )
     decoded = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/control.kedi").data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    operator_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("operator")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(
         line == 1 and col == 1 and length == len("value") and token_type == variable_type
@@ -153,10 +156,10 @@ def test_semantic_tokens_cover_assignment_and_map_syntax() -> None:
 def test_semantic_tokens_cover_annotated_description_string():
     line = '  >> Capital is [capital: Annotated[str, "City name"]].'
     src = f"@p():\n{line}\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
     description_col = line.index('"City name"')
 
     assert any(
@@ -170,10 +173,12 @@ def test_semantic_tokens_cover_annotated_description_string():
 
 def test_semantic_tokens_cover_approval_directive_values():
     src = "> approval: allow\n> approval: `approve_tool`\n"
-    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    tokens = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi").data
+    )
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in tokens)
     assert any(
@@ -194,12 +199,12 @@ def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
         "  cleanup_interval: `timedelta(seconds=5)`\n"
     )
     tokens = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(src, "/tmp/artifacts.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/artifacts.kedi").data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(
         line == 0 and col == len("> ") and length == len("artifacts") and token_type == keyword_type
@@ -226,11 +231,11 @@ def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
 def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
     src = "> codemode:\n  enabled: true\n  max_nested_calls: `8`\n"
     tokens = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(src, "/tmp/codemode.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/codemode.kedi").data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
 
     assert any(
         line == 0 and col == len("> ") and length == len("codemode") and token_type == keyword_type
@@ -256,11 +261,11 @@ def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
 def test_semantic_tokens_cover_hooks_directive_fields_and_python_values() -> None:
     src = "> hooks:\n  pre_tool_use: `[validate_path, audit_call]`\n"
     tokens = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(src, "/tmp/hooks.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/hooks.kedi").data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert (0, 2, len("hooks"), keyword_type) in [token[:4] for token in tokens]
     assert (1, 2, len("pre_tool_use"), property_type) in [token[:4] for token in tokens]
@@ -272,8 +277,10 @@ def test_semantic_tokens_cover_hooks_directive_fields_and_python_values() -> Non
 
 def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
     src = "@p(name: str) -> str:\n  >> İstanbul için [answer: str] from <name>.\n"
-    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    tokens = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi").data
+    )
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(
         line == 1 and col == 20 and length == len("answer") and token_type == variable_type
@@ -283,8 +290,10 @@ def test_semantic_tokens_keep_unicode_prefixes_on_source_boundaries():
 
 def test_semantic_tokens_keep_template_substitution_delimiters_consistent():
     src = ">> Compare <left> with <right> and <`value`>.\n"
-    tokens = decode_semantic_tokens(features.compute_semantic_tokens_full(src, "/tmp/x.kedi").data)
-    operator_type = features.SEMANTIC_TOKEN_TYPES.index("operator")
+    tokens = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi").data
+    )
+    operator_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("operator")
 
     for column in (11, 16, 23, 29):
         assert any(
@@ -417,12 +426,12 @@ def test_lsp_semantic_tokens_cover_workflow_and_compaction_settings() -> None:
         "    compaction_threshold: `100_000`\n"
     )
     tokens = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(source, "/tmp/directives.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(source, "/tmp/directives.kedi").data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
 
     expected = {
         (1, 4, len("workflow"), keyword_type),
@@ -467,10 +476,12 @@ def test_tree_sitter_and_lsp_highlight_expanded_skills_policy() -> None:
         )
 
     decoded = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(source.decode(), "/tmp/skills.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(
+            source.decode(), "/tmp/skills.kedi"
+        ).data
     )
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
     actual = {(line, col, length, token_type) for line, col, length, token_type, _ in decoded}
     assert (0, 2, len("skills"), keyword_type) in actual
     assert (1, 2, len("enabled"), property_type) in actual
@@ -489,7 +500,7 @@ def test_python_ranges_picks_up_fenced_block():
         "  ```\n"
         "  = <`str(total)`>\n"
     )
-    ranges = features.compute_python_ranges(src)
+    ranges = python_regions_module.compute_python_ranges(src)
     kinds = [r["kind"] for r in ranges]
     assert "fenced" in kinds
     assert "inline" in kinds
@@ -499,4 +510,4 @@ def test_python_ranges_picks_up_fenced_block():
 
 def test_python_ranges_empty_for_no_python():
     src = "@p():\n  = ok\n"
-    assert features.compute_python_ranges(src) == []
+    assert python_regions_module.compute_python_ranges(src) == []

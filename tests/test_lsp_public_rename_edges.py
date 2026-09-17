@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from kedi.lsp import features
+import kedi.lang.ast as lang_ast_module
+import kedi.lsp.features.navigation as lsp_navigation_module
+import kedi.lsp.features.symbols as lsp_symbols_module
 from tests.lsp_helpers import prepare_rename_at, rename_at
 
 
@@ -29,11 +31,11 @@ def test_rename_returns_none_without_symbol(tmp_path) -> None:
 
 
 def test_rename_rejects_external_imported_value(tmp_path, monkeypatch) -> None:
-    external_span = features.Span(0, 1, 1, 1, 1, 2, source_path=str(tmp_path / "other.kedi"))
+    external_span = lang_ast_module.Span(0, 1, 1, 1, 1, 2, source_path=str(tmp_path / "other.kedi"))
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             "imported_value", "v", external_span, None, external_span
         ),
     )
@@ -42,14 +44,16 @@ def test_rename_rejects_external_imported_value(tmp_path, monkeypatch) -> None:
 
 
 def test_rename_local_symbol_with_and_without_cursor_span(monkeypatch) -> None:
-    rename_span = features.Span(0, 1, 1, 1, 1, 2)
+    rename_span = lang_ast_module.Span(0, 1, 1, 1, 1, 2)
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef("local", "x", rename_span, None, rename_span),
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
+            "local", "x", rename_span, None, rename_span
+        ),
     )
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_find_all_references",
         lambda prog, sym, *, include_declaration: [rename_span],
     )
@@ -57,9 +61,9 @@ def test_rename_local_symbol_with_and_without_cursor_span(monkeypatch) -> None:
     assert rename_edit is not None and rename_edit.changes is not None
     assert len(rename_edit.changes["file:///tmp/x.kedi"]) == 1
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef("local", "x", None, None, cast(Any, None)),
+        lambda prog, pos: lsp_symbols_module.SymbolRef("local", "x", None, None, cast(Any, None)),
     )
     rename_without_cursor = rename_at("= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", "=", "y")
     assert rename_without_cursor is not None and rename_without_cursor.changes is not None

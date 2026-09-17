@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from kedi.lsp import features
+import kedi.lsp.features.directive_help as lsp_directive_help_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.resolution as lsp_resolution_module
+import kedi.lsp.features.scope as lsp_scope_module
 from tests.lsp_edges_fixtures import make_edge_span
 from tests.lsp_helpers import position_at_line
 
@@ -14,9 +17,11 @@ def test_resolve_in_type_def_rejects_missing_or_out_of_range_location() -> None:
     from kedi.lang.ast import Span, TypeDef
 
     pos = position_at_line(0, 4)
-    assert features._resolve_in_type_def(TypeDef("Person", [], loc=None), pos, {}) is None
     assert (
-        features._resolve_in_type_def(
+        lsp_resolution_module._resolve_in_type_def(TypeDef("Person", [], loc=None), pos, {}) is None
+    )
+    assert (
+        lsp_resolution_module._resolve_in_type_def(
             TypeDef("Person", [], loc=Span(0, 6, 1, 1, 1, 7)),
             position_at_line(5, 0),
             {},
@@ -39,16 +44,16 @@ def test_type_expr_to_str_covers_ref_apply_union_and_fallback(tmp_path: Path) ->
         right=TypeRef(name="str", loc=make_edge_span(tmp_path)),
         loc=make_edge_span(tmp_path),
     )
-    assert features._type_expr_to_str(None) == "None"
-    assert features._type_expr_to_str(type_ref) == "Person"
-    assert features._type_expr_to_str(type_apply) == "list[Person]"
-    assert features._type_expr_to_str(type_union) == "list[Person] | str"
-    assert "TypeExpr" in features._type_expr_to_str(TypeExpr())
+    assert lsp_directive_help_module._type_expr_to_str(None) == "None"
+    assert lsp_directive_help_module._type_expr_to_str(type_ref) == "Person"
+    assert lsp_directive_help_module._type_expr_to_str(type_apply) == "list[Person]"
+    assert lsp_directive_help_module._type_expr_to_str(type_union) == "list[Person] | str"
+    assert "TypeExpr" in lsp_directive_help_module._type_expr_to_str(TypeExpr())
 
 
 def test_prelude_defined_names_skips_broken_and_collects_symbols() -> None:
-    assert features._prelude_defined_names(None) == set()
-    assert features._prelude_defined_names("class Broken(:\n") == set()
+    assert lsp_scope_module._prelude_defined_names(None) == set()
+    assert lsp_scope_module._prelude_defined_names("class Broken(:\n") == set()
     assert {
         "Model",
         "fn",
@@ -57,7 +62,7 @@ def test_prelude_defined_names_skips_broken_and_collects_symbols() -> None:
         "alias",
         "x",
         "y",
-    } <= features._prelude_defined_names(
+    } <= lsp_scope_module._prelude_defined_names(
         "import os.path as path\n"
         "from typing import Any as alias\n"
         "class Model: pass\n"
@@ -78,8 +83,8 @@ def test_proc_signature_markdown_variants(tmp_path: Path) -> None:
         return_type_annotation="str",
         loc=make_edge_span(tmp_path),
     )
-    assert "@p(x: int)" in features._proc_signature_markdown(proc)
-    assert "AI-generated" in features._proc_signature_markdown(
+    assert "@p(x: int)" in lsp_directive_help_module._proc_signature_markdown(proc)
+    assert "AI-generated" in lsp_directive_help_module._proc_signature_markdown(
         ProcedureDef(
             name="auto",
             params=[],
@@ -87,7 +92,7 @@ def test_proc_signature_markdown_variants(tmp_path: Path) -> None:
             loc=make_edge_span(tmp_path),
         )
     )
-    assert "optimization spans" in features._proc_signature_markdown(
+    assert "optimization spans" in lsp_directive_help_module._proc_signature_markdown(
         ProcedureDef(
             name="opt",
             params=[],
@@ -95,7 +100,7 @@ def test_proc_signature_markdown_variants(tmp_path: Path) -> None:
             loc=make_edge_span(tmp_path),
         )
     )
-    assert "doc" in features._proc_signature_markdown(
+    assert "doc" in lsp_directive_help_module._proc_signature_markdown(
         ProcedureDef(name="doc", params=[], docstring="doc", loc=make_edge_span(tmp_path))
     )
 
@@ -161,23 +166,23 @@ def test_describe_ast_node_covers_supported_nodes(tmp_path: Path) -> None:
         EvalDataset("train", "[]", loc=make_edge_span(tmp_path)),
         EvalMetric("score", "return 1", loc=make_edge_span(tmp_path)),
     ]
-    assert all(features._describe_ast_node(node) for node in described_nodes)
-    assert features._describe_ast_node(Stmt(loc=make_edge_span(tmp_path))) is None
+    assert all(lsp_hover_module._describe_ast_node(node) for node in described_nodes)
+    assert lsp_hover_module._describe_ast_node(Stmt(loc=make_edge_span(tmp_path))) is None
 
 
 def test_generic_hover_returns_none_without_actionable_nodes(tmp_path: Path) -> None:
     from kedi.lang.ast import Program, Stmt
 
     pos = position_at_line(0, 4)
-    assert features._generic_hover(Program(), pos) is None
+    assert lsp_hover_module._generic_hover(Program(), pos) is None
     assert (
-        features._generic_hover(
+        lsp_hover_module._generic_hover(
             SimpleNamespace(procedures=[], type_defs=[], top_level_statements=[]), pos
         )
         is None
     )
     assert (
-        features._generic_hover(
+        lsp_hover_module._generic_hover(
             SimpleNamespace(
                 procedures=[],
                 type_defs=[],

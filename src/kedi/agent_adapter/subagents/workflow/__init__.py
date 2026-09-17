@@ -26,7 +26,7 @@ from pydantic_monty import (
 from ....telemetry import TelemetrySpan, current_span
 from ....telemetry import span as telemetry_span
 from ...telemetry import current_tool_call_name
-from ...tool_override import ToolSpec
+from ...tools.specs import ToolSpec
 from .. import validate_final_schema
 from ..attempts import attempt_status_from_run, track_delegation_attempt
 from ..budget import (

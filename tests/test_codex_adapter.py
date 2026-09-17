@@ -16,18 +16,18 @@ from typing import Annotated, Any, cast
 import pytest
 from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
 
+import kedi.agent_adapter.adapters.codex.adapter as codex_adapter_module
 from kedi.agent_adapter import CodexAdapter as ExportedCodexAdapter
 from kedi.agent_adapter.adapters import CodexAdapter
-from kedi.agent_adapter.adapters import _codex_app_server as codex_server_module
-from kedi.agent_adapter.adapters import codex as codex_adapter_module
-from kedi.agent_adapter.adapters._codex_app_server import (
+from kedi.agent_adapter.adapters.codex import app_server as codex_server_module
+from kedi.agent_adapter.adapters.codex.app_server import (
     CodexAppServerClient,
     CodexAppServerDisconnected,
     CodexAppServerError,
     CodexAppServerProtocolError,
     CodexTurnResult,
 )
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
@@ -38,7 +38,8 @@ from kedi.agent_adapter.events import (
 from kedi.agent_adapter.invocation import InvocationUsage, observe_invocations
 from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tool_override import ToolSpec, arguments_target_secret_file
+from kedi.agent_adapter.tools.execution import arguments_target_secret_file
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
 from kedi.agent_profile.compaction import CompactionSettings
 from kedi.agent_profile.mcp import McpServerSpec

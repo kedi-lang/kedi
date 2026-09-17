@@ -8,8 +8,9 @@ from typing import Any
 import pytest
 
 import kedi
-import kedi.api as api
-from kedi.core import shared_thread_engine
+import kedi.api.configuration as api_configuration_module
+import kedi.api.state as api_state_module
+from kedi.core.engines import shared_thread_engine
 from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
 from tests.mock_adapter import MockAdapter
@@ -65,11 +66,11 @@ class RendezvousAdapter(MockAdapter):
 @pytest.fixture(autouse=True)
 def isolated_config(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("KEDI_PARALLEL", raising=False)
-    token = api._config_var.set(api._APIConfig())
+    token = api_state_module._config_var.set(api_state_module._APIConfig())
     try:
         yield
     finally:
-        api._config_var.reset(token)
+        api_state_module._config_var.reset(token)
 
 
 @pytest.mark.parametrize("surface", ["compiler", "query", "bind"])
@@ -117,7 +118,10 @@ def test_python_api_engine_precedence(
     if env is not None:
         monkeypatch.setenv("KEDI_PARALLEL", env)
     with kedi.context(parallel=parallel):
-        assert api._execution_engine(api._config_var.get()).parallel is expected
+        assert (
+            api_configuration_module._execution_engine(api_state_module._config_var.get()).parallel
+            is expected
+        )
         with kedi.interactive(adapter=MockAdapter()) as session:
             assert session._compiler.rt._engine.parallel is expected
             assert session.execute(">> Value [answer].\n= <answer>") == "answer-value"
@@ -125,10 +129,17 @@ def test_python_api_engine_precedence(
 
 def test_worker_count_and_context_restoration() -> None:
     with kedi.context(max_workers=3):
-        assert api._execution_engine(api._config_var.get()) is shared_thread_engine(3)
+        assert api_configuration_module._execution_engine(
+            api_state_module._config_var.get()
+        ) is shared_thread_engine(3)
         with kedi.context(parallel=False):
-            assert isinstance(api._execution_engine(api._config_var.get()), SequentialEngine)
-        assert api._execution_engine(api._config_var.get()) is shared_thread_engine(3)
+            assert isinstance(
+                api_configuration_module._execution_engine(api_state_module._config_var.get()),
+                SequentialEngine,
+            )
+        assert api_configuration_module._execution_engine(
+            api_state_module._config_var.get()
+        ) is shared_thread_engine(3)
 
 
 def test_explicit_engine_overrides_api_and_environment(monkeypatch: pytest.MonkeyPatch) -> None:

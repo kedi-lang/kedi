@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from kedi.lsp import features, module_surface
+import kedi.lang.ast as lang_ast_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.resolution as lsp_resolution_module
+import kedi.lsp.features.symbols as lsp_symbols_module
+from kedi.lsp import module_surface
 from tests.lsp_helpers import definition_at, hover_text_at
 
 
@@ -61,49 +65,49 @@ def test_hover_on_plain_text_segment() -> None:
 
 def test_hover_symbol_kind_branches(monkeypatch) -> None:
     monkeypatch.setattr(
-        features,
+        lsp_hover_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="parameter",
             name="x",
             declaration_span=None,
             scope_proc=None,
-            cursor_span=features.Span(0, 1, 1, 1, 1, 2),
+            cursor_span=lang_ast_module.Span(0, 1, 1, 1, 1, 2),
         ),
     )
     assert "Parameter" in hover_text_at("= ok\n", "/tmp/x.kedi", "=")
     monkeypatch.setattr(
-        features,
+        lsp_hover_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="type_field",
             name="field",
             declaration_span=None,
             scope_proc=None,
-            cursor_span=features.Span(0, 5, 1, 1, 1, 6),
+            cursor_span=lang_ast_module.Span(0, 5, 1, 1, 1, 6),
         ),
     )
     assert "Field" in hover_text_at("= ok\n", "/tmp/x.kedi", "=")
     monkeypatch.setattr(
-        features,
+        lsp_hover_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="custom",
             name="thing",
             declaration_span=None,
             scope_proc=None,
-            cursor_span=features.Span(0, 5, 1, 1, 1, 6),
+            cursor_span=lang_ast_module.Span(0, 5, 1, 1, 1, 6),
         ),
     )
     assert "custom" in hover_text_at("= ok\n", "/tmp/x.kedi", "=")
 
 
 def test_hover_imported_value_with_surface(monkeypatch) -> None:
-    value_span = features.Span(0, 5, 1, 1, 1, 6)
+    value_span = lang_ast_module.Span(0, 5, 1, 1, 1, 6)
     monkeypatch.setattr(
-        features,
+        lsp_hover_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="imported_value",
             name="loose",
             declaration_span=value_span,
@@ -112,7 +116,7 @@ def test_hover_imported_value_with_surface(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(
-        features,
+        lsp_resolution_module,
         "imported_surface_for_program",
         lambda prog: module_surface.ImportedSurface(
             values={"loose": module_surface.ImportedValueInfo("loose", value_span)}

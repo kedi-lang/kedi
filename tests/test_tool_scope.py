@@ -3,7 +3,43 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from kedi.agent_adapter.tool_override import ToolScope
+from kedi.agent_adapter.tools.scope import ToolScope
+
+
+def test_compatibility_exports_share_tool_state_and_identity() -> None:
+    from kedi.agent_adapter import ToolSpec as exported_spec
+    from kedi.agent_adapter import tool_override
+    from kedi.agent_adapter.tools import execution, scope, specs
+
+    assert exported_spec is tool_override.ToolSpec is specs.ToolSpec
+    assert tool_override.ToolScope is scope.ToolScope
+    assert tool_override.with_tool_telemetry is execution.with_tool_telemetry
+    assert tool_override.RequiredToolCalls is scope.RequiredToolCalls
+    with tool_override.artifact_admission_scope(manager="manager", policy="policy"):
+        assert scope.current_artifact_admission() == ("manager", "policy")
+    assert scope.current_artifact_admission() is None
+
+
+def test_documented_approval_exports_preserve_identity() -> None:
+    from kedi.agent_adapter import approval
+    from kedi.agent_adapter.approvals import policy
+
+    for name in approval.__all__:
+        assert getattr(approval, name) is getattr(policy, name)
+
+
+def test_documented_conversion_exports_preserve_identity() -> None:
+    from kedi.agent_adapter import utils
+    from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec
+
+    assert utils.kedi_procedure_tool_spec is kedi_procedure_tool_spec
+
+
+def test_pydantic_required_call_validator_preserves_direct_entry_point() -> None:
+    from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
+
+    output = object()
+    assert PydanticAdapter._validate_required_tool_calls(output) is output
 
 
 def _tool(name: str) -> SimpleNamespace:

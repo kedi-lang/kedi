@@ -9,9 +9,8 @@ from typing import TYPE_CHECKING, Any, Iterator
 from typing_extensions import final
 
 from .agent_adapter.conversation import ConversationState, SupportsConversationState
-from .agent_adapter.meta import AgentAdapter
-from .agent_adapter.profile_override import SupportsProfileOverride
-from .agent_adapter.tool_override import SupportsToolRegistration, ToolSpec
+from .agent_adapter.meta import AgentAdapter, SupportsProfileOverride
+from .agent_adapter.tools.specs import SupportsToolRegistration, ToolSpec
 from .agent_profile import (
     AgentProfile,
     AgentProfileOverrideUnsupported,
@@ -93,7 +92,7 @@ class AgentSurface:
                 if self._tool_adapter is not None:
                     stack.enter_context(self._tool_adapter.tool_scope(self.tool_specs))
                 if self._artifact_manager is not None and self.profile.artifacts is not None:
-                    from .agent_adapter.tool_override import artifact_admission_scope
+                    from .agent_adapter.tools.scope import artifact_admission_scope
 
                     stack.enter_context(
                         artifact_admission_scope(

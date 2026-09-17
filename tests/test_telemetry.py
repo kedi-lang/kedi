@@ -18,12 +18,8 @@ from kedi.agent_adapter.adapters.pydantic import (
     PydanticAdapter,
     _KediTelemetryCapability,
 )
-from kedi.agent_adapter.approval import (
-    ApprovalDecision,
-    ApprovalPolicy,
-    ApprovalRequest,
-)
-from kedi.agent_adapter.approval_telemetry import (
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from kedi.agent_adapter.approvals.telemetry import (
     approval_mechanism,
     approval_span,
     record_immediate_decision,
@@ -32,7 +28,7 @@ from kedi.agent_adapter.invocation import InvocationUsage
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_adapter.request_budget import ModelRequestBudget
 from kedi.agent_adapter.skills import SkillStore
-from kedi.agent_adapter.subagents.coordinator import _subagent_run_span
+from kedi.agent_adapter.subagents.execution import _subagent_run_span
 from kedi.agent_adapter.subagents.workflow import _dynamic_workflow_span
 from kedi.agent_adapter.telemetry import (
     adapter_owns_native_span,
@@ -49,7 +45,8 @@ from kedi.agent_adapter.telemetry import (
     tool_call_span,
     tool_source,
 )
-from kedi.agent_adapter.tool_override import ToolSpec, with_approval, with_tool_telemetry
+from kedi.agent_adapter.tools.execution import with_approval, with_tool_telemetry
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.app import run_program_cli, run_source_cli
 from kedi.artifacts.telemetry import artifact_span

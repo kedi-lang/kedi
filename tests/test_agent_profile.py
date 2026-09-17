@@ -19,13 +19,13 @@ from kedi.agent_profile import (
     CodeModeSettings,
     normalize_codemode_settings,
 )
-from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
-from kedi.agent_profile.model import (
+from kedi.agent_profile.directives import (
     eval_agent_command_value,
     eval_agent_directive,
     eval_mcp_field_value,
     eval_settings_field_value,
 )
+from kedi.agent_profile.mcp import McpServerSpec, mcp_spec_from_mapping
 from kedi.agent_profile.settings import parse_plain_setting_value
 from kedi.artifacts import artifact_instructions
 from kedi.core import KediRuntime
@@ -791,10 +791,11 @@ def test_adapter_registry_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
             self.kwargs = kwargs
 
     import kedi.agent_adapter.adapters.dspy as dspy_module
-    import kedi.agent_adapter.adapters.langchain as langchain_module
 
     monkeypatch.setattr(dspy_module, "DSPyAdapter", FakeDSPyAdapter)
-    monkeypatch.setattr(langchain_module, "LangChainAdapter", FakeLangChainAdapter)
+    monkeypatch.setattr(
+        "kedi.agent_adapter.adapters.langchain.LangChainAdapter", FakeLangChainAdapter
+    )
     assert build_adapter("dspy", "dspy-model", cache=False).model == "dspy-model"
     assert build_adapter("langchain", "langchain-model", temperature=0.2).model == "langchain-model"
 
@@ -1136,10 +1137,27 @@ def test_block_state_system_within_procedure_body() -> None:
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
     rt._invoke_procedure(rt._procedures["foo"], [])
-    assert adapter.instruction_calls == [
-        artifact_instructions(),
-        f"Answer tersely.\n\n{artifact_instructions()}",
-    ]
+    assert len(adapter.request_calls) == 2
+    instructions_by_request = dict(
+        zip(adapter.request_calls, adapter.instruction_calls, strict=True)
+    )
+    assert len(instructions_by_request) == 2
+    assert (
+        next(
+            instructions
+            for request, instructions in instructions_by_request.items()
+            if "first" in request
+        )
+        == artifact_instructions()
+    )
+    assert (
+        next(
+            instructions
+            for request, instructions in instructions_by_request.items()
+            if "second" in request
+        )
+        == f"Answer tersely.\n\n{artifact_instructions()}"
+    )
 
 
 def test_block_state_system_renders_multiline_substitutions() -> None:

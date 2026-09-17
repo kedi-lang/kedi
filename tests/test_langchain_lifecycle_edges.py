@@ -9,8 +9,10 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from pydantic_ai import UsageLimits
 
+import kedi.agent_adapter.adapters.langchain.adapter as langchain_adapter_module
+import kedi.agent_adapter.adapters.langchain.messages as langchain_messages_module
 from kedi.agent_adapter.adapters import LangChainAdapter
-from kedi.agent_adapter.adapters.langchain_runtime import LangChainRunMiddleware
+from kedi.agent_adapter.adapters.langchain.runtime import LangChainRunMiddleware
 from kedi.agent_adapter.compaction.archive import cache_epoch_key
 
 
@@ -83,14 +85,14 @@ def test_unscoped_middleware_preserves_requests_and_rotates_only_existing_keys(s
 def test_native_run_recursion_configuration_is_preserved(config, limits, explicit, monkeypatch):
     from contextlib import contextmanager
 
-    from kedi.agent_adapter.adapters import langchain as module
-
     @contextmanager
     def events(*args):
         yield SimpleNamespace(complete_run=lambda **kwargs: None)
 
-    monkeypatch.setattr(module, "agent_event_run", events)
-    monkeypatch.setattr(module, "_langchain_event_handler", lambda _: SimpleNamespace())
+    monkeypatch.setattr(langchain_adapter_module, "agent_event_run", events)
+    monkeypatch.setattr(
+        langchain_messages_module, "_langchain_event_handler", lambda _: SimpleNamespace()
+    )
     callbacks = AsyncCallbackManager([])
     seen = []
 

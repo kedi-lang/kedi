@@ -21,7 +21,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from kedi.agent_adapter import PydanticAdapter
 from kedi.agent_adapter.adapters.claude import _claude_sdk_tool
 from kedi.agent_adapter.adapters.langchain import _langchain_tool_from_spec
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.artifacts import (
     ArtifactAccessError,
     ArtifactHandle,

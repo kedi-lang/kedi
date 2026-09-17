@@ -11,6 +11,7 @@ from .errors import ArtifactPolicyError
 
 ArtifactStoreKind: TypeAlias = Literal["memory", "file"]
 
+
 _ALL_POLICY_FIELDS = frozenset(
     {
         "enabled",
@@ -27,6 +28,8 @@ _ALL_POLICY_FIELDS = frozenset(
         "cleanup_interval_seconds",
     }
 )
+
+
 _INPUT_ALIASES = {
     "threshold": "threshold_bytes",
     "ttl": "ttl_seconds",
@@ -34,6 +37,8 @@ _INPUT_ALIASES = {
     "session_quota": "session_quota_bytes",
     "cleanup_interval": "cleanup_interval_seconds",
 }
+
+
 ARTIFACT_POLICY_INPUT_FIELDS = frozenset(
     {
         "enabled",
@@ -50,6 +55,8 @@ ARTIFACT_POLICY_INPUT_FIELDS = frozenset(
         "cleanup_interval",
     }
 )
+
+
 _BYTE_UNITS = {
     "b": 1,
     "kb": 1_000,
@@ -59,6 +66,8 @@ _BYTE_UNITS = {
     "mib": 1_048_576,
     "gib": 1_073_741_824,
 }
+
+
 _DURATION_UNITS = {
     "ms": 0.001,
     "s": 1.0,
@@ -66,6 +75,8 @@ _DURATION_UNITS = {
     "h": 3_600.0,
     "d": 86_400.0,
 }
+
+
 _NUMBER_WITH_UNIT = re.compile(r"^\s*(?P<number>(?:\d+(?:\.\d*)?|\.\d+))\s*(?P<unit>[a-zA-Z]+)\s*$")
 
 
@@ -284,3 +295,6 @@ def _validate_policy(policy: ArtifactPolicy) -> None:
         raise ArtifactPolicyError("cleanup_interval_seconds must be greater than zero")
     if not policy._specified_fields <= _ALL_POLICY_FIELDS:
         raise ArtifactPolicyError("artifact policy contains unknown specified fields")
+
+
+MAX_INLINE_TOOL_RESULT_BYTES = 100_000

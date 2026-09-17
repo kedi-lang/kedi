@@ -22,9 +22,15 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
+import kedi.agent_adapter.subagents.coordinator as agent_adapter_subagents_coordinator_module
+import kedi.lsp.features.diagnostics as lsp_diagnostics_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.navigation as lsp_navigation_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+import kedi.lsp.features.symbols as lsp_symbols_module
 from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.agent_adapter.adapters.pydantic import _validated_tool_function
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.events import (
     AgentRunStateEvent,
     AgentStreamEvent,
@@ -48,7 +54,6 @@ from kedi.agent_adapter.subagents import (
     validate_structured_result,
     wrapped_final_schema,
 )
-from kedi.agent_adapter.subagents import coordinator as coordinator_module
 from kedi.agent_adapter.subagents import workflow as workflow_module
 from kedi.agent_adapter.subagents.attempts import (
     DelegationFailurePolicy,
@@ -67,9 +72,9 @@ from kedi.agent_adapter.subagents.coordinator import (
     MAX_SUBAGENT_CONVERSATION_TURNS,
     _OwnedSubagentTask,
     _schedule_owned_cancellation,
-    _subagent_run_span,
     _unwrap_task,
 )
+from kedi.agent_adapter.subagents.execution import _subagent_run_span
 from kedi.agent_adapter.subagents.limits import (
     MAX_SUBAGENT_REQUESTS,
     MAX_SUBAGENT_TOKENS,
@@ -109,25 +114,21 @@ from kedi.agent_adapter.subagents.workflow.executor import (
     WorkflowExecutor,
 )
 from kedi.agent_adapter.telemetry import tool_call_span
-from kedi.agent_adapter.tool_override import (
-    RequiredToolCallError,
-    ToolSpec,
-    required_tool_call_scope,
-    validate_required_tool_calls,
-    with_required_before_output,
-)
+from kedi.agent_adapter.tools.errors import RequiredToolCallError
+from kedi.agent_adapter.tools.execution import with_required_before_output
+from kedi.agent_adapter.tools.scope import required_tool_call_scope, validate_required_tool_calls
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import (
     AgentProfile,
     AgentSubagentUnsupported,
 )
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
-from kedi.agent_profile.model import eval_profile_definition
+from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.artifacts import artifact_instructions
-from kedi.core import KediRuntime
+from kedi.core.runtime import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import ProfileDefStmt, ProfileOutputEntry, ProfileWorkflowEntry, TypeRef
-from kedi.lsp import features
 from tests.mock_adapter import MockAdapter
 from tests.telemetry_helpers import installed_recording_backend
 
@@ -482,7 +483,9 @@ def test_subagent_cross_loop_guard_paths_are_explicit(
         asyncio.new_event_loop(),
     )
     monkeypatch.setattr(
-        coordinator_module, "_running_loop", lambda: coordinator._tasks["terminal"].loop
+        agent_adapter_subagents_coordinator_module,
+        "_running_loop",
+        lambda: coordinator._tasks["terminal"].loop,
     )
     coordinator.runs = cast(
         Any, SimpleNamespace(get=lambda _run_id: SimpleNamespace(status="completed"))
@@ -4707,29 +4710,29 @@ def test_subagent_lsp_diagnostics_definition_and_tokens() -> None:
     > subagent: child
     > max_agents: 5
 """
-    assert features.compute_diagnostics(source, "/tmp/subagents.kedi") == []
+    assert lsp_diagnostics_module.compute_diagnostics(source, "/tmp/subagents.kedi") == []
 
-    definition = features.compute_definition(
+    definition = lsp_navigation_module.compute_definition(
         source,
         "file:///tmp/subagents.kedi",
         "/tmp/subagents.kedi",
-        features.lsp.Position(line=5, character=17),
+        lsp_symbols_module.lsp.Position(line=5, character=17),
     )
     assert definition is not None
 
-    tokens = features.compute_semantic_tokens_full(source, "/tmp/subagents.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(source, "/tmp/subagents.kedi")
     assert tokens.data
-    hover = features.compute_hover(
+    hover = lsp_hover_module.compute_hover(
         source,
         "/tmp/subagents.kedi",
-        features.lsp.Position(line=6, character=8),
+        lsp_symbols_module.lsp.Position(line=6, character=8),
     )
     assert hover is not None
     assert "Subagent budget" in hover.contents.value
     assert "5" in hover.contents.value
 
     unknown = source.replace("subagent: child", "subagent: missing")
-    diagnostics = features.compute_diagnostics(unknown, "/tmp/subagents.kedi")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(unknown, "/tmp/subagents.kedi")
     assert any(item.code == "K-SUBAGENT-UNKNOWN" for item in diagnostics)
 
     cycle = """
@@ -4738,18 +4741,18 @@ def test_subagent_lsp_diagnostics_definition_and_tokens() -> None:
 > profile: b:
     > subagent: a
 """
-    diagnostics = features.compute_diagnostics(cycle, "/tmp/subagents.kedi")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(cycle, "/tmp/subagents.kedi")
     assert any(item.code == "K-SUBAGENT-CYCLE" for item in diagnostics)
 
     unsupported = source.replace(
         "> profile: parent:",
         "> profile: parent:\n    > agent: acp",
     )
-    diagnostics = features.compute_diagnostics(unsupported, "/tmp/subagents.kedi")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(unsupported, "/tmp/subagents.kedi")
     assert any(item.code == "K-ADAPTER-SUBAGENTS" for item in diagnostics)
 
     inherited_unsupported = source + "\n> agent: acp\n" + "> use: parent\n"
-    diagnostics = features.compute_diagnostics(
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(
         inherited_unsupported,
         "/tmp/subagents.kedi",
     )

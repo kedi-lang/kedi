@@ -31,6 +31,7 @@ from pydantic_ai.tools import (
 )
 from pydantic_ai.toolsets import AbstractToolset, ExternalToolset, FunctionToolset
 
+import kedi.agent_adapter.adapters.pydantic.tools as pydantic_tools_module
 from kedi.agent_adapter import (
     PydanticAdapter,
     pydantic_approval_request_from_deferred,
@@ -38,31 +39,23 @@ from kedi.agent_adapter import (
     pydantic_tool_from_spec,
     pydantic_toolset_from_specs,
 )
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
-from kedi.agent_adapter.adapters._pydantic_compat import (
+from kedi.agent_adapter.adapters.pydantic.compat import (
     PydanticAICompatibilityError,
     application_toolset_count,
     build_base_toolset_list,
     has_application_tools,
     infer_agent_name,
 )
-from kedi.agent_adapter.approval import (
-    ApprovalDecision,
-    ApprovalPolicy,
-    ApprovalRequest,
-)
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from kedi.agent_adapter.hooks.tool_wrapper import with_hook_lifecycle
 from kedi.agent_adapter.subagents import (
     SubagentConversationContext,
     SubagentExecutionRequest,
 )
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tool_override import (
-    ToolSpec,
-    artifact_admission_scope,
-    current_required_tool_calls,
-)
-from kedi.agent_adapter.utils import python_callable_tool_spec
+from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
+from kedi.agent_adapter.tools.scope import artifact_admission_scope, current_required_tool_calls
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactStream
@@ -590,7 +583,7 @@ def test_native_capability_injection_is_idempotent() -> None:
 
 def test_approval_required_toolset_fails_closed_for_unknown_projected_tool() -> None:
     toolset = pydantic_toolset_from_specs([ToolSpec(lambda: "ok", "known", risk="read_only")])
-    wrapped = pydantic_adapter_module._approval_required_toolset(toolset)
+    wrapped = pydantic_tools_module._approval_required_toolset(toolset)
 
     assert wrapped.approval_required_func(
         cast(Any, SimpleNamespace()),
@@ -898,7 +891,7 @@ def test_pydantic_tool_introspection_preserves_annotation_fallbacks() -> None:
     def unresolved_wrapper(**kwargs: Any) -> dict[str, Any]:
         return kwargs
 
-    preserved = pydantic_adapter_module._preserve_tool_introspection(
+    preserved = pydantic_tools_module._preserve_tool_introspection(
         unresolved_wrapper,
         unresolved,
     )
@@ -925,7 +918,7 @@ def test_pydantic_tool_introspection_preserves_annotation_fallbacks() -> None:
         ),
     )
     signature_only.__annotations__ = {}
-    preserved = pydantic_adapter_module._preserve_tool_introspection(
+    preserved = pydantic_tools_module._preserve_tool_introspection(
         lambda **kwargs: kwargs,
         signature_only,
     )

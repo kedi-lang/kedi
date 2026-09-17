@@ -25,11 +25,11 @@ from kedi._interactive.persistence import (
     UnsupportedSessionValue,
 )
 from kedi._interactive.state import ExecutedFragment
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.conversation import ConversationState
 from kedi.agent_adapter.hooks import HookHandler
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, HookSettings
 from kedi.agent_profile.codemode import CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings

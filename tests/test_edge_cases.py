@@ -10,7 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 import kedi.cli as cli
-from kedi.agent_adapter.utils import run_sync
+from kedi.agent_adapter.execution import run_sync
 from kedi.cli import main as cli_main
 from kedi.codegen.manager import CodegenManager
 from kedi.lang.compiler import compile_program

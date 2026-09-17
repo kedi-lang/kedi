@@ -4,13 +4,13 @@ import pytest
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
 
+import kedi.lsp.features.diagnostics as lsp_diagnostics_module
 from kedi.agent_adapter import PydanticAdapter
 from kedi.agent_profile import AgentProfile
 from kedi.artifacts import ArtifactManager, ArtifactPolicy, ArtifactPolicyError, artifact_tool_specs
-from kedi.core import KediRuntime
+from kedi.core.runtime import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.parser.diagnostics import KediParseError
-from kedi.lsp import features
 
 
 def test_query_policy_defaults_overlay_and_cache_identity():
@@ -88,7 +88,7 @@ def test_query_directive_parser_and_lsp_reject_invalid_literals(literal):
     source = f"> artifacts:\n  query_artifacts: {literal}\n"
     with pytest.raises(KediParseError):
         parse_program(source)
-    diagnostics = features.compute_diagnostics(source, "query-policy.kedi")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(source, "query-policy.kedi")
     assert [d.code for d in diagnostics] == ["K-ARTIFACTS-VALUE"]
     assert diagnostics[0].range.start.line == 1
     assert diagnostics[0].range.start.character == len("  query_artifacts: ")
@@ -97,7 +97,7 @@ def test_query_directive_parser_and_lsp_reject_invalid_literals(literal):
 @pytest.mark.parametrize("value", ["enabled", "disabled", '`"enabled"`'])
 def test_query_directive_accepts_literal_and_native_value(value):
     source = f"> artifacts:\n  query_artifacts: {value}\n"
-    assert features.compute_diagnostics(source, "query-policy.kedi") == []
+    assert lsp_diagnostics_module.compute_diagnostics(source, "query-policy.kedi") == []
     parse_program(source)
 
 

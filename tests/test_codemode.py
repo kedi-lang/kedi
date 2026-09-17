@@ -28,15 +28,15 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, ToolsetTool
 from pydantic_ai.usage import RunUsage
 
 import kedi.agent_adapter.codemode.pydantic as pydantic_codemode_module
-from kedi.agent_adapter.adapters._pydantic_compat import (
-    PydanticAICompatibilityError,
-    build_nested_tool_manager,
-)
 from kedi.agent_adapter.adapters.pydantic import (
     PydanticAdapter,
     pydantic_toolset_from_specs,
 )
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy, ApprovalRequest
+from kedi.agent_adapter.adapters.pydantic.compat import (
+    PydanticAICompatibilityError,
+    build_nested_tool_manager,
+)
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy, ApprovalRequest
 from kedi.agent_adapter.codemode import (
     CodeModeBoundaryError,
     CodeModeCatalog,
@@ -50,12 +50,9 @@ from kedi.agent_adapter.codemode import (
 )
 from kedi.agent_adapter.codemode.core import _name_score, _SequentialDispatchGate
 from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeToolset
-from kedi.agent_adapter.tool_override import (
-    ToolSpec,
-    artifact_admission_scope,
-    current_required_tool_calls,
-    with_artifact_result,
-)
+from kedi.agent_adapter.tools.execution import with_artifact_result
+from kedi.agent_adapter.tools.scope import artifact_admission_scope, current_required_tool_calls
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 from tests.telemetry_helpers import installed_recording_backend

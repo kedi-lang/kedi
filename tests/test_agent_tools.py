@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import pytest
 
-from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
-from kedi.agent_adapter.utils import kedi_procedure_tool_spec
-from kedi.agent_profile.tools import eval_use_directive
+from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec
+from kedi.agent_adapter.tools.scope import ToolScope
+from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_profile.use_resolution import eval_use_directive
 from kedi.core import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -498,7 +499,7 @@ def test_imported_profile_reports_unknown_composed_target(tmp_path) -> None:
 
 
 def test_imported_profile_tool_binding_does_not_publish_or_rebind_dependency() -> None:
-    from kedi.agent_profile.registry import ProfileDefinition, ProfileToolMember
+    from kedi.agent_profile.definitions import ProfileDefinition, ProfileToolMember
     from kedi.lang.compiler.program_compiler import ProgramCompiler
 
     compiler = ProgramCompiler(adapter=None)
@@ -527,7 +528,7 @@ def test_unknown_use_target_raises() -> None:
 
 
 def test_empty_use_directive_raises() -> None:
-    from kedi.agent_profile.tools import eval_use_directive
+    from kedi.agent_profile.use_resolution import eval_use_directive
     from kedi.core import KediRuntime
     from kedi.lang.ast import UseDirectiveStmt
 
@@ -536,7 +537,7 @@ def test_empty_use_directive_raises() -> None:
 
 
 def test_use_directive_accepts_runtime_global_python_callable() -> None:
-    from kedi.agent_profile.tools import eval_use_directive
+    from kedi.agent_profile.use_resolution import eval_use_directive
     from kedi.core import KediRuntime
     from kedi.lang.ast import UseDirectiveStmt
 
@@ -568,7 +569,9 @@ def test_unknown_tool_procedure_at_runtime_raises(
 """
     adapter = _adapter()
     rt = compile_program(parse_program(src), adapter=adapter)
-    monkeypatch.setattr("kedi.agent_profile.tools.procedure_def_for_tool", lambda _rt, _name: None)
+    monkeypatch.setattr(
+        "kedi.agent_profile.use_resolution.procedure_def_for_tool", lambda _rt, _name: None
+    )
     with pytest.raises(KediExecutionError, match="Unknown tool procedure"):
         rt.run_main()
 
@@ -744,7 +747,7 @@ async def fetch(url: str) -> str:
 
 
 def test_procedure_def_for_tool_handles_missing_metadata() -> None:
-    from kedi.agent_profile.tools import procedure_def_for_tool
+    from kedi.agent_profile.use_resolution import procedure_def_for_tool
 
     rt = compile_program(parse_program("= ok"))
     assert procedure_def_for_tool(rt, "missing") is None
@@ -753,7 +756,7 @@ def test_procedure_def_for_tool_handles_missing_metadata() -> None:
 
 
 def test_python_callable_for_tool_skips_non_dict_envs() -> None:
-    from kedi.agent_profile.tools import python_callable_for_tool
+    from kedi.agent_profile.use_resolution import python_callable_for_tool
 
     def tool() -> str:
         return "ok"
@@ -774,7 +777,7 @@ def test_pydantic_adapter_tool_scope_registers_toolsets() -> None:
     from pydantic_ai.models.test import TestModel
 
     from kedi.agent_adapter.adapters import PydanticAdapter
-    from kedi.agent_adapter.utils import kedi_procedure_tool_spec
+    from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec
 
     src = "@search(query: str) -> str:\n  = <query>\n"
     prog = parse_program(src)

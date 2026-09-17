@@ -22,7 +22,7 @@ from kedi.agent_adapter.compaction import archive
 from kedi.agent_adapter.compaction.langchain_archive import LangChainArtifactHistoryProcessor
 from kedi.agent_adapter.compaction.models import NativeHistoryEntryRef
 from kedi.agent_adapter.compaction.pydantic_archive import PydanticArtifactHistoryCapability
-from kedi.agent_adapter.tool_override import artifact_admission_scope
+from kedi.agent_adapter.tools.scope import artifact_admission_scope
 from kedi.artifacts import ArtifactPolicy
 from tests.test_pydantic_history_archive import _history, _processor
 

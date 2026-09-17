@@ -10,13 +10,16 @@ import pytest
 from pydantic_ai.models.test import TestModel
 
 import kedi
-import kedi.api as kedi_api
+import kedi.agent_adapter.tools.conversion as adapter_utils
+import kedi.api.cache as api_cache_module
+import kedi.api.registration as api_registration_module
+import kedi.api.state as api_state_module
 import kedi.app as app_module
-from kedi.agent_adapter import approval as approval_module
-from kedi.agent_adapter import utils as adapter_utils
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
-from kedi.agent_adapter.approval import (
+from kedi.agent_adapter.approvals import policy as approval_module
+from kedi.agent_adapter.approvals.cli import CliApprovalHandler
+from kedi.agent_adapter.approvals.policy import (
     ApprovalCancelled,
     ApprovalDecision,
     ApprovalPolicy,
@@ -25,17 +28,18 @@ from kedi.agent_adapter.approval import (
     resolve_tool_approval,
     resolve_tool_approval_async,
 )
-from kedi.agent_adapter.cli_approval import CliApprovalHandler
-from kedi.agent_adapter.tool_override import ToolSpec, with_approval
-from kedi.agent_adapter.utils import (
+from kedi.agent_adapter.tools.conversion import (
     _procedure_tool_risk,
     kedi_procedure_tool_spec,
     python_callable_tool_spec,
 )
+from kedi.agent_adapter.tools.execution import with_approval
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, block_agent_profile_scope, current_block_agent_profile
-from kedi.agent_profile.model import eval_approval_directive, eval_profile_definition
-from kedi.agent_profile.registry import ProfileApprovalMember, ProfileDefinition
-from kedi.core import KediRuntime
+from kedi.agent_profile.definitions import ProfileApprovalMember, ProfileDefinition
+from kedi.agent_profile.directives import eval_approval_directive
+from kedi.agent_profile.evaluation import eval_profile_definition
+from kedi.core.runtime import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import ApprovalDirectiveStmt
@@ -554,7 +558,7 @@ def test_approval_decorator_registers_the_default_python_api_policy() -> None:
     def permit(_request: object) -> ApprovalDecision:
         return ApprovalDecision.allow()
 
-    policy = kedi_api._config_var.get().profile.approval
+    policy = api_state_module._config_var.get().profile.approval
 
     assert policy is not None
     assert policy.handler is permit
@@ -851,28 +855,28 @@ def test_python_tool_risk_and_api_approval_inputs_are_validated() -> None:
     with pytest.raises(ValueError, match="invalid Kedi tool risk"):
         python_callable_tool_spec("unsafe", unsafe)
 
-    assert kedi_api._coerce_approval("allow") == ApprovalPolicy.allow()
-    assert kedi_api._coerce_approval("deny") == ApprovalPolicy.deny()
+    assert api_registration_module._coerce_approval("allow") == ApprovalPolicy.allow()
+    assert api_registration_module._coerce_approval("deny") == ApprovalPolicy.deny()
     policy = ApprovalPolicy.allow()
-    assert kedi_api._coerce_approval(policy) is policy
-    assert kedi_api._approval_identity(policy) == ("allow", None)
-    assert kedi_api._approval_identity(None) is None
+    assert api_registration_module._coerce_approval(policy) is policy
+    assert api_cache_module._approval_identity(policy) == ("allow", None)
+    assert api_cache_module._approval_identity(None) is None
 
     def permit(_request: object) -> ApprovalDecision:
         return ApprovalDecision.allow()
 
-    dynamic_policy = kedi_api._coerce_approval(permit)
+    dynamic_policy = api_registration_module._coerce_approval(permit)
     assert dynamic_policy is not None
     assert dynamic_policy.handler is permit
-    assert kedi_api._approval_identity(dynamic_policy)[:3] == (
+    assert api_cache_module._approval_identity(dynamic_policy)[:3] == (
         None,
         permit.__module__,
         permit.__qualname__,
     )
     with pytest.raises(TypeError, match="approval must be"):
-        kedi_api._coerce_approval("edit")  # type: ignore[arg-type]
+        api_registration_module._coerce_approval("edit")  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="approval must be"):
-        kedi_api._coerce_approval(1)  # type: ignore[arg-type]
+        api_registration_module._coerce_approval(1)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="tool risk"):
         kedi.tool(risk="unknown")  # type: ignore[arg-type]
 

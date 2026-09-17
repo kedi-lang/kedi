@@ -1,89 +1,63 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager
 from contextvars import Context, ContextVar, copy_context
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, cast
 
-from ...errors import KediExecutionError, KediTraceFrame
-from ...telemetry import TelemetrySpan, current_span
-from ...telemetry import span as telemetry_span
-from ..events import bind_agent_run, current_agent_run_identity
-from ..invocation import InvocationUsage, observe_invocations
-from ..telemetry import current_tool_call_name
-from . import (
+from kedi.agent_adapter.invocation import InvocationUsage
+from kedi.agent_adapter.subagents import (
     DelegationResult,
     SubagentConversationContext,
-    SubagentExecutionRequest,
     SubagentTurn,
     SupportsSubagentExecution,
-    effective_final_schema,
     new_subagent_run_id,
-    validate_structured_result,
-    wrapped_final_schema,
 )
-from .attempts import bind_current_delegation_run
-from .budget import (
+from kedi.agent_adapter.subagents import execution as _execution
+from kedi.agent_adapter.subagents.attempts import bind_current_delegation_run
+from kedi.agent_adapter.subagents.budget import (
     DelegationBudget,
     DelegationConcurrency,
     SubagentBudgetExceeded,
     SubagentConcurrencyExceeded,
 )
-from .context import SubagentExecutionContext, _subagent_execution_scope
-from .limits import SubagentUsageLimits
-from .persistence import StoredConversation, SubagentStateStore
-from .runs import (
-    SubagentCancelled,
-    SubagentCompleted,
+from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
+from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
+from kedi.agent_adapter.subagents.runs import (
     SubagentEventLog,
     SubagentFailed,
     SubagentRunRegistry,
     SubagentRunStatus,
     SubagentStarted,
 )
-from .safety import SubagentSafetyCeiling
+from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
+from kedi.errors import KediExecutionError, KediTraceFrame
+from kedi.telemetry import TelemetrySpan
 
 DEFAULT_MAX_SUBAGENT_DEPTH = 5
+
+
 HARD_MAX_SUBAGENT_DEPTH = 5
+
+
 DEFAULT_MAX_SUBAGENT_CONCURRENCY = 4
+
+
 DEFAULT_SUBAGENT_TIMEOUT_SECONDS = 120.0
+
+
 MAX_SUBAGENT_TIMEOUT_SECONDS = 600.0
+
+
 DEFAULT_MAX_RETAINED_SUBAGENT_RUNS = 1024
+
+
 MAX_SUBAGENT_CONVERSATION_TURNS = 8
-_DELEGATION_TOOL_NAMES = frozenset({"delegate_task", "continue_subagent"})
-
-
-def _subagent_run_span(
-    attributes: Mapping[str, Any],
-) -> AbstractContextManager[TelemetrySpan]:
-    current = current_span()
-    tool_name = current_tool_call_name()
-    profile = attributes.get("kedi.subagent.profile")
-    span_name = f"{profile} run" if isinstance(profile, str) and profile else "subagent run"
-    if current.is_recording() and tool_name in _DELEGATION_TOOL_NAMES:
-        current.update_name(span_name)
-        current.set_attribute("kedi.operation.name", "run_agent")
-        current.set_attribute("gen_ai.operation.name", "invoke_agent")
-        for key, value in attributes.items():
-            if isinstance(value, (bool, str, int, float)):
-                current.set_attribute(key, value)
-        return nullcontext(current)
-    return telemetry_span(
-        "agent",
-        span_name,
-        "run_agent",
-        attributes={
-            key: value
-            for key, value in attributes.items()
-            if isinstance(value, (bool, str, int, float))
-        },
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -631,133 +605,23 @@ class SubagentCoordinator:
         stack: tuple[tuple[str, str], ...],
         conversation_id: str,
     ) -> DelegationResult:
-        active_agent_run = current_agent_run_identity()
-        event_parent_run_id = parent_run_id or (
-            active_agent_run.run_id if active_agent_run is not None else None
+        return await _execution._execute_run(
+            self,
+            run_id=run_id,
+            root_run_id=root_run_id,
+            parent_run_id=parent_run_id,
+            child_depth=child_depth,
+            definition=definition,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            parent_profile=parent_profile,
+            parent_ceiling=parent_ceiling,
+            budgets=budgets,
+            concurrency=concurrency,
+            stack=stack,
+            conversation_id=conversation_id,
         )
-        token = self._deps.active_stack.set((*stack, (run_id, subagent)))
-        budget_token = self._budget_stack.set(budgets)
-        concurrency_token = self._concurrency.set(concurrency)
-        safety_token = None
-        with _subagent_run_span(
-            {
-                "kedi.subagent.run_id": run_id,
-                "kedi.subagent.root_run_id": root_run_id,
-                "kedi.subagent.profile": subagent,
-                "kedi.subagent.depth": child_depth,
-                "kedi.subagent.structured_output": final_schema is not None,
-            },
-        ) as span:
-            if parent_run_id is not None:
-                span.set_attribute("kedi.subagent.parent_run_id", parent_run_id)
-            try:
-                child_profile = self._deps.evaluate_profile(definition)
-                enforcement = getattr(parent_profile, "_hook_enforcement", None)
-                if enforcement is not None and enforcement.active:
-                    child_hooks = getattr(child_profile, "hooks", None)
-                    child_profile = replace(
-                        child_profile,
-                        hooks=enforcement.compose_enforced(child_hooks),
-                        _hook_enforcement=enforcement,
-                    )
-                child_profile, child_ceiling = parent_ceiling.constrain_child(child_profile)
-                final_schema = effective_final_schema(child_profile, final_schema)
-                span.set_attribute(
-                    "kedi.subagent.structured_output",
-                    final_schema is not None,
-                )
-                child_adapter = self._deps.resolve_adapter(child_profile)
-                if not isinstance(child_adapter, SupportsSubagentExecution):
-                    raise KediExecutionError(
-                        f"Adapter {getattr(child_adapter, 'shortname', type(child_adapter).__name__)!r} "
-                        "does not implement Kedi child execution"
-                    )
-                model = child_profile.model or child_adapter.telemetry_model_name()
-                self.runs.describe(
-                    run_id,
-                    adapter_shortname=child_adapter.shortname,
-                    model=model,
-                    structured_output=final_schema is not None,
-                )
-                span.set_attribute("kedi.subagent.adapter", child_adapter.shortname)
-                if model is not None:
-                    span.set_attribute("gen_ai.request.model", model)
-                self._deps.assert_profile_override_supported(child_profile, child_adapter)
-                child_tools = self._deps.resolve_tools(child_profile, child_adapter)
-                instructions = self._deps.instructions_for_profile(child_profile, child_adapter)
-                conversation = self._conversation_context(conversation_id)
-                child_call = self._run_child(
-                    run_id=run_id,
-                    subagent=subagent,
-                    task=task,
-                    final_schema=final_schema,
-                    adapter=child_adapter,
-                    profile=child_profile,
-                    tools=child_tools,
-                    instructions=instructions,
-                    approval_ceiling=parent_ceiling.approval_policies,
-                    conversation=conversation,
-                )
-                safety_token = self._safety_ceiling.set(child_ceiling)
-                with bind_agent_run(
-                    run_id,
-                    parent_run_id=event_parent_run_id,
-                    agent_name=subagent,
-                ):
-                    with observe_invocations(
-                        lambda usage: self._record_and_assert_usage(run_id, span, usage)
-                    ):
-                        result = await child_call
-                self._assert_usage_limits(run_id)
-                if self.runs.get(run_id).status != "running":
-                    raise asyncio.CancelledError
-                self._record_success(
-                    conversation_id=conversation_id,
-                    run_id=run_id,
-                    task=task,
-                    result=result,
-                    adapter_state=conversation.result_state,
-                )
-                completed = self.runs.transition(run_id, "completed")
-                self.events.append(SubagentCompleted(completed))
-                self._persist_state()
-                span.set_attribute("kedi.subagent.status", "completed")
-                return result
-            except asyncio.CancelledError as exc:
-                if self.runs.get(run_id).status == "running":
-                    cancelled = self.runs.transition(run_id, "cancelled", error=exc)
-                    self.events.append(SubagentCancelled(cancelled))
-                    span.set_attribute("kedi.subagent.status", "cancelled")
-                else:
-                    span.set_attribute("kedi.subagent.status", "timed_out")
-                self._deactivate_conversation(conversation_id, run_id)
-                self._persist_state()
-                raise
-            except BaseException as exc:
-                current = self.runs.get(run_id)
-                if current.status == "running":
-                    failed = self.runs.transition(run_id, "failed", error=exc)
-                    self.events.append(SubagentFailed(failed))
-                    span.set_attribute("kedi.subagent.status", "failed")
-                else:
-                    span.set_attribute("kedi.subagent.status", current.status)
-                self._deactivate_conversation(conversation_id, run_id)
-                self._persist_state()
-                raise
-            finally:
-                run = self.runs.get(run_id)
-                assert run.started_at is not None
-                assert run.finished_at is not None
-                span.set_attribute(
-                    "kedi.subagent.duration_ms",
-                    (run.finished_at - run.started_at) * 1000,
-                )
-                if safety_token is not None:
-                    self._safety_ceiling.reset(safety_token)
-                self._release_slot(concurrency)
-                self._concurrency.reset(concurrency_token)
-                self._budget_stack.reset(budget_token)
-                self._deps.active_stack.reset(token)
 
     def _record_usage(
         self,
@@ -850,54 +714,19 @@ class SubagentCoordinator:
         approval_ceiling: tuple[Any, ...],
         conversation: SubagentConversationContext,
     ) -> DelegationResult:
-        run_kwargs = dict(adapter.subagent_run_kwargs(self.usage_limits))
-        if instructions is not None:
-            run_kwargs["instructions"] = instructions
-
-        request = SubagentExecutionRequest(
+        return await _execution._run_child(
+            self,
+            run_id=run_id,
+            subagent=subagent,
+            task=task,
+            final_schema=final_schema,
+            adapter=adapter,
             profile=profile,
             tools=tools,
             instructions=instructions,
             approval_ceiling=approval_ceiling,
-            usage_limits=self.usage_limits,
             conversation=conversation,
         )
-        effective_task = task
-        if conversation.turns and not bool(
-            getattr(adapter, "supports_native_subagent_resume", False)
-        ):
-            effective_task = _task_with_verified_history(conversation.turns, task)
-        execution_context = SubagentExecutionContext(
-            run_id=run_id,
-            profile=profile,
-            conversation_id=conversation.conversation_id,
-        )
-        with (
-            self._deps.trace_frame(KediTraceFrame(kind="subagent", label=f"delegate {subagent}")),
-            _subagent_execution_scope(execution_context),
-            adapter.subagent_scope(request),
-        ):
-            if final_schema is None:
-                task_summary = await adapter.invoke(prompt=effective_task, **run_kwargs)
-                return DelegationResult(
-                    run_id=run_id,
-                    subagent=subagent,
-                    task_summary=task_summary,
-                )
-
-            schema = wrapped_final_schema(final_schema)
-            produced = await adapter.produce_subagent(
-                template=effective_task,
-                output_schema=schema,
-                **run_kwargs,
-            )
-            result = validate_structured_result(produced, schema)
-            return DelegationResult(
-                run_id=run_id,
-                subagent=subagent,
-                task_summary=result["task_summary"],
-                final_result=result["final_result"],
-            )
 
     def _activate_conversation(
         self,
@@ -1050,22 +879,6 @@ class SubagentCoordinator:
                 results=results,
                 conversations=conversations,
             )
-
-
-def _task_with_verified_history(turns: tuple[SubagentTurn, ...], task: str) -> str:
-    history = [
-        {
-            "task": turn.task,
-            "task_summary": turn.task_summary,
-            "final_result": turn.final_result,
-        }
-        for turn in turns
-    ]
-    return (
-        "Continue the same child task using this verified prior conversation state:\n"
-        f"{json.dumps(history, ensure_ascii=False)}\n\n"
-        f"New task:\n{task}"
-    )
 
 
 def _running_loop() -> asyncio.AbstractEventLoop | None:

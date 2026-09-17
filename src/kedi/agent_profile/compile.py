@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ..errors import KediExecutionError
-from .registry import (
+from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
@@ -290,7 +290,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         UseDirectiveStmt,
     )
 
-    from .model import (
+    from .directives import (
         eval_adapter_directive,
         eval_agent_directive,
         eval_approval_directive,
@@ -305,7 +305,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_skills_directive,
         eval_system_directive,
     )
-    from .tools import eval_use_directive
+    from .use_resolution import eval_use_directive
 
     if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
         return

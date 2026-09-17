@@ -11,9 +11,9 @@ from typing import Any, cast
 import pytest
 from pydantic_ai.models.test import TestModel
 
+import kedi.agent_adapter.adapters.pydantic.adapter as pydantic_adapter_module
 from kedi.agent_adapter import codex_responses_model
 from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_profile import AgentProfile
 
 

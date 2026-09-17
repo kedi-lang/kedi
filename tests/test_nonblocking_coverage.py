@@ -14,7 +14,7 @@ from concurrent.futures import Future
 
 import pytest
 
-import kedi.core as core
+import kedi.core.engines as core_engines_module
 from kedi.engine import JobManagerEngine, RetryPolicy, SequentialEngine, ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
@@ -108,10 +108,10 @@ def test_map_propagates_source_and_fn_errors() -> None:
 def test_shutdown_shared_engines_clears_cache_and_stops_pools() -> None:
     # The atexit handler also runs at interpreter exit (when coverage is no longer recording), so
     # exercise it directly: it must clear the per-worker-count cache and shut each pool down.
-    eng = core.shared_thread_engine(max_workers=3)
-    assert core._SHARED_PARALLEL_ENGINES  # at least the one just created is cached
-    core._shutdown_shared_engines()
-    assert core._SHARED_PARALLEL_ENGINES == {}
+    eng = core_engines_module.shared_thread_engine(max_workers=3)
+    assert core_engines_module._SHARED_PARALLEL_ENGINES  # at least the one just created is cached
+    core_engines_module._shutdown_shared_engines()
+    assert core_engines_module._SHARED_PARALLEL_ENGINES == {}
     with pytest.raises(RuntimeError):
         eng._pool.submit(lambda: None)  # pool was shut down → rejects new work
 
@@ -193,7 +193,7 @@ def test_default_engine_selection(monkeypatch: pytest.MonkeyPatch, value, parall
         monkeypatch.delenv("KEDI_PARALLEL", raising=False)
     else:
         monkeypatch.setenv("KEDI_PARALLEL", value)
-    eng = core._default_engine()
+    eng = core_engines_module._default_engine()
     assert bool(getattr(eng, "parallel", False)) is parallel
 
 
@@ -202,13 +202,13 @@ def test_default_engine_rejects_garbage(monkeypatch: pytest.MonkeyPatch, value) 
     # A1: an unrecognized KEDI_PARALLEL value must raise loudly, never silently flip parallel on.
     monkeypatch.setenv("KEDI_PARALLEL", value)
     with pytest.raises(RuntimeError, match="Invalid KEDI_PARALLEL"):
-        core._default_engine()
+        core_engines_module._default_engine()
 
 
 def test_shared_thread_engine_and_self_check() -> None:
     assert_kedienv_routing()  # must not raise on a supported interpreter
-    eng = core.shared_thread_engine()
-    assert eng is core.shared_thread_engine()  # singleton
+    eng = core_engines_module.shared_thread_engine()
+    assert eng is core_engines_module.shared_thread_engine()  # singleton
     assert getattr(eng, "parallel", False) is True
 
 

@@ -14,12 +14,9 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, ToolsetTool, 
 from pydantic_ai.toolsets.abstract import SchemaValidatorProt
 from typing_extensions import NotRequired, Self, TypedDict
 
-from ..adapters._pydantic_compat import build_nested_tool_manager
-from ..tool_override import (
-    ToolResultAdmitter,
-    ToolSpec,
-    defer_artifact_admission,
-)
+from ..adapters.pydantic.compat import build_nested_tool_manager
+from ..tools.scope import defer_artifact_admission
+from ..tools.specs import ToolResultAdmitter, ToolSpec
 from .core import CODEMODE_INSTRUCTIONS, CodeModeLimits, CodeModeSession, CodeModeTool
 from .errors import CodeModeCatalogError, CodeModeError
 

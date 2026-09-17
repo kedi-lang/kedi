@@ -9,9 +9,9 @@ import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.test import TestModel
 
+import kedi.agent_adapter.adapters.pydantic.capabilities as pydantic_capabilities_module
 from kedi.agent_adapter import events as event_module
 from kedi.agent_adapter.adapters import PydanticAdapter
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_adapter.events import (
     AgentEventDispatcher,
     AgentMessageEvent,
@@ -372,7 +372,7 @@ def test_pydantic_event_capability_seals_text_at_tool_boundary() -> None:
         with observe_agent_events(events.append):
             with agent_event_run("pydantic") as resolver:
                 assert resolver is not None
-                capability = pydantic_adapter_module._KediAgentEventCapability(resolver)
+                capability = pydantic_capabilities_module._KediAgentEventCapability(resolver)
                 response = ModelResponse(
                     parts=[TextPart("Inspecting."), ToolCallPart("read_file", {})]
                 )

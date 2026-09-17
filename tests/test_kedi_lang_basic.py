@@ -4,7 +4,7 @@ from typing import Any, List
 
 import pytest
 
-import kedi.core as core
+import kedi.core.runtime as core_runtime_module
 from kedi.lang import compile_program, parse_program
 from kedi.tests_runner import run_evals, run_tests
 from tests.mock_adapter import MockAdapter
@@ -26,7 +26,7 @@ def _run(monkeypatch: Any, src: str) -> Any:
 # ----------------------
 def test_runtime_city_country(monkeypatch: Any) -> None:
 
-    rt = core.KediRuntime(adapter=MockAdapter())
+    rt = core_runtime_module.KediRuntime(adapter=MockAdapter())
 
     @rt.procedure
     def foo_city_country(city: str) -> Any:
@@ -44,7 +44,7 @@ def test_runtime_city_country(monkeypatch: Any) -> None:
 
 def test_runtime_nested_calls(monkeypatch: Any) -> None:
 
-    rt = core.KediRuntime(adapter=MockAdapter())
+    rt = core_runtime_module.KediRuntime(adapter=MockAdapter())
 
     @rt.procedure
     def get_country_info_nested(city: str) -> Any:

@@ -22,7 +22,11 @@ import pytest
 from click import ClickException, UsageError
 from click.testing import CliRunner
 
-from kedi.agent_adapter.approval import ApprovalRequest
+import kedi.integrations.harbor.terminal.audit as terminal_audit_module
+import kedi.integrations.harbor.terminal.output as terminal_output_module
+import kedi.integrations.harbor.terminal.processes as terminal_processes_module
+import kedi.integrations.harbor.terminal.session as terminal_session_module
+from kedi.agent_adapter.approvals.policy import ApprovalRequest
 from kedi.agent_adapter.hooks import (
     PostToolUseEvent,
     PostToolUseFailureEvent,
@@ -30,10 +34,9 @@ from kedi.agent_adapter.hooks import (
     UserPromptSubmitRequest,
 )
 from kedi.agent_adapter.invocation import InvocationUsage, report_invocation
-from kedi.agent_adapter.utils import python_callable_tool_spec
+from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
 from kedi.integrations.harbor import host, runner
 from kedi.integrations.harbor import process_supervisor as harbor_process_supervisor
-from kedi.integrations.harbor import terminal as harbor_terminal
 from kedi.integrations.harbor.records import (
     HarborRunPolicy,
     HarnessPolicy,
@@ -48,7 +51,7 @@ from kedi.integrations.harbor.records import (
     redact_text,
     sha256_file,
 )
-from kedi.integrations.harbor.terminal import TerminalSession
+from kedi.integrations.harbor.terminal.session import TerminalSession
 from kedi.lang.parser import parse_program
 
 
@@ -658,8 +661,8 @@ def test_terminal_tool_audit_serializes_supported_values_and_flushes_fail_open(
     terminal: TerminalSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert harbor_terminal._audit_value(None) is None
-    assert harbor_terminal._audit_value(b"short") == {
+    assert terminal_audit_module._audit_value(None) is None
+    assert terminal_audit_module._audit_value(b"short") == {
         "kind": "bytes",
         "size_bytes": 5,
         "sha256": "f9b0078b5df596d2ea19010c001bbd009e651de2c57e8fb7e355f31eb9d3f739",
@@ -667,36 +670,42 @@ def test_terminal_tool_audit_serializes_supported_values_and_flushes_fail_open(
         "truncated": False,
     }
     long_bytes = b"x" * 5_000
-    assert harbor_terminal._audit_value(long_bytes)["truncated"] is True
-    assert harbor_terminal._audit_value(Path("fixture.txt")) == "fixture.txt"
-    assert harbor_terminal._audit_value({"nested": {"value": 1}}, depth=4) == {
+    assert terminal_audit_module._audit_value(long_bytes)["truncated"] is True
+    assert terminal_audit_module._audit_value(Path("fixture.txt")) == "fixture.txt"
+    assert terminal_audit_module._audit_value({"nested": {"value": 1}}, depth=4) == {
         "kind": "depth_limit",
         "type": "dict",
     }
 
     mapping = {f"item-{index}": index for index in range(33)}
-    mapped = harbor_terminal._audit_value(mapping)
+    mapped = terminal_audit_module._audit_value(mapping)
     assert mapped["__audit_truncated_items__"] == 1
     assert "item-32" not in mapped
     long_key = "prefix-" + "x" * 5_000 + "-suffix"
-    audited_long_key = next(iter(harbor_terminal._audit_value({long_key: 1})))
+    audited_long_key = next(iter(terminal_audit_module._audit_value({long_key: 1})))
     assert len(audited_long_key) == 256
     assert audited_long_key.startswith("prefix-")
     assert audited_long_key.endswith("-suffix")
     assert "sha256:" in audited_long_key
-    assert harbor_terminal._audit_value({"sk-this-must-be-redacted": 1}) == {"[REDACTED]": 1}
-    assert harbor_terminal._audit_value(1.5) == 1.5
-    assert harbor_terminal._audit_value(float("nan")) == {"kind": "float", "value": "nan"}
-    assert harbor_terminal._audit_value(float("inf")) == {"kind": "float", "value": "inf"}
-    assert harbor_terminal._audit_value((1, 2)) == [1, 2]
-    sequence = harbor_terminal._audit_value(tuple(range(33)))
+    assert terminal_audit_module._audit_value({"sk-this-must-be-redacted": 1}) == {"[REDACTED]": 1}
+    assert terminal_audit_module._audit_value(1.5) == 1.5
+    assert terminal_audit_module._audit_value(float("nan")) == {
+        "kind": "float",
+        "value": "nan",
+    }
+    assert terminal_audit_module._audit_value(float("inf")) == {
+        "kind": "float",
+        "value": "inf",
+    }
+    assert terminal_audit_module._audit_value((1, 2)) == [1, 2]
+    sequence = terminal_audit_module._audit_value(tuple(range(33)))
     assert sequence == {
         "kind": "sequence",
         "total_items": 33,
         "items": list(range(32)),
         "truncated": True,
     }
-    assert harbor_terminal._audit_value(SimpleNamespace(value=1)) == "namespace(value=1)"
+    assert terminal_audit_module._audit_value(SimpleNamespace(value=1)) == "namespace(value=1)"
 
     terminal.hook_handler(
         UserPromptSubmitRequest(
@@ -713,7 +722,7 @@ def test_terminal_tool_audit_serializes_supported_values_and_flushes_fail_open(
     def fail_fsync(_: int) -> None:
         raise OSError("fixture fsync failure")
 
-    monkeypatch.setattr(harbor_terminal.os, "fsync", fail_fsync)
+    monkeypatch.setattr(terminal_processes_module.os, "fsync", fail_fsync)
     terminal._flush_tool_events()
     assert terminal.summary()["tool_audit_errors"] == 1
 
@@ -1018,7 +1027,9 @@ def test_terminal_supervisor_start_and_state_edge_cases(
         records_dir=tmp_path / "mocked-records",
     )
     monkeypatch.setattr(
-        harbor_terminal.subprocess, "Popen", lambda *_args, **_kwargs: next(fake_processes)
+        terminal_processes_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: next(fake_processes),
     )
     monkeypatch.setattr(mocked, "_await_supervisor_start", lambda *_args: next(failures))
     monkeypatch.setattr(
@@ -1041,25 +1052,35 @@ def test_terminal_supervisor_start_and_state_edge_cases(
 
 def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -> None:
     assert isinstance(
-        harbor_terminal._supervisor_start_error(
+        terminal_processes_module._supervisor_start_error(
             {"start_error_type": "FileNotFoundError", "start_error_message": "missing"}
         ),
         FileNotFoundError,
     )
     assert isinstance(
-        harbor_terminal._supervisor_start_error(
+        terminal_processes_module._supervisor_start_error(
             {"start_error_type": "PermissionError", "start_error_message": "denied"}
         ),
         PermissionError,
     )
-    assert isinstance(harbor_terminal._supervisor_start_error({}), OSError)
-    assert harbor_terminal._preview_file(tmp_path / "missing.bin", 8) == ("", False, False, 0)
+    assert isinstance(terminal_processes_module._supervisor_start_error({}), OSError)
+    assert terminal_output_module._preview_file(tmp_path / "missing.bin", 8) == (
+        "",
+        False,
+        False,
+        0,
+    )
     invalid_utf8 = tmp_path / "invalid-utf8.bin"
     invalid_utf8.write_bytes(b"\xff\xfe")
-    assert harbor_terminal._preview_file(invalid_utf8, 8) == ("\ufffd\ufffd", False, True, 2)
+    assert terminal_output_module._preview_file(invalid_utf8, 8) == (
+        "\ufffd\ufffd",
+        False,
+        True,
+        2,
+    )
     complete_preview = tmp_path / "complete-preview.bin"
     complete_preview.write_bytes(b"abcdefghijkl")
-    assert harbor_terminal._preview_file(complete_preview, 8) == (
+    assert terminal_output_module._preview_file(complete_preview, 8) == (
         "abcdefghijkl",
         False,
         False,
@@ -1067,7 +1088,7 @@ def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -
     )
     truncated_preview = tmp_path / "truncated-preview.bin"
     truncated_preview.write_bytes(b"abcdefghijklmnopqrst")
-    rendered, truncated, invalid, total = harbor_terminal._preview_file(truncated_preview, 8)
+    rendered, truncated, invalid, total = terminal_output_module._preview_file(truncated_preview, 8)
     assert (truncated, invalid, total) == (True, False, 20)
     assert "4 bytes omitted" in rendered
 
@@ -1075,8 +1096,8 @@ def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -
         def close(self) -> None:
             raise BrokenPipeError
 
-    harbor_terminal._close_process_input(cast(Any, SimpleNamespace(stdin=None)))
-    harbor_terminal._close_process_input(cast(Any, SimpleNamespace(stdin=BrokenClose())))
+    terminal_processes_module._close_process_input(cast(Any, SimpleNamespace(stdin=None)))
+    terminal_processes_module._close_process_input(cast(Any, SimpleNamespace(stdin=BrokenClose())))
 
     terminal = TerminalSession(root=tmp_path, records_dir=tmp_path / "state-records")
     result = terminal.run_command([sys.executable, "-c", "pass"])
@@ -1479,7 +1500,7 @@ def test_terminal_rejects_invalid_inputs_and_closed_sessions(
 
     with monkeypatch.context() as context:
         context.setattr(
-            harbor_terminal.subprocess,
+            terminal_processes_module.subprocess,
             "Popen",
             lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("blocked")),
         )
@@ -1499,7 +1520,7 @@ def test_terminal_output_boundaries_deadline_and_environment(
     terminal: TerminalSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    preview = harbor_terminal._BytePreview(limit=4)
+    preview = terminal_output_module._BytePreview(limit=4)
     preview.append(b"abcdef")
     assert preview.render() == ("abcdef", False, False)
     preview.append(b"ghijkl")
@@ -1567,7 +1588,7 @@ def test_terminal_output_boundaries_deadline_and_environment(
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/credentials.json")
     monkeypatch.setenv("HF_TOKEN", "token")
     monkeypatch.setenv("VISIBLE_FIXTURE", "yes")
-    child_env = harbor_terminal._sanitized_subprocess_env()
+    child_env = terminal_processes_module._sanitized_subprocess_env()
     assert "OPENAI_API_KEY" not in child_env
     assert "AWS_ACCESS_KEY_ID" not in child_env
     assert "AWS_SESSION_TOKEN" not in child_env
@@ -1582,23 +1603,25 @@ def test_terminal_output_boundaries_deadline_and_environment(
 def test_terminal_command_classification_and_process_group_races(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert harbor_terminal._is_verification_command("python3.14 -m pytest -q", shell=False)
-    assert not harbor_terminal._is_verification_command("'", shell=False)
-    assert not harbor_terminal._is_verification_command("", shell=False)
-    assert not harbor_terminal._is_read_only_command("'", shell=False)
-    assert not harbor_terminal._is_read_only_command("", shell=False)
-    assert not harbor_terminal._is_read_only_command("echo changed", shell=False)
-    assert harbor_terminal._is_read_only_command("cat file.txt", shell=False)
+    assert terminal_processes_module._is_verification_command(
+        "python3.14 -m pytest -q", shell=False
+    )
+    assert not terminal_processes_module._is_verification_command("'", shell=False)
+    assert not terminal_processes_module._is_verification_command("", shell=False)
+    assert not terminal_processes_module._is_read_only_command("'", shell=False)
+    assert not terminal_processes_module._is_read_only_command("", shell=False)
+    assert not terminal_processes_module._is_read_only_command("echo changed", shell=False)
+    assert terminal_processes_module._is_read_only_command("cat file.txt", shell=False)
 
     fake = SimpleNamespace(process=SimpleNamespace(pid=999999))
     monkeypatch.setattr(
-        harbor_terminal.os,
+        terminal_processes_module.os,
         "killpg",
         lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
     )
     TerminalSession._signal_process_group(cast(Any, fake), signal.SIGTERM)
 
-    empty = harbor_terminal._empty_binary_file()
+    empty = terminal_output_module._empty_binary_file()
     with empty as handle:
         assert handle.seek(0) is None
         assert handle.read(1) == b""
@@ -2296,7 +2319,7 @@ def test_runner_hands_off_retained_processes_only_after_success(
 def test_runner_unwinds_active_turn_before_deadline_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, adapter: str
 ) -> None:
-    from kedi.agent_adapter.utils import run_sync
+    from kedi.agent_adapter.execution import run_sync
     from kedi.engine import ThreadEngine
 
     events: list[str] = []
@@ -2429,7 +2452,7 @@ def test_terminal_time_notice_is_once_only_and_preserves_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     clock = [100.0]
-    monkeypatch.setattr(harbor_terminal.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(terminal_session_module.time, "monotonic", lambda: clock[0])
     terminal = TerminalSession(
         root=tmp_path,
         records_dir=tmp_path / "logs",

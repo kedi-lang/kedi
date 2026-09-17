@@ -7,9 +7,14 @@ from typing import Any, cast
 
 import pytest
 
+import kedi.agent_adapter.adapters.pydantic.adapter as pydantic_adapter_module
+import kedi.lsp.features.directive_help as lsp_directive_help_module
+import kedi.lsp.features.document as lsp_document_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.resolution as lsp_resolution_module
+import kedi.lsp.features.symbols as lsp_symbols_module
 from kedi.agent_adapter.adapters import DSPyAdapter, PydanticAdapter
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
-from kedi.agent_adapter.adapters import pydantic as pydantic_adapter_module
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compile import (
     build_capture_env,
@@ -17,16 +22,16 @@ from kedi.agent_profile.compile import (
     effective_profile_registry,
     profile_stmt_to_definition,
 )
-from kedi.agent_profile.model import (
-    AgentProfileOverrideUnsupported,
+from kedi.agent_profile.directives import (
     _member_to_patch,
     eval_effort_value,
     eval_model_value,
     eval_system_value,
-    eval_use_profile,
 )
+from kedi.agent_profile.errors import AgentProfileOverrideUnsupported
+from kedi.agent_profile.evaluation import eval_use_profile
 from kedi.agent_profile.profile import AgentProfile as AgentProfileType
-from kedi.core import KediRuntime
+from kedi.core.runtime import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import (
     EffortDirectiveStmt,
@@ -50,7 +55,6 @@ from kedi.lang.ast import (
 )
 from kedi.lang.compiler.statement_compiler import StatementExecutor
 from kedi.lang.parser.diagnostics import KediParseError
-from kedi.lsp import features
 from tests.lsp_helpers import hover_text_at, position_at_line
 from tests.mock_adapter import MockAdapter
 
@@ -309,8 +313,8 @@ def test_dspy_adapter_profile_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_lsp_profile_helpers_and_hovers() -> None:
-    assert features._directive_name_span(Program(), cast(Any, None), "x") is None
-    assert features._directive_name_span(Program(), Span(0, 1, 1, 1, 1, 2), "x") is None
+    assert lsp_symbols_module._directive_name_span(Program(), cast(Any, None), "x") is None
+    assert lsp_symbols_module._directive_name_span(Program(), Span(0, 1, 1, 1, 1, 2), "x") is None
 
     use_src = "> profile: light:\n    > model: opus\n> use: light\n"
     use_prog = parse_program(use_src)
@@ -318,21 +322,23 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         item for item in use_prog.ordered_toplevel if isinstance(item, UseDirectiveStmt)
     )
     use_pos = position_at_line(2, 10)
-    resolved = features._resolve_in_stmt(use_prog, use_stmt, use_pos, None, {}, {}, {})
+    resolved = lsp_resolution_module._resolve_in_stmt(use_prog, use_stmt, use_pos, None, {}, {}, {})
     assert resolved is not None and resolved.kind == "agent_profile"
     assert (
-        features._resolve_in_stmt(use_prog, use_stmt, position_at_line(2, 0), None, {}, {}, {})
+        lsp_resolution_module._resolve_in_stmt(
+            use_prog, use_stmt, position_at_line(2, 0), None, {}, {}, {}
+        )
         is None
     )
 
     foo_use = parse_program("> use: foo\n").toplevel_body[0]
     assert isinstance(foo_use, UseDirectiveStmt)
     assert foo_use.loc is not None
-    assert features._directive_name_span(use_prog, foo_use.loc, "bar") is None
+    assert lsp_symbols_module._directive_name_span(use_prog, foo_use.loc, "bar") is None
 
     prog = parse_program("> use: missing\n")
     pos = position_at_line(0, 8)
-    sym = features._resolve_symbol_at(prog, pos)
+    sym = lsp_resolution_module._resolve_symbol_at(prog, pos)
     assert sym is not None and sym.kind == "agent_profile"
 
     body = hover_text_at("> use: ghost\n", "x.kedi", "ghost")
@@ -347,7 +353,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         captured_agent_profile=AgentProfile(model="opus"),
         loc=Span(0, 1, 1, 1, 1, 2),
     )
-    assert "Model in this scope: `opus`" in features._proc_signature_markdown(proc)
+    assert "Model in this scope: `opus`" in lsp_directive_help_module._proc_signature_markdown(proc)
     empty_capture = ProcedureDef(
         name="p",
         params=[],
@@ -355,7 +361,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         docstring="docs",
         loc=Span(0, 1, 1, 1, 1, 2),
     )
-    assert "docs" in features._proc_signature_markdown(empty_capture)
+    assert "docs" in lsp_directive_help_module._proc_signature_markdown(empty_capture)
     proc_with_doc = ProcedureDef(
         name="p",
         params=[],
@@ -363,14 +369,14 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         captured_agent_profile=AgentProfile(model="opus"),
         loc=Span(0, 1, 1, 1, 1, 2),
     )
-    assert "docs" in features._proc_signature_markdown(proc_with_doc)
+    assert "docs" in lsp_directive_help_module._proc_signature_markdown(proc_with_doc)
 
     body_src = "@foo():\n    > use: light\n    >> x [y]\n"
-    symbols = features.compute_document_symbols(body_src, "x.kedi")
+    symbols = lsp_document_module.compute_document_symbols(body_src, "x.kedi")
     foo = next(symbol for symbol in symbols if symbol.name == "foo")
     assert any(child.name.startswith("> use:") for child in foo.children or ())
 
-    effort_symbols = features.compute_document_symbols(
+    effort_symbols = lsp_document_module.compute_document_symbols(
         "> profile: p:\n    > effort: high\n@foo():\n    > effort: low\n    >> x [y]\n",
         "x.kedi",
     )
@@ -380,7 +386,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     assert any(child.name == "> effort: low" for child in foo_symbol.children or ())
     profile_span = Span(0, 30, 1, 1, 1, 30)
     member_span = Span(4, 20, 2, 5, 2, 20)
-    skipped_effort_symbol = features._profile_def_symbol(
+    skipped_effort_symbol = lsp_document_module._profile_def_symbol(
         ProfileDefStmt(
             name="skip",
             effort_members=[ProfileEffortEntry(plain_value="low")],
@@ -401,15 +407,19 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         profile_defs={"p": profile_node},
         ordered_toplevel=[profile_node],
     )
-    assert features._smallest_enclosing(profile_prog, position_at_line(0, 12)) is profile_node
+    assert (
+        lsp_hover_module._smallest_enclosing(profile_prog, position_at_line(0, 12)) is profile_node
+    )
 
-    use_hover = features._describe_ast_node(UseDirectiveStmt(target="light"))
+    use_hover = lsp_hover_module._describe_ast_node(UseDirectiveStmt(target="light"))
     assert use_hover is not None and "> use:" in use_hover
-    model_hover = features._describe_ast_node(ModelDirectiveStmt(backtick_code="models['x']"))
+    model_hover = lsp_hover_module._describe_ast_node(
+        ModelDirectiveStmt(backtick_code="models['x']")
+    )
     assert model_hover is not None and "models['x']" in model_hover
-    effort_hover = features._describe_ast_node(EffortDirectiveStmt(plain_value="high"))
+    effort_hover = lsp_hover_module._describe_ast_node(EffortDirectiveStmt(plain_value="high"))
     assert effort_hover is not None and "> effort:" in effort_hover
-    profile_effort_hover = features._describe_ast_node(
+    profile_effort_hover = lsp_hover_module._describe_ast_node(
         ProfileEffortEntry(backtick_code="efforts['careful']")
     )
     assert profile_effort_hover is not None and "efforts['careful']" in profile_effort_hover
@@ -421,7 +431,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         == "Be concise."
     )
 
-    profile_system_hover = features._describe_ast_node(
+    profile_system_hover = lsp_hover_module._describe_ast_node(
         ProfileSystemEntry(
             template_lines=[
                 TemplateLine(
@@ -441,23 +451,25 @@ def test_lsp_profile_helpers_and_hovers() -> None:
     )
     assert profile_system_hover is not None
     assert "Use <tone>\\n persona." in profile_system_hover
-    profile_system_backtick = features._describe_ast_node(
+    profile_system_backtick = lsp_hover_module._describe_ast_node(
         ProfileSystemEntry(backtick_code="instructions['short']")
     )
     assert profile_system_backtick is not None
     assert "instructions['short']" in profile_system_backtick
-    assert features._system_value_preview(ProfileSystemEntry()) == "``"
+    assert lsp_directive_help_module._system_value_preview(ProfileSystemEntry()) == "``"
 
-    profile_mcp_hover = features._describe_ast_node(
+    profile_mcp_hover = lsp_hover_module._describe_ast_node(
         ProfileMcpEntry(fields=[McpField(name="env", backtick_code="env")])
     )
     assert profile_mcp_hover is not None
     assert "MCP server configuration stored in this profile" in profile_mcp_hover
-    mcp_directive_hover = features._describe_ast_node(
+    mcp_directive_hover = lsp_hover_module._describe_ast_node(
         McpDirectiveStmt(fields=[McpField(name="headers", backtick_code="headers")])
     )
     assert mcp_directive_hover is not None and "> mcp:" in mcp_directive_hover
-    mcp_field_hover = features._describe_ast_node(McpField(name="url", plain_value="http://x"))
+    mcp_field_hover = lsp_hover_module._describe_ast_node(
+        McpField(name="url", plain_value="http://x")
+    )
     assert mcp_field_hover is not None and "HTTP/SSE MCP server URL" in mcp_field_hover
 
     plain_only = ProfileDefStmt(
@@ -465,14 +477,14 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         model_members=[ProfileModelEntry(plain_value="haiku", loc=member_span)],
         effort_members=[ProfileEffortEntry(plain_value="medium", loc=member_span)],
     )
-    profile_hover = features._describe_ast_node(plain_only)
+    profile_hover = lsp_hover_module._describe_ast_node(plain_only)
     assert profile_hover is not None and "haiku" in profile_hover and "medium" in profile_hover
     backtick_only = ProfileDefStmt(
         name="dyn",
         model_members=[ProfileModelEntry(backtick_code="dyn", loc=member_span)],
     )
-    assert "dyn" in (features._describe_ast_node(backtick_only) or "")
-    tools_signature = features._profile_signature_markdown(
+    assert "dyn" in (lsp_hover_module._describe_ast_node(backtick_only) or "")
+    tools_signature = lsp_directive_help_module._profile_signature_markdown(
         ProfileDefStmt(name="tools", tool_names=["fetch", "search"])
     )
     assert "Uses: `fetch`, `search`" in tools_signature
@@ -480,7 +492,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         name="sparse",
         model_members=[ProfileModelEntry(loc=member_span)],
     )
-    assert "Reusable agent profile." in (features._describe_ast_node(sparse_member) or "")
+    assert "Reusable agent profile." in (lsp_hover_module._describe_ast_node(sparse_member) or "")
 
     proc_with_effort = ProcedureDef(
         name="with_effort",
@@ -489,7 +501,7 @@ def test_lsp_profile_helpers_and_hovers() -> None:
         captured_agent_profile=AgentProfile(effort="high"),
     )
     assert "Reasoning effort in this scope: `high`" in (
-        features._describe_ast_node(proc_with_effort) or ""
+        lsp_hover_module._describe_ast_node(proc_with_effort) or ""
     )
 
     capture_procedure_profiles(KediRuntime(), Program())

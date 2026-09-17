@@ -9,8 +9,9 @@ from typing import Annotated, Any, get_type_hints
 import pytest
 
 from kedi import ArtifactStream
-from kedi.agent_adapter.tool_override import ToolSpec, with_artifact_result
-from kedi.agent_adapter.utils import kedi_procedure_tool_spec, python_callable_tool_spec
+from kedi.agent_adapter.tools.conversion import kedi_procedure_tool_spec, python_callable_tool_spec
+from kedi.agent_adapter.tools.execution import with_artifact_result
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.artifacts import (
     ArtifactHandle,
     ArtifactManager,

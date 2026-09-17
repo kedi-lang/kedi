@@ -8,7 +8,17 @@ from typing import Any, cast
 import pytest
 from lsprotocol import types as lsp
 
-from kedi.lsp import features, module_surface
+import kedi.lang.ast as lang_ast_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.navigation as lsp_navigation_module
+import kedi.lsp.features.python_regions as python_regions_module
+import kedi.lsp.features.resolution as lsp_resolution_module
+import kedi.lsp.features.scope as lsp_scope_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+import kedi.lsp.features.signatures as lsp_signatures_module
+import kedi.lsp.features.symbols as lsp_symbols_module
+import kedi.lsp.features.type_support as lsp_type_support_module
+from kedi.lsp import module_surface
 from kedi.resolved_types import (
     as_resolved_kedi_type,
     is_resolved_kedi_type,
@@ -40,7 +50,7 @@ def test_smallest_enclosing_visits_toplevel_return() -> None:
     src = ">> [x]\n= <x>\n"
     prog = parse_program(src)
     pos = position_of(src, "<x>")
-    assert features._smallest_enclosing(prog, pos) is not None
+    assert lsp_hover_module._smallest_enclosing(prog, pos) is not None
 
 
 def test_smallest_enclosing_visits_variable_init_stmt_expression() -> None:
@@ -49,7 +59,7 @@ def test_smallest_enclosing_visits_variable_init_stmt_expression() -> None:
     src = "@p():\n  [x] = <y>\n\n= ok\n"
     prog = parse_program(src)
     pos = position_of(src, "y")
-    node = features._smallest_enclosing(prog, pos)
+    node = lsp_hover_module._smallest_enclosing(prog, pos)
     assert node is not None
     assert getattr(node, "name", None) == "y"
 
@@ -69,9 +79,9 @@ def test_type_registry_skips_private_and_missing_names(
     fake_module = SimpleNamespace(
         Optional=object(),
     )
-    monkeypatch.setattr(features, "_typing", fake_module)
-    monkeypatch.setattr(features, "_typing_extensions", None)
-    registry = features._build_lsp_type_registry()
+    monkeypatch.setattr(lsp_type_support_module, "_typing", fake_module)
+    monkeypatch.setattr(lsp_type_support_module, "_typing_extensions", None)
+    registry = lsp_type_support_module._build_lsp_type_registry()
     assert registry["Optional"] == "typing"
     assert "Literal" not in registry
     assert "Protocol" not in registry
@@ -83,10 +93,11 @@ def test_exported_name_skips_position_outside_name_span(tmp_path) -> None:
     source_path = str(tmp_path / "m.kedi")
     export_prog = parse_program("> export:\n  shared\n", source_path=source_path)
     assert (
-        features._exported_name_at_position(export_prog, lsp.Position(line=1, character=1)) is None
+        lsp_scope_module._exported_name_at_position(export_prog, lsp.Position(line=1, character=1))
+        is None
     )
     assert (
-        features._exported_name_at_position(export_prog, lsp.Position(line=1, character=3))
+        lsp_scope_module._exported_name_at_position(export_prog, lsp.Position(line=1, character=3))
         is not None
     )
 
@@ -99,7 +110,8 @@ def test_exported_name_misses_narrow_name_span(tmp_path) -> None:
         exports=[ModuleExport(["Name"], loc=Span(0, 32, 1, 1, 4, 7))],
     )
     assert (
-        features._exported_name_at_position(export_prog, lsp.Position(line=1, character=2)) is None
+        lsp_scope_module._exported_name_at_position(export_prog, lsp.Position(line=1, character=2))
+        is None
     )
 
 
@@ -109,18 +121,18 @@ def test_resolve_exported_imported_value(tmp_path, monkeypatch: pytest.MonkeyPat
     export_span = make_edge_span(tmp_path, line=2, start_col=3, end_col=9)
     export_prog = Program(source_text="> export:\n  shared\n")
     monkeypatch.setattr(
-        features,
+        lsp_resolution_module,
         "_exported_name_at_position",
         lambda prog, pos: ("shared", export_span),
     )
     monkeypatch.setattr(
-        features,
+        lsp_resolution_module,
         "imported_surface_for_program",
         lambda prog: module_surface.ImportedSurface(
             values={"shared": module_surface.ImportedValueInfo("shared", export_span)}
         ),
     )
-    sym = features._resolve_symbol_at(export_prog, lsp.Position(line=1, character=3))
+    sym = lsp_resolution_module._resolve_symbol_at(export_prog, lsp.Position(line=1, character=3))
     assert sym is not None
     assert sym.kind == "imported_value"
     assert sym.name == "shared"
@@ -148,7 +160,7 @@ def test_resolve_output_segment_without_type_expr(tmp_path) -> None:
     from kedi.lang.ast import TypeDef
 
     assert (
-        features._resolve_in_segment(
+        lsp_resolution_module._resolve_in_segment(
             plain,
             pos,
             proc,
@@ -161,11 +173,11 @@ def test_resolve_output_segment_without_type_expr(tmp_path) -> None:
 
 
 def test_prelude_defined_names_skips_non_name_assignment_targets() -> None:
-    assert features._prelude_defined_names("obj.attr = 1\n") == set()
+    assert lsp_scope_module._prelude_defined_names("obj.attr = 1\n") == set()
 
 
 def test_prelude_defined_names_skips_unhandled_statement_kinds() -> None:
-    assert features._prelude_defined_names("raise ValueError\n") == set()
+    assert lsp_scope_module._prelude_defined_names("raise ValueError\n") == set()
 
 
 def test_compute_definition_without_declaration_source_path(tmp_path, monkeypatch) -> None:
@@ -173,9 +185,9 @@ def test_compute_definition_without_declaration_source_path(tmp_path, monkeypatc
 
     span = Span(0, 4, 1, 1, 1, 5, source_path=None)
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="local",
             name="x",
             declaration_span=span,
@@ -183,7 +195,7 @@ def test_compute_definition_without_declaration_source_path(tmp_path, monkeypatc
             cursor_span=span,
         ),
     )
-    loc = features.compute_definition(
+    loc = lsp_navigation_module.compute_definition(
         "= ok\n", "file:///tmp/x.kedi", "/tmp/x.kedi", lsp.Position(0, 0)
     )
     assert loc is not None
@@ -191,11 +203,11 @@ def test_compute_definition_without_declaration_source_path(tmp_path, monkeypatc
 
 
 def test_compute_references_for_unhandled_symbol_kind(monkeypatch) -> None:
-    span = features.Span(0, 4, 1, 1, 1, 5)
+    span = lang_ast_module.Span(0, 4, 1, 1, 1, 5)
     monkeypatch.setattr(
-        features,
+        lsp_navigation_module,
         "_resolve_symbol_at",
-        lambda prog, pos: features.SymbolRef(
+        lambda prog, pos: lsp_symbols_module.SymbolRef(
             kind="module",
             name="profiles",
             declaration_span=span,
@@ -203,7 +215,7 @@ def test_compute_references_for_unhandled_symbol_kind(monkeypatch) -> None:
             cursor_span=span,
         ),
     )
-    refs = features.compute_references(
+    refs = lsp_navigation_module.compute_references(
         "> import: profiles\n= ok\n",
         "file:///tmp/x.kedi",
         "/tmp/x.kedi",
@@ -228,8 +240,12 @@ def test_signature_help_skips_decoy_procedure_without_call_at_cursor(
         body=[ReturnStmt(segments=[TextSegment(text="plain", loc=make_edge_span(tmp_path))])],
         loc=make_edge_span(tmp_path, line=4, start_col=1, end_col=20),
     )
-    monkeypatch.setattr(features, "_all_procedures", lambda _prog: [decoy, *prog.procedures])
-    sig = features.compute_signature_help(src, str(tmp_path / "x.kedi"), pos)
+    monkeypatch.setattr(
+        lsp_scope_module,
+        "_all_procedures",
+        lambda _prog: [decoy, *prog.procedures],
+    )
+    sig = lsp_signatures_module.compute_signature_help(src, str(tmp_path / "x.kedi"), pos)
     assert sig is not None
     assert "other" in sig.signatures[0].label
 
@@ -237,7 +253,7 @@ def test_signature_help_skips_decoy_procedure_without_call_at_cursor(
 def test_signature_help_uses_toplevel_when_procedure_body_has_no_call(tmp_path) -> None:
     src = "@other(x):\n  = <x>\n\n@helper():\n  = plain text\n\n= <other(1)>\n"
     pos = position_of(src, "other", occurrence=2)
-    sig = features.compute_signature_help(src, str(tmp_path / "x.kedi"), pos)
+    sig = lsp_signatures_module.compute_signature_help(src, str(tmp_path / "x.kedi"), pos)
     assert sig is not None
     assert "other" in sig.signatures[0].label
 
@@ -257,7 +273,7 @@ def test_signature_help_skips_procedure_without_inner_call(tmp_path) -> None:
     prog = parse_program(prog_src)
     prog.procedures.append(helper)
     pos = position_of(prog_src, "helper", occurrence=2)
-    sig = features.compute_signature_help(prog_src, str(tmp_path / "x.kedi"), pos)
+    sig = lsp_signatures_module.compute_signature_help(prog_src, str(tmp_path / "x.kedi"), pos)
     assert sig is not None
 
 
@@ -277,7 +293,7 @@ def test_innermost_call_keeps_outer_when_nested_segment_misses(tmp_path) -> None
         loc=make_edge_span(tmp_path, line=1, start_col=1, end_col=20),
     )
     pos = lsp.Position(line=0, character=5)
-    found = features._innermost_call_in_segment(outer, pos)
+    found = lsp_signatures_module._innermost_call_in_segment(outer, pos)
     assert found is outer
 
 
@@ -294,19 +310,19 @@ def test_procedure_docstring_nodes_without_body(monkeypatch) -> None:
             return None
 
     root = FakeNode("source_file", child_nodes=[FakeNode("procedure_def")])
-    assert features._procedure_docstring_nodes(cast(Any, root)) == []
+    assert lsp_semantic_tokens_module._procedure_docstring_nodes(cast(Any, root)) == []
 
 
 def test_semantic_tokens_without_docstring_capture(monkeypatch) -> None:
     src = "@translate(text: str) -> str:\n  ###\n  >> Translate the provided text.\n  ###\n  = <text>\n"
-    monkeypatch.setattr(features, "_capture_to_token", lambda _name: None)
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    monkeypatch.setattr(lsp_semantic_tokens_module, "_capture_to_token", lambda _name: None)
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)
 
 
 def test_python_code_lines_strips_trailing_empty_split_line() -> None:
-    assert features._python_code_lines("  return 1\n") == ["  return 1"]
-    assert features._python_code_lines("foo") == ["foo"]
+    assert python_regions_module._python_code_lines("  return 1\n") == ["  return 1"]
+    assert python_regions_module._python_code_lines("foo") == ["foo"]
 
 
 def test_resolve_symbol_at_skips_unmatched_type_defs_before_match() -> None:
@@ -315,7 +331,7 @@ def test_resolve_symbol_at_skips_unmatched_type_defs_before_match() -> None:
 
     src = "~Alpha(x)\n~Beta(y)\n"
     prog = parse_program(src)
-    sym = features._resolve_symbol_at(prog, position_of(src, "Beta"))
+    sym = lsp_resolution_module._resolve_symbol_at(prog, position_of(src, "Beta"))
     assert sym is not None
     assert sym.name == "Beta"
 
@@ -326,16 +342,16 @@ def test_export_orphan_name_falls_through_to_procedure_walk(tmp_path, monkeypatc
     export_span = make_edge_span(tmp_path)
     export_prog = Program()
     monkeypatch.setattr(
-        features,
+        lsp_resolution_module,
         "_exported_name_at_position",
         lambda prog, pos: ("orphan", export_span),
     )
     monkeypatch.setattr(
-        features,
+        lsp_resolution_module,
         "imported_surface_for_program",
         lambda prog: module_surface.ImportedSurface(),
     )
-    assert features._resolve_symbol_at(export_prog, lsp.Position(0, 0)) is None
+    assert lsp_resolution_module._resolve_symbol_at(export_prog, lsp.Position(0, 0)) is None
 
 
 def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
@@ -344,7 +360,7 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
     def capture(line: int, col: int, length: int, ttype: int, mods: int) -> None:
         captured.append((line, col, length, ttype, mods))
 
-    features._emit_token_spans_for_range(
+    lsp_semantic_tokens_module._emit_token_spans_for_range(
         src_lines=["only"],
         emit=capture,
         start_line=0,
@@ -357,7 +373,7 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
     assert captured == [(0, 0, 4, 1, 0)]
 
     captured.clear()
-    features._emit_token_spans_for_range(
+    lsp_semantic_tokens_module._emit_token_spans_for_range(
         src_lines=["first", "second", "third"],
         emit=capture,
         start_line=0,
@@ -370,7 +386,7 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
     assert captured == [(0, 0, 5, 2, 0), (1, 0, 6, 2, 0), (2, 0, 3, 2, 0)]
 
     captured.clear()
-    features._emit_token_spans_for_range(
+    lsp_semantic_tokens_module._emit_token_spans_for_range(
         src_lines=["only"],
         emit=capture,
         start_line=1,
@@ -385,11 +401,11 @@ def test_emit_token_spans_for_range_covers_multiline_edges() -> None:
 
 def test_semantic_tokens_multiline_python_emit_edges() -> None:
     src = "= <`def f():\n    >> return 1\n`>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert len(tokens.data) % 5 == 0
 
 
 def test_semantic_tokens_multiline_python_short_source() -> None:
     src = "= <`a\n>> b`>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/x.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/x.kedi")
     assert isinstance(tokens.data, list)

@@ -21,8 +21,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.tools import ToolDefinition
 
 import kedi
-import kedi.agent_profile.model as profile_model
-import kedi.api as kedi_api
+import kedi.agent_profile.directives as profile_model
+import kedi.api.cache as api_cache_module
 from kedi import (
     HookDeniedError,
     HookExecutionError,
@@ -36,31 +36,31 @@ from kedi import (
 )
 from kedi.agent_adapter.adapters import PydanticAdapter
 from kedi.agent_adapter.adapters.acp import ACPAdapter
-from kedi.agent_adapter.adapters.claude import (
-    ClaudeAdapter,
-    _active_claude_hook_identities,
+from kedi.agent_adapter.adapters.claude.adapter import ClaudeAdapter
+from kedi.agent_adapter.adapters.claude.hooks import (
     _claude_post_tool_use_failure_hook,
     _claude_post_tool_use_hook,
     _claude_pre_tool_use_hook,
-    _claude_session_fingerprint,
-    _claude_tool_call_input,
     _with_kedi_approval_hook,
 )
-from kedi.agent_adapter.adapters.codex import CodexAdapter
+from kedi.agent_adapter.adapters.claude.messages import (
+    _active_claude_hook_identities,
+    _claude_session_fingerprint,
+)
+from kedi.agent_adapter.adapters.claude.tools import _claude_tool_call_input
+from kedi.agent_adapter.adapters.codex.adapter import CodexAdapter
 from kedi.agent_adapter.adapters.dspy import DSPyAdapter
-from kedi.agent_adapter.adapters.langchain import (
-    LangChainAdapter,
+from kedi.agent_adapter.adapters.langchain.adapter import LangChainAdapter
+from kedi.agent_adapter.adapters.langchain.middleware import (
     _langchain_approval_middleware,
     _langchain_hook_origin,
-    _validated_tool_arguments,
 )
+from kedi.agent_adapter.adapters.langchain.tools import _validated_tool_arguments
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
-from kedi.agent_adapter.adapters.pydantic import (
-    _KediHookCapability,
-    pydantic_toolset_from_specs,
-)
+from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
+from kedi.agent_adapter.adapters.pydantic.tools import pydantic_toolset_from_specs
 from kedi.agent_adapter.adapters.webgpu import WebGPUAdapter
-from kedi.agent_adapter.approval import (
+from kedi.agent_adapter.approvals.policy import (
     ApprovalDecision,
     ApprovalPolicy,
     ApprovalRequest,
@@ -89,7 +89,8 @@ from kedi.agent_adapter.hooks import boundary as hook_boundary
 from kedi.agent_adapter.hooks import dispatcher as hook_dispatcher
 from kedi.agent_adapter.hooks import tool_wrapper as hook_tool_wrapper
 from kedi.agent_adapter.hooks.telemetry import HookChainTelemetry
-from kedi.agent_adapter.tool_override import ToolSpec, with_artifact_result
+from kedi.agent_adapter.tools.execution import with_artifact_result
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import (
     AgentProfile,
     AgentProfileOverrideUnsupported,
@@ -98,9 +99,9 @@ from kedi.agent_profile import (
     normalize_hook_settings,
 )
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
-from kedi.agent_profile.model import eval_profile_definition
+from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
-from kedi.core import KediRuntime
+from kedi.core.runtime import KediRuntime
 from kedi.lang import compile_program
 from kedi.lang.ast import HooksDirectiveStmt, ProfileDefStmt, SettingsField
 from kedi.lang.parser import KediParseError, parse_program
@@ -363,7 +364,7 @@ def test_kedi_on_registers_handlers_in_context_local_profile() -> None:
     def outer(event: Any) -> None:
         return None
 
-    from kedi.api import _config_var
+    from kedi.api.state import _config_var
 
     outer_settings = _config_var.get().profile.hooks
     assert outer_settings is not None
@@ -384,7 +385,7 @@ def test_kedi_on_accepts_lists_and_rejects_non_callable_decorator_targets() -> N
     def observe(_event: Any) -> None:
         return None
 
-    from kedi.api import _config_var
+    from kedi.api.state import _config_var
 
     hooks = _config_var.get().profile.hooks
     assert hooks is not None
@@ -397,8 +398,8 @@ def test_kedi_on_accepts_lists_and_rejects_non_callable_decorator_targets() -> N
 def test_hook_profile_helpers_cover_empty_and_invalid_internal_values() -> None:
     empty = AgentProfile.empty()
     assert empty.with_hook_enforcement() is empty
-    assert kedi_api._hooks_identity(None) is None
-    identity = kedi_api._hooks_identity(HookSettings(enabled=True, pre_tool_use=(len,)))
+    assert api_cache_module._hooks_identity(None) is None
+    identity = api_cache_module._hooks_identity(HookSettings(enabled=True, pre_tool_use=(len,)))
     assert identity is not None
     assert identity[0] is True
     assert identity[1][1][1][0][0] == "builtins"

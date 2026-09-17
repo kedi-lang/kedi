@@ -27,7 +27,7 @@ from ..telemetry import (
 from ..telemetry.naming import qualified_type_name
 from .invocation import InvocationUsage
 from .meta import AgentAdapterKind
-from .tool_override import ToolSpec
+from .tools.specs import ToolSpec
 
 if TYPE_CHECKING:
     from ..agent_profile import AgentProfile

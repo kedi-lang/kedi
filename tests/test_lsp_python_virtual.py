@@ -8,7 +8,15 @@ import json
 from types import SimpleNamespace
 from typing import Any, cast
 
-from kedi.lsp.python_virtual import compute_python_virtual_document
+import pytest
+
+import kedi.lang.ast as kedi_ast
+import kedi.lsp.python_virtual.builder as virtual_builder_module
+import kedi.lsp.python_virtual.document as virtual_document_module
+import kedi.lsp.python_virtual.scope as virtual_scope_module
+import kedi.lsp.python_virtual.statements as virtual_statements_module
+import kedi.lsp.python_virtual.stubs as virtual_stubs_module
+from kedi.lsp.python_virtual.document import compute_python_virtual_document
 
 
 def test_python_virtual_document_models_procedure_scope():
@@ -490,21 +498,25 @@ def test_python_virtual_document_preserves_imported_python_type_metadata(tmp_pat
 
 def test_python_virtual_type_import_discovery_handles_partial_and_star_imports() -> None:
     from kedi.lang import parse_program
-    from kedi.lsp import python_virtual as pv
 
     program = parse_program('~Request(note: Annotated[str, "Human note"])\n')
 
-    assert pv._typing_import_lines(program, None) == ["from typing import Annotated, Any"]
+    assert virtual_stubs_module._typing_import_lines(program, None) == [
+        "from typing import Annotated, Any"
+    ]
     assert (
-        pv._typing_import_lines(
+        virtual_stubs_module._typing_import_lines(
             program,
             None,
             ("from typing import *", "this is not valid Python:"),
         )
         == []
     )
-    assert pv._typing_symbols_in_python_stub("not valid Python:") == set()
-    assert ("typing", "Optional") in pv._typing_symbols_in_python_stub(
+    assert virtual_stubs_module._typing_symbols_in_python_stub("not valid Python:") == set()
+    assert (
+        "typing",
+        "Optional",
+    ) in virtual_stubs_module._typing_symbols_in_python_stub(
         "def normalize(value: Optional[str]): ..."
     )
 
@@ -683,30 +695,40 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
         PythonExprNativeSegment,
         TextSegment,
     )
-    from kedi.lsp import python_virtual as pv
 
-    builder = pv.VirtualBuilder("", None)
+    builder = virtual_builder_module.VirtualBuilder("", None)
     empty_if = IfStmt(condition_code="", body=[], else_body=[])
-    pv._emit_if_stmt(builder, pv.RegionCursor([]), empty_if, {}, "", {})
+    virtual_statements_module._emit_if_stmt(
+        builder, virtual_builder_module.RegionCursor([]), empty_if, {}, "", {}
+    )
     assert "cast(bool, _kedi_placeholder())" in builder.finish()
     assert builder.lines.count("    pass") == 2
 
     no_else = IfStmt(condition_code="", body=[])
-    pv._emit_if_stmt(builder, pv.RegionCursor([]), no_else, {}, "", {})
-    assert list(pv._iter_control_statements([no_else])) == [no_else]
+    virtual_statements_module._emit_if_stmt(
+        builder, virtual_builder_module.RegionCursor([]), no_else, {}, "", {}
+    )
+    assert list(virtual_scope_module._iter_control_statements([no_else])) == [no_else]
 
-    loop_scope = {"n": pv.ScopeName(typ="str", source_range=None)}
+    loop_scope = {"n": virtual_builder_module.ScopeName(typ="str", source_range=None)}
     empty_loop = LoopStmt(binder="n", iterable_code="", body=[])
-    pv._emit_loop_stmt(builder, pv.RegionCursor([]), empty_loop, loop_scope, "", {})
+    virtual_statements_module._emit_loop_stmt(
+        builder,
+        virtual_builder_module.RegionCursor([]),
+        empty_loop,
+        loop_scope,
+        "",
+        {},
+    )
     text = builder.finish()
     assert "cast(Iterable[Any], _kedi_placeholder())" in text
     assert "n: str = cast(str, _kedi_placeholder())" in text
     assert loop_scope["n"].typ == "str"
 
     empty_conditional_loop = ConditionalLoopStmt(condition_code="", body=[])
-    pv._emit_conditional_loop_stmt(
+    virtual_statements_module._emit_conditional_loop_stmt(
         builder,
-        pv.RegionCursor([]),
+        virtual_builder_module.RegionCursor([]),
         empty_conditional_loop,
         {},
         "",
@@ -718,7 +740,7 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
 
     nested = ProcedureDef(name="nested", params=[])
     statements = list(
-        pv._iter_control_statements(
+        virtual_scope_module._iter_control_statements(
             [IfStmt(condition_code="", body=[], else_body=[ProcDefStmt(proc=nested)])]
         )
     )
@@ -733,28 +755,31 @@ def test_python_virtual_control_flow_defensive_fallbacks_and_scope_isolation() -
         condition_code="",
         body=[ProcDefStmt(proc=nested)],
     )
-    walked = list(pv._iter_control_statements([nested_loop, conditional]))
+    walked = list(virtual_scope_module._iter_control_statements([nested_loop, conditional]))
     assert len(walked) == 5
     outer = ProcedureDef(name="outer", params=[], body=[nested_loop])
-    assert [proc.name for proc in pv._all_procedures([outer])] == ["outer", "nested"]
+    assert [proc.name for proc in virtual_scope_module._all_procedures([outer])] == [
+        "outer",
+        "nested",
+    ]
 
-    fallback_builder = pv.VirtualBuilder("", None)
-    fallback_cursor = pv.RegionCursor([])
-    pv._emit_assignment_block(
+    fallback_builder = virtual_builder_module.VirtualBuilder("", None)
+    fallback_cursor = virtual_builder_module.RegionCursor([])
+    virtual_statements_module._emit_assignment_block(
         fallback_builder,
         fallback_cursor,
         AssignmentBlockStmt(name="value", code="return 1"),
-        {"value": pv.ScopeName(typ="int", source_range=None)},
+        {"value": virtual_builder_module.ScopeName(typ="int", source_range=None)},
         "",
     )
-    pv._emit_assignment_stmt(
+    virtual_statements_module._emit_assignment_stmt(
         fallback_builder,
         fallback_cursor,
         AssignmentStmt(
             name="value",
             expr=[PythonExprNativeSegment(code="1")],
         ),
-        {"value": pv.ScopeName(typ="int", source_range=None)},
+        {"value": virtual_builder_module.ScopeName(typ="int", source_range=None)},
         "",
     )
     assert "_kedi_placeholder" in fallback_builder.finish()
@@ -1047,10 +1072,9 @@ def test_python_virtual_helper_edges(monkeypatch):
         VarArg,
         VariableInitStmt,
     )
-    from kedi.lsp import python_virtual as pv
 
     source = "```\n    # comment\n    value = 1\n```\n"
-    builder = pv.VirtualBuilder(source, "/tmp/x.kedi")
+    builder = virtual_builder_module.VirtualBuilder(source, "/tmp/x.kedi")
     builder.add_symbol(
         kind="missing",
         name="x",
@@ -1062,7 +1086,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     )
     assert builder.symbols == []
 
-    empty_region = pv.PythonRegion(
+    empty_region = virtual_builder_module.PythonRegion(
         kind="inline",
         range={
             "start": {"line": 99, "character": 0},
@@ -1073,7 +1097,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert builder.add_mapped_region(empty_region)["start"]["line"] == 0
     assert "..." in builder.finish()
 
-    comment_region = pv.PythonRegion(
+    comment_region = virtual_builder_module.PythonRegion(
         kind="fenced",
         range={
             "start": {"line": 1, "character": 0},
@@ -1085,7 +1109,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert builder.lines[-1] == "    ..."
     assert builder._common_indent(99, 100) == 0
 
-    reversed_region = pv.PythonRegion(
+    reversed_region = virtual_builder_module.PythonRegion(
         kind="inline",
         range={
             "start": {"line": 2, "character": 9},
@@ -1095,7 +1119,7 @@ def test_python_virtual_helper_edges(monkeypatch):
     )
     builder.add_mapped_region(reversed_region)
 
-    region_cursor = pv.RegionCursor(
+    region_cursor = virtual_builder_module.RegionCursor(
         [
             {
                 "kind": "inline",
@@ -1116,10 +1140,10 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
 
-    stub_builder = pv.VirtualBuilder("", None)
-    pv._emit_python_module_stub(stub_builder, "if")
-    pv._emit_python_module_stub(stub_builder, "1 + 1")
-    pv._emit_python_module_stub(
+    stub_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_stubs_module._emit_python_module_stub(stub_builder, "if")
+    virtual_stubs_module._emit_python_module_stub(stub_builder, "1 + 1")
+    virtual_stubs_module._emit_python_module_stub(
         stub_builder,
         "import os, sys as system\n"
         "from typing import *\n"
@@ -1161,9 +1185,9 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert "d: Any = cast(Any, _kedi_placeholder())" in text
     field_call = cast(ast.Call, ast.parse("obj.Field(...)", mode="eval").body)
     factory_call = cast(ast.Call, ast.parse("factory()", mode="eval").body)
-    assert pv._python_call_name(field_call.func) == "Field"
-    assert pv._python_call_name(factory_call.func) == "factory"
-    assert pv._unparse_or_any(None) == "Any"
+    assert virtual_stubs_module._python_call_name(field_call.func) == "Field"
+    assert virtual_stubs_module._python_call_name(factory_call.func) == "factory"
+    assert virtual_scope_module._unparse_or_any(None) == "Any"
 
     class BadNode(ast.AST):
         _fields = ("bad",)
@@ -1172,30 +1196,32 @@ def test_python_virtual_helper_edges(monkeypatch):
         def bad(self):
             raise RuntimeError("bad")
 
-    assert pv._unparse_or_any(BadNode()) == "Any"
+    assert virtual_scope_module._unparse_or_any(BadNode()) == "Any"
     required_field = cast(ast.AnnAssign, ast.parse("x: int = Field(...)\n").body[0])
     defaulted_field = cast(ast.AnnAssign, ast.parse("x: int = Field(1)\n").body[0])
-    assert pv._python_field_has_default(required_field.value) is False
-    assert pv._python_field_has_default(defaulted_field.value) is True
-    assert pv._python_field_has_default(ast.Constant(value=1)) is True
-    assert pv._assigned_python_names(ast.parse("x: int\n").body[0]) == ["x"]
+    assert virtual_stubs_module._python_field_has_default(required_field.value) is False
+    assert virtual_stubs_module._python_field_has_default(defaulted_field.value) is True
+    assert virtual_stubs_module._python_field_has_default(ast.Constant(value=1)) is True
+    assert virtual_stubs_module._assigned_python_names(ast.parse("x: int\n").body[0]) == ["x"]
     multi_assign_class = cast(ast.ClassDef, ast.parse("class C:\n    a = b = 1\n").body[0])
     mixed_assign_class = cast(ast.ClassDef, ast.parse("class C:\n    self.a = b = 1\n").body[0])
-    assert pv._python_class_fields(multi_assign_class) == [
+    assert virtual_stubs_module._python_class_fields(multi_assign_class) == [
         ("a", "Any", True),
         ("b", "Any", True),
     ]
-    assert pv._python_class_fields(mixed_assign_class) == [("b", "Any", True)]
+    assert virtual_stubs_module._python_class_fields(mixed_assign_class) == [("b", "Any", True)]
     assert (
-        pv._single_python_segment([TextSegment(text="x"), PythonExprNativeSegment(code="1")])
+        virtual_statements_module._single_python_segment(
+            [TextSegment(text="x"), PythonExprNativeSegment(code="1")]
+        )
         is None
     )
-    assert pv._single_python_segment([TextSegment(text="x")]) is None
-    assert pv._type_init_params(cast(Any, SimpleNamespace(fields=[]))) == "self"
-    assert pv._indent_width("\t  x") == 6
-    assert pv._python_call_name(ast.Constant(value=1)) == ""
+    assert virtual_statements_module._single_python_segment([TextSegment(text="x")]) is None
+    assert virtual_stubs_module._type_init_params(cast(Any, SimpleNamespace(fields=[]))) == "self"
+    assert virtual_builder_module._indent_width("\t  x") == 6
+    assert virtual_stubs_module._python_call_name(ast.Constant(value=1)) == ""
 
-    typing_symbols = pv._typing_symbols_in_type_expr(
+    typing_symbols = virtual_stubs_module._typing_symbols_in_type_expr(
         TypeUnion(
             left=TypeApply(name="Optional", args=[TypeRef(name="Literal")]),
             right=TypePython(code="Annotated[str, 'x']"),
@@ -1206,19 +1232,25 @@ def test_python_virtual_helper_edges(monkeypatch):
         ("typing", "Literal"),
         ("typing", "Annotated"),
     } <= typing_symbols
-    assert ("builtins", "str") in pv._typing_symbols_in_type_expr(
+    assert (
+        "builtins",
+        "str",
+    ) in virtual_stubs_module._typing_symbols_in_type_expr(
         TypeApply(name="Custom", args=[TypeRef(name="str")])
     )
-    assert pv._typing_symbols_in_type_expr(cast(Any, TypeField(name="not-type"))) == set()
-    assert pv._path_from_uri(None) is None
-    assert pv._path_from_uri("untitled:test") is None
-    assert pv._path_from_uri("file:///tmp/a%20b.kedi") == "/tmp/a b.kedi"
+    assert (
+        virtual_stubs_module._typing_symbols_in_type_expr(cast(Any, TypeField(name="not-type")))
+        == set()
+    )
+    assert virtual_document_module._path_from_uri(None) is None
+    assert virtual_document_module._path_from_uri("untitled:test") is None
+    assert virtual_document_module._path_from_uri("file:///tmp/a%20b.kedi") == "/tmp/a b.kedi"
 
-    empty_type_builder = pv.VirtualBuilder("", None)
-    pv._emit_type_stub(empty_type_builder, TypeDef(name="Empty", fields=[]), {})
+    empty_type_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_stubs_module._emit_type_stub(empty_type_builder, TypeDef(name="Empty", fields=[]), {})
     assert "    pass" in empty_type_builder.finish()
 
-    nested_builder = pv.VirtualBuilder(
+    nested_builder = virtual_builder_module.VirtualBuilder(
         "@outer():\n  @inner():\n    ###\n    >> doc\n    ###\n", None
     )
     inner = ProcedureDef(
@@ -1228,27 +1260,49 @@ def test_python_virtual_helper_edges(monkeypatch):
         docstring="doc",
         loc=Span(0, 1, 2, 3, 5, 8),
     )
-    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), inner, {}, "    ", {})
+    virtual_statements_module._emit_nested_procedure(
+        nested_builder,
+        virtual_builder_module.RegionCursor([]),
+        inner,
+        {},
+        "    ",
+        {},
+    )
     empty_inner = ProcedureDef(name="empty", params=[], body=[], loc=Span(0, 1, 1, 1, 1, 10))
-    pv._emit_nested_procedure(nested_builder, pv.RegionCursor([]), empty_inner, {}, "    ", {})
+    virtual_statements_module._emit_nested_procedure(
+        nested_builder,
+        virtual_builder_module.RegionCursor([]),
+        empty_inner,
+        {},
+        "    ",
+        {},
+    )
     assert '"""doc"""' in nested_builder.finish()
     assert "        return cast(str, _kedi_placeholder())" in nested_builder.finish()
-    assert pv._docstring_lines("one line", "  ") == ['  """one line"""']
+    assert virtual_stubs_module._docstring_lines("one line", "  ") == ['  """one line"""']
 
     assign = VariableInitStmt(
         name="x",
         expr=[PythonExprNativeSegment(code="1", loc=Span(0, 1, 1, 12, 1, 13))],
         loc=Span(0, 1, 1, 2, 1, 3),
     )
-    emit_builder = pv.VirtualBuilder("[x: int] = `1`\n", None)
-    pv._emit_variable_init_stmt(emit_builder, pv.RegionCursor([]), assign, {}, "    ")
+    emit_builder = virtual_builder_module.VirtualBuilder("[x: int] = `1`\n", None)
+    virtual_statements_module._emit_variable_init_stmt(
+        emit_builder, virtual_builder_module.RegionCursor([]), assign, {}, "    "
+    )
     assert "x: str = (" in emit_builder.finish()
     plain_assign = VariableInitStmt(
         name="y",
         expr=[TextSegment(text="hello")],
         loc=Span(0, 1, 1, 2, 1, 3),
     )
-    pv._emit_variable_init_stmt(emit_builder, pv.RegionCursor([]), plain_assign, {}, "    ")
+    virtual_statements_module._emit_variable_init_stmt(
+        emit_builder,
+        virtual_builder_module.RegionCursor([]),
+        plain_assign,
+        {},
+        "    ",
+    )
     assert "y: str = cast(str, _kedi_placeholder())" in emit_builder.finish()
     region_for_assign = {
         "kind": "inline",
@@ -1258,31 +1312,39 @@ def test_python_virtual_helper_edges(monkeypatch):
         },
         "text": "1",
     }
-    pv._emit_variable_init_stmt(
-        emit_builder, pv.RegionCursor([region_for_assign]), assign, {}, "    "
+    virtual_statements_module._emit_variable_init_stmt(
+        emit_builder,
+        virtual_builder_module.RegionCursor([region_for_assign]),
+        assign,
+        {},
+        "    ",
     )
 
-    import_builder = pv.VirtualBuilder("", None)
-    assert pv._emit_python_stub_stmt(import_builder, ast.parse("import typing").body[0])
+    import_builder = virtual_builder_module.VirtualBuilder("", None)
+    assert virtual_stubs_module._emit_python_stub_stmt(
+        import_builder, ast.parse("import typing").body[0]
+    )
     assert (
-        pv._emit_python_stub_stmt(
+        virtual_stubs_module._emit_python_stub_stmt(
             import_builder,
             ast.parse("from package import *").body[0],
         )
         is False
     )
     assert "import typing" in import_builder.finish()
-    assert pv._checker_safe_value_stub("not valid Python !") == "not valid Python !"
+    assert (
+        virtual_stubs_module._checker_safe_value_stub("not valid Python !") == "not valid Python !"
+    )
 
-    no_region_block = pv.VariableInitBlockStmt(
+    no_region_block = kedi_ast.VariableInitBlockStmt(
         name="blocked",
         code="return 1",
         type_annotation="int",
         loc=Span(0, 1, 1, 1, 1, 10),
     )
-    pv._emit_variable_init_block(
+    virtual_statements_module._emit_variable_init_block(
         emit_builder,
-        pv.RegionCursor([]),
+        virtual_builder_module.RegionCursor([]),
         no_region_block,
         {},
         "    ",
@@ -1324,34 +1386,37 @@ def test_python_virtual_helper_edges(monkeypatch):
             ),
         ],
     )
-    assert len(list(pv._call_inline_python_locations(nested_call))) == 5
-    pv._emit_segments(
+    assert len(list(virtual_statements_module._call_inline_python_locations(nested_call))) == 5
+    virtual_statements_module._emit_segments(
         emit_builder,
-        pv.RegionCursor([]),
-        pv.TemplateLine(segments=[nested_call]),
+        virtual_builder_module.RegionCursor([]),
+        kedi_ast.TemplateLine(segments=[nested_call]),
         {},
         "    ",
     )
-    pv._emit_segments(
+    virtual_statements_module._emit_segments(
         emit_builder,
-        pv.RegionCursor([]),
-        pv.TemplateLine(
+        virtual_builder_module.RegionCursor([]),
+        kedi_ast.TemplateLine(
             segments=[PythonExprSegment(code="missing_region", loc=Span(0, 1, 1, 1, 1, 5))]
         ),
         {},
         "    ",
     )
 
-    raw_scope = pv._collect_toplevel_scope(
+    raw_scope = virtual_scope_module._collect_toplevel_scope(
         [RawInvokeStmt(name="response", segments=[TextSegment(text="hello")])]
     )
     assert raw_scope["response"].typ == "str"
-    assert pv._index_header_ranges([{"ownerKind": None, "containerLine": None}]) == {}
+    assert (
+        virtual_scope_module._index_header_ranges([{"ownerKind": None, "containerLine": None}])
+        == {}
+    )
 
-    stmt_builder = pv.VirtualBuilder("[a] = ok\n`x = 1`\n", None)
-    pv._emit_statements(
+    stmt_builder = virtual_builder_module.VirtualBuilder("[a] = ok\n`x = 1`\n", None)
+    virtual_statements_module._emit_statements(
         stmt_builder,
-        pv.RegionCursor(
+        virtual_builder_module.RegionCursor(
             [
                 {
                     "kind": "inline",
@@ -1365,7 +1430,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         ),
         [
             VariableInitStmt(name="a", expr=[TextSegment(text="ok")], loc=Span(0, 1, 1, 2, 1, 3)),
-            pv.TemplateLine(
+            kedi_ast.TemplateLine(
                 segments=[OutputSegment(name="template_output", type_annotation="int")],
                 loc=Span(0, 1, 1, 1, 1, 1),
             ),
@@ -1380,20 +1445,22 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert "a: str = cast(str, _kedi_placeholder())" in stmt_builder.finish()
     assert "template_output: int = cast(int, _kedi_placeholder())" in stmt_builder.finish()
     assert "x = 1" in stmt_builder.finish()
-    pv._emit_statements(
+    virtual_statements_module._emit_statements(
         stmt_builder,
-        pv.RegionCursor([]),
+        virtual_builder_module.RegionCursor([]),
         [
             BacktickLineStmt(code="z = 3", loc=Span(0, 1, 2, 1, 2, 7)),
-            pv.ReturnBlockStmt(code="return 1", loc=Span(0, 1, 2, 1, 2, 8)),
-            pv.Stmt(),
+            kedi_ast.ReturnBlockStmt(code="return 1", loc=Span(0, 1, 2, 1, 2, 8)),
+            kedi_ast.Stmt(),
         ],
         {},
         "    ",
         {},
     )
 
-    validation_builder = pv.VirtualBuilder("`assert True`\n```\nDATA = []\n```\n", None)
+    validation_builder = virtual_builder_module.VirtualBuilder(
+        "`assert True`\n```\nDATA = []\n```\n", None
+    )
     program = ProgramWithValidation(
         tests=[
             TestSuite(
@@ -1412,7 +1479,7 @@ def test_python_virtual_helper_edges(monkeypatch):
             EvalSuite(
                 procedure_name="solve",
                 datasets={
-                    "train": pv.EvalDataset(
+                    "train": kedi_ast.EvalDataset(
                         name="train",
                         code="DATA = []",
                         is_block=True,
@@ -1423,9 +1490,9 @@ def test_python_virtual_helper_edges(monkeypatch):
             )
         ],
     )
-    pv._emit_validation(
+    virtual_statements_module._emit_validation(
         validation_builder,
-        pv.RegionCursor(
+        virtual_builder_module.RegionCursor(
             [
                 {
                     "kind": "inline",
@@ -1452,34 +1519,44 @@ def test_python_virtual_helper_edges(monkeypatch):
     assert "__kedi_test_solve_basic" in validation_text
     assert "__kedi_metric_solve_score" in validation_text
     assert "    pass" in validation_text
-    metric_builder = pv.VirtualBuilder("", None)
-    pv._emit_metric(
+    metric_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_statements_module._emit_metric(
         metric_builder,
-        pv.RegionCursor([]),
+        virtual_builder_module.RegionCursor([]),
         EvalSuite(procedure_name="solve"),
         EvalMetric(name="score", code="return 1.0"),
         None,
     )
     assert "    pass" in metric_builder.finish()
 
-    symbol_builder = pv.VirtualBuilder("", None)
-    pv._add_scope_param_symbols(symbol_builder, {"x": pv.ScopeName("str", None)}, 0, "no params")
-    pv._add_scope_param_symbols(symbol_builder, {"missing": pv.ScopeName("str", None)}, 0, "fn(x)")
+    symbol_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_scope_module._add_scope_param_symbols(
+        symbol_builder,
+        {"x": virtual_builder_module.ScopeName("str", None)},
+        0,
+        "no params",
+    )
+    virtual_scope_module._add_scope_param_symbols(
+        symbol_builder,
+        {"missing": virtual_builder_module.ScopeName("str", None)},
+        0,
+        "fn(x)",
+    )
     assert symbol_builder.symbols == []
-    assert not pv._range_within_span(
+    assert not virtual_builder_module._range_within_span(
         {"start": {"line": 0, "character": 0}, "end": {"line": 3, "character": 0}},
         Span(0, 1, 2, 1, 2, 5),
     )
-    assert not pv._range_within_span(
+    assert not virtual_builder_module._range_within_span(
         {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 99}},
         Span(0, 1, 2, 2, 2, 5),
     )
-    assert pv._proc_name_range(ProcedureDef(name="p", params=[])) is None
-    assert pv._type_name_range(TypeDef(name="T", fields=[])) is None
-    assert pv._binding_name_range(VariableInitStmt(name="x")) is None
-    assert pv._output_name_range(OutputSegment(name="x")) is None
+    assert virtual_scope_module._proc_name_range(ProcedureDef(name="p", params=[])) is None
+    assert virtual_scope_module._type_name_range(TypeDef(name="T", fields=[])) is None
+    assert virtual_scope_module._binding_name_range(VariableInitStmt(name="x")) is None
+    assert virtual_scope_module._output_name_range(OutputSegment(name="x")) is None
     assert (
-        pv._param_name_range(
+        virtual_scope_module._param_name_range(
             ["@p(x):"],
             ProcedureDef(name="p", params=["x"]),
             "x",
@@ -1487,7 +1564,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
     assert (
-        pv._param_name_range(
+        virtual_scope_module._param_name_range(
             [],
             ProcedureDef(name="p", params=["x"], loc=Span(0, 1, 1, 1, 1, 5)),
             "x",
@@ -1495,7 +1572,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
     assert (
-        pv._param_name_range(
+        virtual_scope_module._param_name_range(
             ["@p x):"],
             ProcedureDef(name="p", params=["x"], loc=Span(0, 1, 1, 1, 1, 5)),
             "x",
@@ -1503,7 +1580,7 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
     assert (
-        pv._param_name_range(
+        virtual_scope_module._param_name_range(
             ["@p(x"],
             ProcedureDef(name="p", params=["y"], loc=Span(0, 1, 1, 1, 1, 5)),
             "y",
@@ -1511,15 +1588,15 @@ def test_python_virtual_helper_edges(monkeypatch):
         is None
     )
     assert (
-        pv._param_name_range(
+        virtual_scope_module._param_name_range(
             ["@p(x):"],
             ProcedureDef(name="p", params=["y"], loc=Span(0, 1, 1, 1, 1, 6)),
             "y",
         )
         is None
     )
-    assert pv._container_line(ProcedureDef(name="p", params=[])) == -1
-    pv._add_proc_header_regions(
+    assert virtual_scope_module._container_line(ProcedureDef(name="p", params=[])) == -1
+    virtual_scope_module._add_proc_header_regions(
         symbol_builder,
         ProcedureDef(
             name="p",
@@ -1543,8 +1620,12 @@ def test_python_virtual_helper_edges(monkeypatch):
             }
         },
     )
-    monkeypatch.setattr(pv, "_proc_param_to_python", lambda proc, name: "x: str")
-    pv._add_proc_header_regions(
+    monkeypatch.setattr(
+        virtual_scope_module,
+        "_proc_param_to_python",
+        lambda proc, name: "x: str",
+    )
+    virtual_scope_module._add_proc_header_regions(
         symbol_builder,
         ProcedureDef(
             name="p",
@@ -1569,8 +1650,8 @@ def test_python_virtual_helper_edges(monkeypatch):
         },
     )
     monkeypatch.undo()
-    dynamic_header_builder = pv.VirtualBuilder("", None)
-    pv._add_proc_header_regions(
+    dynamic_header_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_scope_module._add_proc_header_regions(
         dynamic_header_builder,
         ProcedureDef(
             name="dynamic",
@@ -1618,8 +1699,8 @@ def test_python_virtual_helper_edges(monkeypatch):
         return_type_expr=TypePython(code="list[int]"),
         loc=Span(0, 1, 1, 1, 1, 30),
     )
-    missing_header_builder = pv.VirtualBuilder("", None)
-    pv._add_proc_header_regions(
+    missing_header_builder = virtual_builder_module.VirtualBuilder("", None)
+    virtual_scope_module._add_proc_header_regions(
         missing_header_builder,
         dynamic_proc,
         signature_line=0,
@@ -1638,7 +1719,7 @@ def test_python_virtual_helper_edges(monkeypatch):
             }
         },
     )
-    pv._add_proc_header_regions(
+    virtual_scope_module._add_proc_header_regions(
         missing_header_builder,
         dynamic_proc,
         signature_line=0,
@@ -1658,8 +1739,12 @@ def test_python_virtual_helper_edges(monkeypatch):
         },
     )
     with monkeypatch.context() as patch:
-        patch.setattr(pv, "_proc_param_to_python", lambda _proc, _name: "value: object")
-        pv._add_proc_header_regions(
+        patch.setattr(
+            virtual_scope_module,
+            "_proc_param_to_python",
+            lambda _proc, _name: "value: object",
+        )
+        virtual_scope_module._add_proc_header_regions(
             missing_header_builder,
             dynamic_proc,
             signature_line=0,
@@ -1678,7 +1763,7 @@ def test_python_virtual_helper_edges(monkeypatch):
                 }
             },
         )
-    pv._add_default_expr_region(
+    virtual_scope_module._add_default_expr_region(
         symbol_builder,
         source_range={
             "start": {"line": 0, "character": 0},
@@ -1689,14 +1774,17 @@ def test_python_virtual_helper_edges(monkeypatch):
         expr="missing",
     )
 
-    assert pv._find_deepest_procedure_at_line([ProcedureDef(name="p", params=[])], 1) is None
+    assert (
+        virtual_scope_module._find_deepest_procedure_at_line([ProcedureDef(name="p", params=[])], 1)
+        is None
+    )
     first = ProcedureDef(name="first", params=[])
     second = ProcedureDef(name="second", params=[])
-    assert pv._top_level_procedure_for([first, second], second) is second
-    assert pv._top_level_procedure_for([first], second) is None
-    assert pv._should_emit_full_module_python(None, 1) is False
-    assert pv._indent_width("") == 0
-    pv._fallback_virtual_document(
+    assert virtual_scope_module._top_level_procedure_for([first, second], second) is second
+    assert virtual_scope_module._top_level_procedure_for([first], second) is None
+    assert virtual_scope_module._should_emit_full_module_python(None, 1) is False
+    assert virtual_builder_module._indent_width("") == 0
+    virtual_document_module._fallback_virtual_document(
         "```\nvalue = 1\n```\n",
         [
             {
@@ -1710,32 +1798,36 @@ def test_python_virtual_helper_edges(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(pv, "compute_python_ranges", lambda src: [])
-    outside_focus = pv.compute_python_virtual_document(
+    monkeypatch.setattr(virtual_document_module, "compute_python_ranges", lambda src: [])
+    outside_focus = virtual_document_module.compute_python_virtual_document(
         "@p():\n  = ok\n\n```\nSIDE = 2\n```\n",
         focus_line=99,
     )
     assert "SIDE: Any = cast(Any, _kedi_placeholder())" in outside_focus["text"]
-    fallback = pv.compute_python_virtual_document("```\nvalue = 1\n```\n@bad(:\n")
+    fallback = virtual_document_module.compute_python_virtual_document(
+        "```\nvalue = 1\n```\n@bad(:\n"
+    )
     assert fallback["focusKey"] is None
 
-    monkeypatch.setattr(pv, "compute_python_ranges", lambda src: [])
-    no_region = pv.compute_python_virtual_document("```\nPRELUDE = 1\n```\n```\nSIDE = 2\n```\n")
+    monkeypatch.setattr(virtual_document_module, "compute_python_ranges", lambda src: [])
+    no_region = virtual_document_module.compute_python_virtual_document(
+        "```\nPRELUDE = 1\n```\n```\nSIDE = 2\n```\n"
+    )
     assert "PRELUDE = 1" in no_region["text"]
     assert "SIDE = 2" in no_region["text"]
 
     stdin = io.StringIO('{"text":"= ok\\n","uri":"file:///tmp/x.kedi","focusLine":0}')
     stdout = io.StringIO()
-    monkeypatch.setattr(pv.sys, "stdin", stdin)
-    monkeypatch.setattr(pv.sys, "stdout", stdout)
-    pv.main()
+    monkeypatch.setattr(virtual_document_module.sys, "stdin", stdin)
+    monkeypatch.setattr(virtual_document_module.sys, "stdout", stdout)
+    virtual_document_module.main()
     assert json.loads(stdout.getvalue())["focusKey"] is None
 
     stdin = io.StringIO('\n{"id":1,"text":"= ok\\n"}\nnot-json\n')
     stdout = io.StringIO()
-    monkeypatch.setattr(pv.sys, "stdin", stdin)
-    monkeypatch.setattr(pv.sys, "stdout", stdout)
-    pv.main_loop()
+    monkeypatch.setattr(virtual_document_module.sys, "stdin", stdin)
+    monkeypatch.setattr(virtual_document_module.sys, "stdout", stdout)
+    virtual_document_module.main_loop()
     responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
     assert responses[0]["ok"] is True
     assert responses[1]["ok"] is False
@@ -1762,3 +1854,20 @@ def redact(event):
     assert "        [redact]" in virtual["text"]
     inline = [region for region in virtual["ranges"] if region["kind"] == "inline"]
     assert [region["text"] for region in inline] == ["redact", "[redact]"]
+
+
+def test_virtual_document_module_entry_point(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+    import io
+    import json
+    import runpy
+    import sys
+
+    entry = importlib.import_module("kedi.lsp.python_virtual.__main__")
+    assert entry.main is virtual_document_module.main
+    monkeypatch.delitem(sys.modules, entry.__name__)
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"text":"= ok\\n"}'))
+    output = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", output)
+    runpy.run_module("kedi.lsp.python_virtual", run_name="__main__")
+    assert json.loads(output.getvalue())["focusKey"] is None

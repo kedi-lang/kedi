@@ -31,7 +31,7 @@ from kedi.agent_adapter.compaction import (
     PydanticArtifactHistoryProcessor,
     PydanticHistoryArchiveSettings,
 )
-from kedi.agent_adapter.tool_override import artifact_admission_scope
+from kedi.agent_adapter.tools.scope import artifact_admission_scope
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 
 

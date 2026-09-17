@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from lsprotocol import types as lsp
 
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 from kedi.lsp import kedi_docstrings
 from tests.lsp_helpers import decode_semantic_tokens, position_of
 
@@ -190,12 +191,11 @@ def broken(name: str) -> str:
 
 
 def test_kedi_docstring_semantic_tokens_are_remapped() -> None:
-    from kedi.lsp import features
 
     tokens = kedi_docstrings.compute_kedi_docstring_semantic_tokens(PY_SOURCE)
     decoded = decode_semantic_tokens(tokens["data"])
     token_types = {
-        features.SEMANTIC_TOKEN_TYPES[token_type]
+        lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES[token_type]
         for line, _, _, token_type, _ in decoded
         if line == 12
     }

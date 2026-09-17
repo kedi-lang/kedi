@@ -19,7 +19,7 @@ from kedi.agent_adapter.adapters.acp import (
 )
 from kedi.agent_adapter.events import AgentMessageEvent, AgentRunStateEvent, observe_agent_events
 from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import ACP_AGENT_SETTING_KEYS, AgentProfile
 from kedi.app import _build_runtime_adapter
 

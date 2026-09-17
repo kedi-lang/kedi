@@ -5,13 +5,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..approval import ApprovalPolicy
-from ..tool_override import (
-    ToolResultAdmitter,
-    ToolSpec,
-    defer_artifact_admission,
-    resolve_tool_arguments_async,
-)
+from ..approvals.policy import ApprovalPolicy
+from ..tools.execution import resolve_tool_arguments_async
+from ..tools.scope import defer_artifact_admission
+from ..tools.specs import ToolResultAdmitter, ToolSpec
 from .core import CODEMODE_INSTRUCTIONS, CodeModeLimits, CodeModeSession, CodeModeTool
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})

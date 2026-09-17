@@ -22,7 +22,7 @@ from contextvars import ContextVar
 
 import pytest
 
-import kedi.core as core
+import kedi.core.engines as core_engines_module
 import kedi.engine as engine_mod
 from kedi.engine import JobManagerEngine, RetryPolicy, ThreadEngine
 from kedi.errors import KediExecutionError
@@ -376,8 +376,8 @@ def test_a8_thread_engine_runs_routing_check_once(
 
 
 def test_a9_shared_engine_cached_by_worker_count() -> None:
-    e4a = core.shared_thread_engine(max_workers=4)
-    e4b = core.shared_thread_engine(max_workers=4)
-    e7 = core.shared_thread_engine(max_workers=7)
+    e4a = core_engines_module.shared_thread_engine(max_workers=4)
+    e4b = core_engines_module.shared_thread_engine(max_workers=4)
+    e7 = core_engines_module.shared_thread_engine(max_workers=7)
     assert e4a is e4b  # same worker count → reused
     assert e4a is not e7  # different worker count → a distinct pool, not the sticky first one

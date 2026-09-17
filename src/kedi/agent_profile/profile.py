@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..agent_adapter.approval import ApprovalPolicy
+from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
@@ -15,8 +15,8 @@ from .mcp import McpServerSpec
 from .skills import SkillsSettings, skills_settings
 
 if TYPE_CHECKING:
-    from ..agent_adapter.tool_override import ToolSpec
-    from .registry import ProfileDefinition
+    from ..agent_adapter.tools.specs import ToolSpec
+    from .definitions import ProfileDefinition
 
 AgentCommand = str | tuple[str, ...]
 WorkflowMode = Literal["delegate", "dynamic"]

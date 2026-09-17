@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from typing_extensions import runtime_checkable
 
 from ..resolved_types import ResolvedKediType
+
+if TYPE_CHECKING:
+    from kedi.agent_profile import AgentProfile
+
+
+@runtime_checkable
+class SupportsProfileOverride(Protocol):
+    def default_model(self) -> str | None:
+        """Return the adapter's configured default model, if any."""
+        ...
+
+    def profile_override(self, profile: AgentProfile) -> AbstractContextManager[None]:
+        """Return a context manager that applies ``profile`` for nested agent calls."""
+        ...
+
 
 T = TypeVar("T", covariant=True)
 AgentAdapterKind = Literal["agent-framework", "agent-harness"]

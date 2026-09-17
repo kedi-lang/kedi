@@ -153,5 +153,9 @@ jobs:
           'kedi/integrations/harbor/agent.py',
           'kedi/integrations/harbor/host.py',
           'kedi/integrations/harbor/runner.py',
-          'kedi/integrations/harbor/terminal.py'};
+          'kedi/integrations/harbor/terminal/__init__.py',
+          'kedi/integrations/harbor/terminal/session.py',
+          'kedi/integrations/harbor/terminal/processes.py',
+          'kedi/integrations/harbor/terminal/output.py',
+          'kedi/integrations/harbor/terminal/audit.py'};
           assert required <= names, sorted(required - names)"

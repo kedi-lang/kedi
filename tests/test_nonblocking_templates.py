@@ -176,7 +176,7 @@ def test_concurrent_tool_using_templates_have_isolated_scopes() -> None:
     # templates can pipeline without serialization.
     from types import SimpleNamespace
 
-    from kedi.agent_adapter.tool_override import ToolSpec
+    from kedi.agent_adapter.tools.specs import ToolSpec
 
     class ScopeProbeAdapter(ConcurrencyProbeAdapter):
         def register_tool(self, tool: ToolSpec) -> None:

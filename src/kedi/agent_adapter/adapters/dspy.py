@@ -24,18 +24,20 @@ from ...dynamic_models import build_dynamic_model
 from ...errors import KediExecutionError
 from ...model_normalization import normalize_for_litellm
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_metadata
-from ..approval import ApprovalPolicy
+from ..approvals.policy import ApprovalPolicy
 from ..dspy_metadata import DSPY_ADAPTER
 from ..invocation import InvocationUsage, invocation_observer, report_invocation
 from ..llm_wrapper import ThinkingStrippingLM
 from ..meta import AgentAdapterKind
+from ..output_schema import output_field_metadata
 from ..subagents import SubagentExecutionRequest
 from ..subagents.attempts import DelegationFailurePolicy, delegation_scope
 from ..subagents.limits import SubagentUsageLimits
 from ..subagents.runs import safe_subagent_error_message
 from ..telemetry import mcp_initialization_span, mcp_server_name
-from ..tool_override import ToolScope, ToolSpec, with_approval
+from ..tools.execution import with_approval
+from ..tools.scope import ToolScope
+from ..tools.specs import ToolSpec
 
 
 class DSPyAdapter:
@@ -119,7 +121,11 @@ class DSPyAdapter:
         return scoped()
 
     def register_tool(self, tool: ToolSpec) -> None:
-        from ..utils import dspy_sync_tool_function, dspy_tool_arg_desc, dspy_tool_args
+        from ..adapters.dspy_tools import (
+            dspy_sync_tool_function,
+            dspy_tool_arg_desc,
+            dspy_tool_args,
+        )
 
         if tool.metadata is not None and tool.metadata.get("kind") == "subagent":
             tool = _dspy_recoverable_subagent_tool(tool)
@@ -251,7 +257,7 @@ class DSPyAdapter:
         """
         if not output_schema and output_type is None:
             raise ValueError("Output spec must be provided.")
-        from ..utils import run_sync
+        from ..execution import run_sync
 
         kwargs.pop("user_prompt", None)
         sig = (
@@ -280,7 +286,7 @@ class DSPyAdapter:
         return await asyncio.to_thread(self.invoke_sync, prompt=prompt, **kwargs)
 
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
-        from ..utils import run_sync
+        from ..execution import run_sync
 
         kwargs.pop("user_prompt", None)
         sig = self.invoke_signature()
@@ -303,7 +309,7 @@ class DSPyAdapter:
         output_schema: dict[str, Any],
         kwargs: dict[str, Any],
     ) -> Mapping[str, Any]:
-        from ..utils import run_sync
+        from ..execution import run_sync
 
         run_kwargs = dict(kwargs)
         run_kwargs.pop("user_prompt", None)

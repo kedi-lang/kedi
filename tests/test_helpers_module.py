@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from kedi.agent_adapter.approval import ApprovalDecision
+from kedi.agent_adapter.approvals.policy import ApprovalDecision
 from kedi.lang import compile_program, parse_program
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict

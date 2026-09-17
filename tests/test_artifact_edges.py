@@ -15,6 +15,8 @@ from typing import Any, AsyncIterator, Iterator, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
+import kedi.artifacts.file_store as artifacts_file_store_module
+import kedi.artifacts.projection as artifacts_projection_module
 from kedi.agent_adapter.conversation import ConversationState
 from kedi.artifacts import (
     ArtifactAccessError,
@@ -39,10 +41,10 @@ from kedi.artifacts import (
 )
 from kedi.artifacts import telemetry as artifact_telemetry
 from kedi.artifacts.cleanup import ArtifactCleanupService
-from kedi.artifacts.manager import _is_expired, _StreamingWrite
+from kedi.artifacts.manager import _is_expired
+from kedi.artifacts.memory_store import InMemoryArtifactStore
 from kedi.artifacts.models import ArtifactRecord, ArtifactRef
-from kedi.artifacts.store import (
-    InMemoryArtifactStore,
+from kedi.artifacts.projection import (
     _build_utf8_checkpoints,
     _count_utf8_chars,
     _JsonPointerLocator,
@@ -52,9 +54,10 @@ from kedi.artifacts.store import (
     _read_utf8_chars,
     _validated_checkpoints,
     _validated_pointer_ranges,
-    store_size,
 )
+from kedi.artifacts.store import store_size
 from kedi.artifacts.stream import ArtifactStream
+from kedi.artifacts.stream_writer import _StreamingWrite
 from kedi.artifacts.streaming import ArtifactStreamEncoder, StreamedArtifact
 from kedi.artifacts.tools import artifact_tool_specs
 from kedi.lang.compiler.environment import (
@@ -77,6 +80,15 @@ def policy(**values: object) -> ArtifactPolicy:
             **values,
         }
     ).resolved()
+
+
+def test_store_public_exports_include_lazy_implementations() -> None:
+    namespace: dict[str, Any] = {}
+    exec("from kedi.artifacts.store import *", namespace)
+
+    assert namespace["FileArtifactStore"] is FileArtifactStore
+    assert namespace["InMemoryArtifactStore"] is InMemoryArtifactStore
+    assert namespace["store_size"] is store_size
 
 
 @pytest.mark.parametrize(
@@ -440,11 +452,10 @@ def test_file_store_removes_payload_when_metadata_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kedi.artifacts.store as store_module
 
     root = tmp_path / "artifacts"
     store = FileArtifactStore(root)
-    original = store_module._atomic_write
+    original = artifacts_projection_module._atomic_write
     calls = 0
 
     def fail_metadata(path: Path, payload: bytes, *, mode: int) -> None:
@@ -454,7 +465,7 @@ def test_file_store_removes_payload_when_metadata_write_fails(
             raise OSError("metadata write failed")
         original(path, payload, mode=mode)
 
-    monkeypatch.setattr(store_module, "_atomic_write", fail_metadata)
+    monkeypatch.setattr(artifacts_file_store_module, "_atomic_write", fail_metadata)
     with pytest.raises(OSError, match="metadata"):
         store.put(_record(), serialize_artifact("value", preview_chars=10))
     assert not (root / "session" / "art_test.payload").exists()
@@ -465,7 +476,6 @@ def test_atomic_write_removes_temporary_file_on_replace_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kedi.artifacts.store as store_module
 
     target = tmp_path / "target"
 
@@ -474,7 +484,7 @@ def test_atomic_write_removes_temporary_file_on_replace_failure(
 
     monkeypatch.setattr(Path, "replace", fail_replace)
     with pytest.raises(OSError, match="cannot replace"):
-        store_module._atomic_write(target, b"value", mode=0o600)
+        artifacts_projection_module._atomic_write(target, b"value", mode=0o600)
     assert list(tmp_path.iterdir()) == []
 
 
@@ -1112,7 +1122,6 @@ def test_file_stream_writer_removes_payload_when_metadata_write_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kedi.artifacts.store as store_module
 
     store = FileArtifactStore(tmp_path / "writer-failure")
     writer = store.begin_write("session", "art_test")
@@ -1121,7 +1130,7 @@ def test_file_stream_writer_removes_payload_when_metadata_write_fails(
     def fail_write(*_args: object, **_kwargs: object) -> None:
         raise OSError("metadata failed")
 
-    monkeypatch.setattr(store_module, "_atomic_write", fail_write)
+    monkeypatch.setattr(artifacts_file_store_module, "_atomic_write", fail_write)
     try:
         with pytest.raises(OSError, match="metadata failed"):
             writer.commit(_record(), _streamed())
@@ -1178,7 +1187,6 @@ def test_utf8_reader_accepts_decoder_tail(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import kedi.artifacts.store as store_module
 
     class Decoder:
         def decode(self, payload: bytes, final: bool = False) -> str:
@@ -1186,7 +1194,9 @@ def test_utf8_reader_accepts_decoder_tail(
 
     path = tmp_path / "tail"
     path.write_bytes(b"a")
-    monkeypatch.setattr(store_module.codecs, "getincrementaldecoder", lambda _name: Decoder)
+    monkeypatch.setattr(
+        artifacts_projection_module.codecs, "getincrementaldecoder", lambda _name: Decoder
+    )
     assert _read_utf8_chars(path, start=0, limit=10) == "atail"
 
 
@@ -1217,15 +1227,13 @@ def test_legacy_json_locator_defensive_parser_invariants(
 ) -> None:
     from io import BytesIO
 
-    import kedi.artifacts.store as store_module
-
     missing_key = _JsonPointerLocator(BytesIO(b'{"a":1}'), target=("missing",))
     monkeypatch.setattr(missing_key, "_parse_string", lambda *, decode: None)
     with pytest.raises(ArtifactSerializationError, match="object key"):
         missing_key.locate()
 
     invalid_key = _JsonPointerLocator(BytesIO(b'"x"'), target=())
-    monkeypatch.setattr(store_module.json, "loads", lambda _value: 1)
+    monkeypatch.setattr(artifacts_projection_module.json, "loads", lambda _value: 1)
     with pytest.raises(ArtifactSerializationError, match="key is not a string"):
         invalid_key._parse_string(decode=True)
 

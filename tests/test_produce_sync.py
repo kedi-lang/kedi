@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from kedi.agent_adapter.utils import run_sync
+from kedi.agent_adapter.execution import run_sync
 
 
 async def _echo(value: str) -> str:

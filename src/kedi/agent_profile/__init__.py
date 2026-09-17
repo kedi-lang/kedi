@@ -12,28 +12,7 @@ from .compaction import (
     CompactionSettingsError,
     normalize_compaction_settings,
 )
-from .hooks import HookInput, HookSettings, normalize_hook_settings
-from .mcp import McpServerSpec, McpTransport
-from .model import (
-    AgentProfileOverrideUnsupported,
-    AgentSubagentUnsupported,
-    AgentToolOverrideUnsupported,
-    eval_adapter_directive,
-    eval_agent_directive,
-    eval_approval_directive,
-    eval_codemode_directive,
-    eval_effort_directive,
-    eval_history_directive,
-    eval_hooks_directive,
-    eval_mcp_directive,
-    eval_model_directive,
-    eval_settings_directive,
-    eval_skills_directive,
-    eval_system_directive,
-    eval_use_profile,
-)
-from .profile import AgentProfile, WorkflowMode
-from .registry import (
+from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
@@ -54,6 +33,30 @@ from .registry import (
     ProfileUseMember,
     ProfileWorkflowMember,
 )
+from .directives import (
+    eval_adapter_directive,
+    eval_agent_directive,
+    eval_approval_directive,
+    eval_codemode_directive,
+    eval_effort_directive,
+    eval_history_directive,
+    eval_hooks_directive,
+    eval_mcp_directive,
+    eval_model_directive,
+    eval_settings_directive,
+    eval_skills_directive,
+    eval_system_directive,
+)
+from .errors import (
+    AgentProfileOverrideUnsupported,
+    AgentSubagentUnsupported,
+    AgentToolOverrideUnsupported,
+)
+from .evaluation import eval_use_profile
+from .hooks import HookInput, HookSettings, normalize_hook_settings
+from .mcp import McpServerSpec, McpTransport
+from .profile import AgentProfile, WorkflowMode
+from .scope import block_agent_profile_scope, current_block_agent_profile
 from .settings import (
     ACP_AGENT_SETTING_KEYS,
     CLAUDE_AGENT_SETTING_KEYS,
@@ -70,8 +73,7 @@ from .settings import (
     pydantic_model_settings,
 )
 from .skills import SkillsSettings
-from .stack import block_agent_profile_scope, current_block_agent_profile
-from .tools import eval_use_directive, procedure_def_for_tool
+from .use_resolution import eval_use_directive, procedure_def_for_tool
 
 __all__ = [
     "AgentProfile",

@@ -19,7 +19,8 @@ from kedi.agent_adapter.adapters.pydantic import _model_retry_for_tool_error
 from kedi.agent_adapter.compaction import HistoryArchiveSettings, LangChainArtifactHistoryProcessor
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.invocation import observe_invocations
-from kedi.agent_adapter.tool_override import ToolSpec, artifact_admission_scope
+from kedi.agent_adapter.tools.scope import artifact_admission_scope
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
 
@@ -313,7 +314,7 @@ def test_explicit_none_does_not_inherit_constructor_limit() -> None:
 
 
 def test_cancellation_closes_run_scope_without_committing_partial_history() -> None:
-    from kedi.agent_adapter.adapters.langchain_runtime import _RUN
+    from kedi.agent_adapter.adapters.langchain.runtime import _RUN
 
     async def run() -> None:
         entered = asyncio.Event()

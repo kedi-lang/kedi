@@ -6,7 +6,8 @@ from typing import Any, Sequence
 
 from ...agent_profile import McpServerSpec
 from ..telemetry import mcp_initialization_span, mcp_server_name, mcp_transport_name
-from ..tool_override import ToolSpec, arguments_target_secret_file
+from ..tools.execution import arguments_target_secret_file
+from ..tools.specs import ToolSpec
 
 
 async def materialize_mcp_tool_specs(

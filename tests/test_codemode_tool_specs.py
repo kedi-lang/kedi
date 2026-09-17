@@ -8,7 +8,7 @@ from typing import Any
 import fastmcp
 import pytest
 
-from kedi.agent_adapter.approval import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
 from kedi.agent_adapter.codemode import CodeModeLimits
 from kedi.agent_adapter.codemode import mcp as codemode_mcp_module
 from kedi.agent_adapter.codemode.tool_specs import (
@@ -19,7 +19,7 @@ from kedi.agent_adapter.codemode.tool_specs import (
     approval_policies,
     codemode_projection,
 )
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import McpServerSpec
 
 

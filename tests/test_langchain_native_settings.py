@@ -10,8 +10,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from kedi.agent_adapter.adapters import LangChainAdapter
+from kedi.agent_adapter.compaction.native_settings import langchain_settings_with_native_compaction
 from kedi.agent_adapter.conversation import AdapterConversationContext
-from kedi.agent_adapter.native_compaction import langchain_settings_with_native_compaction
 from kedi.agent_adapter.prefix_cache import langchain_provider_cache_policy
 from kedi.agent_profile import AgentProfile
 from kedi.agent_profile.compaction import CompactionSettings

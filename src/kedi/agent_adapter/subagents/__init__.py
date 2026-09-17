@@ -12,7 +12,7 @@ from pydantic import TypeAdapter
 from typing_extensions import runtime_checkable
 
 from ...errors import KediExecutionError
-from ..tool_override import ToolSpec
+from ..tools.specs import ToolSpec
 from .attempts import (
     active_delegation_attempt_for_run,
     attempt_status_from_run,
@@ -22,7 +22,7 @@ from .budget import DelegationBudget
 from .limits import SubagentUsageLimits
 
 if TYPE_CHECKING:
-    from kedi.agent_adapter.approval import ApprovalPolicy
+    from kedi.agent_adapter.approvals.policy import ApprovalPolicy
     from kedi.agent_profile import AgentProfile
     from kedi.core import KediRuntime
 

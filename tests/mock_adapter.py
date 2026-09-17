@@ -8,7 +8,8 @@ from typing import Any, Dict, Iterator, List, Sequence
 
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind
-from kedi.agent_adapter.tool_override import ToolScope, ToolSpec
+from kedi.agent_adapter.tools.scope import ToolScope
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 from kedi.resolved_types import ResolvedKediType
 from kedi.utils import AttrDict

@@ -6,8 +6,15 @@ from pathlib import Path
 
 from lsprotocol import types as lsp
 
+import kedi.lang.ast as kedi_ast
+import kedi.lsp.features.completion as lsp_completion_module
+import kedi.lsp.features.diagnostics as lsp_diagnostics_module
+import kedi.lsp.features.document as lsp_document_module
+import kedi.lsp.features.hover as lsp_hover_module
+import kedi.lsp.features.navigation as lsp_navigation_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+import kedi.lsp.features.symbols as lsp_symbols_module
 from kedi.lang.ast import ProfileSubagentEntry, Program, Span, UseDirectiveStmt
-from kedi.lsp import features
 from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, signature_help_at
 
 # ---------------------------------------------------------------------
@@ -16,7 +23,7 @@ from tests.lsp_helpers import decode_semantic_tokens, inlay_hints_for_lines, sig
 
 
 def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
-    directive_items = features.compute_completion(
+    directive_items = lsp_completion_module.compute_completion(
         "> mo",
         "/tmp/x.kedi",
         lsp.Position(line=0, character=4),
@@ -29,7 +36,7 @@ def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
         "  [label: str] = <person>\n"
         "  = <label>\n"
     )
-    items = features.compute_completion(
+    items = lsp_completion_module.compute_completion(
         source,
         "/tmp/x.kedi",
         lsp.Position(line=3, character=5),
@@ -38,7 +45,7 @@ def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
     assert {"Person", "render", "person", "label", "str"} <= labels
 
     assert (
-        features.compute_completion(
+        lsp_completion_module.compute_completion(
             "```\nvalue = 1\n```",
             "/tmp/x.kedi",
             lsp.Position(line=1, character=3),
@@ -47,7 +54,7 @@ def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
     )
     invalid_labels = {
         item.label
-        for item in features.compute_completion(
+        for item in lsp_completion_module.compute_completion(
             "[broken",
             "/tmp/x.kedi",
             lsp.Position(line=0, character=7),
@@ -80,7 +87,7 @@ def test_completion_exposes_top_level_control_flow_and_imported_symbols(tmp_path
         "[later: int] = `2`\n"
     )
     source_path = tmp_path / "main.kedi"
-    items = features.compute_completion(
+    items = lsp_completion_module.compute_completion(
         source,
         str(source_path),
         lsp.Position(line=7, character=0),
@@ -103,7 +110,7 @@ def test_completion_exposes_top_level_control_flow_and_imported_symbols(tmp_path
 
 def test_document_symbols_lists_procedures_and_types():
     src = "~Person(name, age: int)\n\n@get(x: int) -> int:\n  = `x`\n"
-    syms = features.compute_document_symbols(src, "/tmp/x.kedi")
+    syms = lsp_document_module.compute_document_symbols(src, "/tmp/x.kedi")
     names = [s.name for s in syms]
     assert "Person" in names
     assert "get" in names
@@ -119,7 +126,9 @@ def test_package_manifest_hover_describes_installed_package_metadata() -> None:
         "    httpx>=0.27\n"
     )
 
-    hover = features.compute_hover(source, "/tmp/package.kedi", lsp.Position(line=0, character=4))
+    hover = lsp_hover_module.compute_hover(
+        source, "/tmp/package.kedi", lsp.Position(line=0, character=4)
+    )
 
     assert hover is not None
     assert "Kedi package" in hover.contents.value
@@ -130,7 +139,9 @@ def test_package_manifest_hover_describes_installed_package_metadata() -> None:
 def test_package_manifest_hover_handles_minimal_metadata() -> None:
     source = "> package: kedi_http:\n  author: Mert\n"
 
-    hover = features.compute_hover(source, "/tmp/package.kedi", lsp.Position(line=0, character=4))
+    hover = lsp_hover_module.compute_hover(
+        source, "/tmp/package.kedi", lsp.Position(line=0, character=4)
+    )
 
     assert hover is not None
     assert hover.contents.value == "**Kedi package** `kedi_http`"
@@ -141,9 +152,9 @@ def test_control_flow_hover_describes_kedi_headers_and_defers_python() -> None:
         "> if: `ready`:\n  [status] = yes\n> else:\n  > loop [n]: `range(3)`:\n    [value] = <n>\n"
     )
 
-    if_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
-    loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(3, 3))
-    python_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 8))
+    if_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
+    loop_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(3, 3))
+    python_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 8))
 
     assert if_hover is not None
     assert "Conditional branch" in if_hover.contents.value
@@ -155,7 +166,7 @@ def test_control_flow_hover_describes_kedi_headers_and_defers_python() -> None:
 
 def test_template_condition_diagnostic_and_control_hover() -> None:
     invalid = "> if: [answer] is correct\n  [result] = yes\n"
-    diagnostics = features.compute_diagnostics(invalid, "/tmp/control.kedi")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(invalid, "/tmp/control.kedi")
 
     assert len(diagnostics) == 1
     assert diagnostics[0].code == "K-CONDITION-OUTPUT"
@@ -166,10 +177,12 @@ def test_template_condition_diagnostic_and_control_hover() -> None:
         "> loop: `remaining > 0`:\n  `remaining -= 1`\n"
         "> loop: <city> remains available\n  [seen] = <city>\n"
     )
-    if_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
-    loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(2, 3))
-    model_loop_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(4, 3))
-    city_hover = features.compute_hover(source, "/tmp/control.kedi", lsp.Position(4, 10))
+    if_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(0, 3))
+    loop_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(2, 3))
+    model_loop_hover = lsp_hover_module.compute_hover(
+        source, "/tmp/control.kedi", lsp.Position(4, 3)
+    )
+    city_hover = lsp_hover_module.compute_hover(source, "/tmp/control.kedi", lsp.Position(4, 10))
 
     assert if_hover is not None
     assert "Model-classified condition" in if_hover.contents.value
@@ -192,13 +205,13 @@ def test_loop_binder_definition_and_references_respect_nested_shadowing() -> Non
     )
     uri = "file:///tmp/control.kedi"
 
-    definition = features.compute_definition(
+    definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/control.kedi",
         lsp.Position(line=1, character=13),
     )
-    references = features.compute_references(
+    references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/control.kedi",
@@ -234,11 +247,13 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     path = "/tmp/control-symbols.kedi"
     uri = "file:///tmp/control-symbols.kedi"
 
-    binder_hover = features.compute_hover(source, path, lsp.Position(2, lines[2].index("n")))
+    binder_hover = lsp_hover_module.compute_hover(
+        source, path, lsp.Position(2, lines[2].index("n"))
+    )
     assert binder_hover is not None
     assert "Loop binder" in binder_hover.contents.value
 
-    outer_hover = features.compute_hover(
+    outer_hover = lsp_hover_module.compute_hover(
         source,
         path,
         lsp.Position(3, lines[3].index("outer")),
@@ -246,7 +261,7 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     assert outer_hover is not None
     assert "Module value" in outer_hover.contents.value
 
-    outer_binder_refs = features.compute_references(
+    outer_binder_refs = lsp_navigation_module.compute_references(
         source,
         uri,
         path,
@@ -255,7 +270,7 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     )
     assert {item.range.start.line for item in outer_binder_refs} == {2, 6}
 
-    procedure_binder_refs = features.compute_references(
+    procedure_binder_refs = lsp_navigation_module.compute_references(
         source,
         uri,
         path,
@@ -264,7 +279,7 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     )
     assert {item.range.start.line for item in procedure_binder_refs} == {9, 10}
 
-    type_refs = features.compute_references(
+    type_refs = lsp_navigation_module.compute_references(
         source,
         uri,
         path,
@@ -273,20 +288,22 @@ def test_control_flow_symbols_cover_nested_scopes_types_and_procedures() -> None
     )
     assert {item.range.start.line for item in type_refs} >= {0, 1, 3}
 
-    assert features.compute_diagnostics(source, path) == []
+    assert lsp_diagnostics_module.compute_diagnostics(source, path) == []
 
 
 def test_generic_hover_visits_legacy_top_level_body() -> None:
-    program = features.parse_program("[value: str] = done\n", source_path="/tmp/x.kedi")
+    program = lsp_diagnostics_module.parse_program(
+        "[value: str] = done\n", source_path="/tmp/x.kedi"
+    )
     program.ordered_toplevel.clear()
 
-    target = features._smallest_enclosing(program, lsp.Position(line=0, character=2))
+    target = lsp_hover_module._smallest_enclosing(program, lsp.Position(line=0, character=2))
 
     assert target is not None
 
 
 def test_generic_hover_returns_none_for_an_undocumented_statement() -> None:
-    span = features.Span(
+    span = kedi_ast.Span(
         start_byte=0,
         end_byte=3,
         start_line=1,
@@ -294,9 +311,9 @@ def test_generic_hover_returns_none_for_an_undocumented_statement() -> None:
         end_line=1,
         end_col=4,
     )
-    program = features.Program(
+    program = kedi_ast.Program(
         ordered_toplevel=[
-            features.ProfileDefStmt(
+            kedi_ast.ProfileDefStmt(
                 name="parent",
                 subagent_members=[ProfileSubagentEntry(name="child", loc=span)],
                 loc=span,
@@ -304,7 +321,7 @@ def test_generic_hover_returns_none_for_an_undocumented_statement() -> None:
         ]
     )
 
-    assert features._generic_hover(program, lsp.Position(line=0, character=1)) is None
+    assert lsp_hover_module._generic_hover(program, lsp.Position(line=0, character=1)) is None
 
 
 def test_package_manifest_semantic_tokens_cover_metadata() -> None:
@@ -317,9 +334,9 @@ def test_package_manifest_semantic_tokens_cover_metadata() -> None:
     )
 
     tokens = decode_semantic_tokens(
-        features.compute_semantic_tokens_full(source, "/tmp/package.kedi").data
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(source, "/tmp/package.kedi").data
     )
-    token_types = features.SEMANTIC_TOKEN_TYPES
+    token_types = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES
 
     assert any(
         line == 0 and token_type == token_types.index("keyword")
@@ -341,7 +358,7 @@ def test_package_manifest_semantic_tokens_cover_metadata() -> None:
 
 def test_document_symbols_lists_validation_blocks():
     src = '@p():\n  = ok\n\n@test: p:\n  > case: c1:\n    `assert p() == "ok"`\n'
-    syms = features.compute_document_symbols(src, "/tmp/x.kedi")
+    syms = lsp_document_module.compute_document_symbols(src, "/tmp/x.kedi")
     names = [s.name for s in syms]
     assert any("@test: p" in n for n in names)
 
@@ -349,7 +366,7 @@ def test_document_symbols_lists_validation_blocks():
 def test_document_symbols_nest_procedure_local_types():
     src = "@outer() -> str:\n  ~Inner(name: str)\n  = ok\n"
 
-    symbols = features.compute_document_symbols(src, "/tmp/x.kedi")
+    symbols = lsp_document_module.compute_document_symbols(src, "/tmp/x.kedi")
 
     outer = next(symbol for symbol in symbols if symbol.name == "outer")
     assert outer.children is not None
@@ -367,7 +384,7 @@ def test_imported_procedure_references_preserve_the_declaration_uri(tmp_path: Pa
     main.write_text(source, encoding="utf-8")
     position = lsp.Position(line=1, character=source.splitlines()[1].index("greet"))
 
-    references = features.compute_references(
+    references = lsp_navigation_module.compute_references(
         source,
         main.as_uri(),
         str(main),
@@ -392,7 +409,7 @@ def test_profile_references_include_composition_subagent_and_use() -> None:
     )
     position = lsp.Position(line=0, character=len("> profile: "))
 
-    references = features.compute_references(
+    references = lsp_navigation_module.compute_references(
         source,
         "file:///main.kedi",
         "main.kedi",
@@ -409,7 +426,7 @@ def test_profile_references_include_composition_subagent_and_use() -> None:
 
     span = Span(0, 1, 1, 1, 1, 2)
     no_location = Program(ordered_toplevel=[UseDirectiveStmt(target="base")])
-    symbol = features.SymbolRef(
+    symbol = lsp_symbols_module.SymbolRef(
         kind="agent_profile",
         name="base",
         declaration_span=None,
@@ -417,7 +434,7 @@ def test_profile_references_include_composition_subagent_and_use() -> None:
         cursor_span=span,
     )
     assert (
-        features._find_all_references(
+        lsp_navigation_module._find_all_references(
             no_location,
             symbol,
             include_declaration=False,
@@ -442,7 +459,7 @@ def test_references_include_nested_procedure_calls_and_type_annotations() -> Non
     )
     uri = "file:///tmp/x.kedi"
 
-    helper_references = features.compute_references(
+    helper_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
@@ -457,7 +474,7 @@ def test_references_include_nested_procedure_calls_and_type_annotations() -> Non
         (9, 20),
     ]
 
-    person_references = features.compute_references(
+    person_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
@@ -488,14 +505,14 @@ def test_references_keep_shadowed_local_and_top_level_types_separate() -> None:
     )
     uri = "file:///tmp/x.kedi"
 
-    global_references = features.compute_references(
+    global_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
         lsp.Position(line=0, character=1),
         include_declaration=True,
     )
-    local_references = features.compute_references(
+    local_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
@@ -527,27 +544,27 @@ def test_references_and_definitions_keep_shadowed_procedures_separate() -> None:
     )
     uri = "file:///tmp/x.kedi"
 
-    global_references = features.compute_references(
+    global_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
         lsp.Position(line=0, character=1),
         include_declaration=True,
     )
-    local_references = features.compute_references(
+    local_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
         lsp.Position(line=4, character=3),
         include_declaration=True,
     )
-    global_definition = features.compute_definition(
+    global_definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/x.kedi",
         lsp.Position(line=9, character=7),
     )
-    local_definition = features.compute_definition(
+    local_definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/x.kedi",
@@ -580,7 +597,7 @@ def test_rename_only_edits_matching_type_identifier_tokens() -> None:
     )
     uri = "file:///tmp/x.kedi"
 
-    edit = features.compute_rename(
+    edit = lsp_navigation_module.compute_rename(
         source,
         uri,
         "/tmp/x.kedi",
@@ -599,7 +616,7 @@ def test_rename_type_field_edits_only_the_field_identifier() -> None:
     source = "~Person(name: str)\n"
     uri = "file:///tmp/x.kedi"
 
-    edit = features.compute_rename(
+    edit = lsp_navigation_module.compute_rename(
         source,
         uri,
         "/tmp/x.kedi",
@@ -618,14 +635,14 @@ def test_procedure_parameter_header_resolves_to_its_declaration() -> None:
     source = "@greet(user: str) -> str:\n  = Hello <user>\n"
     uri = "file:///tmp/x.kedi"
 
-    hover = features.compute_hover(source, "/tmp/x.kedi", lsp.Position(line=0, character=7))
-    definition = features.compute_definition(
+    hover = lsp_hover_module.compute_hover(source, "/tmp/x.kedi", lsp.Position(line=0, character=7))
+    definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/x.kedi",
         lsp.Position(line=0, character=7),
     )
-    references = features.compute_references(
+    references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
@@ -657,8 +674,8 @@ def test_selective_import_name_resolves_hover_and_definition(tmp_path: Path) -> 
     source = "> import: package/helpers:\n  selected\n"
     position = lsp.Position(line=1, character=3)
 
-    hover = features.compute_hover(source, str(source_path), position)
-    definition = features.compute_definition(
+    hover = lsp_hover_module.compute_hover(source, str(source_path), position)
+    definition = lsp_navigation_module.compute_definition(
         source,
         source_path.as_uri(),
         str(source_path),
@@ -688,14 +705,16 @@ def test_selective_import_names_resolve_all_export_kinds(tmp_path: Path) -> None
     source_path = tmp_path / "main.kedi"
     source = "> import: helpers:\n  Record\n  count\n  analyst\n  missing\n"
 
-    type_hover = features.compute_hover(source, str(source_path), lsp.Position(line=1, character=3))
-    value_hover = features.compute_hover(
+    type_hover = lsp_hover_module.compute_hover(
+        source, str(source_path), lsp.Position(line=1, character=3)
+    )
+    value_hover = lsp_hover_module.compute_hover(
         source, str(source_path), lsp.Position(line=2, character=3)
     )
-    profile_hover = features.compute_hover(
+    profile_hover = lsp_hover_module.compute_hover(
         source, str(source_path), lsp.Position(line=3, character=3)
     )
-    missing_hover = features.compute_hover(
+    missing_hover = lsp_hover_module.compute_hover(
         source, str(source_path), lsp.Position(line=4, character=3)
     )
 
@@ -717,9 +736,9 @@ def test_nested_procedure_capture_resolves_to_the_outer_parameter() -> None:
     uri = "file:///tmp/x.kedi"
     position = lsp.Position(line=2, character=7)
 
-    hover = features.compute_hover(source, "/tmp/x.kedi", position)
-    definition = features.compute_definition(source, uri, "/tmp/x.kedi", position)
-    references = features.compute_references(
+    hover = lsp_hover_module.compute_hover(source, "/tmp/x.kedi", position)
+    definition = lsp_navigation_module.compute_definition(source, uri, "/tmp/x.kedi", position)
+    references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/x.kedi",
@@ -753,33 +772,33 @@ def test_assignment_and_map_references_resolve_to_iteration_owners() -> None:
     )
     uri = "file:///tmp/map.kedi"
 
-    count_definition = features.compute_definition(
+    count_definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/map.kedi",
         lsp.Position(line=4, character=3),
     )
-    label_definition = features.compute_definition(
+    label_definition = lsp_navigation_module.compute_definition(
         source,
         uri,
         "/tmp/map.kedi",
         lsp.Position(line=4, character=14),
     )
-    binder_references = features.compute_references(
+    binder_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/map.kedi",
         lsp.Position(line=1, character=8),
         include_declaration=True,
     )
-    count_references = features.compute_references(
+    count_references = lsp_navigation_module.compute_references(
         source,
         uri,
         "/tmp/map.kedi",
         lsp.Position(line=0, character=2),
         include_declaration=True,
     )
-    map_hover = features.compute_hover(
+    map_hover = lsp_hover_module.compute_hover(
         source,
         "/tmp/map.kedi",
         lsp.Position(line=4, character=9),
@@ -798,7 +817,7 @@ def test_assignment_and_map_references_resolve_to_iteration_owners() -> None:
     ] == [(0, 1), (4, 3), (6, 3)]
     assert map_hover is not None
     assert (
-        features._generic_hover(
+        lsp_hover_module._generic_hover(
             parse_program(source),
             lsp.Position(line=4, character=9),
         )
@@ -813,7 +832,7 @@ def test_imported_assignment_target_resolves_to_exported_declaration(tmp_path: P
     source = "> import: values:\n  value\n\n[value] := replacement\n"
     main.write_text(source, encoding="utf-8")
 
-    definition = features.compute_definition(
+    definition = lsp_navigation_module.compute_definition(
         source,
         main.as_uri(),
         str(main),
@@ -828,7 +847,7 @@ def test_imported_assignment_target_resolves_to_exported_declaration(tmp_path: P
 def test_control_flow_declaration_does_not_resolve_outside_its_child_scope() -> None:
     source = "> if: `True`:\n  [branch_only] = yes\n= <branch_only>\n"
 
-    definition = features.compute_definition(
+    definition = lsp_navigation_module.compute_definition(
         source,
         "file:///tmp/scope.kedi",
         "/tmp/scope.kedi",
@@ -845,7 +864,7 @@ def test_control_flow_declaration_does_not_resolve_outside_its_child_scope() -> 
 
 def test_formatting_trims_trailing_whitespace():
     src = "@p():   \n  = ok   \n\n\n"
-    edits = features.compute_formatting(src)
+    edits = lsp_document_module.compute_formatting(src)
     assert edits
     new = edits[0].new_text
     assert "   \n" not in new
@@ -855,7 +874,7 @@ def test_formatting_trims_trailing_whitespace():
 
 def test_formatting_is_noop_for_clean_source():
     src = "@p():\n  = ok\n"
-    edits = features.compute_formatting(src)
+    edits = lsp_document_module.compute_formatting(src)
     assert edits == []
 
 

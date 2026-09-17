@@ -5,6 +5,11 @@ from pathlib import Path
 import pytest
 from lsprotocol import types as lsp
 
+import kedi.lsp.features.directive_help as lsp_directive_help_module
+import kedi.lsp.features.document as lsp_document_module
+import kedi.lsp.features.resolution as lsp_resolution_module
+import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
+import kedi.lsp.features.symbols as lsp_symbols_module
 from kedi.lang import parse_program
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
@@ -24,7 +29,6 @@ from kedi.lang.ast import (
     TypeRef,
     UseDirectiveStmt,
 )
-from kedi.lsp import features
 from tests.lsp_helpers import (
     decode_semantic_tokens,
     definition_at,
@@ -53,12 +57,12 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
         "        temperature: 0.2\n"
         "> use: light\n"
     )
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/profile.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/profile.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    label_type = features.SEMANTIC_TOKEN_TYPES.index("enumMember")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    label_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("enumMember")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
 
     assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 0 and token_type == label_type for line, _, _, token_type, _ in decoded)
@@ -78,7 +82,7 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
     assert any(line == 7 and token_type == label_type for line, _, _, token_type, _ in decoded)
     assert any(line == 9 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 10 and token_type == string_type for line, _, _, token_type, _ in decoded)
-    property_type = features.SEMANTIC_TOKEN_TYPES.index("property")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
     assert any(line == 11 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 12 and token_type == property_type for line, _, _, token_type, _ in decoded)
     assert any(line == 12 and token_type == string_type for line, _, _, token_type, _ in decoded)
@@ -91,11 +95,11 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
 
 def test_semantic_tokens_cover_multiline_acp_agent_command() -> None:
     src = "> agent:\n    acp: uv run acp server\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/acp.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/acp.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    label_type = features.SEMANTIC_TOKEN_TYPES.index("enumMember")
-    string_type = features.SEMANTIC_TOKEN_TYPES.index("string")
+    label_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("enumMember")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
 
     assert (1, 4, 3, label_type, 0) in decoded
     assert (1, 9, len("uv run acp server"), string_type, 0) in decoded
@@ -103,11 +107,11 @@ def test_semantic_tokens_cover_multiline_acp_agent_command() -> None:
 
 def test_semantic_tokens_and_hover_cover_raw_invoke() -> None:
     src = "[answer] << Hello <name>\n"
-    tokens = features.compute_semantic_tokens_full(src, "/tmp/raw.kedi")
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/raw.kedi")
     decoded = decode_semantic_tokens(tokens.data)
 
-    keyword_type = features.SEMANTIC_TOKEN_TYPES.index("keyword")
-    variable_type = features.SEMANTIC_TOKEN_TYPES.index("variable")
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    variable_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("variable")
 
     assert any(line == 0 and token_type == keyword_type for line, _, _, token_type, _ in decoded)
     assert any(line == 0 and token_type == variable_type for line, _, _, token_type, _ in decoded)
@@ -208,7 +212,7 @@ def test_document_symbols_cover_agent_and_adapter_directives() -> None:
     > adapter: `adapter_name`
     >> answer [x]
 """
-    symbols = features.compute_document_symbols(src, "profile.kedi")
+    symbols = lsp_document_module.compute_document_symbols(src, "profile.kedi")
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: light")
     proc = next(symbol for symbol in symbols if symbol.name == "foo")
 
@@ -230,28 +234,28 @@ def test_profile_symbol_skips_agent_and_adapter_members_without_locations() -> N
         agent_members=[ProfileAgentEntry(plain_value="codex")],
         adapter_members=[ProfileAdapterEntry(plain_value="pydantic")],
     )
-    symbol = features._profile_def_symbol(profile)
+    symbol = lsp_document_module._profile_def_symbol(profile)
 
     assert symbol.children == []
 
 
 def test_directive_markdown_helpers_for_synthetic_nodes() -> None:
-    assert "`agent_name`" in features._agent_directive_markdown(
+    assert "`agent_name`" in lsp_directive_help_module._agent_directive_markdown(
         AgentDirectiveStmt(backtick_code="agent_name")
     )
-    assert "command" in features._agent_directive_markdown(
+    assert "command" in lsp_directive_help_module._agent_directive_markdown(
         AgentDirectiveStmt(plain_value="acp", command_backtick_code='["uv", "run"]')
     )
-    assert "`adapter_name`" in features._adapter_directive_markdown(
+    assert "`adapter_name`" in lsp_directive_help_module._adapter_directive_markdown(
         AdapterDirectiveStmt(backtick_code="adapter_name")
     )
-    assert "`agent_name`" in features._profile_agent_entry_markdown(
+    assert "`agent_name`" in lsp_directive_help_module._profile_agent_entry_markdown(
         ProfileAgentEntry(backtick_code="agent_name")
     )
-    assert "uv run acp" in features._profile_agent_entry_markdown(
+    assert "uv run acp" in lsp_directive_help_module._profile_agent_entry_markdown(
         ProfileAgentEntry(plain_value="acp", command_plain_value="uv run acp")
     )
-    assert "`adapter_name`" in features._profile_adapter_entry_markdown(
+    assert "`adapter_name`" in lsp_directive_help_module._profile_adapter_entry_markdown(
         ProfileAdapterEntry(backtick_code="adapter_name")
     )
 
@@ -260,8 +264,10 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
     src = '> settings:\n    stop_sequences: `["END"]`\n'
 
     assert '`["END"]`' in hover_text_at(src, "profile.kedi", "stop_sequences")
-    assert "no adapter; valid keys are" in features._setting_adapter_label("imaginary")
-    cwd_hover = features._setting_adapter_label("cwd")
+    assert "no adapter; valid keys are" in lsp_directive_help_module._setting_adapter_label(
+        "imaginary"
+    )
+    cwd_hover = lsp_directive_help_module._setting_adapter_label("cwd")
     assert "Claude Agent SDK settings" in cwd_hover
     assert "Codex App Server settings" in cwd_hover
     assert "ACP agent settings" in cwd_hover
@@ -269,7 +275,9 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
         name="empty_settings",
         settings_members=[ProfileSettingsEntry(fields=[])],
     )
-    assert "Reusable agent profile." in features._profile_signature_markdown(profile)
+    assert "Reusable agent profile." in lsp_directive_help_module._profile_signature_markdown(
+        profile
+    )
 
 
 def test_profile_docstring_replaces_default_profile_hover() -> None:
@@ -338,7 +346,7 @@ def test_resolve_symbol_skips_empty_toplevel_use_directive() -> None:
             )
         ),
     )
-    assert features._resolve_symbol_at(prog, lsp.Position(line=0, character=0)) is None
+    assert lsp_resolution_module._resolve_symbol_at(prog, lsp.Position(line=0, character=0)) is None
 
 
 def test_resolve_symbol_skips_unknown_multiline_tool() -> None:
@@ -351,7 +359,7 @@ def test_resolve_symbol_skips_unknown_multiline_tool() -> None:
 """
     prog = parse_program(src)
     pos = position_of(src, "missing_tool")
-    sym = features._resolve_symbol_at(prog, pos)
+    sym = lsp_resolution_module._resolve_symbol_at(prog, pos)
     assert sym is not None
     assert sym.kind == "agent_tool"
     assert sym.name == "missing_tool"
@@ -366,7 +374,7 @@ def test_resolve_symbol_skips_unknown_tool_inside_procedure() -> None:
 """
     prog = parse_program(src)
     pos = position_of(src, "missing_tool")
-    sym = features._resolve_symbol_at(prog, pos)
+    sym = lsp_resolution_module._resolve_symbol_at(prog, pos)
     assert sym is not None
     assert sym.kind == "agent_tool"
     assert sym.name == "missing_tool"
@@ -388,7 +396,7 @@ def test_resolve_in_stmt_skips_empty_use_directive() -> None:
     pos = lsp.Position(line=1, character=5)
     proc_by_name = {p.name: p for p in prog.procedures}
     assert (
-        features._resolve_in_stmt(
+        lsp_resolution_module._resolve_in_stmt(
             prog,
             stmt,
             pos,
@@ -416,7 +424,7 @@ def test_resolve_in_stmt_use_name_off_cursor() -> None:
     pos = position_of(src, "answer")
     proc_by_name = {p.name: p for p in prog.procedures}
     assert (
-        features._resolve_in_stmt(
+        lsp_resolution_module._resolve_in_stmt(
             prog,
             use_stmt,
             pos,
@@ -431,19 +439,20 @@ def test_resolve_in_stmt_use_name_off_cursor() -> None:
 
 def test_use_tool_entry_spans_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     prog = parse_program("@x():\n    = 1\n")
-    assert features._use_tool_entry_spans(prog, UseDirectiveStmt()) == []
-    assert features._line_start_byte(prog, 999) is None
+    assert lsp_symbols_module._use_tool_entry_spans(prog, UseDirectiveStmt()) == []
+    assert lsp_symbols_module._line_start_byte(prog, 999) is None
     prog.source_text = None
-    assert features._line_start_byte(prog, 1) is None
-    assert features._use_single_target_span(prog, UseDirectiveStmt(target="x")) is None
+    assert lsp_symbols_module._line_start_byte(prog, 1) is None
+    assert lsp_symbols_module._use_single_target_span(prog, UseDirectiveStmt(target="x")) is None
     stmt = UseDirectiveStmt(
         tool_names=["missing"],
         loc=prog.procedures[0].loc,
     )
-    monkeypatch.setattr(features, "_program_line_text", lambda *_args, **_kwargs: None)
-    assert features._use_tool_entry_spans(prog, stmt) == []
+    monkeypatch.setattr(lsp_symbols_module, "_program_line_text", lambda *_args, **_kwargs: None)
+    assert lsp_symbols_module._use_tool_entry_spans(prog, stmt) == []
     assert (
-        features._use_single_target_span(prog, UseDirectiveStmt(target="x", loc=stmt.loc)) is None
+        lsp_symbols_module._use_single_target_span(prog, UseDirectiveStmt(target="x", loc=stmt.loc))
+        is None
     )
 
 
@@ -453,7 +462,7 @@ def test_use_tool_entry_spans_deduplicates_same_line() -> None:
     use_stmt = prog.ordered_toplevel[0]
     assert isinstance(use_stmt, UseDirectiveStmt)
     use_stmt.tool_names = ["tool", "tool"]
-    spans = features._use_tool_entry_spans(prog, use_stmt)
+    spans = lsp_symbols_module._use_tool_entry_spans(prog, use_stmt)
     assert len(spans) == 1
 
 
@@ -473,7 +482,7 @@ def test_profile_def_symbol_skips_members_without_loc() -> None:
         end_line=1,
         end_col=10,
     )
-    symbol = features._profile_def_symbol(
+    symbol = lsp_document_module._profile_def_symbol(
         ProfileDefStmt(
             name="p",
             loc=loc,
@@ -697,7 +706,7 @@ def test_document_symbols_include_profile_definition() -> None:
         web_search
     >> x [y]
 """
-    symbols = features.compute_document_symbols(src, "profile.kedi")
+    symbols = lsp_document_module.compute_document_symbols(src, "profile.kedi")
     names = [symbol.name for symbol in symbols]
     assert "> profile: light" in names
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: light")
@@ -720,7 +729,7 @@ def test_profile_def_symbol_without_tools() -> None:
         end_line=1,
         end_col=10,
     )
-    symbol = features._profile_def_symbol(
+    symbol = lsp_document_module._profile_def_symbol(
         ProfileDefStmt(
             name="light",
             loc=loc,
@@ -751,7 +760,7 @@ def test_profile_def_symbol_without_tools() -> None:
     assert not any("Skip me" in name for name in child_names)
     assert not any(name.startswith("> use:") for name in child_names)
 
-    signature = features._profile_signature_markdown(
+    signature = lsp_directive_help_module._profile_signature_markdown(
         ProfileDefStmt(name="empty", system_members=[ProfileSystemEntry()])
     )
     assert "Reusable agent profile." in signature
@@ -786,7 +795,7 @@ def test_profile_artifacts_appear_in_profile_hover_and_document_symbols() -> Non
     profile_hover = hover_text_at(source, "artifacts.kedi", "compact")
     assert "Artifact settings: 2" in profile_hover
 
-    symbols = features.compute_document_symbols(source, "artifacts.kedi")
+    symbols = lsp_document_module.compute_document_symbols(source, "artifacts.kedi")
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: compact")
     assert any(child.name == "> artifacts: enabled, threshold" for child in profile.children or ())
 
@@ -803,7 +812,7 @@ def test_profile_output_type_supports_navigation_and_document_symbols() -> None:
     references = references_at(source, uri, path, "Result", include_declaration=True)
     assert len(references) == 2
 
-    symbols = features.compute_document_symbols(source, path)
+    symbols = lsp_document_module.compute_document_symbols(source, path)
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: worker")
     assert any(child.name == "> output: Result" for child in profile.children or ())
 
@@ -814,4 +823,4 @@ def test_profile_output_symbol_skips_synthetic_entry_without_location() -> None:
         output_members=[ProfileOutputEntry(type_annotation="str", type_expr=TypeRef("str"))],
     )
 
-    assert features._profile_def_symbol(profile).children == []
+    assert lsp_document_module._profile_def_symbol(profile).children == []

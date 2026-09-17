@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
-from ...agent_profile.model import (
+from ...agent_profile.directives import (
     eval_adapter_directive,
     eval_agent_directive,
     eval_approval_directive,
@@ -20,7 +20,7 @@ from ...agent_profile.model import (
     eval_skills_directive,
     eval_system_directive,
 )
-from ...agent_profile.tools import eval_use_directive
+from ...agent_profile.use_resolution import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
 from ..ast import (

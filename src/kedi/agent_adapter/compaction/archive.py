@@ -11,7 +11,7 @@ from typing import Generic, TypeVar, cast
 
 from kedi.artifacts import ArtifactError, ArtifactHandle, ArtifactPolicy
 
-from ..tool_override import current_artifact_admission
+from ..tools.scope import current_artifact_admission
 from .checkpoint import render_checkpoint
 from .codecs import AdapterHistoryCodec, conservative_token_estimate, fingerprint_sequence
 from .models import CompactionCheckpoint, CompactionOutcome, HistoryRange, HistorySnapshot

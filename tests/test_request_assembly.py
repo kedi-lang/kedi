@@ -30,9 +30,9 @@ from kedi.agent_adapter.request import (
     lower_request_sync,
     request_diagnostics,
 )
-from kedi.agent_adapter.tool_override import ToolSpec
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile.mcp import McpServerSpec
-from kedi.core import _type_display_name
+from kedi.core.expressions import _type_display_name
 
 
 def test_prompt_builders_preserve_existing_wire_text() -> None:

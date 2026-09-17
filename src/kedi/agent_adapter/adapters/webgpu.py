@@ -25,8 +25,7 @@ from ...agent_profile import AgentProfile, McpServerSpec, McpTransport
 from ...agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
 from ...dynamic_models import build_dynamic_model
 from ...resolved_types import ResolvedKediType
-from .._schema import output_field_definition
-from ..approval import ToolApprovalDenied
+from ..approvals.policy import ToolApprovalDenied
 from ..hooks import (
     HookDeniedError,
     HookExecutionError,
@@ -40,12 +39,14 @@ from ..hooks import (
     is_tool_execution_interrupted,
 )
 from ..meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from ..output_schema import output_field_definition
 from ..telemetry import (
     mcp_initialization_span,
     mcp_server_name,
     mcp_transport_name,
 )
-from ..tool_override import ToolScope, ToolSpec
+from ..tools.scope import ToolScope
+from ..tools.specs import ToolSpec
 
 
 class BrowserModelBridge(Protocol):
@@ -218,7 +219,7 @@ class WebGPUAdapter(HookRegistrationMixin):
 
     @hooked_agent_run("prompt")
     def invoke_sync(self, *, prompt: str, instructions: str | None = None, **kwargs: Any) -> str:
-        from ..utils import run_sync
+        from ..execution import run_sync
 
         return run_sync(self.invoke(prompt=prompt, instructions=instructions, **kwargs))
 
@@ -333,7 +334,7 @@ class WebGPUAdapter(HookRegistrationMixin):
         instructions: str | None = None,
         **kwargs: Any,
     ) -> Any:
-        from ..utils import run_sync
+        from ..execution import run_sync
 
         return run_sync(
             self.produce(

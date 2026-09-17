@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from ..conversation import AdapterConversationContext
     from ..subagents import SubagentExecutionRequest
     from ..subagents.limits import SubagentUsageLimits
-    from ..tool_override import ToolSpec
+    from ..tools.specs import ToolSpec
 
 
 @runtime_checkable

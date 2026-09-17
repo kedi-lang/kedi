@@ -26,9 +26,10 @@ from kedi import (
     observe_agent_events,
 )
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
-from kedi.agent_adapter.approval import ApprovalPolicy
+from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.meta import AdapterCapabilities
-from kedi.agent_adapter.tool_override import ToolSpec, current_artifact_admission
+from kedi.agent_adapter.tools.scope import current_artifact_admission
+from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import (
     AgentProfile,
     AgentProfileOverrideUnsupported,
