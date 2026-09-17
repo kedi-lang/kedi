@@ -376,6 +376,8 @@ class KediAgent(BaseInstalledAgent):
             )
         env = dict(self.model_connection.env)
         env["KEDI_HOME"] = self._KEDI_HOME.as_posix()
+        if workspace_policy := os.getenv("KEDI_WORKSPACE_POLICY"):
+            env["KEDI_WORKSPACE_POLICY"] = workspace_policy
         if logfire_enabled := os.getenv("KEDI_HARBOR_LOGFIRE") == "1":
             env["KEDI_HARBOR_LOGFIRE"] = "1"
         if logfire_enabled and (logfire_token := _resolve_logfire_token()):

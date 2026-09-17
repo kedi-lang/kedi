@@ -3719,6 +3719,7 @@ def test_harbor_agent_lifecycle_and_context_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("KEDI_HARBOR_LOGFIRE", "1")
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "none")
     monkeypatch.delenv("LOGFIRE_TOKEN", raising=False)
     credentials_dir = tmp_path / "logfire"
     credentials_dir.mkdir()
@@ -3836,6 +3837,7 @@ def test_harbor_agent_lifecycle_and_context_projection(
     assert "sk-provider-secret-value" not in run_call["command"]
     assert "logfire-test-token" not in run_call["command"]
     assert run_call["env"]["KEDI_HARBOR_LOGFIRE"] == "1"
+    assert run_call["env"]["KEDI_WORKSPACE_POLICY"] == "none"
     assert run_call["env"]["LOGFIRE_TOKEN"] == "logfire-test-token"
 
     agent.logs_dir.mkdir(parents=True)

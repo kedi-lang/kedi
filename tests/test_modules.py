@@ -692,6 +692,7 @@ def test_internal_filesystem_rejects_out_of_root_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("KEDI_WORKSPACE_POLICY", raising=False)
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside.txt"
     main = tmp_path / "main.kedi"
@@ -704,6 +705,68 @@ def test_internal_filesystem_rejects_out_of_root_path(
 
     with pytest.raises(Exception, match="path escapes filesystem root"):
         rt.run_main()
+
+
+def test_internal_filesystem_strict_policy_rejects_out_of_root_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "strict")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    with pytest.raises(Exception, match="path escapes filesystem root"):
+        _compile_file(main).run_main()
+
+
+def test_internal_filesystem_none_policy_allows_out_of_root_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "none")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    assert _compile_file(main).run_main() == "outside"
+
+
+def test_internal_filesystem_none_policy_keeps_secret_file_protection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "none")
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / ".env.outside"
+    outside.write_text("SECRET=value", encoding="utf-8")
+    main = _compile_fs_module_with_call(
+        tmp_path,
+        f"= <read_text_file(`{str(outside)!r}`)>",
+    )
+
+    with pytest.raises(Exception, match="refusing to read secret file"):
+        _compile_file(main).run_main()
+
+
+def test_internal_filesystem_rejects_invalid_workspace_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KEDI_WORKSPACE_POLICY", "relaxed")
+    monkeypatch.chdir(tmp_path)
+    main = _compile_fs_module_with_call(tmp_path, '= <path_exists(`"."`)>')
+
+    with pytest.raises(Exception, match="Invalid KEDI_WORKSPACE_POLICY.*none\\|strict"):
+        _compile_file(main).run_main()
 
 
 def _compile_fs_module_with_call(tmp_path: Path, call: str) -> Path:
