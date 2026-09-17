@@ -131,7 +131,6 @@ conflicts = [
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 kedi-notebook = { path = "notebook", editable = true }
-kedi-typesafe = { git = "https://github.com/kedi-lang/kedi-typesafe.git", rev = "781b3d03d952b7356a3f6794d612b079b3f19463" }
 
 [tool.ruff]
 line-length = 100
