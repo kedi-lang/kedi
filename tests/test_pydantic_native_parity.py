@@ -65,6 +65,32 @@ def _request(messages: list[ModelMessage]) -> ModelRequest:
     return next(message for message in messages if isinstance(message, ModelRequest))
 
 
+def test_construction_toolsets_ignore_runtime_overrides() -> None:
+    original = FunctionToolset()
+    adapter = PydanticAdapter(TestModel(), toolsets=[original])
+    with adapter.override(toolsets=[FunctionToolset(), FunctionToolset()]):
+        assert application_toolset_count(adapter) == 3
+        assert application_toolset_count(adapter, ignore_overrides=True) == 2
+        assert build_base_toolset_list(adapter, ignore_overrides=True)[1] is original
+        assert len(adapter._build_toolset_list()) == 3
+        assert len(adapter._construction_toolsets) == 2
+
+
+def test_toolset_builder_supports_older_pydantic_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic_ai import Agent
+
+    agent = Agent(TestModel())
+    toolset = FunctionToolset()
+
+    def legacy_builder(self: Any, cap_toolsets: Any = None) -> list[Any]:
+        assert self is agent
+        assert cap_toolsets == [toolset]
+        return [toolset]
+
+    monkeypatch.setattr(Agent, "_build_toolset_list", legacy_builder)
+    assert build_base_toolset_list(agent, [toolset]) == [toolset]
+
+
 def test_native_run_surfaces_apply_active_profile() -> None:
     observed: list[tuple[str | None, dict[str, Any]]] = []
 

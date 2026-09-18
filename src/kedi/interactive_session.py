@@ -23,6 +23,7 @@ from .lang.parser import parse_program
 if TYPE_CHECKING:
     from .agent_adapter.meta import AgentAdapter
     from .agent_adapter.subagents.limits import SubagentUsageLimits
+    from .decisions import DecisionInfo
     from .executors.base import Executor
 
 
@@ -129,6 +130,20 @@ class InteractiveSession:
                 raise RuntimeError("Cannot dump InteractiveSession while it is executing")
         try:
             return _dump_session_state(self, path)
+        finally:
+            self._execute_lock.release()
+
+    def decision_info(self, name: str) -> DecisionInfo | None:
+        """Inspect decision evidence attached to one top-level binding."""
+        from .decisions import decision_info_for_env
+
+        with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("InteractiveSession is closed")
+            if not self._execute_lock.acquire(blocking=False):
+                raise RuntimeError("Cannot inspect InteractiveSession while it is executing")
+        try:
+            return decision_info_for_env(self._env, name)
         finally:
             self._execute_lock.release()
 

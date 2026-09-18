@@ -12,6 +12,7 @@ from kedi.agent_adapter.events import AgentMessageResolver
 from kedi.agent_adapter.invocation import InvocationUsage
 from kedi.agent_adapter.prefix_cache import langchain_provider_cache_policy
 from kedi.effort import pydantic_effort_value
+from kedi.decisions import capture_decision_evidence
 
 
 def _langchain_uses_explicit_cache_blocks(model: Any | None) -> bool:
@@ -238,6 +239,33 @@ def _langchain_structured_response(result: Any) -> Any:
         return result.structured_response
     except AttributeError:
         raise ValueError("LangChain agent did not return structured_response.") from None
+
+
+def _capture_langchain_typesafe_decision_evidence(
+    result: Any,
+    *,
+    input_messages: object = None,
+) -> None:
+    if not isinstance(result, Mapping):
+        return
+    messages = result.get("messages")
+    if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
+        return
+    messages = _langchain_current_messages(messages, input_messages)
+    for message in reversed(messages):
+        metadata = getattr(message, "response_metadata", None)
+        if not isinstance(metadata, Mapping):
+            continue
+        typesafe = metadata.get("typesafe")
+        if not isinstance(typesafe, Mapping):
+            continue
+        model = metadata.get("model_name")
+        capture_decision_evidence(
+            provider="typesafe",
+            model=model if isinstance(model, str) else None,
+            metadata=typesafe,
+        )
+        return
 
 
 def _langchain_text_response(result: Any) -> str:

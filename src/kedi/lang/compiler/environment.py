@@ -122,6 +122,7 @@ class BindingMetadata:
     source: Any | None = None
     assignable: bool = True
     synthetic: bool = False
+    decision: Any | None = None
 
 
 class ScopeFrame(dict[str, Any]):
@@ -230,6 +231,8 @@ class ScopeFrame(dict[str, Any]):
             if metadata is not None and not metadata.assignable:
                 raise ValueError(f"Kedi binding {name!r} is read-only")
             dict.__setitem__(owner, name, value)
+            if metadata is not None and metadata.decision is not None:
+                owner._binding_metadata[name] = dataclasses.replace(metadata, decision=None)
             return
         owner[name] = value
 
@@ -546,13 +549,20 @@ def model_value(value: Any, *, _memo: dict[int, Any] | None = None) -> Any:
 
 def model_text(value: Any) -> str:
     """Render a model-facing value, using stable JSON for artifact references."""
+    _, text = model_value_and_text(value)
+    return text
+
+
+def model_value_and_text(value: Any) -> tuple[Any, str]:
+    """Resolve and render once so request text and decision identity share a snapshot."""
+    contains_artifact = _contains_artifact_ref(value)
     resolved = model_value(value)
-    if _contains_artifact_ref(value):
+    if contains_artifact:
         try:
-            return json.dumps(resolved, ensure_ascii=False, sort_keys=True)
+            return resolved, json.dumps(resolved, ensure_ascii=False, sort_keys=True)
         except (TypeError, ValueError, RecursionError):
-            return repr(resolved)
-    return str(resolved)
+            return resolved, repr(resolved)
+    return resolved, str(resolved)
 
 
 def _raw_mapping_value(mapping: dict[str, Any], key: str) -> Any:
@@ -587,6 +597,8 @@ def write_owned_value(owner: dict[str, Any], name: str, value: Any) -> None:
         if metadata is not None and not metadata.assignable:
             raise ValueError(f"Kedi binding {name!r} is read-only")
         dict.__setitem__(owner, name, value)
+        if metadata is not None and metadata.decision is not None:
+            owner._binding_metadata[name] = dataclasses.replace(metadata, decision=None)
         return
     owner[name] = value
 

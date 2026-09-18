@@ -34,6 +34,7 @@ from kedi.agent_adapter.compaction.native_settings import with_pydantic_native_c
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.hooks import current_hook_dispatcher
 from kedi.agent_adapter.prefix_cache import has_response_cache_settings, pydantic_cache_settings
+from kedi.agent_adapter.request import current_agent_run_request
 from kedi.agent_adapter.tools.scope import current_artifact_admission
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import normalize_codemode_settings
@@ -65,6 +66,16 @@ def _run_kwargs(
     tool_specs: Sequence[ToolSpec],
 ) -> dict[str, object]:
     run_kwargs: dict[str, object] = dict(kwargs)
+    request = current_agent_run_request()
+    if request is not None and request.prompt.kind == "claim":
+        selected = effective_model(self, cast("Model | str | None", run_kwargs.get("model")))
+        if getattr(selected, "system", None) == "typesafe" and not getattr(
+            selected, "supports_decision_threshold", False
+        ):
+            raise ValueError(
+                "Kedi Jev claims require kedi_typesafe.TypeSafeModel to enforce typesafe_threshold; "
+                "the upstream TypeSafeModel uses a fixed decision policy"
+            )
     self._apply_default_usage_limits(run_kwargs)
     if self.active_profile.system is not None and run_kwargs.get("instructions") is None:
         run_kwargs["instructions"] = self.active_profile.system
@@ -87,8 +98,6 @@ def _run_kwargs(
             run_kwargs["model_settings"] = model_settings
     conversation = self._subagent_conversation_var.get()
     self._apply_conversation_history(run_kwargs, conversation)
-    from kedi.agent_adapter.adapters.pydantic.compat import effective_model
-
     existing_settings = run_kwargs.get("model_settings")
     adapter_conversation = (
         conversation if isinstance(conversation, AdapterConversationContext) else None
@@ -198,8 +207,6 @@ def _run_kwargs(
         and compaction is not None
         and compaction.mode == "native"
     ):
-        from kedi.agent_adapter.adapters.pydantic.compat import effective_model
-
         selected_model = effective_model(
             self,
             cast("Model | str | None", run_kwargs.get("model")),

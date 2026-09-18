@@ -207,6 +207,10 @@ change earlier procedures.
 - `> model: name` — set the model for subsequent procedure captures (plain name or `` `expression` ``)
 - On Python 3.11+, `> adapter: pydantic` with `> model: codex/<model>` uses the optional
   `kedi[codex-model]` bridge and the user's existing `codex login` credentials.
+- `> model: typesafe/<model>` selects the optional Jev bridge with either the Pydantic or
+  LangChain adapter. Install `kedi[typesafe]` for Pydantic or `kedi[langchain,typesafe]` for
+  LangChain. Jev supports typed classification and finite-choice outputs rather than free-form
+  text.
 - `> agent: name` — select an agent harness such as `codex`, `claude`, or `acp`; ACP commands can use multiline `> agent:` entries
 - `> effort: minimal|low|medium|high|xhigh|max` — set reasoning effort
 - `> system:` — set plain or multiline agent instructions with `<name>` and ``<`python`>`` substitutions

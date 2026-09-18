@@ -410,12 +410,15 @@ def _add_nested_native_toolsets(
 
 
 def _build_toolset_list(
-    self: PydanticAdapter[Any, Any], cap_toolsets: Sequence[Any] | None = None
+    self: PydanticAdapter[Any, Any],
+    cap_toolsets: Sequence[Any] | None = None,
+    *,
+    ignore_overrides: bool = False,
 ) -> list[Any]:
     """Require native approval for every application-provided Pydantic toolset."""
 
-    toolsets = build_base_toolset_list(self, cap_toolsets)
-    toolset_count = application_toolset_count(self)
+    toolsets = build_base_toolset_list(self, cap_toolsets, ignore_overrides=ignore_overrides)
+    toolset_count = application_toolset_count(self, ignore_overrides=ignore_overrides)
     return [
         (
             _approval_required_toolset(

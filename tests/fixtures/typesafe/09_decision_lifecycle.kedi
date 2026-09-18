@@ -1,0 +1,28 @@
+```
+from kedi import decision_info
+```
+> adapter: pydantic
+> model: typesafe/jev-latest
+> settings:
+    typesafe_threshold: 0.85
+
+[checks: list[bool]] = `[]`
+[ticket: str] = `"original ticket"`
+
+>> Evaluate <ticket> as [approved: bool] and [urgent: bool]
+[approved_info: Any] = `decision_info("approved")`
+[urgent_info: Any] = `decision_info("urgent")`
+[checks] := `checks + [approved_info.call_id == urgent_info.call_id]`
+[checks] := `checks + [approved_info.matches_inputs(ticket="original ticket")]`
+
+[ticket] := `"changed ticket"`
+[checks] := `checks + [not approved_info.matches_inputs(ticket=ticket)]`
+
+[approved] := `False`
+[checks] := `checks + [decision_info("approved") is None]`
+
+> if: `True`:
+  >> Evaluate the inner scope as [approved: bool]
+  [checks] := `checks + [decision_info("approved").call_id != approved_info.call_id]`
+
+= `checks`

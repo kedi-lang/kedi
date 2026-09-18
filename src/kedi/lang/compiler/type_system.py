@@ -16,7 +16,7 @@ import ast
 import copy
 import json
 import shlex
-from typing import Annotated, Any, Optional, Union, cast, get_args, get_origin
+from typing import Annotated, Any, Optional, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -467,13 +467,9 @@ def register_type(
 
 
 def _annotated_field_metadata(resolved: Any) -> tuple[Any, str | None]:
-    if get_origin(resolved) is not Annotated:
-        return resolved, None
-    args = get_args(resolved)
-    annotation = next(iter(args))
-    metadata = args[1:]
-    description = metadata[0] if metadata and isinstance(metadata[0], str) else None
-    return annotation, description
+    from ...resolved_types import annotated_field_metadata
+
+    return annotated_field_metadata(resolved)
 
 
 def _required_field(description: str | None) -> Any:

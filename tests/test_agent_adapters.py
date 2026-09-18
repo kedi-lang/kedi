@@ -251,7 +251,7 @@ def test_output_field_metadata_uses_first_annotated_string_as_description() -> N
         str,
         "Documented answer",
     )
-    assert output_field_metadata(Annotated[str, 1]) == (str, None)
+    assert output_field_metadata(Annotated[str, 1]) == (Annotated[str, 1], None)
 
 
 def test_agent_adapter_metadata_is_exposed_from_public_surfaces() -> None:

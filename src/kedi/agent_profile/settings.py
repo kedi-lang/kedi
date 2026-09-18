@@ -9,6 +9,8 @@ SettingsMap = Mapping[str, SettingValue]
 
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
+        "typesafe_threshold",
+        "typesafe_tool_call_threshold",
         "max_tokens",
         "temperature",
         "top_p",
@@ -48,6 +50,8 @@ DSPY_LM_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 
 LANGCHAIN_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
+        "typesafe_threshold",
+        "typesafe_tool_call_threshold",
         "api_key",
         "base_url",
         "callbacks",

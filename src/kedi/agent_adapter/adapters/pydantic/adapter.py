@@ -77,7 +77,13 @@ from kedi.agent_adapter.hooks import (
 )
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
-from kedi.agent_adapter.models import codex_responses_model, is_codex_model_id
+from kedi.agent_adapter.models import (
+    close_typesafe_model_current,
+    codex_responses_model,
+    is_codex_model_id,
+    is_typesafe_model_id,
+    typesafe_pydantic_model,
+)
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.responses_session import model_responses_session as _model_responses_session
 from kedi.agent_adapter.responses_session import model_responses_turn as _model_responses_turn
@@ -141,6 +147,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         """Report per-agent native ownership without relying on process-global state."""
 
         return operation in {"run_agent", "chat", "call_tool"} and self.instrument is not False
+
+    def supports_artifact_contract(self, profile: AgentProfile) -> bool:
+        """Return whether the active model can receive artifact management tools."""
+
+        if profile.model is not None:
+            return not is_typesafe_model_id(profile.model)
+        model = getattr(self, "_agent_model_arg", None)
+        return getattr(model, "system", None) != "typesafe"
 
     def __init__(
         self,
@@ -409,15 +423,15 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return (
-            await self._run_agent(
-                agent,
-                template,
-                run_kwargs,
-                tool_specs=tool_specs,
-                emit_final=False,
-            )
-        ).output
+        result = await self._run_agent(
+            agent,
+            template,
+            run_kwargs,
+            tool_specs=tool_specs,
+            emit_final=False,
+        )
+        _messages._capture_typesafe_decision_evidence(result)
+        return result.output
 
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
@@ -677,7 +691,15 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def invoke_sync(self, *, prompt: str, **kwargs: Any) -> str:
         from kedi.agent_adapter.execution import run_sync
 
-        return run_sync(self.invoke(prompt=prompt, **kwargs))
+        model = self._model_for_sync_cleanup()
+
+        async def invoke_and_close() -> str:
+            try:
+                return await self.invoke(prompt=prompt, **kwargs)
+            finally:
+                await close_typesafe_model_current(model)
+
+        return run_sync(invoke_and_close())
 
     def _run_kwargs(
         self,
@@ -699,9 +721,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def _add_nested_native_toolsets(self, run_kwargs: dict[str, object]) -> None:
         return _tools._add_nested_native_toolsets(self, run_kwargs)
 
-    def _build_toolset_list(self, cap_toolsets: Sequence[Any] | None = None) -> list[Any]:
+    def _build_toolset_list(
+        self, cap_toolsets: Sequence[Any] | None = None, *, ignore_overrides: bool = False
+    ) -> list[Any]:
         """Require native approval for every application-provided Pydantic toolset."""
-        return _tools._build_toolset_list(self, cap_toolsets)
+        return _tools._build_toolset_list(self, cap_toolsets, ignore_overrides=ignore_overrides)
 
     def _application_toolset_count(self) -> int:
         """Count function, user, and dynamic toolsets without capability toolsets."""
@@ -850,9 +874,26 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         """
         from kedi.agent_adapter.execution import run_sync
 
-        return run_sync(
-            self.produce(template, output_schema=output_schema, output_type=output_type, **kwargs)
-        )
+        model = self._model_for_sync_cleanup()
+
+        async def produce_and_close() -> OutputDataT:
+            try:
+                return await self.produce(
+                    template,
+                    output_schema=output_schema,
+                    output_type=output_type,
+                    **kwargs,
+                )
+            finally:
+                await close_typesafe_model_current(model)
+
+        return run_sync(produce_and_close())
+
+    def _model_for_sync_cleanup(self) -> object:
+        profile = self.active_profile
+        if profile.model is not None:
+            return self._resolve_model(profile.model)
+        return self._agent_model_arg
 
     def default_model(self) -> str | None:
         default_model = getattr(self, "_default_model", None)
@@ -891,6 +932,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return override_kwargs
 
     def _resolve_model(self, model: str) -> str | Model:
+        if is_typesafe_model_id(model):
+            resolved = self._model_overrides.get(model)
+            if resolved is None:
+                resolved = typesafe_pydantic_model(model)
+                self._model_overrides[model] = resolved
+            return resolved
         if not is_codex_model_id(model):
             return normalize_for_pydantic_ai(model)
         resolved = self._model_overrides.get(model)

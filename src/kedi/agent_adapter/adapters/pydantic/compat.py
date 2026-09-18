@@ -16,22 +16,35 @@ class PydanticAICompatibilityError(RuntimeError):
 def build_base_toolset_list(
     agent: Agent[Any, Any],
     capability_toolsets: Sequence[Any] | None = None,
+    *,
+    ignore_overrides: bool = False,
 ) -> list[AbstractToolset[Any]]:
     """Build Pydantic AI's configured toolsets without dispatching to Kedi's override."""
 
     try:
+        if not ignore_overrides:
+            return cast(
+                "list[AbstractToolset[Any]]",
+                Agent._build_toolset_list(agent, cap_toolsets=cast(Any, capability_toolsets)),
+            )
         return cast(
             "list[AbstractToolset[Any]]",
-            Agent._build_toolset_list(agent, cap_toolsets=cast(Any, capability_toolsets)),
+            Agent._build_toolset_list(
+                agent,
+                cap_toolsets=cast(Any, capability_toolsets),
+                ignore_overrides=ignore_overrides,
+            ),
         )
     except AttributeError as exc:
         raise _unsupported_layout(exc) from exc
 
 
-def application_toolset_count(agent: Agent[Any, Any]) -> int:
+def application_toolset_count(agent: Agent[Any, Any], *, ignore_overrides: bool = False) -> int:
     """Count constructor, overridden, and dynamic application toolsets."""
 
     try:
+        if ignore_overrides:
+            return 1 + len(agent._user_toolsets) + agent._constructor_dynamic_toolset_count
         overridden_toolsets = agent._override_toolsets.get()
         if overridden_toolsets is not None:
             return 1 + len(overridden_toolsets.value)
@@ -114,6 +127,6 @@ def build_nested_tool_manager(
 def _unsupported_layout(exc: AttributeError) -> PydanticAICompatibilityError:
     return PydanticAICompatibilityError(
         "The installed Pydantic AI version has an unsupported Agent tool layout. "
-        "Install the Kedi-supported pydantic-ai-slim==2.23.0 release. "
+        "Install the Kedi-supported pydantic-ai-slim==2.45.0 release. "
         f"Missing private contract: {exc}"
     )
