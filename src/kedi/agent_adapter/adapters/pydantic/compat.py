@@ -22,6 +22,11 @@ def build_base_toolset_list(
     """Build Pydantic AI's configured toolsets without dispatching to Kedi's override."""
 
     try:
+        if not ignore_overrides:
+            return cast(
+                "list[AbstractToolset[Any]]",
+                Agent._build_toolset_list(agent, cap_toolsets=cast(Any, capability_toolsets)),
+            )
         return cast(
             "list[AbstractToolset[Any]]",
             Agent._build_toolset_list(

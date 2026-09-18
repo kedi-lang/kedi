@@ -76,6 +76,21 @@ def test_construction_toolsets_ignore_runtime_overrides() -> None:
         assert len(adapter._construction_toolsets) == 2
 
 
+def test_toolset_builder_supports_older_pydantic_signature(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pydantic_ai import Agent
+
+    agent = Agent(TestModel())
+    toolset = FunctionToolset()
+
+    def legacy_builder(self: Any, cap_toolsets: Any = None) -> list[Any]:
+        assert self is agent
+        assert cap_toolsets == [toolset]
+        return [toolset]
+
+    monkeypatch.setattr(Agent, "_build_toolset_list", legacy_builder)
+    assert build_base_toolset_list(agent, [toolset]) == [toolset]
+
+
 def test_native_run_surfaces_apply_active_profile() -> None:
     observed: list[tuple[str | None, dict[str, Any]]] = []
 
