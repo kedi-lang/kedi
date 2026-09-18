@@ -11,8 +11,9 @@ import pytest
 
 
 def test_typesafe_exports_are_package_primitives() -> None:
-    import kedi.typesafe as surface
     import kedi_typesafe as package
+
+    import kedi.typesafe as surface
 
     assert surface.__all__ == ["BooleanCriteria", "ChoiceCriteria", "Probability", "Rubric"]
     for name in surface.__all__:

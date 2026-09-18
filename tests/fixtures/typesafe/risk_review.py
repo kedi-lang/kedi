@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from kedi import HookEvent, PreToolUseDecision, PreToolUseRequest
-
 from kedi_typesafe import EvaluationResult, TypeSafeEvaluator
+
+from kedi import HookEvent, PreToolUseDecision, PreToolUseRequest
 
 
 class RiskReview:

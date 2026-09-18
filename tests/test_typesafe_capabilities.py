@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from kedi_typesafe import TypeSafeModel
+from kedi_typesafe.integrations.langchain import TypeSafeChatModel
 from typesafe_sdk import (
     Choice,
     ChoiceAnswer,
@@ -14,12 +16,10 @@ from typesafe_sdk import (
 )
 
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
-from kedi.lang import compile_program, parse_program
-from kedi.agent_profile import AgentProfile
 from kedi.agent_adapter.output_schema import build_output_model
-from kedi_typesafe import TypeSafeModel
-from kedi_typesafe.integrations.langchain import TypeSafeChatModel
+from kedi.agent_profile import AgentProfile
 from kedi.decisions import decision_info_for_env
+from kedi.lang import compile_program, parse_program
 
 EXAMPLES = Path(__file__).parent / "fixtures" / "typesafe"
 
@@ -191,6 +191,7 @@ def test_claim_profile_threshold_overrides_constructor(adapter_name, threshold, 
 
 def test_output_schema_preserves_non_jev_constraints_and_description():
     from typing import Annotated
+
     from pydantic import Field, ValidationError
 
     output = build_output_model(

@@ -6,6 +6,9 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
+from kedi_typesafe.core.evaluation import JSONValue
+from kedi_typesafe.integrations.langchain import TypeSafeChatModel
+from kedi_typesafe.integrations.pydantic import TypeSafeModel
 from pydantic_ai.models import Model
 from typesafe_sdk import Noul, NoulAnswer, Question, SystemOneResponse, Usage
 
@@ -20,9 +23,6 @@ from kedi.agent_profile import AgentProfile
 from kedi.artifacts import ArtifactCapabilityError, ArtifactPolicy
 from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
-from kedi_typesafe.core.evaluation import JSONValue
-from kedi_typesafe.integrations.langchain import TypeSafeChatModel
-from kedi_typesafe.integrations.pydantic import TypeSafeModel
 
 
 class _ClaimClient:
