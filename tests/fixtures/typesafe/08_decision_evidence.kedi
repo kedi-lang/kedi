@@ -1,0 +1,11 @@
+```
+from kedi import decision_info
+```
+> adapter: pydantic
+> model: typesafe/jev-latest
+> settings:
+    typesafe_threshold: 0.85
+
+[ticket] = I was charged twice for the same invoice.
+>> Does <ticket> describe a duplicate charge? [duplicate_charge: bool]
+= `decision_info("duplicate_charge").probability`

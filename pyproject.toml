@@ -17,7 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.2,<2",
     "pydantic-settings>=2.14.1,<2.15",
     "prompt-toolkit>=3.0.52,<3.1",
-    "pydantic-ai-slim==2.36.0",
+    "pydantic-ai-slim>=2.36.0,<=2.45.0",
     "pydantic-monty==0.0.21",
     "jsonschema>=4.26,<5",
     "tree-sitter==0.25.2",
@@ -93,7 +93,7 @@ terminal-bench = [
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 typesafe = [
-    "kedi-typesafe==0.1.0",
+    "kedi-typesafe==0.2.1",
 ]
 
 [tool.hatch.build]
@@ -125,6 +125,18 @@ conflicts = [
     [
         { extra = "terminal-bench" },
         { extra = "codex-model" },
+    ],
+    [
+        { extra = "codex-model" },
+        { group = "dev" },
+    ],
+    [
+        { extra = "codex-model" },
+        { extra = "typesafe" },
+    ],
+    [
+        { extra = "terminal-bench" },
+        { extra = "typesafe" },
     ],
 ]
 
@@ -160,7 +172,7 @@ exclude_also = [
 
 [dependency-groups]
 dev = [
-    "anthropic==1.2.0",
+    "anthropic==1.6.0",
     "basedpyright==1.39.6",
     "cassetter[httpx]==0.5.0",
     "coverage==7.14.1",
@@ -171,9 +183,9 @@ dev = [
     "langchain-mcp-adapters==0.3.2",
     "langchain-openai==1.6.0",
     "langchain-openrouter==0.2.8",
-    "kedi-typesafe==0.1.0",
+    "kedi-typesafe[all]==0.2.1",
     "pre-commit==4.6.0",
-    "pydantic-ai==2.36.0",
+    "pydantic-ai==2.45.0",
     "pytest==9.0.3",
     "pytest-cov==7.1.0",
     "ruff==0.15.16",

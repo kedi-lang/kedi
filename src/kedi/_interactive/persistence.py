@@ -29,6 +29,7 @@ from ..agent_profile.hooks import HookSettings
 from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings
 from ..artifacts import ArtifactPolicy
+from ..decisions import DecisionInfo, DecisionRecord
 
 SNAPSHOT_FORMAT = "kedi.interactive-session"
 SNAPSHOT_FORMAT_VERSION = 1
@@ -67,9 +68,19 @@ class UnsupportedSessionValue(TypeError):
 class SessionValueEncoder:
     """Encode a conservative, type-preserving Python value subset as JSON data."""
 
-    def __init__(self, *, kedi_models: Mapping[type[BaseModel], str]) -> None:
+    def __init__(
+        self,
+        *,
+        kedi_models: Mapping[type[BaseModel], str],
+        decision_records: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
         self._kedi_models = dict(kedi_models)
+        self._decision_records = decision_records
         self._seen: dict[int, str] = {}
+
+    def bind_decision_records(self, records: dict[str, dict[str, Any]]) -> None:
+        """Attach the snapshot-owned decision table without changing encoder subclasses."""
+        self._decision_records = records
 
     def encode(self, value: Any, *, path: str = "value", depth: int = 0) -> Any:
         if depth > MAX_VALUE_DEPTH:
@@ -105,6 +116,19 @@ class SessionValueEncoder:
             return {_TAG: "path", "value": str(value)}
         if isinstance(value, _PATTERN_TYPE):
             return {_TAG: "regex", "pattern": value.pattern, "flags": value.flags}
+        if isinstance(value, DecisionInfo):
+            if self._decision_records is None:
+                raise UnsupportedSessionValue(path, value, "decision record table is unavailable")
+            record = value._record
+            encoded_record = record.to_data()
+            previous = self._decision_records.setdefault(record.call_id, encoded_record)
+            if previous != encoded_record:
+                raise UnsupportedSessionValue(path, value, "decision record id is conflicting")
+            return {
+                _TAG: "decision_info",
+                "record_id": record.call_id,
+                "field_path": list(value.field_path),
+            }
 
         next_depth = depth + 1
         if type(value) is list:
@@ -187,8 +211,14 @@ class SessionValueEncoder:
 class SessionValueDecoder:
     """Decode only the fixed value tags owned by Kedi."""
 
-    def __init__(self, *, kedi_models: Mapping[str, type[BaseModel]]) -> None:
+    def __init__(
+        self,
+        *,
+        kedi_models: Mapping[str, type[BaseModel]],
+        decision_records: Mapping[str, DecisionRecord] | None = None,
+    ) -> None:
         self._kedi_models = dict(kedi_models)
+        self._decision_records = dict(decision_records or {})
 
     def decode(self, encoded: Any, *, path: str = "value", depth: int = 0) -> Any:
         if depth > MAX_VALUE_DEPTH:
@@ -226,6 +256,18 @@ class SessionValueDecoder:
                 return Path(encoded["value"])
             if tag == "regex":
                 return re.compile(encoded["pattern"], encoded["flags"])
+            if tag == "decision_info":
+                record_id = encoded["record_id"]
+                field_path = encoded["field_path"]
+                if not isinstance(record_id, str) or not isinstance(field_path, list):
+                    raise SessionLoadError(f"{path}: invalid decision info reference")
+                if not all(isinstance(segment, str) for segment in field_path):
+                    raise SessionLoadError(f"{path}: invalid decision info field path")
+                record = self._decision_records.get(record_id)
+                resolved_path = tuple(field_path)
+                if record is None or record.output(resolved_path) is None:
+                    raise SessionLoadError(f"{path}: unknown decision info reference")
+                return DecisionInfo(record, resolved_path)
             if tag in {"list", "tuple", "set", "frozenset"}:
                 items = [
                     self.decode(item, path=f"{path}[{index}]", depth=next_depth)

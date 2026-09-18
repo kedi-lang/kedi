@@ -72,7 +72,9 @@ from .artifacts import (
     ArtifactSearchResult,
     ArtifactStream,
 )
+from .constraints import Constraints
 from .core import KediRuntime, c, i, o
+from .decisions import DecisionInfo, DecisionSource, decision_info
 from .errors import LoopIterationLimitError
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (
@@ -110,6 +112,9 @@ __all__ = [
     "AsyncAgentEventQueue",
     "bind_agent_event_dispatcher",
     "CacheInfo",
+    "Constraints",
+    "DecisionInfo",
+    "DecisionSource",
     "ConversationState",
     "CodexModel",
     "CodexModelAdapter",
@@ -140,6 +145,7 @@ __all__ = [
     "clear_cache",
     "configure",
     "context",
+    "decision_info",
     "codex_responses_model",
     "current_subagent_execution",
     "interactive",

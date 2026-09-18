@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from ..agent_adapter.conversation import ConversationState
+from ..decisions import DecisionRecord, DecisionReference, decision_info_for_env
 from ..lang.compiler.environment import BindingMetadata, ScopeFrame
 from ..lang.compiler.program_compiler import ProgramCompiler
 from ..lang.compiler.type_system import KediType
@@ -159,8 +160,14 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
 
     model_names = _kedi_model_names(session._compiler)
     raw_environment = _materialize_environment(session._env, issues)
-    binding_metadata = _encode_binding_metadata(session._env, issues)
+    decision_records: dict[str, dict[str, Any]] = {}
+    binding_metadata = _encode_binding_metadata(
+        session._env,
+        issues,
+        decision_records=decision_records,
+    )
     preflight_encoder = SessionValueEncoder(kedi_models=model_names)
+    preflight_encoder.bind_decision_records(decision_records)
     for name, value in raw_environment.items():
         try:
             preflight_encoder.encode(value, path=f"environment[{name!r}]")
@@ -183,6 +190,7 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
         raise SessionDumpError(issues)
 
     encoder = SessionValueEncoder(kedi_models=model_names)
+    encoder.bind_decision_records(decision_records)
     try:
         encoded_environment = encoder.encode(raw_environment, path="environment")
         default_profile = encode_profile(
@@ -220,6 +228,7 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
         ],
         "environment": encoded_environment,
         "binding_metadata": binding_metadata,
+        "decision_records": decision_records,
         "default_profile": default_profile,
         "active_profile": active_profile,
         "adapter_selection_kind": session._top_level_state.adapter_selection_kind,
@@ -255,13 +264,17 @@ def _materialize_environment(env: Mapping[Any, Any], issues: list[str]) -> dict[
 
 
 def _encode_binding_metadata(
-    env: Mapping[str, Any], issues: list[str]
+    env: Mapping[str, Any],
+    issues: list[str],
+    *,
+    decision_records: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     if not isinstance(env, ScopeFrame):
         issues.append("interactive environment does not expose lexical binding metadata")
         return {}
 
     encoded: dict[str, dict[str, Any]] = {}
+    record_table = {} if decision_records is None else decision_records
     for name, metadata in env.local_binding_metadata().items():
         contract = metadata.type_contract
         if contract is None:
@@ -274,11 +287,36 @@ def _encode_binding_metadata(
                 f"{type(contract).__module__}.{type(contract).__qualname__}"
             )
             continue
+        decision = None
+        reference = metadata.decision
+        if reference is not None:
+            if not isinstance(reference, DecisionReference):
+                issues.append(f"binding metadata for {name!r} has an invalid decision reference")
+                continue
+            if not reference.record_future.done():
+                issues.append(f"binding metadata for {name!r} has pending decision evidence")
+                continue
+            try:
+                record = reference.record_future.result()
+            except BaseException as exc:
+                issues.append(f"binding metadata for {name!r} has failed decision evidence: {exc}")
+                continue
+            if record is not None and decision_info_for_env(env, name) is not None:
+                encoded_record = record.to_data()
+                previous = record_table.setdefault(record.call_id, encoded_record)
+                if previous != encoded_record:
+                    issues.append(f"decision record {record.call_id!r} has conflicting payloads")
+                    continue
+                decision = {
+                    "record_id": record.call_id,
+                    "field_path": list(reference.field_path),
+                }
         encoded[name] = {
             "kind": metadata.kind,
             "type_contract": type_contract,
             "assignable": metadata.assignable,
             "synthetic": metadata.synthetic,
+            "decision": decision,
         }
     return encoded
 
@@ -286,11 +324,13 @@ def _encode_binding_metadata(
 def _decode_binding_metadata(
     encoded: Any,
     environment: dict[str, Any],
+    decision_records: Mapping[str, DecisionRecord] | None = None,
 ) -> dict[str, BindingMetadata]:
     if not isinstance(encoded, dict) or set(encoded) != set(environment):
         raise SessionLoadError("Restored binding metadata must match the environment exactly")
 
     decoded: dict[str, BindingMetadata] = {}
+    record_table = {} if decision_records is None else decision_records
     for name, item in encoded.items():
         if not isinstance(name, str) or not isinstance(item, dict):
             raise SessionLoadError("Restored binding metadata entries must be objects")
@@ -298,17 +338,39 @@ def _decode_binding_metadata(
         type_contract = item.get("type_contract")
         assignable = item.get("assignable")
         synthetic = item.get("synthetic")
+        decision_data = item.get("decision")
         if not isinstance(kind, str):
             raise SessionLoadError(f"Binding metadata for {name!r} has an invalid kind")
         if type_contract is not None and not isinstance(type_contract, str):
             raise SessionLoadError(f"Binding metadata for {name!r} has an invalid type contract")
         if not isinstance(assignable, bool) or not isinstance(synthetic, bool):
             raise SessionLoadError(f"Binding metadata for {name!r} has invalid flags")
+        decision = None
+        if decision_data is not None:
+            if not isinstance(decision_data, dict):
+                raise SessionLoadError(f"Binding metadata for {name!r} has invalid decision data")
+            record_id = decision_data.get("record_id")
+            field_path = decision_data.get("field_path")
+            if not isinstance(record_id, str) or not isinstance(field_path, list):
+                raise SessionLoadError(
+                    f"Binding metadata for {name!r} has an invalid decision reference"
+                )
+            if not all(isinstance(segment, str) for segment in field_path):
+                raise SessionLoadError(
+                    f"Binding metadata for {name!r} has an invalid decision field path"
+                )
+            record = record_table.get(record_id)
+            if record is None or record.output(tuple(field_path)) is None:
+                raise SessionLoadError(
+                    f"Binding metadata for {name!r} references an unknown decision output"
+                )
+            decision = DecisionReference.completed(record, tuple(field_path))
         decoded[name] = BindingMetadata(
             kind=kind,
             type_contract=None if type_contract is None else KediType(type_contract),
             assignable=assignable,
             synthetic=synthetic,
+            decision=decision,
         )
     return decoded
 
@@ -366,11 +428,16 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
         fragments.append(ExecutedFragment(source, source_name))
 
     models = _kedi_models(session._compiler)
-    decoder = SessionValueDecoder(kedi_models=models)
+    decision_records = _decode_decision_records(payload.get("decision_records", {}))
+    decoder = SessionValueDecoder(kedi_models=models, decision_records=decision_records)
     environment = decoder.decode(payload["environment"], path="environment")
     if not isinstance(environment, dict) or not all(isinstance(name, str) for name in environment):
         raise SessionLoadError("Restored environment must be a string-keyed mapping")
-    metadata = _decode_binding_metadata(payload["binding_metadata"], environment)
+    metadata = _decode_binding_metadata(
+        payload["binding_metadata"],
+        environment,
+        decision_records,
+    )
     if not isinstance(session._env, ScopeFrame):
         raise SessionLoadError("Interactive environment is not a lexical scope frame")
     session._env.restore_locals(environment, metadata)
@@ -387,6 +454,23 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
     session._cell_number = payload["cell_number"]
     session._source_names = set(payload["source_names"])
     session._fragments = fragments
+
+
+def _decode_decision_records(encoded: Any) -> dict[str, DecisionRecord]:
+    if not isinstance(encoded, dict):
+        raise SessionLoadError("Restored decision records must be an object")
+    records: dict[str, DecisionRecord] = {}
+    for record_id, value in encoded.items():
+        if not isinstance(record_id, str) or not isinstance(value, dict):
+            raise SessionLoadError("Restored decision record entries must be objects")
+        try:
+            record = DecisionRecord.from_data(value)
+        except ValueError as exc:
+            raise SessionLoadError(f"Invalid decision record {record_id!r}: {exc}") from exc
+        if record.call_id != record_id:
+            raise SessionLoadError(f"Decision record {record_id!r} has a mismatched call_id")
+        records[record_id] = record
+    return records
 
 
 def _kedi_model_names(compiler: ProgramCompiler) -> dict[type[BaseModel], str]:

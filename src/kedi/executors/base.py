@@ -87,7 +87,14 @@ class DefaultExecutor:
         eval_filename = self._python_filename(rt, "inline", code)
         eval_source = self._python_source(rt, code)
         try:
-            result = eval(compile(eval_source, eval_filename, "eval", dont_inherit=True), env, env)
+            from ..decisions import decision_environment
+
+            with decision_environment(local_env):
+                result = eval(
+                    compile(eval_source, eval_filename, "eval", dont_inherit=True),
+                    env,
+                    env,
+                )
             self._emit_debug(
                 "execution_completed",
                 "evaluate_inline",
@@ -211,7 +218,10 @@ class DefaultExecutor:
         )
         compile_source = self._python_source(rt, code, kedi_line_offset=kedi_line_offset)
         try:
-            exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
+            from ..decisions import decision_environment
+
+            with decision_environment(env_map):
+                exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
         except Exception as exc:
             self._emit_debug(
                 "execution_failed",
@@ -495,8 +505,11 @@ class DefaultExecutor:
         )
         # Pad so traceback line numbers stay aligned with the Kedi source line.
         compile_source = self._python_source(rt, wrapper_src, kedi_line_offset=kedi_line_offset)
-        exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
-        result = env["__kedi_wrapper__"]()
+        from ..decisions import decision_environment
+
+        with decision_environment(local_env):
+            exec(compile(compile_source, filename, "exec", dont_inherit=True), env, env)
+            result = env["__kedi_wrapper__"]()
         # CPython's STORE_GLOBAL can bypass dict-subclass mutation hooks. Compare raw identities
         # around the block and feed only actual rebindings through owner-aware validation. In-place
         # mutations already affect the owned object; untouched lazy values remain promises.

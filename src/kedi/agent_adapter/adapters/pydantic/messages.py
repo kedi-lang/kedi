@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import (
     Any,
+    Sequence,
+    cast,
 )
 
 from pydantic_ai.messages import (
@@ -10,6 +12,7 @@ from pydantic_ai.messages import (
 
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.subagents import SubagentConversationContext
+from kedi.decisions import capture_decision_evidence
 
 
 def _capture_conversation_messages(
@@ -49,3 +52,27 @@ def _apply_conversation_history(
     run_kwargs["message_history"] = ModelMessagesTypeAdapter.validate_python(
         conversation.resume_state["pydantic_messages"]
     )
+
+
+def _capture_typesafe_decision_evidence(result: Any) -> None:
+    """Publish metadata from the final TypeSafe model response for this run only."""
+    new_messages = getattr(result, "new_messages", None)
+    if not callable(new_messages):
+        return
+    messages = cast(Sequence[Any], new_messages())
+    for message in reversed(messages):
+        details = getattr(message, "provider_details", None)
+        if not isinstance(details, dict):
+            details = getattr(message, "metadata", None)
+        if not isinstance(details, dict):
+            continue
+        metadata = details.get("typesafe")
+        if not isinstance(metadata, dict):
+            continue
+        model = getattr(message, "model_name", None)
+        capture_decision_evidence(
+            provider="typesafe",
+            model=model if isinstance(model, str) else None,
+            metadata=metadata,
+        )
+        return

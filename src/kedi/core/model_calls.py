@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -11,7 +13,25 @@ from typing import (
     cast,
 )
 
-from kedi.core.expressions import Expression, OutputExpr, ValueEnv
+from kedi.core.expressions import (
+    CallExpr,
+    ComputedExpr,
+    Expression,
+    InputExpr,
+    OutputExpr,
+    ValueEnv,
+)
+from kedi.decisions import (
+    DecisionInput,
+    DecisionOutput,
+    DecisionRecord,
+    DecisionReference,
+    DecisionSource,
+    collect_decision_evidence,
+    fingerprint_text,
+    fingerprint_value,
+    new_call_id,
+)
 from kedi.errors import KediExecutionError
 from kedi.promise import KediPromise
 
@@ -23,6 +43,27 @@ if TYPE_CHECKING:
 _CLAIM_OUTPUT_DESCRIPTION = (
     "Whether the claim can be established as true from the available context."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PromptInputSnapshot:
+    text: str
+    identity: DecisionInput
+
+
+def _snapshot_prompt_input(name: str, value: Any) -> _PromptInputSnapshot:
+    from kedi.lang.compiler.environment import model_value_and_text
+
+    model_value, text = model_value_and_text(value)
+    fingerprint = fingerprint_value(model_value)
+    return _PromptInputSnapshot(
+        text=text,
+        identity=DecisionInput(
+            name=name,
+            fingerprint=fingerprint,
+            supported=fingerprint is not None,
+        ),
+    )
 
 
 def _tool_request_context(tools: Sequence[Any]) -> list[dict[str, Any]]:
@@ -228,8 +269,24 @@ def _kedi_run(
     parts: List[Any] = []
     outputs: List[OutputExpr] = []
     deps: List[Any] = []
+    input_snapshots: list[_PromptInputSnapshot | KediPromise] = []
+    inputs_complete = True
     for expr in expressions:
-        text, out = self._evaluate_expression(expr, env)
+        if isinstance(expr, InputExpr):
+            value = self._lookup_value(expr.key, env)
+            if isinstance(value, KediPromise):
+                captured = value.map(lambda item, key=expr.key: _snapshot_prompt_input(key, item))
+                text = captured.map(lambda item: item.text)
+                input_snapshots.append(captured)
+            else:
+                captured = _snapshot_prompt_input(expr.key, value)
+                text = captured.text
+                input_snapshots.append(captured)
+            out = None
+        else:
+            text, out = self._evaluate_expression(expr, env)
+            if isinstance(expr, (CallExpr, ComputedExpr)):
+                inputs_complete = False
         if out is not None:
             outputs.append(out)
         if text is not None:
@@ -255,6 +312,15 @@ def _kedi_run(
     }
     explicit_typed_fields = {out.key for out in outputs if out.pytype is not None}
     binding_contracts = {out.key: out.binding_contract for out in outputs}
+    record_future: Future[DecisionRecord | None] = Future()
+    call_id = new_call_id()
+    frames = self.current_trace_frames()
+    span = frames[-1].span if frames else None
+    decision_source = DecisionSource(
+        path=None if span is None else span.source_path,
+        line=None if span is None else span.start_line,
+        column=None if span is None else span.start_col,
+    )
 
     def declare_output(key: str, value: Any) -> None:
         from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
@@ -263,7 +329,10 @@ def _kedi_run(
             env.declare(
                 key,
                 value,
-                BindingMetadata(type_contract=binding_contracts[key]),
+                BindingMetadata(
+                    type_contract=binding_contracts[key],
+                    decision=DecisionReference(record_future, (key,)),
+                ),
             )
         else:
             env[key] = value
@@ -292,6 +361,9 @@ def _kedi_run(
         # parallel engine; concrete already in sequential), then build the prompt + call the
         # model + validate — all inside the captured context so profile/tools are correct.
         resolved_parts = [p.resolve() if isinstance(p, KediPromise) else p for p in parts]
+        resolved_inputs = [
+            item.resolve() if isinstance(item, KediPromise) else item for item in input_snapshots
+        ]
 
         from kedi.agent_adapter.meta import SupportsProfileOverride
         from kedi.agent_adapter.request import (
@@ -316,8 +388,12 @@ def _kedi_run(
             tool_adapter = adapter
             tool_ctx = tool_adapter.tool_scope()
 
+        captured_evidence: list[Any] = []
+
         def produce_and_validate(request: AgentRunRequest) -> Dict[str, Any]:
-            result = lower_request_sync(adapter, request)
+            with collect_decision_evidence() as evidence:
+                result = lower_request_sync(adapter, request)
+            captured_evidence.extend(evidence)
             out_map: Dict[str, Any] = {}
             artifact_policy = profile.artifacts
             for key in required:
@@ -351,7 +427,7 @@ def _kedi_run(
             ).build()
 
             with override_ctx:
-                return self._run_conversation_call(
+                result_map = self._run_conversation_call(
                     adapter,
                     prompt,
                     produce_and_validate,
@@ -364,12 +440,50 @@ def _kedi_run(
                     conversation_ticket=conversation_ticket,
                     lane_identity=lane_identity,
                 )
+        if not captured_evidence:
+            record_future.set_result(None)
+            return result_map
+
+        unique_inputs: dict[str, DecisionInput] = {}
+        complete_input_set = inputs_complete
+        for item in resolved_inputs:
+            previous = unique_inputs.get(item.identity.name)
+            if previous is not None and previous != item.identity:
+                complete_input_set = False
+            unique_inputs[item.identity.name] = item.identity
+        output_identities: list[DecisionOutput] = []
+        for key in required:
+            output_fingerprint = fingerprint_value(result_map[key])
+            output_identities.append(
+                DecisionOutput(
+                    field_path=(key,),
+                    fingerprint=output_fingerprint,
+                    supported=output_fingerprint is not None,
+                )
+            )
+        record_future.set_result(
+            DecisionRecord(
+                call_id=call_id,
+                source=decision_source,
+                prompt_fingerprint=fingerprint_text(prompt.content),
+                inputs=tuple(unique_inputs.values()),
+                inputs_complete=complete_input_set,
+                outputs=tuple(output_identities),
+                evidence=captured_evidence[-1],
+            )
+        )
+        return result_map
+
+    def finish_without_evidence() -> None:
+        if not record_future.done():
+            record_future.set_result(None)
 
     # Explicit sequential execution avoids a worker and returns concrete values.
     if not parallel:
         try:
             result_map = _produce()  # raises on the main thread, wrapped by the trace frame
         except BaseException:
+            finish_without_evidence()
             self._cancel_conversation_turn(conversation_state, conversation_ticket)
             raise
         for key in required:
@@ -407,15 +521,21 @@ def _kedi_run(
     try:
         future = self._engine.schedule(deps, _job)
     except BaseException:
+        finish_without_evidence()
         self._cancel_conversation_turn(conversation_state, conversation_ticket)
         raise
-    future.add_done_callback(
-        lambda completed: self._retire_conversation_turn_after_failed_future(
+
+    def _finish_parallel_produce(completed: Future[Any]) -> None:
+        # The engine can cancel or fail the Future before `_job` starts. In that case none of
+        # `_job`'s exception handlers run, so settle the evidence reference here as well.
+        finish_without_evidence()
+        self._retire_conversation_turn_after_failed_future(
             conversation_state,
             conversation_ticket,
             completed,
         )
-    )
+
+    future.add_done_callback(_finish_parallel_produce)
     self._register_outstanding(future)
     views: Dict[str, Any] = {key: KediPromise(future, key) for key in required}
     for key in required:

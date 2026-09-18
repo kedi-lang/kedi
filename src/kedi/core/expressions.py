@@ -51,7 +51,14 @@ class CallExpr:
     args: Tuple[Any, ...]
 
 
-Expression = Union[str, InputExpr, OutputExpr, CallExpr]
+@dataclass(frozen=True, slots=True)
+class ComputedExpr:
+    """Already-evaluated prompt text whose input dependencies are not explicit."""
+
+    text: str
+
+
+Expression = Union[str, InputExpr, OutputExpr, CallExpr, ComputedExpr]
 
 
 def i(key: str) -> InputExpr:
@@ -130,6 +137,8 @@ def _evaluate_expression(
         # failure — better than silently deferring an unsupported cross-proc dataflow.
         result = self._invoke_procedure(callee, evaluated_args)
         return str(result), None
+    if isinstance(expr, ComputedExpr):
+        return expr.text, None
     if isinstance(expr, OutputExpr):
         return f"[{expr.key}]", expr
     return str(expr), None

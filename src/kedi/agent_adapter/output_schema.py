@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, get_args, get_origin
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..dynamic_models import build_dynamic_model
-from ..resolved_types import ResolvedKediType
+from ..resolved_types import ResolvedKediType, annotated_field_metadata
 
 
 def make_repr(cls: type) -> str:
@@ -14,12 +14,7 @@ def make_repr(cls: type) -> str:
 
 
 def output_field_metadata(type_: ResolvedKediType) -> tuple[Any, str | None]:
-    if get_origin(type_) is not Annotated:
-        return type_, None
-
-    annotation, first_metadata, *_ = get_args(type_)
-    description = first_metadata if isinstance(first_metadata, str) else None
-    return annotation, description
+    return annotated_field_metadata(type_)
 
 
 def output_field_definition(

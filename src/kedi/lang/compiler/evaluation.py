@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...core import KediRuntime
+from ...core.expressions import ComputedExpr
 from ...errors import KediTraceFrame
 from ...promise import force
 from ..ast import (
@@ -169,7 +170,7 @@ def prepare_segments(
                 parts.append(model_text(value) if context == "system" else str(value))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            expr.append(str(value))
+            expr.append(ComputedExpr(str(value)) if context == "template" else str(value))
             parts.append(str(value))
         elif isinstance(seg, OutputSegment):
             kedi_type = KediType.from_node(seg.type_expr, seg.type_annotation)
@@ -179,7 +180,7 @@ def prepare_segments(
             expr.append(rt.o(seg.name, pytype, binding_contract=kedi_type))
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            expr.append(str(value))
+            expr.append(ComputedExpr(str(value)) if context == "template" else str(value))
             parts.append(str(value))
 
     return expr, "".join(parts)

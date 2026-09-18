@@ -423,15 +423,15 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             run_kwargs = self._run_kwargs(run_kwargs, tool_specs=tool_specs)
             run_kwargs.update(self._profile_override_kwargs(self.active_profile))
             self._add_nested_native_toolsets(run_kwargs)
-        return (
-            await self._run_agent(
-                agent,
-                template,
-                run_kwargs,
-                tool_specs=tool_specs,
-                emit_final=False,
-            )
-        ).output
+        result = await self._run_agent(
+            agent,
+            template,
+            run_kwargs,
+            tool_specs=tool_specs,
+            emit_final=False,
+        )
+        _messages._capture_typesafe_decision_evidence(result)
+        return result.output
 
     @hooked_agent_run("prompt")
     async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
@@ -721,9 +721,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def _add_nested_native_toolsets(self, run_kwargs: dict[str, object]) -> None:
         return _tools._add_nested_native_toolsets(self, run_kwargs)
 
-    def _build_toolset_list(self, cap_toolsets: Sequence[Any] | None = None) -> list[Any]:
+    def _build_toolset_list(
+        self, cap_toolsets: Sequence[Any] | None = None, *, ignore_overrides: bool = False
+    ) -> list[Any]:
         """Require native approval for every application-provided Pydantic toolset."""
-        return _tools._build_toolset_list(self, cap_toolsets)
+        return _tools._build_toolset_list(self, cap_toolsets, ignore_overrides=ignore_overrides)
 
     def _application_toolset_count(self) -> int:
         """Count function, user, and dynamic toolsets without capability toolsets."""

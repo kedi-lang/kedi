@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 from types import GenericAlias, UnionType
-from typing import TypeAlias, cast
+from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin
 
 from pydantic import TypeAdapter
 
 ResolvedKediType: TypeAlias = type | GenericAlias | UnionType
+
+
+def annotated_field_metadata(annotation: Any) -> tuple[Any, str | None]:
+    """Extract Kedi's description while retaining native validation metadata."""
+    if get_origin(annotation) is not Annotated:
+        return annotation, None
+    base, *metadata = get_args(annotation)
+    description = metadata[0] if metadata and isinstance(metadata[0], str) else None
+    retained = tuple(item for item in metadata if not isinstance(item, str))
+    return (Annotated[(base, *retained)] if retained else base), description
 
 
 def is_resolved_kedi_type(value: object) -> bool:
@@ -45,6 +55,7 @@ def resolved_type_name(value: ResolvedKediType) -> str:
 
 
 __all__ = [
+    "annotated_field_metadata",
     "ResolvedKediType",
     "as_resolved_kedi_type",
     "is_resolved_kedi_type",

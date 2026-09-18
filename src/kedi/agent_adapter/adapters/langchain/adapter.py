@@ -18,6 +18,7 @@ from pydantic_ai.output import OutputDataT
 
 from kedi.agent_adapter.adapters.langchain.messages import (
     _apply_langchain_effort_settings,
+    _capture_langchain_typesafe_decision_evidence,
     _langchain_event_handler,
     _langchain_invocation_usage,
     _langchain_structured_response,
@@ -235,6 +236,10 @@ class LangChainAdapter(HookRegistrationMixin):
             payload = {"messages": self._messages_for_prompt(template, model=model), **kwargs}
             async with model_responses_turn(model):
                 result = await self._invoke_agent(agent, payload, emit_final=False)
+            _capture_langchain_typesafe_decision_evidence(
+                result,
+                input_messages=payload.get("messages"),
+            )
             structured = _langchain_structured_response(result)
             return cast(OutputDataT, unwrap_response(structured))
 
