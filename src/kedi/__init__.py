@@ -74,7 +74,13 @@ from .artifacts import (
 )
 from .constraints import Constraints
 from .core import KediRuntime, c, i, o
-from .decisions import DecisionInfo, DecisionSource, decision_info
+from .decisions import (
+    DecisionCapture,
+    DecisionInfo,
+    DecisionSource,
+    capture_decisions,
+    decision_info,
+)
 from .errors import LoopIterationLimitError
 from .executors.base import DefaultExecutor, Executor
 from .executors.debug import (
@@ -114,6 +120,8 @@ __all__ = [
     "CacheInfo",
     "Constraints",
     "DecisionInfo",
+    "DecisionCapture",
+    "capture_decisions",
     "DecisionSource",
     "ConversationState",
     "CodexModel",

@@ -496,6 +496,13 @@ def _artifacts_field_value_preview(field: ArtifactsField) -> str:
 
 
 def _setting_adapter_label(name: str) -> str:
+    if name == "tool_reason":
+        return (
+            "Kedi approval setting for Pydantic AI and LangChain; enabled or disabled "
+            "(default disabled), or a backtick Python expression returning a boolean. "
+            "Adds an optional reason to tools that may require approval. "
+            "Overrides the adapter constructor in this scope; not sent to the model provider."
+        )
     labels: list[str] = []
     if name in PYDANTIC_MODEL_SETTING_KEYS:
         labels.append("Pydantic AI `ModelSettings`")

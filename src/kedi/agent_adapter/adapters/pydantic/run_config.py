@@ -156,6 +156,12 @@ def _run_kwargs(
             *(toolsets or ()),
         ]
     capabilities = run_kwargs.get("capabilities")
+    if self.active_tool_reason:
+        from .reason import ToolReasonCapability
+
+        capabilities = _with_capability(
+            capabilities, ToolReasonCapability, lambda: ToolReasonCapability(self)
+        )
     approval_resolution = self.active_approval_resolution
     dispatcher = current_hook_dispatcher()
     if dispatcher is not None and any(

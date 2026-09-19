@@ -307,7 +307,7 @@ def eval_system_directive(
 
 def eval_mcp_field_value(rt: KediRuntime, field: McpField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
-        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+        return rt.executor.evaluate_inline(rt, field.backtick_code, env)
     if field.plain_value is not None:
         return field.plain_value.strip()
     return None
@@ -330,8 +330,14 @@ def eval_mcp_directive(
 
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
-        return rt.executor.evaluate_type_expression(rt, field.backtick_code, env)
+        return rt.executor.evaluate_inline(rt, field.backtick_code, env)
     if field.plain_value is not None:
+        if field.name == "tool_reason":
+            if field.plain_value not in {"enabled", "disabled"}:
+                raise ValueError(
+                    "tool_reason must be enabled, disabled, or a Python boolean expression"
+                )
+            return field.plain_value == "enabled"
         return parse_plain_setting_value(field.plain_value)
     return None
 

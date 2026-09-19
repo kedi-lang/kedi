@@ -7,6 +7,8 @@ from typing import Any, Final
 SettingValue = Any
 SettingsMap = Mapping[str, SettingValue]
 
+KEDI_RUNTIME_SETTING_KEYS: Final[frozenset[str]] = frozenset({"tool_reason"})
+
 PYDANTIC_MODEL_SETTING_KEYS: Final[frozenset[str]] = frozenset(
     {
         "typesafe_threshold",
@@ -124,7 +126,8 @@ ACP_AGENT_SETTING_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 MODEL_SETTING_KEYS: Final[frozenset[str]] = (
-    PYDANTIC_MODEL_SETTING_KEYS
+    KEDI_RUNTIME_SETTING_KEYS
+    | PYDANTIC_MODEL_SETTING_KEYS
     | DSPY_LM_SETTING_KEYS
     | LANGCHAIN_MODEL_SETTING_KEYS
     | CLAUDE_AGENT_SETTING_KEYS
@@ -135,6 +138,15 @@ MODEL_SETTING_KEYS: Final[frozenset[str]] = (
 
 def is_valid_model_setting_key(name: str) -> bool:
     return name in MODEL_SETTING_KEYS
+
+
+def tool_reason_enabled(settings: SettingsMap, *, default: bool = False) -> bool:
+    value = settings.get("tool_reason", default)
+    if not isinstance(value, bool):
+        raise TypeError(
+            "tool_reason must be a boolean; Python expressions must return True or False"
+        )
+    return value
 
 
 def parse_plain_setting_value(raw: str) -> SettingValue:

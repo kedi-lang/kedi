@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..approvals.policy import ApprovalPolicy
+from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_reason
 from ..tools.execution import resolve_tool_arguments_async
 from ..tools.scope import defer_artifact_admission
 from ..tools.specs import ToolResultAdmitter, ToolSpec
@@ -92,6 +93,7 @@ class CodeModeToolSpecBridge:
         limits: CodeModeLimits,
         policies: Sequence[ApprovalPolicy | None],
         adapter_shortname: str,
+        tool_reason: bool = False,
     ) -> None:
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
@@ -99,8 +101,11 @@ class CodeModeToolSpecBridge:
             raise ValueError("Duplicate CodeMode tool names: " + ", ".join(duplicates))
         self._policies = tuple(policies)
         self._adapter_shortname = adapter_shortname
+        self._tool_reason = tool_reason
         self._session = CodeModeSession(limits)
-        self._session.update_tools([_codemode_tool(tool) for tool in tools])
+        self._session.update_tools(
+            [_codemode_tool(tool, tool_reason=tool_reason) for tool in tools]
+        )
         self._result_admitter = shared_result_admitter(tools)
 
     @property
@@ -181,12 +186,17 @@ class CodeModeToolSpecBridge:
     async def _invoke(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         tool = self._tools[tool_name]
         final_arguments = arguments
+        reason = None
+        if self._tool_reason and accepts_tool_reason(tool):
+            final_arguments, reason = split_tool_reason(arguments)
         for policy in self._policies:
             final_arguments = await resolve_tool_arguments_async(
                 tool,
                 final_arguments,
                 policy=policy,
                 adapter_shortname=self._adapter_shortname,
+                reason=reason,
+                tool_reason_enabled=self._tool_reason,
             )
         with defer_artifact_admission():
             result = tool.fn(**final_arguments)
@@ -201,6 +211,7 @@ def codemode_projection(
     limits: CodeModeLimits | None,
     policies: Sequence[ApprovalPolicy | None],
     adapter_shortname: str,
+    tool_reason: bool = False,
 ) -> CodeModeProjection:
     if limits is None:
         return CodeModeProjection(tools=tuple(tools))
@@ -209,6 +220,7 @@ def codemode_projection(
         limits=limits,
         policies=policies,
         adapter_shortname=adapter_shortname,
+        tool_reason=tool_reason,
     )
     return CodeModeProjection(tools=bridge.control_tools, bridge=bridge)
 
@@ -244,13 +256,16 @@ def approval_policies(
     return policies
 
 
-def _codemode_tool(tool: ToolSpec) -> CodeModeTool:
+def _codemode_tool(tool: ToolSpec, *, tool_reason: bool = False) -> CodeModeTool:
     if tool.name in CONTROL_TOOL_NAMES:
         raise ValueError(f"CodeMode reserves tool name {tool.name!r}")
+    schema = tool.json_schema or {"type": "object", "properties": {}}
+    if tool_reason and accepts_tool_reason(tool):
+        schema = reason_schema(schema, name=tool.name)
     return CodeModeTool(
         name=tool.name,
         description=tool.description,
-        parameters_json_schema=tool.json_schema or {"type": "object", "properties": {}},
+        parameters_json_schema=schema,
         return_schema=tool.return_schema,
         metadata=tool.metadata,
         sequential=tool.sequential,

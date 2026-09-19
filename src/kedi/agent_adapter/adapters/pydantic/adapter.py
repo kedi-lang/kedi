@@ -99,7 +99,11 @@ from kedi.agent_adapter.tools.scope import (
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
-from kedi.agent_profile.settings import PYDANTIC_MODEL_SETTING_KEYS
+from kedi.agent_profile.settings import (
+    KEDI_RUNTIME_SETTING_KEYS,
+    PYDANTIC_MODEL_SETTING_KEYS,
+    tool_reason_enabled,
+)
 from kedi.model_normalization import normalize_for_pydantic_ai
 from kedi.resolved_types import ResolvedKediType
 
@@ -140,7 +144,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
         ),
-        settings=PYDANTIC_MODEL_SETTING_KEYS,
+        settings=PYDANTIC_MODEL_SETTING_KEYS | KEDI_RUNTIME_SETTING_KEYS,
     )
 
     def native_telemetry_enabled(self, operation: str) -> bool:
@@ -166,6 +170,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
+        tool_reason: bool = False,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -182,6 +187,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if not isinstance(query_artifact, bool):
             raise TypeError("query_artifact must be a boolean")
         self.query_artifact = query_artifact
+        if not isinstance(tool_reason, bool):
+            raise TypeError("tool_reason must be a boolean")
+        self.tool_reason = tool_reason
+        self._tool_reasons_var: ContextVar[dict[str, str | None]] = ContextVar(
+            f"kedi_pydantic_tool_reasons_{id(self)}", default={}
+        )
         self._tool_scope = ToolScope()
         self._tool_spec_scope = ToolScope()
         self._profile_stack_var: ContextVar[tuple[AgentProfile, ...]] = ContextVar(
@@ -385,6 +396,12 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         stack_var = getattr(self, "_profile_stack_var", None)
         stack = stack_var.get() if stack_var is not None else ()
         return stack[-1] if stack else AgentProfile.empty()
+
+    @property
+    def active_tool_reason(self) -> bool:
+        return tool_reason_enabled(
+            self.active_profile.settings, default=getattr(self, "tool_reason", False)
+        )
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[OutputDataT]:

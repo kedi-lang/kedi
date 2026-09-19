@@ -14,6 +14,7 @@ from kedi.agent_adapter.adapters.langchain.tools import (
     _langchain_tool_error,
 )
 from kedi.agent_adapter.approvals.policy import ApprovalPolicy, ToolApprovalDenied
+from kedi.agent_adapter.approvals.reason import accepts_tool_reason, split_tool_reason
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
     ToolOrigin,
@@ -51,6 +52,7 @@ def _langchain_approval_middleware(
     tools: Sequence[ToolSpec],
     approval_ceiling: Sequence[ApprovalPolicy | None] = (),
     approval_enabled: bool = True,
+    tool_reason: bool = False,
 ) -> Any:
     """Bridge Kedi hook and approval semantics into LangChain's tool lifecycle."""
 
@@ -81,6 +83,9 @@ def _langchain_approval_middleware(
             call_id = str(tool_call_id or new_tool_call_id())
             origin = _langchain_hook_origin(tool, getattr(request, "tool", None))
             try:
+                reason = None
+                if tool_reason and accepts_tool_reason(tool):
+                    arguments, reason = split_tool_reason(arguments)
                 final_arguments = await dispatch_pre_tool_use(
                     tool,
                     arguments,
@@ -99,6 +104,8 @@ def _langchain_approval_middleware(
                             final_arguments,
                             policy=policy,
                             adapter_shortname="langchain",
+                            reason=reason,
+                            tool_reason_enabled=tool_reason,
                         )
             except (HookDeniedError, ToolApprovalDenied) as exc:
                 return _langchain_tool_error(tool_name, tool_call_id, str(exc))

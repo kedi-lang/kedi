@@ -626,6 +626,16 @@ def _walk_settings_field(self: _Walker, node: Node) -> SettingsField:
     name_node = _field(node, "name")
     assert name_node is not None
     self._validate_setting_key(name_node, field.name)
+    if (
+        field.name == "tool_reason"
+        and field.plain_value is not None
+        and field.plain_value not in {"enabled", "disabled"}
+    ):
+        self._error(
+            node,
+            "tool_reason must be enabled, disabled, or a Python boolean expression",
+            code="K-SETTING-VALUE",
+        )
     return field
 
 

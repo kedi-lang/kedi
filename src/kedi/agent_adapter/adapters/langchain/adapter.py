@@ -73,7 +73,12 @@ from kedi.agent_adapter.tools.scope import ToolScope, current_artifact_admission
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from kedi.agent_profile.compaction import CompactionSettingsError
-from kedi.agent_profile.settings import LANGCHAIN_MODEL_SETTING_KEYS, langchain_model_settings
+from kedi.agent_profile.settings import (
+    KEDI_RUNTIME_SETTING_KEYS,
+    LANGCHAIN_MODEL_SETTING_KEYS,
+    langchain_model_settings,
+    tool_reason_enabled,
+)
 from kedi.model_normalization import normalize_for_langchain
 from kedi.resolved_types import ResolvedKediType
 
@@ -106,7 +111,7 @@ class LangChainAdapter(HookRegistrationMixin):
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
         ),
-        settings=LANGCHAIN_MODEL_SETTING_KEYS,
+        settings=LANGCHAIN_MODEL_SETTING_KEYS | KEDI_RUNTIME_SETTING_KEYS,
     )
 
     def supports_artifact_contract(self, profile: AgentProfile) -> bool:
@@ -124,6 +129,7 @@ class LangChainAdapter(HookRegistrationMixin):
         subagent_failure_policy: DelegationFailurePolicy = "fail_closed",
         codemode: bool | CodeModeSettings = False,
         query_artifact: bool = False,
+        tool_reason: bool = False,
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
@@ -134,6 +140,9 @@ class LangChainAdapter(HookRegistrationMixin):
         if not isinstance(query_artifact, bool):
             raise TypeError("query_artifact must be a boolean")
         self.query_artifact = query_artifact
+        if not isinstance(tool_reason, bool):
+            raise TypeError("tool_reason must be a boolean")
+        self.tool_reason = tool_reason
         if isinstance(tool_retries, bool) or not isinstance(tool_retries, int) or tool_retries < 0:
             raise ValueError("tool_retries must be a non-negative integer")
         self._default_usage_limits = default_usage_limits
@@ -192,6 +201,10 @@ class LangChainAdapter(HookRegistrationMixin):
     def active_profile(self) -> AgentProfile:
         stack = self._profile_stack_var.get()
         return stack[-1] if stack else AgentProfile.empty()
+
+    @property
+    def active_tool_reason(self) -> bool:
+        return tool_reason_enabled(self.active_profile.settings, default=self.tool_reason)
 
     @staticmethod
     def type_builder(output_schema: dict[str, ResolvedKediType]) -> type[BaseModel]:
@@ -591,6 +604,14 @@ class LangChainAdapter(HookRegistrationMixin):
         return [*history, current]
 
     def _cache_aware_system_prompt(self, prompt: str | None, *, model: Any) -> Any | None:
+        if self.active_tool_reason:
+            from kedi.agent_adapter.approvals.reason import TOOL_REASON_INSTRUCTIONS
+
+            prompt = (
+                f"{prompt.rstrip()}\n\n{TOOL_REASON_INSTRUCTIONS}"
+                if prompt
+                else TOOL_REASON_INSTRUCTIONS
+            )
         if prompt is None or self._conversation_var.get() is None:
             return prompt
         if not _langchain_uses_explicit_cache_blocks(model):
@@ -673,6 +694,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 tools=tool_specs,
                 approval_ceiling=self._approval_ceiling_var.get(),
                 approval_enabled=approval_enabled,
+                tool_reason=self.active_tool_reason,
             )
         ]
 
@@ -709,6 +731,10 @@ class LangChainAdapter(HookRegistrationMixin):
             else None
         )
         if limits is None:
+            if self.active_tool_reason:
+                from .reason import tools_with_reason
+
+                native_tools = tools_with_reason(native_tools, self.scoped_tool_specs)
             yield CodeModeProjection(tools=tuple(native_tools))
             return
 
@@ -725,6 +751,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 self._approval_ceiling_var.get(),
             ),
             adapter_shortname=self.shortname,
+            tool_reason=self.active_tool_reason,
         )
         try:
             yield projection

@@ -39,6 +39,7 @@ from kedi.agent_adapter.approvals.policy import (
     ToolApprovalDenied,
     ToolRisk,
 )
+from kedi.agent_adapter.approvals.reason import accepts_tool_reason, split_tool_reason
 from kedi.agent_adapter.tools.execution import (
     approval_request_for_tool,
     arguments_after_approval,
@@ -225,6 +226,8 @@ def pydantic_approval_request_from_deferred(
             str(payload["description"]) if payload.get("description") is not None else None
         ),
         metadata=tool_metadata,
+        reason=payload.get("reason"),
+        tool_reason_enabled=payload.get("tool_reason_enabled", False),
     )
 
 
@@ -295,6 +298,8 @@ def _approval_request_payload(request: ApprovalRequest) -> dict[str, Any]:
         "adapter_shortname": request.adapter_shortname,
         "description": request.description,
         "metadata": dict(request.metadata) if request.metadata is not None else None,
+        "reason": request.reason,
+        "tool_reason_enabled": request.tool_reason_enabled,
     }
 
 
@@ -490,6 +495,9 @@ async def _handle_deferred_tool_calls(
             (self._tool_spec_for_call(call.tool_name), "adapter_native"),
         )
         arguments = self._hook_arguments_for_call(call.tool_call_id, arguments)
+        reason_enabled = self.active_tool_reason
+        if reason_enabled and accepts_tool_reason(tool):
+            arguments, _ = split_tool_reason(arguments)
         policies = self._approval_ceiling_for_current_adapter().get()
         local_policy = self.active_profile.approval
         if local_policy is not None or not policies:
@@ -503,6 +511,12 @@ async def _handle_deferred_tool_calls(
                     approved_arguments,
                     policy=policy,
                     adapter_shortname=self.shortname,
+                    reason=(
+                        self._tool_reasons_var.get().get(call.tool_call_id)
+                        if reason_enabled
+                        else None
+                    ),
+                    tool_reason_enabled=reason_enabled,
                 )
             except ToolApprovalDenied as exc:
                 message = str(exc.args[0]) if exc.args else f"Tool {tool.name!r} was denied"

@@ -50,6 +50,8 @@ class ApprovalRequest:
     adapter_shortname: str | None = None
     description: str | None = None
     metadata: Mapping[str, Any] | None = None
+    reason: str | None = None
+    tool_reason_enabled: bool = False
 
     @classmethod
     def create(
@@ -61,6 +63,8 @@ class ApprovalRequest:
         adapter_shortname: str | None,
         description: str | None,
         metadata: Mapping[str, Any] | None,
+        reason: str | None = None,
+        tool_reason_enabled: bool = False,
     ) -> ApprovalRequest:
         return cls(
             tool_name=tool_name,
@@ -68,6 +72,8 @@ class ApprovalRequest:
             risk=risk,
             adapter_shortname=adapter_shortname,
             description=description,
+            reason=reason,
+            tool_reason_enabled=tool_reason_enabled,
             metadata=(
                 MappingProxyType(copy.deepcopy(dict(metadata))) if metadata is not None else None
             ),

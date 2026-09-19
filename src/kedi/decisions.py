@@ -11,6 +11,7 @@ from concurrent.futures import Future
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
+from threading import Lock
 from types import MappingProxyType
 from typing import Any, cast
 from uuid import uuid4
@@ -372,6 +373,64 @@ class DecisionInfo:
         return answer
 
 
+class DecisionCapture:
+    """Completed decision snapshots collected during one explicit capture scope."""
+
+    def __init__(self) -> None:
+        self._records: list[DecisionRecord] = []
+        self._lock = Lock()
+        self._closed = False
+
+    @property
+    def decisions(self) -> tuple[DecisionInfo, ...]:
+        """One immutable view per output binding, in call completion order."""
+        with self._lock:
+            records = tuple(self._records)
+        return tuple(
+            DecisionInfo(record, output.field_path)
+            for record in records
+            for output in record.outputs
+        )
+
+    def _append(self, record: DecisionRecord) -> None:
+        with self._lock:
+            if not self._closed:
+                self._records.append(record)
+
+    def _close(self) -> None:
+        with self._lock:
+            self._closed = True
+
+
+_decision_captures: ContextVar[tuple[DecisionCapture, ...]] = ContextVar(
+    "kedi_decision_captures", default=()
+)
+
+
+@contextmanager
+def capture_decisions() -> Iterator[DecisionCapture]:
+    """Capture newly completed template decisions without changing return values.
+
+    Nested scopes also contribute to their enclosing capture. Use a regular
+    ``with`` around awaited calls; await all desired work before leaving the
+    scope. Exit does not wait for or trigger model calls. Cached returns do not
+    generate new decisions. Successful records survive later call failures.
+    """
+    capture = DecisionCapture()
+    token = _decision_captures.set((*_decision_captures.get(), capture))
+    try:
+        yield capture
+    finally:
+        capture._close()
+        _decision_captures.reset(token)
+
+
+def publish_decision_record(record: DecisionRecord) -> None:
+    """Deliver a validated runtime record to active call-local captures."""
+    for capture in _decision_captures.get():
+        capture._append(record)
+
+
 @contextmanager
 def collect_decision_evidence() -> Iterator[list[CapturedDecisionEvidence]]:
     """Collect provider evidence for exactly one adapter call in the current context."""
@@ -651,6 +710,7 @@ def _decode_output(value: Any) -> DecisionOutput:
 
 
 __all__ = [
+    "DecisionCapture",
     "DecisionInfo",
     "DecisionInput",
     "DecisionOutput",
@@ -658,5 +718,6 @@ __all__ = [
     "DecisionReference",
     "DecisionSource",
     "capture_decision_evidence",
+    "capture_decisions",
     "decision_info",
 ]

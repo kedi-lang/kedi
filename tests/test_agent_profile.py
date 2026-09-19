@@ -428,6 +428,42 @@ def test_runtime_rejects_enabled_codemode_on_unsupported_adapter() -> None:
     )
 
 
+@pytest.mark.parametrize("scope", ["top_level", "profile", "procedure"])
+def test_mcp_expressions_can_access_prelude_imports(scope: str) -> None:
+    import sys
+    import textwrap
+
+    prelude = """
+```
+import sys
+from kedi.agent_profile import current_block_agent_profile
+```
+"""
+    directive = """> mcp:
+    command: `sys.executable`
+    args: `[script_path]`
+    env: `{"TEST_PYTHON": sys.executable}`
+"""
+    result = "= `repr(current_block_agent_profile().mcp_servers[0])`\n"
+    if scope == "top_level":
+        source = prelude + directive + result
+    elif scope == "profile":
+        source = prelude + "> profile: local:\n" + textwrap.indent(directive, "    ")
+        source += "> use: local\n" + result
+    else:
+        source = prelude + "@inspect():\n" + textwrap.indent(directive + result, "    ")
+        source += "= `inspect()`\n"
+    runtime = compile_program(
+        parse_program(source), adapter=_adapter(), runtime_globals={"script_path": "server.py"}
+    )
+
+    assert runtime.run_main() == repr(
+        McpServerSpec(
+            command=sys.executable, args=("server.py",), env={"TEST_PYTHON": sys.executable}
+        )
+    )
+
+
 def test_mcp_profile_capture_uses_runtime_globals() -> None:
     src = """
 > profile: dynamic:

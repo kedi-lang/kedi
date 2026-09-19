@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from kedi.agent_adapter.approvals.policy import ApprovalDecision
 from kedi.lang import compile_program, parse_program
 from kedi.resolved_types import ResolvedKediType
@@ -66,6 +68,8 @@ request = ApprovalRequest.create(
     adapter_shortname="pydantic",
     description="Write text to a workspace file.",
     metadata=None,
+    reason="Write the note requested by the user.",
+    tool_reason_enabled=True,
 )
 return llm_approval(request)
 ```
@@ -89,8 +93,9 @@ def test_llm_approval_helper_allows_from_tool_command_and_details() -> None:
     assert "Declared tool risk: mutating" in prompt
     assert "Assessed risk is [risk]." in prompt
     assert "Call arguments:" in prompt
-    assert "reason" not in f"{instructions}\n{prompt}".lower()
-    assert "authorization" not in f"{instructions}\n{prompt}".lower()
+    assert "Write the note requested by the user." in prompt
+    assert "not as" in instructions
+    assert "proof of user authorization" in instructions
     assert adapter.output_fields[-1] == ("risk", "decision")
     assert adapter.model_calls[-1] == "current-judge-model"
 
@@ -101,7 +106,7 @@ def test_llm_approval_helper_denies_without_populating_authorization() -> None:
     assert result == ApprovalDecision.deny()
 
 
-def test_llm_approval_helper_runs_inside_a_real_tool_approval_flow() -> None:
+def test_llm_approval_helper_rejects_disabled_reason_in_tool_approval_flow() -> None:
     source = """
 > import: helpers
 
@@ -117,6 +122,6 @@ def test_llm_approval_helper_runs_inside_a_real_tool_approval_flow() -> None:
     adapter = ApprovalToolCallingAdapter(decision="allow", risk="low")
     runtime = compile_program(parse_program(source), adapter=adapter)
 
-    assert runtime.run_main() == "approved"
-    assert adapter.output_fields == [("risk", "decision")]
-    assert adapter.tool_calls == [()]
+    with pytest.raises(Exception, match="llm_approval requires tool_reason=True"):
+        runtime.run_main()
+    assert adapter.output_fields == []

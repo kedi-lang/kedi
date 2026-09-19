@@ -13,6 +13,7 @@ from .compaction import CompactionSettings
 from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec
 from .skills import SkillsSettings, skills_settings
+from .settings import tool_reason_enabled
 
 if TYPE_CHECKING:
     from ..agent_adapter.tools.specs import ToolSpec
@@ -54,6 +55,7 @@ class AgentProfile:
     artifacts: ArtifactPolicy | None = None
 
     def __post_init__(self) -> None:
+        tool_reason_enabled(self.settings)
         object.__setattr__(self, "skills", skills_settings(self.skills))
         object.__setattr__(self, "codemode", normalize_codemode_settings(self.codemode))
         object.__setattr__(self, "hooks", normalize_hook_settings(self.hooks))

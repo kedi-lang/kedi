@@ -183,6 +183,8 @@ class _KediExternalApprovalCapability(AbstractCapability[Any]):
                 tool,
                 self.adapter._hook_arguments_for_call(call.tool_call_id, args),
                 self.adapter.shortname,
+                reason=self.adapter._tool_reasons_var.get().get(call.tool_call_id),
+                tool_reason_enabled=self.adapter.active_tool_reason,
             )
             call.args = dict(request.arguments)
             metadata = dict(exc.metadata or {})

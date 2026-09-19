@@ -465,6 +465,17 @@ class KediRuntime:
         from kedi.agent_profile import AgentProfileOverrideUnsupported
         from kedi.agent_profile.compaction import CompactionSettingsError
 
+        if profile.settings.get("tool_reason") is True:
+            capabilities = getattr(adapter, "capabilities", None)
+            if (
+                not isinstance(capabilities, AdapterCapabilities)
+                or "tool_reason" not in capabilities.settings
+            ):
+                shortname = getattr(adapter, "shortname", type(adapter).__name__)
+                raise AgentProfileOverrideUnsupported(
+                    f"tool_reason is not supported by adapter {shortname!r}"
+                )
+
         compaction = profile.compaction
         if compaction is not None and compaction.mode == "native" and profile.history is not True:
             raise CompactionSettingsError("native compaction requires history to be enabled")

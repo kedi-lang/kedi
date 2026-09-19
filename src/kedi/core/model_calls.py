@@ -31,6 +31,7 @@ from kedi.decisions import (
     fingerprint_text,
     fingerprint_value,
     new_call_id,
+    publish_decision_record,
 )
 from kedi.errors import KediExecutionError
 from kedi.promise import KediPromise
@@ -461,17 +462,17 @@ def _kedi_run(
                     supported=output_fingerprint is not None,
                 )
             )
-        record_future.set_result(
-            DecisionRecord(
-                call_id=call_id,
-                source=decision_source,
-                prompt_fingerprint=fingerprint_text(prompt.content),
-                inputs=tuple(unique_inputs.values()),
-                inputs_complete=complete_input_set,
-                outputs=tuple(output_identities),
-                evidence=captured_evidence[-1],
-            )
+        record = DecisionRecord(
+            call_id=call_id,
+            source=decision_source,
+            prompt_fingerprint=fingerprint_text(prompt.content),
+            inputs=tuple(unique_inputs.values()),
+            inputs_complete=complete_input_set,
+            outputs=tuple(output_identities),
+            evidence=captured_evidence[-1],
         )
+        publish_decision_record(record)
+        record_future.set_result(record)
         return result_map
 
     def finish_without_evidence() -> None:

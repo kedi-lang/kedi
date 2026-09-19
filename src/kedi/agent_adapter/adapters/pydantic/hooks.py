@@ -353,10 +353,12 @@ def _run_tool_spec_scope(
     hook_tools_token = hook_tools_var.set({})
     hook_started_var = self._hook_started_for_current_adapter()
     hook_started_token = hook_started_var.set({})
+    reasons_token = self._tool_reasons_var.set({})
     try:
         with self._required_tool_call_scope():
             yield
     finally:
+        self._tool_reasons_var.reset(reasons_token)
         hook_started_var.reset(hook_started_token)
         hook_tools_var.reset(hook_tools_token)
         hook_arguments_var.reset(hook_arguments_token)

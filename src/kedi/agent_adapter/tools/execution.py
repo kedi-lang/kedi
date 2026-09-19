@@ -486,11 +486,16 @@ def approval_request_for_tool(
     tool: ToolSpec,
     arguments: Mapping[str, Any],
     adapter_shortname: str | None,
+    *,
+    reason: str | None = None,
+    tool_reason_enabled: bool = False,
 ) -> ApprovalRequest:
     return _approval_request_for_canonical_arguments(
         tool,
         validate_tool_arguments(tool, arguments),
         adapter_shortname,
+        reason=reason,
+        tool_reason_enabled=tool_reason_enabled,
     )
 
 
@@ -498,6 +503,9 @@ def _approval_request_for_canonical_arguments(
     tool: ToolSpec,
     arguments: dict[str, Any],
     adapter_shortname: str | None,
+    *,
+    reason: str | None = None,
+    tool_reason_enabled: bool = False,
 ) -> ApprovalRequest:
     static_risk = _validated_risk(tool.risk, tool.name)
     resolved_risk = (
@@ -513,6 +521,8 @@ def _approval_request_for_canonical_arguments(
         adapter_shortname=adapter_shortname,
         description=tool.description,
         metadata=tool.metadata,
+        reason=reason,
+        tool_reason_enabled=tool_reason_enabled,
     )
 
 
@@ -550,10 +560,18 @@ def resolve_tool_arguments(
     *,
     policy: ApprovalPolicy | None,
     adapter_shortname: str | None,
+    reason: str | None = None,
+    tool_reason_enabled: bool = False,
 ) -> dict[str, Any]:
     """Validate, approve, and reapprove edits that increase a tool call's risk."""
 
-    request = approval_request_for_tool(tool, arguments, adapter_shortname)
+    request = approval_request_for_tool(
+        tool,
+        arguments,
+        adapter_shortname,
+        reason=reason,
+        tool_reason_enabled=tool_reason_enabled,
+    )
     while True:
         decision = resolve_tool_approval(policy, request)
         approved = arguments_after_approval(tool, request.arguments, decision)
@@ -563,6 +581,8 @@ def resolve_tool_arguments(
             tool,
             approved,
             adapter_shortname,
+            reason=reason,
+            tool_reason_enabled=tool_reason_enabled,
         )
         if not _risk_increased(request, edited_request):
             return approved
@@ -575,10 +595,18 @@ async def resolve_tool_arguments_async(
     *,
     policy: ApprovalPolicy | None,
     adapter_shortname: str | None,
+    reason: str | None = None,
+    tool_reason_enabled: bool = False,
 ) -> dict[str, Any]:
     """Async counterpart of :func:`resolve_tool_arguments`."""
 
-    request = approval_request_for_tool(tool, arguments, adapter_shortname)
+    request = approval_request_for_tool(
+        tool,
+        arguments,
+        adapter_shortname,
+        reason=reason,
+        tool_reason_enabled=tool_reason_enabled,
+    )
     while True:
         decision = await resolve_tool_approval_async(policy, request)
         approved = arguments_after_approval(tool, request.arguments, decision)
@@ -588,6 +616,8 @@ async def resolve_tool_arguments_async(
             tool,
             approved,
             adapter_shortname,
+            reason=reason,
+            tool_reason_enabled=tool_reason_enabled,
         )
         if not _risk_increased(request, edited_request):
             return approved
