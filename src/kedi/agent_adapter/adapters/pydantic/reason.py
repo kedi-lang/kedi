@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.capabilities import AbstractCapability, RawToolArgs
 from pydantic_ai.exceptions import ModelRetry, UserError
-from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.tools import RunContext, ToolDefinition
 
 from kedi.agent_adapter.approvals.reason import (

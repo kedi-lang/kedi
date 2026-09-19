@@ -202,8 +202,8 @@ def test_unsupported_adapter_does_not_silently_ignore_enabled_reason():
 
 
 def test_setting_has_lsp_help_and_semantic_highlighting():
-    from tests.lsp_helpers import hover_text_at, decode_semantic_tokens
-    from kedi.lsp.features.semantic_tokens import compute_semantic_tokens_full, SEMANTIC_TOKEN_TYPES
+    from kedi.lsp.features.semantic_tokens import SEMANTIC_TOKEN_TYPES, compute_semantic_tokens_full
+    from tests.lsp_helpers import decode_semantic_tokens, hover_text_at
 
     source = "> settings:\n    tool_reason: enabled\n"
     parse_program(source)

@@ -455,11 +455,12 @@ def test_pydantic_concurrent_runs_and_calls_keep_reasons_isolated():
 
 
 def test_pydantic_external_approval_preserves_reason_in_metadata():
+    from pydantic_ai.tools import DeferredToolRequests
+
     from kedi.agent_adapter import (
         pydantic_approval_request_from_deferred,
         pydantic_deferred_results_from_decisions,
     )
-    from pydantic_ai.tools import DeferredToolRequests
 
     calls = []
 
