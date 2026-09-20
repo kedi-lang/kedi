@@ -68,16 +68,16 @@ from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run, current_agent_run_identity
+from kedi.agent_adapter.history_processing import (
+    HistoryProcessorCallback,
+    HistoryProcessorRunner,
+)
 from kedi.agent_adapter.hooks import (
     HookHandler,
     HookRegistrationMixin,
     ToolOrigin,
     hooked_agent_run,
     native_agent_hook_run,
-)
-from kedi.agent_adapter.history_processing import (
-    HistoryProcessorCallback,
-    HistoryProcessorRunner,
 )
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities

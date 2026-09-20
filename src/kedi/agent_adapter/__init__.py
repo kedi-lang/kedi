@@ -22,6 +22,12 @@ from .events import (
     bind_agent_event_dispatcher,
     observe_agent_events,
 )
+from .history_processing import (
+    HistoryProcessingError,
+    HistoryProcessingValidationError,
+    HistoryProcessorCallback,
+    HistoryProcessorContext,
+)
 from .hooks import (
     HOOK_EVENT_NAMES,
     AdapterHookSnapshot,
@@ -43,12 +49,6 @@ from .hooks import (
     ToolOrigin,
     UserPromptSubmitDecision,
     UserPromptSubmitRequest,
-)
-from .history_processing import (
-    HistoryProcessingError,
-    HistoryProcessingValidationError,
-    HistoryProcessorCallback,
-    HistoryProcessorContext,
 )
 from .meta import (
     AdapterCapabilities,
