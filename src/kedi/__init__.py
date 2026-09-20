@@ -1,3 +1,7 @@
+import os as _os
+
+_os.environ["PYDANTIC_AI_NO_BANNER"] = "1"
+
 from ._interactive import SessionDumpError, SessionLoadError, SessionPersistenceError
 from ._version import __version__
 from .agent_adapter import (
