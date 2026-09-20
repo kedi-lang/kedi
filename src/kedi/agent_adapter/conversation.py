@@ -66,6 +66,19 @@ class AdapterConversationContext:
 
         self._completed = True
 
+    def advance_cache_generation(self) -> int:
+        """Stage a provider-prefix generation change for this active turn."""
+
+        self.cache_epoch += 1
+        self.cache_prefix_changed = True
+        if self.session_id and self.lane_identity:
+            self.cache_key = _conversation_cache_key(
+                self.session_id,
+                self.lane_identity,
+                self.cache_epoch,
+            )
+        return self.cache_epoch
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationTurnTicket:
@@ -337,9 +350,11 @@ class ConversationState:
             raise RuntimeError("conversation state is closed")
 
     def _cache_key(self, adapter_shortname: str) -> str:
-        material = f"{self.session_id}\0{adapter_shortname}\0{self._cache_epoch}".encode()
-        digest = sha256(material).hexdigest()[:24]
-        return f"kedi_cache_{digest}_e{self._cache_epoch}"
+        return _conversation_cache_key(
+            self.session_id,
+            adapter_shortname,
+            self._cache_epoch,
+        )
 
     def _begin_turn(
         self,
@@ -402,7 +417,7 @@ class ConversationState:
                         )
                     )
                 if context.cache_prefix_changed:
-                    self._cache_epoch += 1
+                    self._cache_epoch = max(self._cache_epoch + 1, context.cache_epoch)
                     self._adapter_states.clear()
                     self._adapter_lane_identities.clear()
                     retired_cleanups.extend(
@@ -438,6 +453,12 @@ class ConversationState:
 
 def _conversation_turn(role: ConversationRole, content: str) -> ConversationTurn:
     return ConversationTurn(role=role, content=content)
+
+
+def _conversation_cache_key(session_id: str, lane_identity: str, cache_epoch: int) -> str:
+    material = f"{session_id}\0{lane_identity}\0{cache_epoch}".encode()
+    digest = sha256(material).hexdigest()[:24]
+    return f"kedi_cache_{digest}_e{cache_epoch}"
 
 
 def _current_async_task() -> asyncio.Task[Any] | None:

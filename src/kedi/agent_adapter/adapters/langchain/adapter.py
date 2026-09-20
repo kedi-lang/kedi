@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
 from contextvars import ContextVar
 from typing import (
     Any,
@@ -54,6 +54,10 @@ from kedi.agent_adapter.hooks import (
     HookRegistrationMixin,
     current_hook_dispatcher,
     hooked_agent_run,
+)
+from kedi.agent_adapter.history_processing import (
+    HistoryProcessorCallback,
+    HistoryProcessorRunner,
 )
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
@@ -133,6 +137,7 @@ class LangChainAdapter(HookRegistrationMixin):
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
+        history_processor: HistoryProcessorCallback[Any] | None = None,
         tool_retries: int = 3,
         **kwargs: Any,
     ) -> None:
@@ -147,6 +152,16 @@ class LangChainAdapter(HookRegistrationMixin):
             raise ValueError("tool_retries must be a non-negative integer")
         self._default_usage_limits = default_usage_limits
         self._history_archive = history_archive
+        self._history_processor_runner: HistoryProcessorRunner[Any] | None = None
+        if history_processor is not None:
+            from kedi.agent_adapter.adapters.langchain.history_processing import (
+                LangChainHistoryMessageCodec,
+            )
+
+            self._history_processor_runner = HistoryProcessorRunner(
+                history_processor,
+                LangChainHistoryMessageCodec(),
+            )
         self._tool_retries = tool_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
@@ -450,6 +465,11 @@ class LangChainAdapter(HookRegistrationMixin):
             if request_limit is not None:
                 config["recursion_limit"] = request_limit * 3 + 5
         with (
+            (
+                self._history_processor_runner.run_scope(self._conversation_var.get())
+                if self._history_processor_runner is not None
+                else nullcontext()
+            ),
             langchain_run_scope(limits) as run_state,
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as resolver,
@@ -708,7 +728,12 @@ class LangChainAdapter(HookRegistrationMixin):
         from kedi.agent_adapter.adapters.langchain.runtime import LangChainRunMiddleware
 
         return [
-            LangChainRunMiddleware(archive=self._history_archive, tool_retries=self._tool_retries),
+            LangChainRunMiddleware(
+                archive=self._history_archive,
+                history_processor=self._history_processor_runner,
+                model_id=_history_processor_model_id(model),
+                tool_retries=self._tool_retries,
+            ),
             *_langchain_cache_middleware(
                 model,
                 enabled=self._conversation_var.get() is not None,
@@ -801,3 +826,9 @@ def _langchain_typed_output(
         return output_type, lambda value: value
     wrapper = create_model("KediTypedOutput", response=(output_type, ...))
     return wrapper, lambda value: value.response
+
+
+def _history_processor_model_id(model: Any) -> str | None:
+    from kedi.agent_adapter.adapters.langchain.history_processing import langchain_model_id
+
+    return langchain_model_id(model)

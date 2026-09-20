@@ -13,6 +13,11 @@ from .policy import ApprovalCancelled, ApprovalDecision, ApprovalRequest, ToolRi
 CliApprovalChoice = Literal["allow", "deny", "always"]
 _PromptResult = CliApprovalChoice | None | Awaitable[CliApprovalChoice | None]
 _Prompt = Callable[[ApprovalRequest], _PromptResult]
+_Notifier = Callable[[str], None]
+
+
+def _notify_stderr(message: str) -> None:
+    print(message, file=sys.stderr)
 
 
 @dataclass
@@ -23,6 +28,7 @@ class CliApprovalHandler:
 
     prompt: _Prompt | None = None
     is_interactive: Callable[[], bool] = lambda: sys.stdin.isatty() and sys.stdout.isatty()
+    notify: _Notifier = field(default=_notify_stderr, repr=False)
     _always_allowed: set[tuple[str, ToolRisk]] = field(default_factory=set, init=False)
 
     def __call__(self, request: ApprovalRequest) -> ApprovalDecision:
@@ -31,7 +37,7 @@ class CliApprovalHandler:
         if key in self._always_allowed:
             return ApprovalDecision.allow(reason="allowed for this CLI run")
         if not self.is_interactive():
-            return ApprovalDecision.deny(reason="interactive CLI approval requires a TTY")
+            return self._deny(request, reason="interactive CLI approval requires a TTY")
 
         choice = self._ask(request)
         return self._decision(request, choice)
@@ -42,7 +48,7 @@ class CliApprovalHandler:
         if key in self._always_allowed:
             return ApprovalDecision.allow(reason="allowed for this CLI run")
         if not self.is_interactive():
-            return ApprovalDecision.deny(reason="interactive CLI approval requires a TTY")
+            return self._deny(request, reason="interactive CLI approval requires a TTY")
 
         choice = await self._ask_async(request)
         return self._decision(request, choice)
@@ -59,7 +65,11 @@ class CliApprovalHandler:
             return ApprovalDecision.allow(reason="allowed for this CLI run")
         if choice is None:
             raise ApprovalCancelled(f"Approval cancelled for tool {request.tool_name!r}")
-        return ApprovalDecision.deny(reason="denied in CLI")
+        return self._deny(request, reason="denied in CLI")
+
+    def _deny(self, request: ApprovalRequest, *, reason: str) -> ApprovalDecision:
+        self.notify(f"Tool call denied: {request.tool_name!r} ({reason})")
+        return ApprovalDecision.deny(reason=reason)
 
     def _ask(self, request: ApprovalRequest) -> CliApprovalChoice | None:
         if self.prompt is not None:

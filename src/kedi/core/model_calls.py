@@ -42,7 +42,9 @@ if TYPE_CHECKING:
 
 
 _CLAIM_OUTPUT_DESCRIPTION = (
-    "Whether the claim can be established as true from the available context."
+    "Whether the claim is established. Treat current context and relevant tool results as "
+    "authoritative, including when they conflict with general knowledge; otherwise use reliable "
+    "existing knowledge. False if contradicted or unknown."
 )
 
 
@@ -205,7 +207,13 @@ def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
     adapter = self._concrete_adapter(self._resolve_adapter(profile))
     captured_tool_specs = self._resolve_agent_tool_specs(profile, adapter)
     self._assert_profile_override_supported(profile, adapter)
-    from kedi.agent_adapter.request import ClaimPromptBuilder, TypedOutput, lower_request_sync
+    from kedi.agent_adapter.request import (
+        CLAIM_INSTRUCTION,
+        ClaimPromptBuilder,
+        InstructionPart,
+        TypedOutput,
+        lower_request_sync,
+    )
 
     question = ClaimPromptBuilder(claim=claim).build()
 
@@ -227,7 +235,14 @@ def _evaluate_claim(self: KediRuntime, claim: str) -> bool:
             profile, adapter, captured_tool_specs
         )
         try:
-            instruction_parts = self._agent_instruction_parts(profile, adapter)
+            instruction_parts = (
+                *self._agent_instruction_parts(profile, adapter),
+                InstructionPart(
+                    identity="runtime.claim",
+                    source="runtime",
+                    content=CLAIM_INSTRUCTION,
+                ),
+            )
             claim_output_type = cast(
                 type[Any],
                 Annotated[bool, _CLAIM_OUTPUT_DESCRIPTION],

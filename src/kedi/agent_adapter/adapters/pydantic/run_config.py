@@ -127,10 +127,20 @@ def _run_kwargs(
             conversation=adapter_conversation,
         )
     elif selected_model is not None:
+        configured_settings = self.model_settings
         cache_settings = pydantic_cache_settings(
-            cast("Mapping[str, Any]", existing_settings)
-            if isinstance(existing_settings, Mapping)
-            else {},
+            {
+                **(
+                    cast("Mapping[str, Any]", configured_settings)
+                    if isinstance(configured_settings, Mapping)
+                    else {}
+                ),
+                **(
+                    cast("Mapping[str, Any]", existing_settings)
+                    if isinstance(existing_settings, Mapping)
+                    else {}
+                ),
+            },
             model=selected_model,
             conversation=adapter_conversation,
         )
@@ -156,6 +166,10 @@ def _run_kwargs(
             *(toolsets or ()),
         ]
     capabilities = run_kwargs.get("capabilities")
+    if getattr(self, "_history_processor_runner", None) is not None:
+        from .history_processing import reject_conflicting_history_capabilities
+
+        reject_conflicting_history_capabilities(capabilities)
     if self.active_tool_reason:
         from .reason import ToolReasonCapability
 

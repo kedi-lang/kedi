@@ -44,6 +44,12 @@ from .hooks import (
     UserPromptSubmitDecision,
     UserPromptSubmitRequest,
 )
+from .history_processing import (
+    HistoryProcessingError,
+    HistoryProcessingValidationError,
+    HistoryProcessorCallback,
+    HistoryProcessorContext,
+)
 from .meta import (
     AdapterCapabilities,
     AdapterCapability,
@@ -158,6 +164,10 @@ __all__ = [
     "HookRegistrationMixin",
     "HookResult",
     "HookTimeoutError",
+    "HistoryProcessingError",
+    "HistoryProcessingValidationError",
+    "HistoryProcessorCallback",
+    "HistoryProcessorContext",
     "ApprovalCancelled",
     "AsyncAgentEventQueue",
     "bind_agent_event_dispatcher",

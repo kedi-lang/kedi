@@ -16,6 +16,11 @@ from pydantic_ai.usage import RunUsage
 
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings, cache_epoch_key
 from kedi.agent_adapter.compaction.langchain_archive import LangChainArtifactHistoryProcessor
+from kedi.agent_adapter.history_processing import (
+    HistoryProcessingError,
+    HistoryProcessorRunner,
+    rebase_history_cache_key,
+)
 from kedi.agent_adapter.invocation import InvocationUsage
 
 
@@ -51,15 +56,26 @@ def langchain_run_scope(limits: UsageLimits | None) -> Iterator[LangChainRunStat
 
 
 class LangChainRunMiddleware(AgentMiddleware):
-    def __init__(self, *, archive: HistoryArchiveSettings | None, tool_retries: int) -> None:
+    def __init__(
+        self,
+        *,
+        archive: HistoryArchiveSettings | None,
+        tool_retries: int,
+        history_processor: HistoryProcessorRunner[Any] | None = None,
+        model_id: str | None = None,
+    ) -> None:
         self.archiver = LangChainArtifactHistoryProcessor(archive) if archive is not None else None
         self.tool_retries = tool_retries
+        self.history_processor = history_processor
+        self.model_id = model_id
 
     async def abefore_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
-        if self.archiver is None:
-            return None
+        del runtime
         messages = state["messages"]
-        updated = self.archiver(messages)
+        updated = self.archiver(messages) if self.archiver is not None else messages
+        if self.history_processor is not None:
+            outcome = await self.history_processor.process(updated, model_id=self.model_id)
+            updated = outcome.messages
         if updated is messages:
             return None
         # Replace the graph's durable message state, not just this request's view.
@@ -80,14 +96,37 @@ class LangChainRunMiddleware(AgentMiddleware):
             ),
             None,
         )
+        settings = dict(request.model_settings)
+        changed = False
         if checkpoint_id is not None:
-            settings = dict(request.model_settings)
             key = settings.get("prompt_cache_key")
             if key is None:
                 key = getattr(request.model, "model_kwargs", {}).get("prompt_cache_key")
             if isinstance(key, str) and key:
                 settings["prompt_cache_key"] = cache_epoch_key(key, checkpoint_id)
-                request = request.override(model_settings=settings)
+                changed = True
+        model = request.model
+        if self.history_processor is not None:
+            directive = self.history_processor.prepare_transport()
+            if directive.rewritten:
+                for key in ("conversation", "conversation_id", "previous_response_id"):
+                    changed = settings.pop(key, None) is not None or changed
+                model = _without_stale_continuation(
+                    model,
+                    reset_previous_response=directive.reset_continuation,
+                )
+                changed = model is not request.model or changed
+                cache_key = settings.get("prompt_cache_key")
+                if cache_key is None:
+                    cache_key = getattr(model, "model_kwargs", {}).get("prompt_cache_key")
+                if directive.cache_key is not None and isinstance(cache_key, str) and cache_key:
+                    settings["prompt_cache_key"] = rebase_history_cache_key(
+                        directive.cache_key,
+                        cache_key,
+                    )
+                    changed = True
+        if changed:
+            request = request.override(model=model, model_settings=settings)
         response = await handler(request)
         if state is not None:
             usage = _langchain_invocation_usage({"messages": response.result})
@@ -126,3 +165,31 @@ class LangChainRunMiddleware(AgentMiddleware):
         else:
             state.native_usage.tool_calls += 1
         return result
+
+
+def _without_stale_continuation(model: Any, *, reset_previous_response: bool) -> Any:
+    updates: dict[str, Any] = {}
+    if reset_previous_response and getattr(model, "use_previous_response_id", False):
+        updates["use_previous_response_id"] = False
+
+    model_kwargs = getattr(model, "model_kwargs", None)
+    if isinstance(model_kwargs, dict):
+        filtered = dict(model_kwargs)
+        for key in ("conversation", "conversation_id", "previous_response_id"):
+            filtered.pop(key, None)
+        if filtered != model_kwargs:
+            updates["model_kwargs"] = filtered
+
+    for attribute in ("conversation", "conversation_id"):
+        if getattr(model, attribute, None) is not None:
+            updates[attribute] = None
+
+    if not updates:
+        return model
+    copy_model = getattr(model, "model_copy", None)
+    if not callable(copy_model):
+        raise HistoryProcessingError(
+            "history_processor rewrote LangChain history, but the configured model cannot "
+            "disable its stale server-side continuation"
+        )
+    return copy_model(update=updates)

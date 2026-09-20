@@ -223,7 +223,8 @@ def test_cli_approval_handler_accepts_async_prompt_callbacks() -> None:
 
 
 def test_cli_approval_handler_refuses_noninteractive_requests() -> None:
-    handler = CliApprovalHandler(is_interactive=lambda: False)
+    notices: list[str] = []
+    handler = CliApprovalHandler(is_interactive=lambda: False, notify=notices.append)
     request = ApprovalRequest.create(
         tool_name="write_file",
         arguments={},
@@ -237,6 +238,7 @@ def test_cli_approval_handler_refuses_noninteractive_requests() -> None:
 
     assert decision.decision == "deny"
     assert decision.reason == "interactive CLI approval requires a TTY"
+    assert notices == ["Tool call denied: 'write_file' (interactive CLI approval requires a TTY)"]
 
 
 def test_cli_approval_handler_async_path_handles_always_and_noninteractive() -> None:
@@ -253,8 +255,33 @@ def test_cli_approval_handler_async_path_handles_always_and_noninteractive() -> 
     assert asyncio.run(handler.resolve_async(request)).decision == "allow"
     assert asyncio.run(handler.resolve_async(request)).reason == "allowed for this CLI run"
 
-    noninteractive = CliApprovalHandler(is_interactive=lambda: False)
+    notices: list[str] = []
+    noninteractive = CliApprovalHandler(is_interactive=lambda: False, notify=notices.append)
     assert asyncio.run(noninteractive.resolve_async(request)).decision == "deny"
+    assert notices == ["Tool call denied: 'write_file' (interactive CLI approval requires a TTY)"]
+
+
+def test_cli_approval_handler_reports_user_denial() -> None:
+    notices: list[str] = []
+    handler = CliApprovalHandler(
+        prompt=lambda _request: "deny",
+        is_interactive=lambda: True,
+        notify=notices.append,
+    )
+    request = ApprovalRequest.create(
+        tool_name="write_file",
+        arguments={},
+        risk="mutating",
+        adapter_shortname="pydantic",
+        description=None,
+        metadata=None,
+    )
+
+    decision = handler(request)
+
+    assert decision.decision == "deny"
+    assert decision.reason == "denied in CLI"
+    assert notices == ["Tool call denied: 'write_file' (denied in CLI)"]
 
 
 def test_cli_approval_handler_uses_questionary_choices(monkeypatch: pytest.MonkeyPatch) -> None:

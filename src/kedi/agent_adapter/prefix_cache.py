@@ -247,7 +247,10 @@ def pydantic_cache_settings(
             "openai_prompt_cache_key",
             conversation.cache_key,
         )
-        if not _pydantic_response_storage_disabled(result, configured):
+        server_conversation = result.get(
+            "openai_conversation_id", configured.get("openai_conversation_id")
+        )
+        if not server_conversation and not _pydantic_response_storage_disabled(result, configured):
             _setdefault_unconfigured(result, configured, "openai_previous_response_id", "auto")
     elif policy.backend == "openrouter":
         if conversation is not None:
@@ -340,7 +343,15 @@ def langchain_cache_settings(
         "prompt_cache_key", result.get("prompt_cache_key", conversation.cache_key)
     )
     result["model_kwargs"] = model_kwargs
-    if policy.continuation and not _langchain_response_storage_disabled(result, model):
+    configured_kwargs = _mapping_value(getattr(model, "model_kwargs", None))
+    server_conversation = result.get(
+        "conversation", model_kwargs.get("conversation", configured_kwargs.get("conversation"))
+    )
+    if (
+        policy.continuation
+        and not server_conversation
+        and not _langchain_response_storage_disabled(result, model)
+    ):
         result.setdefault("use_previous_response_id", True)
     return result
 

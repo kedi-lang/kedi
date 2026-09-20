@@ -75,6 +75,10 @@ from kedi.agent_adapter.hooks import (
     hooked_agent_run,
     native_agent_hook_run,
 )
+from kedi.agent_adapter.history_processing import (
+    HistoryProcessorCallback,
+    HistoryProcessorRunner,
+)
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.models import (
@@ -174,6 +178,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         hook_handler: HookHandler | None = None,
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
+        history_processor: HistoryProcessorCallback[ModelMessage] | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -256,6 +261,18 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             # Native constructor settings include provider-specific keys, unlike DSL settings.
             kwargs["model_settings"] = dict(model_settings)
         kwargs.setdefault("retries", {"tools": _DEFAULT_TOOL_RETRIES})
+        self._history_processor_runner: HistoryProcessorRunner[ModelMessage] | None = None
+        if history_processor is not None:
+            from kedi.agent_adapter.adapters.pydantic.history_processing import (
+                PydanticHistoryMessageCodec,
+                reject_conflicting_history_capabilities,
+            )
+
+            reject_conflicting_history_capabilities(kwargs.get("capabilities"))
+            self._history_processor_runner = HistoryProcessorRunner(
+                history_processor,
+                PydanticHistoryMessageCodec(),
+            )
         if history_archive is not None:
             from kedi.agent_adapter.compaction.pydantic_archive import (
                 PydanticArtifactHistoryCapability,
@@ -265,6 +282,21 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 kwargs.get("capabilities"),
                 PydanticArtifactHistoryCapability,
                 lambda: PydanticArtifactHistoryCapability(history_archive),
+            )
+        if self._history_processor_runner is not None:
+            from kedi.agent_adapter.adapters.pydantic.history_processing import (
+                PydanticHistoryProcessingCapability,
+            )
+
+            kwargs["capabilities"] = _with_capability(
+                kwargs.get("capabilities"),
+                PydanticHistoryProcessingCapability,
+                lambda: PydanticHistoryProcessingCapability(
+                    cast(
+                        "HistoryProcessorRunner[ModelMessage]",
+                        self._history_processor_runner,
+                    )
+                ),
             )
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
@@ -589,6 +621,16 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 else agent_event_run(self.shortname)
             )
             with (
+                (
+                    self._history_processor_runner.run_scope(
+                        conversation
+                        if isinstance(conversation, AdapterConversationContext)
+                        else None,
+                        reuse_existing=True,
+                    )
+                    if self._history_processor_runner is not None
+                    else nullcontext()
+                ),
                 self._run_tool_spec_scope(tool_specs),
                 delegation_scope(self._subagent_failure_policy),
                 event_scope as event_resolver,
@@ -626,6 +668,13 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
+            (
+                self._history_processor_runner.run_scope(
+                    conversation if isinstance(conversation, AdapterConversationContext) else None
+                )
+                if self._history_processor_runner is not None
+                else nullcontext()
+            ),
             self._run_tool_spec_scope(tool_specs),
             delegation_scope(self._subagent_failure_policy),
             agent_event_run(self.shortname) as event_resolver,

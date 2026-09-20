@@ -42,7 +42,7 @@ class ClaimAdapter(MockAdapter):
     def __init__(self, classify) -> None:
         super().__init__()
         self.classify = classify
-        self.claim_calls: list[tuple[str, object]] = []
+        self.claim_calls: list[tuple[str, object, str | None]] = []
 
     def produce_sync(
         self,
@@ -50,9 +50,9 @@ class ClaimAdapter(MockAdapter):
         template: str,
         output_schema=None,
         output_type=None,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> bool:
-        self.claim_calls.append((template, output_type))
+        self.claim_calls.append((template, output_type, kwargs.get("instructions")))
         return self.classify(template)
 
 
@@ -755,14 +755,25 @@ def test_template_if_renders_native_segments_and_uses_annotated_bool() -> None:
 
     assert runtime.run_main() == "accepted"
     assert len(adapter.claim_calls) == 1
-    prompt, output_type = adapter.claim_calls[0]
-    assert prompt == (
-        "Return true only if the following claim can be established as true from the available "
-        "context; otherwise return false.\nClaim: Ankara has 6 letters"
+    prompt, output_type, instructions = adapter.claim_calls[0]
+    assert prompt == "Claim: Ankara has 6 letters"
+    assert instructions is not None
+    assert instructions.endswith(
+        "Determine whether the following claim is true. Consider evidence in this priority "
+        "order: (1) the current context, (2) relevant available tools when they are needed, "
+        "and (3) reliable knowledge you already possess when the context and tools do not "
+        "establish the answer. Before answering, use a relevant tool when it can authoritatively "
+        "resolve a time-sensitive, private, or otherwise unestablished claim; do not call tools "
+        "for stable facts you already know. Prefer current context and tool results over prior "
+        "knowledge when they conflict. Return true if the claim is established; return false "
+        "if it is contradicted or you do not know. Missing context alone is not a reason to "
+        "return false."
     )
     assert get_origin(output_type) is Annotated
     assert get_args(output_type)[0] is bool
-    assert "available context" in get_args(output_type)[1]
+    assert "current context" in get_args(output_type)[1]
+    assert "authoritative" in get_args(output_type)[1]
+    assert "reliable existing knowledge" in get_args(output_type)[1]
     assert "result" not in runtime._globals_env
 
 

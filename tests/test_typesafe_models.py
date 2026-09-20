@@ -188,7 +188,8 @@ def test_kedi_template_condition_uses_jev_noul_through_typed_produce(
     assert len(questions) == 1
     assert isinstance(next(iter(questions.values())), Noul)
     assert "Claim: Ankara is the capital of Turkey" in str(state)
-    assert "instructions" not in state
+    assert "current context" in state["instructions"]
+    assert "reliable knowledge" in state["instructions"]
     assert closed == [model]
 
 

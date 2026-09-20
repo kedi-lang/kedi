@@ -412,9 +412,14 @@ with the same native Kedi semantics used by other templates. Output fields such
 as `[answer]` are invalid because a condition does not produce a user-visible
 binding.
 
-Kedi evaluates the rendered claim using the current agent profile and its
-available context. A claim that cannot be established is treated as `false`.
-The evaluation does not create a Kedi binding.
+Kedi evaluates the rendered claim using the current agent profile. It
+prioritizes the current context and relevant available tools. If neither
+establishes the answer, the evaluator may use reliable knowledge it already
+possesses. A relevant authoritative tool is used before answering a
+time-sensitive, private, or otherwise unestablished claim; stable facts do not
+require a redundant lookup. A contradicted or unknown claim is treated as
+`false`; missing context alone does not make a claim false. The evaluation does
+not create a Kedi binding.
 
 The trailing colon is the unambiguous boundary between both forms:
 
@@ -1292,7 +1297,14 @@ enable scoped skill discovery.
   an error before asking a model. A supplied reason remains optional and is
   untrusted context, not evidence of user authorization. The helper evaluates
   the tool name, description, declared risk, arguments, and reason when present.
-  It remains experimental and is not a complete authorization boundary.
+  Its structured decision includes assessed risk, authorization confidence, an
+  allow/deny decision, and a concise rationale. Kedi prints those four values as
+  an approval report. The same report becomes `ApprovalDecision.reason`; when a
+  call is denied, Pydantic AI and LangChain return it to the calling model as the
+  denied tool result instead of discarding the assessment. Authorization
+  confidence describes the available evidence and does not turn model-authored
+  text into trusted user permission. The helper remains experimental and is not
+  a complete authorization boundary.
 - `> hooks:` registers Python lifecycle handlers for subsequent agent runs:
 
   ````kedi
@@ -2685,6 +2697,84 @@ Pydantic capability/processor names remain supported. Cache keys advance once pe
 checkpoint, and replay does not repeatedly append epochs. Invocation usage is
 collected independently of retained LangChain history, so archival cannot erase
 usage already incurred.
+
+Applications that need their own deterministic retention or summarization policy
+can pass `history_processor=` to either framework adapter. The callback receives
+detached framework-native messages and read-only metadata before every logical
+model request:
+
+```python
+from typing import TypeVar
+
+from kedi.agent_adapter import (
+    HistoryProcessorContext,
+    LangChainAdapter,
+    PydanticAdapter,
+)
+
+MessageT = TypeVar("MessageT")
+
+
+def keep_recent_cycles(ctx: HistoryProcessorContext[MessageT]) -> list[MessageT]:
+    editable = [group for group in ctx.groups if group.closed and not group.protected]
+    retained = {group.group_id for group in editable[-4:]}
+    retained.update(group.group_id for group in ctx.groups if group.protected)
+    return [
+        message
+        for group in ctx.groups
+        if group.group_id in retained
+        for message in ctx.messages[group.entry_start : group.entry_end]
+    ]
+
+
+pydantic_adapter = PydanticAdapter(history_processor=keep_recent_cycles)
+langchain_adapter = LangChainAdapter(history_processor=keep_recent_cycles)
+```
+
+`HistoryProcessorContext` includes `adapter_shortname`, `model_id`, the one-based
+`request_index`, the active `cache_epoch`, a conservative `estimated_tokens`
+value, entry metadata, and validated atomic groups. Its `messages` are native
+Pydantic AI or LangChain messages, not Kedi's portable conversation turns and
+not the entire wire request. System instructions, tool schemas, model settings,
+approval state, and routing metadata outside history are not editable here.
+
+The callback may be synchronous or asynchronous and must return a non-empty
+sequence of native messages. Synchronous callbacks run in a worker thread so a
+costly local policy cannot block the adapter event loop. Returning `ctx.messages`
+or a semantically equivalent fresh sequence is a no-op. Kedi clones callback
+input and accepted output, rejects split tool-call/result lifecycles, orphan
+results, protected-barrier crossings, changed current request tails, and removal
+or mutation of pending/provider-required records before model I/O. Callback
+failures do not fall back to unprocessed history.
+
+Atomic groups currently represent user/assistant cycles, including their tool
+exchanges. Only entire eligible groups can be removed, reordered within protected
+boundaries, or replaced by native text summaries. The callback cannot selectively
+remove individual tool exchanges from the ongoing user cycle; `history_archive=`
+provides exact archival for long tool loops. Serialized message dictionaries are
+rejected. Deep copying preserves native classes and typed tool payloads, but an
+enabled no-op still has copying/inspection overhead. Cancelling a sync callback
+discards its result without forcibly stopping its worker thread or side effects.
+
+Accepted history replaces the framework's durable in-run history, so later tool
+steps and the next successfully committed Kedi turn observe the same edit.
+Incompatible edits disable stale response-ID continuation for the affected
+request and stage one bounded cache generation per actual rewrite. Failed or
+cancelled turns do not commit those staged generations. With `history_archive=`,
+exact archival runs first and the custom callback receives its checkpointed
+native result. A configured Pydantic `ProcessHistory` capability conflicts with
+this API; compose that policy inside `history_processor` instead. This is a
+Python adapter API in v1 and does not add a DSL history/compaction mode.
+
+Within a Kedi conversation lane, the fact that history was rewritten persists
+after success so an old server-owned conversation ID cannot reactivate on the
+next turn. Automatic response-ID continuation can resume from new responses;
+fixed stale IDs remain disabled. Model-level defaults are overridden for these
+requests without mutating the original model. Native Pydantic callers managing
+`message_history=` themselves must reuse `result.all_messages()` and compatible
+settings; appending `new_messages()` to unprocessed old history restores deleted
+messages. Nested native runs use independent processor counters and pending
+transport resets.
 
 ### Native LangChain settings and Codex sessions
 

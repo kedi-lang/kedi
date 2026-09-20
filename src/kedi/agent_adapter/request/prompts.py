@@ -14,9 +14,15 @@ _TEMPLATE_FILL_INSTRUCTION = (
     "exactly; do not replace or invent them. The template must remain grammatically "
     "and semantically coherent after substitution."
 )
-_CLAIM_INSTRUCTION = (
-    "Return true only if the following claim can be established as true from the available "
-    "context; otherwise return false."
+CLAIM_INSTRUCTION = (
+    "Determine whether the following claim is true. Consider evidence in this priority order: "
+    "(1) the current context, (2) relevant available tools when they are needed, and "
+    "(3) reliable knowledge you already possess when the context and tools do not establish "
+    "the answer. Before answering, use a relevant tool when it can authoritatively resolve a "
+    "time-sensitive, private, or otherwise unestablished claim; do not call tools for stable "
+    "facts you already know. Prefer current context and tool results over prior knowledge when "
+    "they conflict. Return true if the claim is established; return false if it is contradicted "
+    "or you do not know. Missing context alone is not a reason to return false."
 )
 
 
@@ -49,9 +55,14 @@ class ClaimPromptBuilder:
 
     def build(self) -> PromptDraft:
         return PromptDraft(
-            content=f"{_CLAIM_INSTRUCTION}\nClaim: {self.claim}",
+            content=f"Claim: {self.claim}",
             kind="claim",
         )
 
 
-__all__ = ["ClaimPromptBuilder", "KediTemplatePromptBuilder", "RawPromptBuilder"]
+__all__ = [
+    "CLAIM_INSTRUCTION",
+    "ClaimPromptBuilder",
+    "KediTemplatePromptBuilder",
+    "RawPromptBuilder",
+]

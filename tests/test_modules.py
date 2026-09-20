@@ -38,6 +38,7 @@ from kedi.package_registry import (
     installed_package_root,
     kedi_home,
 )
+from kedi.registry_api import RegistryAPIError
 from tests.mock_adapter import MockAdapter
 
 
@@ -1437,10 +1438,11 @@ def test_add_package_installs_from_mock_registry(
     )
 
 
-def test_add_package_requires_a_configured_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_add_package_reports_unreachable_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("KEDI_REGISTRY_MOCK_ROOT", raising=False)
+    monkeypatch.setenv("KEDI_REGISTRY_URL", "http://127.0.0.1:1")
 
-    with pytest.raises(RuntimeError, match="public Kedi package registry"):
+    with pytest.raises(RegistryAPIError, match="Could not fetch registry record"):
         add_package("kedi_http")
 
 

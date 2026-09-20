@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,9 @@ from typesafe_sdk import (
 )
 
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
+from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.output_schema import build_output_model
+from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
 from kedi.agent_profile import AgentProfile
 from kedi.decisions import decision_info_for_env
 from kedi.lang import compile_program, parse_program
@@ -187,6 +190,34 @@ def test_claim_profile_threshold_overrides_constructor(adapter_name, threshold, 
     )
     assert runtime.run_main() == expected
     assert len(client.calls) == 1
+
+
+def test_jev_claim_with_tools_has_an_explicit_output_purpose():
+    client = Client()
+
+    def lookup() -> str:
+        """Return current authoritative evidence for the claim."""
+
+        return "Current evidence"
+
+    tool = replace(python_callable_tool_spec("lookup", lookup), risk="read_only")
+    profile = AgentProfile(
+        tools=("lookup",),
+        tool_bindings={"lookup": tool},
+        approval=ApprovalPolicy.allow(),
+    )
+    runtime = compile_program(
+        parse_program("> if: A current private claim\n  = yes\n> else:\n  = no\n"),
+        adapter=PydanticAdapter(TypeSafeModel(client=client)),
+        default_agent_profile=profile,
+    )
+
+    assert runtime.run_main() == "yes"
+    state, questions = client.calls[0]
+    assert "tool" in questions
+    assert "instructions" in state
+    assert "current context" in state["instructions"]
+    assert "time-sensitive" in state["instructions"]
 
 
 def test_output_schema_preserves_non_jev_constraints_and_description():

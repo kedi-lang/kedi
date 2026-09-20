@@ -52,10 +52,7 @@ def test_prompt_builders_preserve_existing_wire_text() -> None:
         "Fields to be substituted into the template string for final construction: (summary)."
         "\n\nThe template string:\nSummarize Kedi. Return [summary]."
     )
-    assert ClaimPromptBuilder(claim="Kedi is typed").build().content == (
-        "Return true only if the following claim can be established as true from the available "
-        "context; otherwise return false.\nClaim: Kedi is typed"
-    )
+    assert ClaimPromptBuilder(claim="Kedi is typed").build().content == "Claim: Kedi is typed"
     assert RawPromptBuilder(content="hello").build().content == "hello"
 
 

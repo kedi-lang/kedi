@@ -19,7 +19,9 @@ from kedi.errors import KediExecutionError
 from kedi.idle import run_idle
 from kedi.lang import parse_program
 from kedi.lang.parser.diagnostics import KediParseError
+from kedi.package_audit import PackageAuditResult, audit_installed_packages
 from kedi.package_registry import add_package, install_package
+from kedi.registry_api import RegistryAPIError
 from kedi.skill_registry import install_skill_path, install_skill_repo
 from kedi.source_loading import load_kedi_source_bundle
 from kedi.utils import parse_args
@@ -31,7 +33,7 @@ context_settings = {
     # is available, so `kedi install --help` cannot show package-command help.
     "help_option_names": [],
 }
-_PACKAGE_COMMANDS = frozenset({"install", "add"})
+_PACKAGE_COMMANDS = frozenset({"install", "add", "audit"})
 
 
 def _package_command_help(command: str) -> str:
@@ -40,9 +42,14 @@ def _package_command_help(command: str) -> str:
             "Usage: kedi install [PACKAGE.KEDI]\n\n"
             "Install package.kedi from the current directory or the supplied manifest path."
         )
+    if command == "add":
+        return (
+            "Usage: kedi add <PACKAGE-NAME | git+https://github.com/OWNER/REPOSITORY.git>\n\n"
+            "Install a package from the Kedi registry or an explicit GitHub source."
+        )
     return (
-        "Usage: kedi add <PACKAGE-NAME | git+https://github.com/OWNER/REPOSITORY.git>\n\n"
-        "Install a package from the Kedi registry or an explicit GitHub source."
+        "Usage: kedi audit\n\n"
+        "Check installed package receipts for yanked or revoked registry commits."
     )
 
 
@@ -50,6 +57,10 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
     if any(argument.startswith("-") for argument in arguments):
         raise click.UsageError(f"Unexpected option for 'kedi {command}'.")
 
+    if command == "audit":
+        if arguments:
+            raise click.UsageError("'kedi audit' does not accept arguments.")
+        return _run_package_audit()
     if command == "install":
         if len(arguments) > 1:
             raise click.UsageError("'kedi install' accepts at most one manifest path.")
@@ -72,6 +83,43 @@ def _run_package_command(command: str, arguments: list[str]) -> int:
         message += f" ({installed.source_revision})"
     click.secho(message, fg="green")
     return 0
+
+
+def _run_package_audit() -> int:
+    try:
+        report = audit_installed_packages()
+    except (RegistryAPIError, OSError, ValueError) as exc:
+        click.echo(f"Registry audit could not complete: {exc}", err=True)
+        raise click.exceptions.Exit(2) from exc
+
+    visible_statuses = {"yanked", "revoked", "unverified", "unknown", "malformed"}
+    for result in report.results:
+        if result.status in visible_statuses:
+            click.echo(_format_package_audit_result(result))
+
+    counts = report.counts
+    ordered = ("active", "superseded", "yanked", "revoked", "unverified", "unknown", "malformed")
+    summary = " ".join(f"{status}={counts[status]}" for status in ordered)
+    click.echo(f"Checked {len(report.results)} installed package(s): {summary}")
+    if report.exit_code:
+        raise click.exceptions.Exit(report.exit_code)
+    return 0
+
+
+def _format_package_audit_result(result: PackageAuditResult) -> str:
+    identity = result.package
+    if result.version is not None:
+        identity += f" {result.version}"
+    if result.commit is not None:
+        identity += f" {result.commit[:12]}"
+    line = f"{result.status.upper()} {identity}"
+    if result.source_kind is not None and result.status == "unverified":
+        line += f" ({result.source_kind})"
+    if result.detail:
+        line += f": {result.detail}"
+    if result.advisory_url:
+        line += f" [{result.advisory_url}]"
+    return line
 
 
 def _run_skills_command(arguments: list[str]) -> int:

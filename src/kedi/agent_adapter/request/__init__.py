@@ -18,12 +18,18 @@ from .models import (
     ToolDefinition,
     TypedOutput,
 )
-from .prompts import ClaimPromptBuilder, KediTemplatePromptBuilder, RawPromptBuilder
+from .prompts import (
+    CLAIM_INSTRUCTION,
+    ClaimPromptBuilder,
+    KediTemplatePromptBuilder,
+    RawPromptBuilder,
+)
 
 __all__ = [
     "AdapterCallOptions",
     "AdapterRunOutcome",
     "AgentRunRequest",
+    "CLAIM_INSTRUCTION",
     "CallKind",
     "ClaimPromptBuilder",
     "ConversationCoordinates",

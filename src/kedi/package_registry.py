@@ -14,7 +14,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -26,6 +26,7 @@ from .package_manifest import (
     validate_package_metadata,
     validate_package_name,
 )
+from .registry_api import HTTPRegistryAPIClient, RegistryPackageRecord
 
 KEDI_HOME_ENV = "KEDI_HOME"
 MOCK_REGISTRY_ROOT_ENV = "KEDI_REGISTRY_MOCK_ROOT"
@@ -34,6 +35,7 @@ GIT_TIMEOUT_SECONDS = 60
 MAX_GIT_ERROR_CHARS = 8_192
 MAX_PACKAGE_SOURCE_FILES = 10_000
 MAX_PACKAGE_SOURCE_BYTES = 50 * 1024 * 1024
+MAX_REGISTRY_MANIFEST_BYTES = 1024 * 1024
 _INSTALL_SOURCE_KINDS = frozenset({"git", "local", "registry"})
 _GIT_CREDENTIAL_URL_RE = re.compile(r"(https?://)[^\s/@]+(?::[^\s/@]*)?@")
 
@@ -97,7 +99,7 @@ class _SourceCopyBudget:
 
 
 class PackageRegistryClient(Protocol):
-    """Lookup seam for the future ``registry.kedi-lang.org`` client."""
+    """Filesystem lookup seam retained for explicit test registries."""
 
     def package_root(self, package_name: str) -> Path:
         """Return a directory containing the package's ``package.kedi``."""
@@ -259,11 +261,21 @@ def install_package(
     source_kind: str = "local",
     source_url: str | None = None,
     source_revision: str | None = None,
+    registry_record: RegistryPackageRecord | None = None,
 ) -> InstalledPackage:
     """Install a package with an atomic, per-package registry transaction."""
     if source_kind not in _INSTALL_SOURCE_KINDS:
         raise ValueError(f"Unknown Kedi package installation source kind: {source_kind!r}")
     prepared = prepare_package(manifest_path, expected_name=expected_name)
+    if registry_record is not None:
+        if source_kind != "registry":
+            raise ValueError("Registry provenance may only be attached to registry installations")
+        if prepared.metadata.name != registry_record.name:
+            raise ValueError("Registry package name differs from the checked-out package manifest")
+        if prepared.metadata.version != registry_record.version:
+            raise ValueError(
+                "Registry package version differs from the checked-out package manifest"
+            )
     root = _resolved_registry_root(registry_root)
     root.mkdir(parents=True, exist_ok=True)
     target = installed_package_root(prepared.metadata.name, registry_root=root)
@@ -280,6 +292,7 @@ def install_package(
             source_kind=source_kind,
             source_url=source_url,
             source_revision=source_revision,
+            registry_record=registry_record,
         )
         _commit_staged_package(root, prepared.metadata.name, staging, target)
     except Exception:
@@ -357,9 +370,10 @@ def _write_install_receipt(
     source_kind: str,
     source_url: str | None,
     source_revision: str | None,
+    registry_record: RegistryPackageRecord | None,
 ) -> None:
-    receipt: dict[str, int | str] = {
-        "format_version": 1,
+    receipt: dict[str, bool | int | str] = {
+        "format_version": 2 if registry_record is not None else 1,
         "install_source_kind": source_kind,
         "package": prepared.metadata.name,
         "source": prepared.source.relative_path.as_posix(),
@@ -369,6 +383,20 @@ def _write_install_receipt(
         receipt["source_url"] = source_url
     if source_revision is not None:
         receipt["source_revision"] = source_revision
+    if registry_record is not None:
+        receipt.update(
+            {
+                "package_version": prepared.metadata.version or "0",
+                "verified": True,
+                "repository": registry_record.repository,
+                "verified_commit": registry_record.verified_commit,
+                "package_manifest_path": registry_record.package_manifest_path,
+                "registry_url": registry_record.registry_url,
+                "registry_manifest_digest": registry_record.registry_manifest_digest,
+                "registry_revision": registry_record.registry_revision,
+                "installed_manifest_digest": f"sha256:{_sha256_file(prepared.manifest_path)}",
+            }
+        )
     (staging / INSTALL_RECEIPT_NAME).write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -463,11 +491,17 @@ def _require_contained(candidate: Path, root: Path, label: str) -> None:
         raise ValueError(f"{label} must remain inside {root}") from exc
 
 
-def _reject_symlinked_components(root: Path, relative_path: Path, label: str) -> None:
+def _reject_symlinked_components(
+    root: Path,
+    relative_path: Path,
+    label: str,
+    *,
+    error_type: type[Exception] = ValueError,
+) -> None:
     current = root
     for part in relative_path.parts:
         current = current / part
-        _reject_symlink(current, label)
+        _reject_symlink(current, label, error_type=error_type)
 
 
 def _reject_symlink(
@@ -627,12 +661,193 @@ def install_git_package(source: str, *, registry_root: Path | None = None) -> In
         )
 
 
+def install_registry_package(
+    package_name: str,
+    *,
+    registry_root: Path | None = None,
+    api_client: HTTPRegistryAPIClient | None = None,
+) -> InstalledPackage:
+    """Install one active package at the registry's exact verified commit."""
+    name = validate_package_name(package_name)
+    selected_client = api_client or HTTPRegistryAPIClient()
+    record = selected_client.package_record(name)
+    if record.name != name:
+        raise PackageRegistryError(
+            f"Registry returned package {record.name!r} for requested package {name!r}"
+        )
+    if record.status != "active":
+        raise PackageRegistryError(
+            f"Kedi package {name!r} is {record.status} and cannot be installed"
+        )
+    repository = _registry_repository_url(
+        record.repository,
+        allow_local=selected_client.is_local,
+    )
+    with tempfile.TemporaryDirectory(prefix="kedi-registry-package-") as temporary:
+        checkout = Path(temporary) / "checkout"
+        manifest_path = _checkout_registry_commit(checkout, repository, record)
+        return install_package(
+            manifest_path,
+            registry_root=registry_root,
+            expected_name=name,
+            source_kind="registry",
+            source_url=repository,
+            source_revision=record.verified_commit,
+            registry_record=record,
+        )
+
+
+def _checkout_registry_commit(
+    checkout: Path,
+    repository: str,
+    record: RegistryPackageRecord,
+) -> Path:
+    _run_git(["init", "--quiet", str(checkout)], error_context="Could not initialize checkout")
+    _run_git(
+        ["-C", str(checkout), "remote", "add", "origin", repository],
+        error_context=f"Could not configure Kedi package repository {repository}",
+    )
+    _run_git(
+        [
+            "-C",
+            str(checkout),
+            "-c",
+            "protocol.file.allow=always",
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "--no-tags",
+            "--filter=blob:none",
+            "origin",
+            record.verified_commit,
+        ],
+        error_context=(
+            f"Could not fetch verified commit {record.verified_commit} from {repository}"
+        ),
+    )
+    fetched_commit = _run_git(
+        ["-C", str(checkout), "rev-parse", "FETCH_HEAD"],
+        error_context="Could not verify the fetched Kedi package commit",
+    )
+    if fetched_commit != record.verified_commit:
+        raise PackageRegistryError(
+            "Fetched Kedi package commit differs from the registry's verified commit"
+        )
+
+    manifest_object = f"{record.verified_commit}:{record.package_manifest_path}"
+    manifest_size_text = _run_git(
+        ["-C", str(checkout), "cat-file", "-s", manifest_object],
+        error_context="Could not inspect the verified package manifest",
+    )
+    try:
+        manifest_size = int(manifest_size_text)
+    except ValueError as exc:
+        raise PackageRegistryError("Git returned an invalid package manifest size") from exc
+    if manifest_size > MAX_REGISTRY_MANIFEST_BYTES:
+        raise PackageRegistryError(
+            f"Registry package manifest exceeds {MAX_REGISTRY_MANIFEST_BYTES} bytes"
+        )
+    manifest_text = _run_git(
+        ["-C", str(checkout), "show", manifest_object],
+        error_context="Could not read the verified package manifest",
+    )
+    preview_manifest = Path(checkout.parent) / PACKAGE_MANIFEST_NAME
+    preview_manifest.write_text(f"{manifest_text}\n", encoding="utf-8")
+    metadata = load_package_manifest(preview_manifest)
+    validate_package_metadata(metadata, enforce_python_compatibility=True)
+    if metadata.name != record.name or metadata.version != record.version:
+        raise PackageRegistryError(
+            "Registry package metadata differs from the verified package manifest"
+        )
+    package_source = _package_source_relative_path(metadata.source, error_type=PackageRegistryError)
+    manifest_relative = PurePosixPath(record.package_manifest_path)
+    repository_source = manifest_relative.parent / PurePosixPath(package_source.as_posix())
+    if any(character in repository_source.as_posix() for character in "*?["):
+        raise PackageRegistryError("Registry package source path must not contain glob syntax")
+
+    _run_git(
+        ["-C", str(checkout), "sparse-checkout", "init", "--no-cone"],
+        error_context="Could not initialize sparse checkout for the Kedi package",
+    )
+    _run_git(
+        [
+            "-C",
+            str(checkout),
+            "sparse-checkout",
+            "set",
+            "--no-cone",
+            f"/{manifest_relative.as_posix()}",
+            f"/{repository_source.as_posix()}/**",
+        ],
+        error_context="Could not select the verified Kedi package source",
+    )
+    _run_git(
+        ["-C", str(checkout), "checkout", "--detach", "--quiet", record.verified_commit],
+        error_context="Could not check out the verified Kedi package commit",
+    )
+    checked_out_commit = _run_git(
+        ["-C", str(checkout), "rev-parse", "HEAD"],
+        error_context="Could not verify the checked-out Kedi package commit",
+    )
+    if checked_out_commit != record.verified_commit:
+        raise PackageRegistryError(
+            "Checked-out Kedi package commit differs from the registry's verified commit"
+        )
+    manifest_path = checkout.joinpath(*manifest_relative.parts)
+    _reject_symlinked_components(
+        checkout,
+        Path(*manifest_relative.parts),
+        "registry package manifest",
+        error_type=PackageRegistryError,
+    )
+    _require_regular_file(
+        manifest_path,
+        "Registry package manifest",
+        error_type=PackageRegistryError,
+    )
+    return manifest_path
+
+
+def _registry_repository_url(value: str, *, allow_local: bool) -> str:
+    parsed = urlsplit(value)
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise PackageRegistryError(
+            "Registry repository URL must not contain credentials, query, or fragment"
+        )
+    if parsed.scheme == "https" and parsed.hostname:
+        return value
+    if allow_local and parsed.scheme == "file" and parsed.hostname in {None, "", "localhost"}:
+        if Path(parsed.path).is_absolute():
+            return value
+    if (
+        allow_local
+        and parsed.scheme == "http"
+        and parsed.hostname
+        in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }
+    ):
+        return value
+    raise PackageRegistryError(
+        "Registry repositories must use credential-free HTTPS; local registries may use "
+        "loopback HTTP or absolute file URLs"
+    )
+
+
 def mock_registry_client_from_environment() -> PackageRegistryClient:
     configured = os.getenv(MOCK_REGISTRY_ROOT_ENV)
     if not configured:
         raise RuntimeError(
-            "The public Kedi package registry is not available yet. "
-            f"Set {MOCK_REGISTRY_ROOT_ENV} to a directory of package sources to use kedi add."
+            f"Set {MOCK_REGISTRY_ROOT_ENV} to a directory of package sources "
+            "before requesting a mock registry client."
         )
     return MockPackageRegistryClient(Path(configured))
 
@@ -647,11 +862,15 @@ def add_package(
     if package_name_or_source.startswith("git+"):
         return install_git_package(package_name_or_source, registry_root=registry_root)
     package_name = validate_package_name(package_name_or_source)
-    selected_client = client or mock_registry_client_from_environment()
-    package_root = selected_client.package_root(package_name)
-    return install_package(
-        package_root / PACKAGE_MANIFEST_NAME,
-        registry_root=registry_root,
-        expected_name=package_name,
-        source_kind="registry",
-    )
+    selected_client = client
+    if selected_client is None and os.getenv(MOCK_REGISTRY_ROOT_ENV):
+        selected_client = mock_registry_client_from_environment()
+    if selected_client is not None:
+        package_root = selected_client.package_root(package_name)
+        return install_package(
+            package_root / PACKAGE_MANIFEST_NAME,
+            registry_root=registry_root,
+            expected_name=package_name,
+            source_kind="registry",
+        )
+    return install_registry_package(package_name, registry_root=registry_root)

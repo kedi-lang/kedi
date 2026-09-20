@@ -555,7 +555,15 @@ def test_real_kedi_program_uses_reason_with_llm_approval(dsl_setting):
             assert "Requested note" in prompt
             return ModelResponse(
                 parts=[
-                    ToolCallPart(info.output_tools[0].name, {"risk": "low", "decision": "allow"})
+                    ToolCallPart(
+                        info.output_tools[0].name,
+                        {
+                            "risk": "low",
+                            "authorization": "low",
+                            "decision": "allow",
+                            "reason": "The bounded note operation is low risk.",
+                        },
+                    )
                 ]
             )
         if any(getattr(p, "part_kind", None) == "tool-return" for m in messages for p in m.parts):
