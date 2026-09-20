@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+node scripts/sync_editor_runtime.mjs --check
 
 vscode_version="$(node -p "require('./kedi-vscode/package.json').version")"
 vscode_vsix="kedi-vscode/kedi-vscode-${vscode_version}.vsix"
@@ -34,6 +35,7 @@ echo "==> Compiling, bundling, and packaging kedi-vscode..."
   npm run bundle
   npm run package
 )
+node scripts/sync_editor_runtime.mjs --check
 
 echo "==> Building and packaging kedi-zed extension..."
 (
