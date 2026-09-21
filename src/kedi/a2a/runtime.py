@@ -13,8 +13,8 @@ from kedi.agent_adapter.execution import run_sync
 from kedi.agent_adapter.meta import AgentAdapter
 from kedi.agent_adapter.registry import build_adapter
 from kedi.agent_adapter.subagents import (
-    SupportsSubagentExecution,
     SubagentUsageLimits,
+    SupportsSubagentExecution,
     validate_final_schema,
     validate_structured_result,
 )

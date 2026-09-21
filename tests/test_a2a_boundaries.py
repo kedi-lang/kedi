@@ -8,11 +8,11 @@ import click
 import pytest
 from click.testing import CliRunner
 
+from kedi._interactive import persistence
 from kedi.a2a import cli, result
 from kedi.a2a.auth import A2AServerAuth
 from kedi.a2a.protocol import response_size
 from kedi.agent_profile.connection import A2AAuthConfig, A2AConnection, normalize_a2a_endpoint
-from kedi._interactive import persistence
 from kedi.cli import main
 
 
@@ -183,6 +183,7 @@ def test_cli_secret_sources(tmp_path, monkeypatch):
 @pytest.mark.parametrize("failure", [None, ImportError("missing"), ValueError("invalid")])
 def test_cli_server_startup_and_cleanup(tmp_path, monkeypatch, failure):
     import uvicorn
+
     from kedi.a2a import server
 
     source = tmp_path / "agent.kedi"
@@ -234,9 +235,9 @@ def test_result_assembly_handles_messages_chunks_and_failed_tasks():
         Role,
         StreamResponse,
         Task,
+        TaskArtifactUpdateEvent,
         TaskState,
         TaskStatus,
-        TaskArtifactUpdateEvent,
         TaskStatusUpdateEvent,
     )
 
@@ -306,6 +307,7 @@ def test_auth_sources_are_exclusive_and_api_key_header_is_configurable():
 
 def test_structured_result_skips_unrelated_artifacts_and_text_parts():
     from a2a.types import Artifact, Part, Task, TaskState, TaskStatus
+
     from kedi.a2a.protocol import KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME
 
     accumulator = result._ResponseAccumulator(max_bytes=4096)
@@ -347,9 +349,9 @@ def test_structured_result_skips_unrelated_artifacts_and_text_parts():
     ],
 )
 def test_connection_directives_reject_invalid_values(body, message):
+    from kedi.agent_profile.directives import eval_agent_directive
     from kedi.core import KediRuntime
     from kedi.lang import parse_program
-    from kedi.agent_profile.directives import eval_agent_directive
 
     stmt = parse_program(
         "> agent: a2a:\n    endpoint: https://agent.example\n    " + body + "\n"

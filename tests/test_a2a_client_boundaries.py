@@ -9,35 +9,35 @@ from unittest.mock import AsyncMock
 import pytest
 from a2a.client.errors import A2AClientError, AgentCardResolutionError
 from a2a.types import (
-    AgentCard,
     AgentCapabilities,
+    AgentCard,
     AgentExtension,
     AgentInterface,
+    APIKeySecurityScheme,
     Artifact,
     Message,
     Part,
     Role,
+    SecurityRequirement,
+    SecurityScheme,
     StreamResponse,
+    StringList,
     Task,
     TaskState,
     TaskStatus,
-    SecurityRequirement,
-    SecurityScheme,
-    APIKeySecurityScheme,
-    StringList,
 )
 
 from kedi.a2a.protocol import (
+    KEDI_STRUCTURED_OUTPUT_EXTENSION_URI,
+    A2AAmbiguousSendError,
     A2ARemoteResult,
     A2ARemoteTaskError,
-    A2ATransportError,
-    A2AAmbiguousSendError,
     A2ATaskTimeoutError,
-    KEDI_STRUCTURED_OUTPUT_EXTENSION_URI,
+    A2ATransportError,
 )
 from kedi.agent_adapter.adapters import a2a as client_module
 from kedi.agent_adapter.adapters.a2a import A2AAdapter
-from kedi.agent_profile import A2AConnection, A2AAuthConfig, AgentProfile
+from kedi.agent_profile import A2AAuthConfig, A2AConnection, AgentProfile
 from tests.test_a2a import _Output
 
 

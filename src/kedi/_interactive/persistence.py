@@ -23,9 +23,9 @@ from pydantic import BaseModel
 from .._version import __version__
 from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_profile import AgentProfile
-from ..agent_profile.connection import A2AAuthConfig, A2AConnection
 from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings
+from ..agent_profile.connection import A2AAuthConfig, A2AConnection
 from ..agent_profile.hooks import HookSettings
 from ..agent_profile.mcp import McpServerSpec
 from ..agent_profile.skills import SkillsSettings

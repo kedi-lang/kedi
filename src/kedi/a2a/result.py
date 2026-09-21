@@ -12,7 +12,6 @@ from .protocol import (
     A2ATransportError,
 )
 
-
 _TERMINAL_TASK_STATES = frozenset(
     {"completed", "failed", "canceled", "rejected", "input_required", "auth_required"}
 )

@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
-
 A2AAuthScheme: TypeAlias = Literal["basic", "bearer", "api_key"]
 CredentialProvider: TypeAlias = Callable[[], str] | Callable[["A2AAuthConfig"], str]
 

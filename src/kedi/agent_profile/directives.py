@@ -10,8 +10,8 @@ from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from .codemode import normalize_codemode_settings
-from .connection import A2AAuthConfig, A2AConnection
 from .compaction import CompactionSettings, normalize_compaction_settings
+from .connection import A2AAuthConfig, A2AConnection
 from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,

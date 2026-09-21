@@ -139,8 +139,9 @@ def _serve(
         )
     served = None
     try:
-        from .server import create_a2a_app
         import uvicorn
+
+        from .server import create_a2a_app
 
         served = prepare_a2a_program(
             source,

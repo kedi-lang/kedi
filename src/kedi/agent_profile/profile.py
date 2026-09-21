@@ -9,8 +9,8 @@ from ..agent_adapter.meta import AgentAdapterKind
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .codemode import CodeModeSettings, normalize_codemode_settings
-from .connection import A2AConnection
 from .compaction import CompactionSettings
+from .connection import A2AConnection
 from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec
 from .settings import tool_reason_enabled

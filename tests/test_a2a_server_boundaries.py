@@ -405,6 +405,7 @@ def test_served_program_rejects_incompatible_adapters(tmp_path, monkeypatch):
 
 def test_cli_reports_preparation_error_before_server_exists(tmp_path, monkeypatch):
     from click.testing import CliRunner
+
     from kedi.a2a import cli
     from kedi.cli import main
 

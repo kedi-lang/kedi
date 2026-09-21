@@ -45,10 +45,10 @@ from kedi.agent_adapter.registry import adapter_capabilities, build_adapter
 from kedi.agent_adapter.subagents import MAX_FINAL_SCHEMA_BYTES
 from kedi.agent_profile import A2AAuthConfig, A2AConnection, AgentProfile
 from kedi.agent_profile.directives import eval_agent_directive
+from kedi.cli import main as cli_main
 from kedi.core import KediRuntime
 from kedi.lang import compile_program, parse_program
 from kedi.lang.ast import AgentDirectiveStmt
-from kedi.cli import main as cli_main
 
 pytest.importorskip("a2a")
 

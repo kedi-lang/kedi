@@ -9,8 +9,8 @@ from threading import RLock
 from typing import Any
 from urllib.parse import urlsplit
 
-from google.protobuf.json_format import ParseDict
 from google.protobuf import struct_pb2
+from google.protobuf.json_format import ParseDict
 from starlette.authentication import AuthenticationBackend
 
 from kedi.agent_adapter.subagents.runs import safe_subagent_error_message
@@ -188,12 +188,12 @@ def _agent_card(
     auth: A2AServerAuth | None,
 ) -> Any:
     from a2a.types import (
-        APIKeySecurityScheme,
         AgentCapabilities,
         AgentCard,
         AgentExtension,
         AgentInterface,
         AgentSkill,
+        APIKeySecurityScheme,
         HTTPAuthSecurityScheme,
         SecurityRequirement,
         SecurityScheme,
