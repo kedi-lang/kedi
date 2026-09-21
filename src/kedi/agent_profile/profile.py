@@ -9,6 +9,7 @@ from ..agent_adapter.meta import AgentAdapterKind
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .codemode import CodeModeSettings, normalize_codemode_settings
+from .connection import A2AConnection
 from .compaction import CompactionSettings
 from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec
@@ -32,6 +33,7 @@ class AgentProfile:
     adapter_kind: AgentAdapterKind | None = None
     adapter_shortname: str | None = None
     agent_command: AgentCommand | None = None
+    a2a_connection: A2AConnection | None = None
     effort: EffortValue | None = None
     system: str | None = None
     settings: Mapping[str, Any] = field(default_factory=dict)
@@ -76,8 +78,17 @@ class AgentProfile:
         if other.adapter_shortname is not None:
             updates["adapter_shortname"] = other.adapter_shortname
             updates["adapter_kind"] = other.adapter_kind
-        if other.agent_command is not None:
+            # A transport selection owns its whole connection atomically. A
+            # later selection must never inherit another lexical scope's
+            # command, endpoint, or credential reference.
             updates["agent_command"] = other.agent_command
+            updates["a2a_connection"] = other.a2a_connection
+        elif other.agent_command is not None:
+            updates["agent_command"] = other.agent_command
+            updates["a2a_connection"] = None
+        elif other.a2a_connection is not None:
+            updates["agent_command"] = None
+            updates["a2a_connection"] = other.a2a_connection
         if other.model is not None:
             updates["model"] = other.model
         if other.effort is not None:
@@ -171,6 +182,7 @@ class AgentProfile:
         return (
             self.effort is not None
             or self.agent_command is not None
+            or self.a2a_connection is not None
             or bool(self.mcp_servers)
             or bool(self.settings)
             or self.compaction is not None

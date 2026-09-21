@@ -301,11 +301,21 @@ class ModelDirectiveStmt(Stmt):
 
 
 @dataclass
+class AgentConnectionField:
+    name: str
+    plain_value: Optional[str] = None
+    backtick_code: Optional[str] = None
+    fields: List["AgentConnectionField"] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class AgentDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
     command_plain_value: Optional[str] = None
     command_backtick_code: Optional[str] = None
+    connection_fields: List[AgentConnectionField] = field(default_factory=list)
 
 
 @dataclass
@@ -452,6 +462,7 @@ class ProfileAgentEntry:
     backtick_code: Optional[str] = None
     command_plain_value: Optional[str] = None
     command_backtick_code: Optional[str] = None
+    connection_fields: List[AgentConnectionField] = field(default_factory=list)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

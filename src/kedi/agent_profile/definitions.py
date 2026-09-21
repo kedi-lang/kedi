@@ -7,7 +7,15 @@ from .profile import WorkflowMode
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.tools.specs import ToolSpec
-    from kedi.lang.ast import ArtifactsField, McpField, SettingsField, Span, TemplateLine, TypeExpr
+    from kedi.lang.ast import (
+        AgentConnectionField,
+        ArtifactsField,
+        McpField,
+        SettingsField,
+        Span,
+        TemplateLine,
+        TypeExpr,
+    )
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -17,6 +25,7 @@ class ProfileAgentMember:
     backtick_code: str | None = None
     command_plain_value: str | None = None
     command_backtick_code: str | None = None
+    connection_fields: tuple["AgentConnectionField", ...] = ()
 
 
 @dataclass(frozen=True, kw_only=True)

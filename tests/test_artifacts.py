@@ -185,6 +185,8 @@ def test_artifact_contract_routes_simple_and_complex_inspection() -> None:
     assert "never infer identity or order from its suffix" in instructions
     assert "do not call artifact tools or search for" in instructions
     assert "before a ref appears in the conversation" in instructions
+    assert "task_id, or context_id is not an artifact ref_id" in instructions
+    assert "release is not required before answering" in instructions
     assert isinstance(usage_hint, str)
     assert "Copy this exact ref_id" in usage_hint
     assert "read_artifact for a known literal or bounded inspection" in usage_hint

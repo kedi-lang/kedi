@@ -4631,6 +4631,10 @@ def test_final_schema_guards_and_result_validation() -> None:
     wrapped = wrapped_final_schema(schema)
     assert wrapped["properties"]["final_result"] == schema
 
+    for invalid in ('{"type": "integer"}', [], True, None):
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            validate_final_schema(invalid)  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match=r"does not support \$ref"):
         validate_final_schema({"$ref": "https://example.com/schema"})
     with pytest.raises(ValueError, match="nesting depth"):

@@ -114,6 +114,7 @@ def _profile_identity(profile: AgentProfile) -> tuple[Any, ...]:
         profile.adapter_kind,
         profile.adapter_shortname,
         _stable_repr(profile.agent_command),
+        profile.a2a_connection.identity() if profile.a2a_connection is not None else None,
         profile.effort,
         profile.system,
         tuple((key, _stable_repr(value)) for key, value in sorted(profile.settings.items())),

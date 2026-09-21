@@ -454,7 +454,7 @@ class _Walker:
     def _walk_agent_directive_parts(
         self,
         node: Node,
-    ) -> tuple[str | None, str | None, str | None, str | None]:
+    ) -> tuple[str | None, str | None, str | None, str | None, list[Any]]:
         return _directive_conversion._walk_agent_directive_parts(self, node)
 
     def _walk_adapter_directive(self, node: Node) -> AdapterDirectiveStmt:

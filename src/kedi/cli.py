@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import click
+from click.core import ParameterSource
 
 from kedi._interactive import SessionPersistenceError
 from kedi.app import (
@@ -350,7 +351,17 @@ def main(
     show_help: bool = False,
 ):
     if show_help:
-        if source == "notebook" and command_source is None:
+        if source == "a2a" and command_source is None:
+            from kedi.a2a.cli import run_a2a_cli
+
+            model_source = ctx.get_parameter_source("adapter_model")
+            explicit_model = adapter_model if model_source is not ParameterSource.DEFAULT else None
+            return run_a2a_cli(
+                [*ctx.args, "--help"],
+                adapter=adapter,
+                model=explicit_model,
+            )
+        elif source == "notebook" and command_source is None:
             click.echo(
                 "Usage: kedi notebook [--host HOST] [--port PORT] [--python PATH] "
                 "[--cwd PATH] [--no-open]\n\nRun the local Kedi notebook."
@@ -381,6 +392,16 @@ def main(
         raise click.UsageError("--record, --load, and --highlight require --idle.")
     if source == "skills" and command_source is None:
         return _run_skills_command(list(ctx.args))
+    if source == "a2a" and command_source is None:
+        from kedi.a2a.cli import run_a2a_cli
+
+        model_source = ctx.get_parameter_source("adapter_model")
+        explicit_model = adapter_model if model_source is not ParameterSource.DEFAULT else None
+        return run_a2a_cli(
+            list(ctx.args),
+            adapter=adapter,
+            model=explicit_model,
+        )
     if source == "notebook" and command_source is None:
         return _run_notebook_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:

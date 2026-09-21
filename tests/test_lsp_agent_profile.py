@@ -105,6 +105,36 @@ def test_semantic_tokens_cover_multiline_acp_agent_command() -> None:
     assert (1, 9, len("uv run acp server"), string_type, 0) in decoded
 
 
+def test_semantic_tokens_and_hover_cover_typed_agent_connections() -> None:
+    src = (
+        "> agent: a2a:\n"
+        "    endpoint: https://agents.example.com/research\n"
+        "    auth:\n"
+        "        scheme: bearer\n"
+        "        token_env: RESEARCH_A2A_TOKEN\n"
+        "    request_timeout: `5.0`\n"
+        "    task_timeout: 120\n"
+        "> agent: acp:\n"
+        "    command: `('uv', 'run', 'agent')`\n"
+    )
+    tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/remote.kedi")
+    decoded = decode_semantic_tokens(tokens.data)
+
+    label_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("enumMember")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    assert (0, 9, len("a2a"), label_type, 0) in decoded
+    assert (7, 9, len("acp"), label_type, 0) in decoded
+    assert any(line == 1 and token_type == property_type for line, _, _, token_type, _ in decoded)
+    assert any(line == 4 and token_type == property_type for line, _, _, token_type, _ in decoded)
+
+    directive_hover = hover_text_at(src, "remote.kedi", "a2a")
+    assert "structured-output extension" in directive_hover
+    assert "Remote endpoints require HTTPS" in hover_text_at(src, "remote.kedi", "endpoint")
+    assert "Bearer token" in hover_text_at(src, "remote.kedi", "token_env")
+    assert "does not cancel remote work" in hover_text_at(src, "remote.kedi", "task_timeout")
+    assert "ACP command" in hover_text_at(src, "remote.kedi", "command")
+
+
 def test_semantic_tokens_and_hover_cover_raw_invoke() -> None:
     src = "[answer] << Hello <name>\n"
     tokens = lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/raw.kedi")
@@ -820,7 +850,7 @@ def test_profile_output_type_supports_navigation_and_document_symbols() -> None:
 def test_profile_output_symbol_skips_synthetic_entry_without_location() -> None:
     profile = ProfileDefStmt(
         name="synthetic",
-        output_members=[ProfileOutputEntry(type_annotation="str", type_expr=TypeRef("str"))],
+        output_members=[ProfileOutputEntry(type_annotation="str", type_expr=TypeRef(name="str"))],
     )
 
     assert lsp_document_module._profile_def_symbol(profile).children == []

@@ -295,6 +295,7 @@ def _approval_handler_agent_scope() -> Iterator[None]:
         adapter_kind=current.adapter_kind,
         adapter_shortname=current.adapter_shortname,
         agent_command=current.agent_command,
+        a2a_connection=current.a2a_connection,
         effort=current.effort,
         settings=current.settings,
         artifacts=ArtifactPolicy.patch({"enabled": False}),

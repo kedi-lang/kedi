@@ -11,6 +11,7 @@ from kedi.agent_profile.settings import (
 )
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
+    AgentConnectionField,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
@@ -87,6 +88,19 @@ def _agent_directive_markdown(stmt: AgentDirectiveStmt) -> str:
             f"`> agent:` {value} `:` {command}\n\n"
             "Uses this command to run the selected agent harness for subsequent agent calls "
             "in the current scope."
+        )
+    if stmt.connection_fields:
+        fields = ", ".join(f"`{field.name}`" for field in stmt.connection_fields)
+        contract = (
+            "Kedi negotiates typed output only when this endpoint advertises the versioned "
+            "Kedi structured-output extension. Model and tool policy remain remote."
+            if stmt.plain_value == "a2a"
+            else "The command starts the local ACP harness process."
+        )
+        return (
+            f"`> agent: {stmt.plain_value or ''}:`\n\n"
+            f"Agent-harness connection for the current lexical scope. Fields: {fields}. "
+            f"{contract}"
         )
     return (
         f"`> agent:` {value}\n\n"
@@ -338,6 +352,13 @@ def _profile_agent_entry_markdown(entry: ProfileAgentEntry) -> str:
             f"`> agent:` {value} `:` {command}\n\n"
             "Agent harness stored in this profile. Applied when the profile is used."
         )
+    if entry.connection_fields:
+        fields = ", ".join(f"`{field.name}`" for field in entry.connection_fields)
+        return (
+            f"`> agent: {entry.plain_value or ''}:`\n\n"
+            f"Agent-harness connection stored in this profile. Fields: {fields}. "
+            "Applied when the profile is used."
+        )
     return (
         f"`> agent:` {value}\n\n"
         "Agent harness stored in this profile. Applied when the profile is used."
@@ -457,6 +478,40 @@ def _agent_command_preview(stmt: AgentDirectiveStmt | ProfileAgentEntry) -> str 
     if stmt.command_plain_value is not None:
         return f"`{stmt.command_plain_value}`"
     return None
+
+
+def _agent_connection_field_markdown(field: AgentConnectionField) -> str:
+    descriptions = {
+        "command": "ACP command as a string or inline-Python sequence of arguments.",
+        "endpoint": (
+            "A2A discovery base URL. Remote endpoints require HTTPS; HTTP is limited to loopback."
+        ),
+        "auth": "A2A transport authentication. Credentials stay outside task prompts.",
+        "scheme": "Authentication scheme: `basic`, `bearer`, or `api_key`.",
+        "username": "HTTP Basic username.",
+        "password_env": "Environment variable containing the HTTP Basic password.",
+        "password_file": "File containing the HTTP Basic password.",
+        "token_env": "Environment variable containing the Bearer token.",
+        "token_file": "File containing the Bearer token.",
+        "api_key_env": "Environment variable containing the API key.",
+        "api_key_file": "File containing the API key.",
+        "credential_env": "Scheme-neutral environment credential reference.",
+        "credential_file": "Scheme-neutral credential-file reference.",
+        "provider": "Inline-Python callable that resolves a credential at transport time.",
+        "header": "HTTP header used by `api_key` authentication.",
+        "request_timeout": "Transport timeout in seconds for one A2A HTTP operation.",
+        "task_timeout": "Local observation deadline; reaching it does not cancel remote work.",
+        "poll_interval": "Polling interval used after streaming/subscription recovery.",
+    }
+    value = (
+        f"`{field.backtick_code}`"
+        if field.backtick_code is not None
+        else f"`{field.plain_value or '<block>'}`"
+    )
+    return f"**A2A/ACP connection field** `{field.name}` = {value}\n\n" + descriptions.get(
+        field.name,
+        "Agent-harness connection configuration.",
+    )
 
 
 def _system_value_preview(stmt: SystemDirectiveStmt | ProfileSystemEntry) -> str:

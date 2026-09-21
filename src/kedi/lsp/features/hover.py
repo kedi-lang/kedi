@@ -7,6 +7,7 @@ from tree_sitter import Node
 
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
+    AgentConnectionField,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
@@ -83,6 +84,7 @@ from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.coordinates import with_source_coordinates
 from kedi.lsp.features.directive_help import (
     _adapter_directive_markdown,
+    _agent_connection_field_markdown,
     _agent_directive_markdown,
     _agent_tool_markdown,
     _approval_directive_markdown,
@@ -436,6 +438,14 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for member in node.workflow_members:
                 visit(member)
             return
+        if isinstance(node, (AgentDirectiveStmt, ProfileAgentEntry)):
+            for field in node.connection_fields:
+                visit(field)
+            return
+        if isinstance(node, AgentConnectionField):
+            for field in node.fields:
+                visit(field)
+            return
         if isinstance(node, SystemDirectiveStmt):
             for line in node.template_lines:
                 visit(line)
@@ -707,6 +717,8 @@ def _describe_ast_node(node) -> Optional[str]:
         return _model_directive_markdown(node)
     if isinstance(node, AgentDirectiveStmt):
         return _agent_directive_markdown(node)
+    if isinstance(node, AgentConnectionField):
+        return _agent_connection_field_markdown(node)
     if isinstance(node, AdapterDirectiveStmt):
         return _adapter_directive_markdown(node)
     if isinstance(node, EffortDirectiveStmt):

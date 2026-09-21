@@ -73,13 +73,16 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
             docstring_loc = self._span(comment)
         for child in body_children:
             if child.type == "agent_directive":
-                plain, code, command_plain, command_code = self._walk_agent_directive_parts(child)
+                plain, code, command_plain, command_code, connection_fields = (
+                    self._walk_agent_directive_parts(child)
+                )
                 agent_members.append(
                     ProfileAgentEntry(
                         plain_value=plain,
                         backtick_code=code,
                         command_plain_value=command_plain,
                         command_backtick_code=command_code,
+                        connection_fields=connection_fields,
                         loc=self._span(child),
                     )
                 )

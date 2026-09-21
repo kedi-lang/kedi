@@ -247,7 +247,8 @@ def subagent_tool_specs(
             "description": (
                 "Optional JSON Schema for the child result. Use standard lowercase "
                 "type values such as object, array, string, integer, number, boolean, "
-                "and null."
+                "and null. Pass a JSON object, not a JSON-encoded string. Omit this "
+                "field to use the child profile's configured output type."
             ),
         },
     }
@@ -283,8 +284,9 @@ def subagent_tool_specs(
             description=(
                 "Delegate one self-contained task to one direct subagent listed below. "
                 "Choose the subagent by its description and include all context it needs; "
-                "the child does not inherit the parent conversation. Use final_schema only "
-                "when the parent needs a validated structured result."
+                "the child does not inherit the parent conversation. Omit final_schema "
+                "to use the child's configured output type; supply it only to override "
+                "or add a structured result schema."
                 + (
                     " Set background=true only for work that can run concurrently, then call "
                     "wait_subagent before using its result or returning a final answer."
@@ -498,6 +500,11 @@ def _run_id_schema() -> dict[str, Any]:
 
 
 def validate_final_schema(schema: dict[str, Any]) -> None:
+    if not isinstance(schema, dict):
+        raise ValueError(
+            "final_schema must be a JSON object, not a JSON-encoded string or another value. "
+            "Omit final_schema to use the child profile's configured output type."
+        )
     try:
         encoded = json.dumps(schema, ensure_ascii=True, separators=(",", ":")).encode()
     except (TypeError, ValueError) as exc:

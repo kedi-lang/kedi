@@ -125,6 +125,7 @@ def _agent_entry_to_member(entry: ProfileAgentEntry) -> ProfileAgentMember:
         backtick_code=entry.backtick_code,
         command_plain_value=entry.command_plain_value,
         command_backtick_code=entry.command_backtick_code,
+        connection_fields=tuple(entry.connection_fields),
     )
 
 
