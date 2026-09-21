@@ -211,7 +211,9 @@ change earlier procedures.
   LangChain adapter. Install `kedi[typesafe]` for Pydantic or `kedi[langchain,typesafe]` for
   LangChain. Jev supports typed classification and finite-choice outputs rather than free-form
   text.
-- `> agent: name` — select an agent harness such as `codex`, `claude`, or `acp`; ACP commands can use multiline `> agent:` entries
+- `> agent: name` — select an agent harness such as `codex` or `claude`; typed
+  `> agent: acp:` and `> agent: a2a:` bodies bind local ACP processes or remote
+  A2A cloud agents. Install `kedi[a2a]` for A2A client/server support.
 - `> effort: minimal|low|medium|high|xhigh|max` — set reasoning effort
 - `> system:` — set plain or multiline agent instructions with `<name>` and ``<`python`>`` substitutions
 - `> settings:` — set adapter-filtered model settings; use backticks for Python values like `` `["END"]` ``

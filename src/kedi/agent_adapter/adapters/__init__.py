@@ -8,7 +8,8 @@ from pydantic_ai import Agent
 from ..codemode.pydantic import PydanticCodeModeCapability, pydantic_code_mode_capability
 from ..output_schema import make_repr
 from ..output_schema import output_field_definition as _output_field_definition
-from . import acp, claude, codex, langchain, lazy, pydantic, webgpu
+from . import a2a, acp, claude, codex, langchain, lazy, pydantic, webgpu
+from .a2a import A2AAdapter
 from .acp import ACPAdapter
 from .claude import (
     ClaudeAdapter,
@@ -53,6 +54,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "Agent",
+    "A2AAdapter",
     "ACPAdapter",
     "BrowserModelBridge",
     "ClaudeAdapter",
@@ -79,6 +81,7 @@ __all__ = [
     "_mcp_toolset_from_config",
     "_output_json_schema",
     "_output_field_definition",
+    "a2a",
     "acp",
     "claude",
     "codex",

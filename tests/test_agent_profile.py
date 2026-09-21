@@ -14,6 +14,7 @@ from kedi.agent_adapter.registry import (
     known_adapter_shortnames,
 )
 from kedi.agent_profile import (
+    A2AConnection,
     AgentProfile,
     AgentProfileOverrideUnsupported,
     CodeModeSettings,
@@ -206,6 +207,17 @@ def test_agent_profile_merge_carries_agent_command() -> None:
     merged = AgentProfile.empty().merge(AgentProfile(agent_command=("uv", "run", "acp")))
 
     assert merged.agent_command == ("uv", "run", "acp")
+
+
+def test_agent_profile_merge_replaces_standalone_transport_atomically() -> None:
+    connection = A2AConnection(endpoint="http://localhost:8000")
+    remote = AgentProfile(agent_command="old").merge(AgentProfile(a2a_connection=connection))
+    local = remote.merge(AgentProfile(agent_command=("uv", "run", "acp")))
+
+    assert remote.agent_command is None
+    assert remote.a2a_connection == connection
+    assert local.agent_command == ("uv", "run", "acp")
+    assert local.a2a_connection is None
 
 
 def test_parse_mcp_directives_top_level_profile_and_procedure() -> None:

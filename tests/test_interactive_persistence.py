@@ -30,7 +30,7 @@ from kedi.agent_adapter.conversation import ConversationState
 from kedi.agent_adapter.hooks import HookHandler
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.specs import ToolSpec
-from kedi.agent_profile import AgentProfile, HookSettings
+from kedi.agent_profile import A2AAuthConfig, A2AConnection, AgentProfile, HookSettings
 from kedi.agent_profile.codemode import CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings
 from kedi.agent_profile.mcp import McpServerSpec
@@ -204,6 +204,46 @@ def test_profile_codec_round_trips_full_portable_profile() -> None:
     )
     assert restored == profile
     assert restored.agent_command == ("agent", "run")
+
+
+def test_profile_codec_round_trips_a2a_references_without_secret_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "must-not-enter-the-session-snapshot"
+    monkeypatch.setenv("KEDI_TEST_A2A_TOKEN", secret)
+    profile = AgentProfile(
+        adapter_kind="agent-harness",
+        adapter_shortname="a2a",
+        a2a_connection=A2AConnection(
+            endpoint="https://agents.example.com/research",
+            auth=A2AAuthConfig(
+                scheme="bearer",
+                secret_env="KEDI_TEST_A2A_TOKEN",
+            ),
+            request_timeout=4,
+            task_timeout=300,
+            poll_interval=0.25,
+        ),
+    )
+
+    encoded = persistence.encode_profile(
+        profile,
+        encoder=SessionValueEncoder(kedi_models={}),
+        model_names={},
+        path="profile",
+    )
+    assert secret not in json.dumps(encoded)
+    assert encoded["a2a_connection"]["auth"]["secret_env"] == "KEDI_TEST_A2A_TOKEN"
+
+    restored = persistence.decode_profile(
+        encoded,
+        decoder=SessionValueDecoder(kedi_models={}),
+        kedi_models={},
+    )
+    assert restored == profile
+    assert restored.a2a_connection is not None
+    assert restored.a2a_connection.auth is not None
+    assert restored.a2a_connection.auth.resolve_secret() == secret
 
 
 @pytest.mark.parametrize(

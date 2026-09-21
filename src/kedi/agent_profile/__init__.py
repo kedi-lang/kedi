@@ -12,6 +12,12 @@ from .compaction import (
     CompactionSettingsError,
     normalize_compaction_settings,
 )
+from .connection import (
+    A2AAuthConfig,
+    A2AConnection,
+    A2AConnectionError,
+    A2ACredentialError,
+)
 from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
@@ -76,6 +82,10 @@ from .skills import SkillsSettings
 from .use_resolution import eval_use_directive, procedure_def_for_tool
 
 __all__ = [
+    "A2AAuthConfig",
+    "A2AConnection",
+    "A2AConnectionError",
+    "A2ACredentialError",
     "AgentProfile",
     "AgentProfileOverrideUnsupported",
     "AgentToolOverrideUnsupported",

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from .._version import __version__
 from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_profile import AgentProfile
+from ..agent_profile.connection import A2AAuthConfig, A2AConnection
 from ..agent_profile.codemode import CodeModeSettings
 from ..agent_profile.compaction import CompactionSettings
 from ..agent_profile.hooks import HookSettings
@@ -357,6 +358,10 @@ def encode_profile(
         "agent_command": list(profile.agent_command)
         if isinstance(profile.agent_command, tuple)
         else profile.agent_command,
+        "a2a_connection": _encode_a2a_connection(
+            profile.a2a_connection,
+            path=path + ".a2a_connection",
+        ),
         "effort": profile.effort,
         "system": profile.system,
         "settings": encoder.encode(dict(profile.settings), path=path + ".settings"),
@@ -438,6 +443,7 @@ def decode_profile(
         adapter_kind=encoded.get("adapter_kind"),
         adapter_shortname=encoded.get("adapter_shortname"),
         agent_command=command,
+        a2a_connection=_decode_a2a_connection(encoded.get("a2a_connection")),
         effort=encoded.get("effort"),
         system=encoded.get("system"),
         settings=decoder.decode(encoded["settings"], path="profile.settings"),
@@ -456,6 +462,71 @@ def decode_profile(
         output_type=output_type,
         artifacts=_decode_artifact_policy(encoded.get("artifacts")),
     )
+
+
+def _encode_a2a_connection(
+    connection: A2AConnection | None,
+    *,
+    path: str,
+) -> dict[str, Any] | None:
+    if connection is None:
+        return None
+    auth = connection.auth
+    if auth is not None and auth.provider is not None:
+        raise UnsupportedSessionValue(
+            path + ".auth.provider",
+            auth.provider,
+            "callable A2A credential providers are not persisted",
+        )
+    return {
+        "endpoint": connection.endpoint,
+        "request_timeout": connection.request_timeout,
+        "task_timeout": connection.task_timeout,
+        "poll_interval": connection.poll_interval,
+        "auth": (
+            None
+            if auth is None
+            else {
+                "scheme": auth.scheme,
+                "username": auth.username,
+                "secret_env": auth.secret_env,
+                "secret_file": auth.secret_file,
+                "header": auth.header,
+            }
+        ),
+    }
+
+
+def _decode_a2a_connection(value: Any) -> A2AConnection | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise SessionLoadError("Invalid A2A connection in profile snapshot")
+    auth_value = value.get("auth")
+    auth = None
+    if auth_value is not None:
+        if not isinstance(auth_value, Mapping):
+            raise SessionLoadError("Invalid A2A auth in profile snapshot")
+        try:
+            auth = A2AAuthConfig(
+                scheme=auth_value["scheme"],
+                username=auth_value.get("username"),
+                secret_env=auth_value.get("secret_env"),
+                secret_file=auth_value.get("secret_file"),
+                header=auth_value.get("header"),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SessionLoadError("Invalid A2A auth in profile snapshot") from exc
+    try:
+        return A2AConnection(
+            endpoint=value["endpoint"],
+            auth=auth,
+            request_timeout=value.get("request_timeout", 30.0),
+            task_timeout=value.get("task_timeout", 600.0),
+            poll_interval=value.get("poll_interval", 0.5),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SessionLoadError("Invalid A2A connection in profile snapshot") from exc
 
 
 def _encode_hooks(value: HookSettings | None, *, path: str) -> dict[str, Any] | None:

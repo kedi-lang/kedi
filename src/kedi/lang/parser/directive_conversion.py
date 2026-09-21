@@ -16,6 +16,7 @@ from kedi.artifacts import ARTIFACT_POLICY_INPUT_FIELDS, ArtifactPolicy, Artifac
 from kedi.effort import EFFORT_VALUES, is_valid_effort
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
+    AgentConnectionField,
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
@@ -201,12 +202,15 @@ def _walk_model_directive(self: _Walker, node: Node) -> ModelDirectiveStmt:
 
 
 def _walk_agent_directive(self: _Walker, node: Node) -> AgentDirectiveStmt:
-    plain, code, command_plain, command_code = self._walk_agent_directive_parts(node)
+    plain, code, command_plain, command_code, connection_fields = self._walk_agent_directive_parts(
+        node
+    )
     return AgentDirectiveStmt(
         plain_value=plain,
         backtick_code=code,
         command_plain_value=command_plain,
         command_backtick_code=command_code,
+        connection_fields=connection_fields,
         loc=self._span(node),
     )
 
@@ -214,11 +218,27 @@ def _walk_agent_directive(self: _Walker, node: Node) -> AgentDirectiveStmt:
 def _walk_agent_directive_parts(
     self: _Walker,
     node: Node,
-) -> tuple[str | None, str | None, str | None, str | None]:
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    list[AgentConnectionField],
+]:
     body_node = _field(node, "body")
     if body_node is None:
         plain, code = self._walk_simple_directive_value(node)
-        return plain, code, None, None
+        return plain, code, None, None, []
+
+    value_node = _field(node, "value")
+    if value_node is not None:
+        plain, code = self._walk_simple_directive_value(node)
+        fields = [
+            _walk_agent_connection_field(self, child)
+            for child in _named_children(body_node)
+            if child.type in {"agent_field", "agent_section"}
+        ]
+        return plain, code, None, None, fields
 
     fields = [child for child in _named_children(body_node) if child.type == "agent_field"]
     if len(fields) != 1:
@@ -227,7 +247,7 @@ def _walk_agent_directive_parts(
             "Multiline '> agent:' must contain exactly one agent entry",
             code="K-AGENT-BODY",
         )
-        return None, None, None, None
+        return None, None, None, None, []
     field = fields[0]
     name_node = _field(field, "name")
     value_node = _field(field, "value")
@@ -237,8 +257,40 @@ def _walk_agent_directive_parts(
     if value_node.type == "inline_python_expr":
         code_node = _field(value_node, "code")
         assert code_node is not None
-        return plain, None, None, _src_text(self.source, code_node)
-    return plain, None, _src_text(self.source, value_node).strip(), None
+        return plain, None, None, _src_text(self.source, code_node), []
+    return plain, None, _src_text(self.source, value_node).strip(), None, []
+
+
+def _walk_agent_connection_field(self: _Walker, node: Node) -> AgentConnectionField:
+    name_node = _field(node, "name")
+    assert name_node is not None
+    name = _identifier_name(self.source, name_node)
+    body_node = _field(node, "body")
+    if body_node is not None:
+        return AgentConnectionField(
+            name=name,
+            fields=[
+                _walk_agent_connection_field(self, child)
+                for child in _named_children(body_node)
+                if child.type == "agent_field"
+            ],
+            loc=self._span(node),
+        )
+    value_node = _field(node, "value")
+    assert value_node is not None
+    if value_node.type == "inline_python_expr":
+        code_node = _field(value_node, "code")
+        assert code_node is not None
+        return AgentConnectionField(
+            name=name,
+            backtick_code=_src_text(self.source, code_node),
+            loc=self._span(node),
+        )
+    return AgentConnectionField(
+        name=name,
+        plain_value=_src_text(self.source, value_node).strip(),
+        loc=self._span(node),
+    )
 
 
 def _walk_adapter_directive(self: _Walker, node: Node) -> AdapterDirectiveStmt:

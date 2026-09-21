@@ -101,7 +101,8 @@ def artifact_tool_specs(
         "type": "string",
         "description": (
             "Copy the exact opaque ref_id from an artifact result or search_artifacts response. "
-            "Never substitute a source name, tool name, summary, or guessed ID."
+            "Never substitute a source name, tool name, summary, run_id, task_id, context_id, "
+            "or guessed ID."
         ),
     }
     specs = (

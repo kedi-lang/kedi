@@ -54,6 +54,12 @@ def _acp(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
     return ACPAdapter(model=model, **dict(kwargs))
 
 
+def _a2a(model: str | None, kwargs: Mapping[str, Any]) -> AgentAdapter[Any]:
+    from .adapters.a2a import A2AAdapter
+
+    return A2AAdapter(model=model, **dict(kwargs))
+
+
 def _pydantic_capabilities() -> AdapterCapabilities:
     from .adapters.pydantic import PydanticAdapter
 
@@ -90,6 +96,12 @@ def _acp_capabilities() -> AdapterCapabilities:
     return ACPAdapter.capabilities
 
 
+def _a2a_capabilities() -> AdapterCapabilities:
+    from .adapters.a2a import A2AAdapter
+
+    return A2AAdapter.capabilities
+
+
 _ADAPTERS: dict[str, AdapterFactory] = {
     "pydantic": AdapterFactory("pydantic", "agent-framework", _pydantic),
     "dspy": AdapterFactory("dspy", "agent-framework", _dspy),
@@ -97,6 +109,7 @@ _ADAPTERS: dict[str, AdapterFactory] = {
     "claude": AdapterFactory("claude", "agent-harness", _claude),
     "codex": AdapterFactory("codex", "agent-harness", _codex),
     "acp": AdapterFactory("acp", "agent-harness", _acp),
+    "a2a": AdapterFactory("a2a", "agent-harness", _a2a),
 }
 
 _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
@@ -106,6 +119,7 @@ _CAPABILITY_LOADERS: dict[str, Callable[[], AdapterCapabilities]] = {
     "claude": _claude_capabilities,
     "codex": _codex_capabilities,
     "acp": _acp_capabilities,
+    "a2a": _a2a_capabilities,
 }
 
 

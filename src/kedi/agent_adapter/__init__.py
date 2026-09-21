@@ -74,6 +74,7 @@ from .tools.specs import SupportsToolRegistration, ToolSpec
 if TYPE_CHECKING:
     from . import adapters
     from .adapters import (
+        A2AAdapter,
         ACPAdapter,
         BrowserModelBridge,
         ClaudeAdapter,
@@ -94,6 +95,7 @@ if TYPE_CHECKING:
 
 _ADAPTER_EXPORTS = frozenset(
     {
+        "A2AAdapter",
         "ACPAdapter",
         "BrowserModelBridge",
         "ClaudeAdapter",
@@ -135,6 +137,7 @@ def kedi_program_to_pydantic_tools(*args: Any, **kwargs: Any) -> Any:
 
 
 __all__ = [
+    "A2AAdapter",
     "AgentAdapter",
     "AdapterHookSnapshot",
     "AdapterCapabilities",
