@@ -49,15 +49,15 @@ from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.compaction.native_settings import langchain_settings_with_native_compaction
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run
+from kedi.agent_adapter.history_processing import (
+    HistoryProcessorCallback,
+    HistoryProcessorRunner,
+)
 from kedi.agent_adapter.hooks import (
     HookHandler,
     HookRegistrationMixin,
     current_hook_dispatcher,
     hooked_agent_run,
-)
-from kedi.agent_adapter.history_processing import (
-    HistoryProcessorCallback,
-    HistoryProcessorRunner,
 )
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
