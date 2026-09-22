@@ -61,6 +61,7 @@ class A2AAdapter(HookRegistrationMixin):
         # Structured output is negotiated per peer through Kedi's versioned
         # A2A extension, so it is intentionally not claimed globally.
         supports_structured_output=None,
+        negotiated_capabilities=frozenset({"structured_output"}),
         supports_tool_registration=False,
         supports_mcp=False,
         supports_profile_override=True,
@@ -530,7 +531,10 @@ class A2AAdapter(HookRegistrationMixin):
             card = await self._agent_card(connection, http_client, A2ACardResolver)
             _validate_agent_card(connection.endpoint, card)
             _validate_card_auth(card, connection.auth)
-            if structured and not _supports_kedi_structured_output(card):
+            require_structured = (
+                structured or "structured_output" in self.active_profile.requirements
+            )
+            if require_structured and not _supports_kedi_structured_output(card):
                 raise A2ARemoteTaskError(
                     "Remote A2A agent does not advertise Kedi structured output v1"
                 )

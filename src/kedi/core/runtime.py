@@ -462,8 +462,15 @@ class KediRuntime:
         """
         from kedi.agent_adapter.hooks import HOOK_EVENT_NAMES
         from kedi.agent_adapter.meta import AdapterCapabilities, SupportsProfileOverride
+        from kedi.agent_adapter.requirements import validate_adapter_requirements
         from kedi.agent_profile import AgentProfileOverrideUnsupported
         from kedi.agent_profile.compaction import CompactionSettingsError
+
+        validate_adapter_requirements(
+            adapter=adapter,
+            requirements=profile.requirements,
+            origins=dict(profile.requirement_origins),
+        )
 
         if profile.settings.get("tool_reason") is True:
             capabilities = getattr(adapter, "capabilities", None)

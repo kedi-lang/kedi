@@ -246,7 +246,11 @@ class LangChainAdapter(HookRegistrationMixin):
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
-                append_codemode_instructions(instructions, enabled=projection.enabled),
+                append_codemode_instructions(
+                    instructions,
+                    enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
+                ),
                 model=model,
             )
             tools = _langchain_projection_tools(projection)
@@ -287,7 +291,11 @@ class LangChainAdapter(HookRegistrationMixin):
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
-                append_codemode_instructions(instructions, enabled=projection.enabled),
+                append_codemode_instructions(
+                    instructions,
+                    enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
+                ),
                 model=model,
             )
             tools = _langchain_projection_tools(projection)
@@ -320,6 +328,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 append_codemode_instructions(
                     instructions if instructions is not None else self.active_profile.system,
                     enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
                 ),
                 model=model,
             )
@@ -750,12 +759,7 @@ class LangChainAdapter(HookRegistrationMixin):
         settings = normalize_codemode_settings(
             self.active_profile.codemode or getattr(self, "codemode", None)
         )
-        limits = (
-            CodeModeLimits(**settings.limit_values())
-            if settings is not None and settings.enabled
-            else None
-        )
-        if limits is None:
+        if settings is None or not settings.enabled:
             if self.active_tool_reason:
                 from .reason import tools_with_reason
 
@@ -763,6 +767,7 @@ class LangChainAdapter(HookRegistrationMixin):
             yield CodeModeProjection(tools=tuple(native_tools))
             return
 
+        limits = CodeModeLimits(**settings.limit_values())
         known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         specs = tuple(
             known_specs.get(tool.name) or _langchain_tool_spec_from_native(tool)
@@ -777,6 +782,7 @@ class LangChainAdapter(HookRegistrationMixin):
             ),
             adapter_shortname=self.shortname,
             tool_reason=self.active_tool_reason,
+            preload_tools=settings.preload_tools,
         )
         try:
             yield projection

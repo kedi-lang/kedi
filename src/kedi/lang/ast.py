@@ -361,6 +361,12 @@ class CodeModeDirectiveStmt(Stmt):
 
 
 @dataclass
+class RequiresDirectiveStmt(Stmt):
+    requirements: List[str] = field(default_factory=list)
+    requirement_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -384,6 +390,7 @@ class McpDirectiveStmt(Stmt):
 class SettingsField:
     name: str = ""
     plain_value: Optional[str] = None
+    plain_values: Optional[List[str]] = None
     backtick_code: Optional[str] = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
@@ -435,6 +442,7 @@ class ProfileDefStmt(Stmt):
     history_members: List["ProfileHistoryEntry"] = field(default_factory=list)
     skills_members: List["ProfileSkillsEntry"] = field(default_factory=list)
     codemode_members: List["ProfileCodeModeEntry"] = field(default_factory=list)
+    requires_members: List["ProfileRequiresEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
@@ -512,6 +520,13 @@ class ProfileSkillsEntry:
 class ProfileCodeModeEntry:
     enabled: bool
     fields: List[SettingsField] = field(default_factory=list)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileRequiresEntry:
+    requirements: List[str] = field(default_factory=list)
+    requirement_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
@@ -598,6 +613,19 @@ class AutoSpec:
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 
+@dataclass(frozen=True)
+class ToolDeclaration:
+    """Definition-site metadata used when a procedure is exposed as a tool."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    risk: Literal["read_only", "mutating", "sensitive"] = "mutating"
+    retries: int = 0
+    retry_on: tuple[str, ...] | None = None
+    field_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
 @dataclass
 class ProcedureDef:
     name: str
@@ -616,6 +644,7 @@ class ProcedureDef:
     # Legacy AI-prompt-only spec (superseded by `auto_spec`).
     ai_prompt: Optional[str] = None
     auto_spec: Optional[AutoSpec] = None
+    tool: Optional[ToolDeclaration] = None
     optimize_spans: List[OptimizeSpan] = field(default_factory=list)
     captured_agent_profile: Any = field(default=None, repr=False, compare=False)
     loc: Optional[Span] = field(default=None, repr=False, compare=False)

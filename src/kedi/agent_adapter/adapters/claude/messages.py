@@ -76,6 +76,7 @@ def _set_claude_system_prompt(
     instructions: str | None,
     *,
     codemode_enabled: bool,
+    codemode_preloaded_tools: Sequence[Mapping[str, Any]] = (),
 ) -> None:
     existing = options.get("system_prompt")
     if existing is None:
@@ -87,14 +88,22 @@ def _set_claude_system_prompt(
     if not codemode_enabled:
         return
     if isinstance(existing, str):
-        options["system_prompt"] = append_codemode_instructions(existing, enabled=True)
+        options["system_prompt"] = append_codemode_instructions(
+            existing,
+            enabled=True,
+            preloaded_tools=codemode_preloaded_tools,
+        )
         return
     if isinstance(existing, Mapping):
         prompt = dict(existing)
         append = prompt.get("append")
         if append is not None and not isinstance(append, str):
             raise TypeError("Claude system_prompt append must be a string")
-        prompt["append"] = append_codemode_instructions(append, enabled=True)
+        prompt["append"] = append_codemode_instructions(
+            append,
+            enabled=True,
+            preloaded_tools=codemode_preloaded_tools,
+        )
         options["system_prompt"] = prompt
         return
     raise TypeError("Claude system_prompt must be a string or preset mapping")

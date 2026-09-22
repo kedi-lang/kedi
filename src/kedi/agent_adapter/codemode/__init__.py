@@ -4,6 +4,7 @@ from .core import (
     CodeModeLimits,
     CodeModeSession,
     CodeModeTool,
+    codemode_instructions,
 )
 from .errors import (
     CodeModeBoundaryError,
@@ -35,6 +36,7 @@ __all__ = [
     "CodeModeLimits",
     "CodeModeSession",
     "CodeModeTool",
+    "codemode_instructions",
     "CONTROL_TOOL_NAMES",
     "CodeModeProjection",
     "CodeModeToolSpecBridge",

@@ -169,6 +169,10 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             stmt = self._walk_codemode_directive(child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
+        elif t == "requires_directive":
+            stmt = self._walk_requires_directive(child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
         elif t == "system_directive":
             stmt = self._walk_system_directive(child)
             prog.toplevel_body.append(stmt)
@@ -423,17 +427,45 @@ def _walk_procedure_def(self: _Walker, node: Node) -> ProcedureDef:
 
 
 def _walk_block_into(self: _Walker, block_node: Node, proc: ProcedureDef) -> None:
-    proc.body.extend(self._walk_block_statements(block_node, proc))
+    proc.body.extend(self._walk_block_statements(block_node, proc, procedure_header=True))
 
 
 def _walk_block_statements(
-    self: _Walker, block_node: Node, proc: Optional[ProcedureDef]
+    self: _Walker,
+    block_node: Node,
+    proc: Optional[ProcedureDef],
+    *,
+    procedure_header: bool = False,
 ) -> List[Stmt]:
     statements: List[Stmt] = []
     pending_else_owner: Optional[IfStmt] = None
+    header_closed = False
     for child in _named_children(block_node):
         if child.type in ("block_comment", "line_comment"):
             continue
+        if child.type == "tool_directive":
+            if proc is None or not procedure_header:
+                self._error(
+                    child,
+                    "'> tool:' is only valid in a procedure metadata header",
+                    code="K-TOOL-SCOPE",
+                )
+            elif proc.tool is not None:
+                self._error(
+                    child,
+                    "a procedure can define only one '> tool:' block",
+                    code="K-TOOL-DUP",
+                )
+            elif header_closed:
+                self._error(
+                    child,
+                    "'> tool:' must appear before executable procedure statements",
+                    code="K-TOOL-PLACEMENT",
+                )
+            else:
+                proc.tool = self._walk_tool_directive(child)
+            continue
+        header_closed = True
         if child.type == "else_clause":
             owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
             self._attach_else_clause(owners, child, proc)
@@ -499,6 +531,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_skills_directive(node)
     if t == "codemode_directive":
         return self._walk_codemode_directive(node)
+    if t == "requires_directive":
+        return self._walk_requires_directive(node)
     if t == "system_directive":
         return self._walk_system_directive(node)
     if t == "mcp_directive":

@@ -9,7 +9,7 @@ import fastmcp
 import pytest
 
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
-from kedi.agent_adapter.codemode import CodeModeLimits
+from kedi.agent_adapter.codemode import CodeModeHydrationError, CodeModeLimits
 from kedi.agent_adapter.codemode import mcp as codemode_mcp_module
 from kedi.agent_adapter.codemode.tool_specs import (
     CONTROL_TOOL_NAMES,
@@ -49,6 +49,92 @@ def test_tool_spec_bridge_exposes_only_uniform_controls() -> None:
     assert bridge.search_tools()["tool_names"] == ["echo"]
     assert bridge.get_tool_schema(tool_names=["echo"])["tools"][0]["name"] == "echo"
     asyncio.run(bridge.close())
+
+
+def test_tool_spec_bridge_preloads_exact_exposed_name_without_running_body() -> None:
+    calls = 0
+
+    def lookup(*, version: str) -> str:
+        nonlocal calls
+        calls += 1
+        return version
+
+    bridge = CodeModeToolSpecBridge(
+        [
+            ToolSpec(
+                fn=lookup,
+                name="lookup_release",
+                description="Read release metadata.",
+                json_schema={
+                    "type": "object",
+                    "properties": {"version": {"type": "string"}},
+                    "required": ["version"],
+                },
+                metadata={"kedi_source_name": "read_release"},
+            )
+        ],
+        limits=CodeModeLimits(),
+        policies=(ApprovalPolicy.allow(),),
+        adapter_shortname="test",
+        preload_tools=("lookup_release",),
+    )
+
+    assert calls == 0
+    assert bridge.preloaded_tools[0]["name"] == "lookup_release"
+    assert bridge.preloaded_tools[0]["callable_name"] == "lookup_release"
+    instructions = append_codemode_instructions(
+        None,
+        enabled=True,
+        preloaded_tools=bridge.preloaded_tools,
+    )
+    assert instructions is not None
+    assert '"description":"Read release metadata."' in instructions
+    assert '"version":{"type":"string"}' in instructions
+
+    async def run() -> None:
+        assert await bridge.execute_code(code='await lookup_release(version="v1")') == "v1"
+        await bridge.close()
+
+    asyncio.run(run())
+    assert calls == 1
+
+    with pytest.raises(CodeModeHydrationError, match="Unknown"):
+        CodeModeToolSpecBridge(
+            [ToolSpec(fn=lookup, name="lookup_release")],
+            limits=CodeModeLimits(),
+            policies=(),
+            adapter_shortname="test",
+            preload_tools=("read_release",),
+        )
+
+
+def test_codemode_preload_is_run_local_and_respects_hydration_limit() -> None:
+    first = CodeModeToolSpecBridge(
+        [ToolSpec(lambda: "a", "alpha"), ToolSpec(lambda: "b", "beta")],
+        limits=CodeModeLimits(max_hydrated_tools=1),
+        policies=(),
+        adapter_shortname="test",
+        preload_tools=("alpha",),
+    )
+    second = CodeModeToolSpecBridge(
+        [ToolSpec(lambda: "a", "alpha"), ToolSpec(lambda: "b", "beta")],
+        limits=CodeModeLimits(max_hydrated_tools=1),
+        policies=(),
+        adapter_shortname="test",
+        preload_tools=("beta",),
+    )
+    assert [tool["name"] for tool in first.preloaded_tools] == ["alpha"]
+    assert [tool["name"] for tool in second.preloaded_tools] == ["beta"]
+    with pytest.raises(CodeModeHydrationError, match="at most 1"):
+        CodeModeToolSpecBridge(
+            [ToolSpec(lambda: "a", "alpha"), ToolSpec(lambda: "b", "beta")],
+            limits=CodeModeLimits(max_hydrated_tools=1),
+            policies=(),
+            adapter_shortname="test",
+            preload_tools=("alpha", "beta"),
+        )
+    asyncio.run(first.close())
+    asyncio.run(second.close())
 
 
 def test_tool_spec_bridge_approves_edits_once_and_executes_nested_call_once() -> None:

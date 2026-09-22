@@ -1159,6 +1159,56 @@ def test_diagnostics_warn_for_nested_scoped_unsupported_capabilities(
     assert any(diag.range.start.line == 36 for diag in diags)
 
 
+def test_codemode_preload_warning_counts_unique_static_names_and_is_configurable() -> None:
+    five = """
+> codemode:
+    preload_tools:
+        one
+        two
+        three
+        four
+        five
+        five
+""".lstrip()
+    assert lsp_diagnostics_module.compute_diagnostics(five, "main.kedi") == []
+
+    six = five.replace("        five\n        five\n", "        five\n        six\n")
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(six, "main.kedi")
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "kedi.codemode.excessive_preload"
+    assert diagnostics[0].severity == lsp.DiagnosticSeverity.Warning
+    assert "enlarge context" in diagnostics[0].message
+    assert (
+        lsp_diagnostics_module.compute_diagnostics(
+            six,
+            "main.kedi",
+            codemode_preload_warning_threshold=6,
+        )
+        == []
+    )
+
+    dynamic = "> codemode:\n    preload_tools: `configured_tools`\n"
+    assert lsp_diagnostics_module.compute_diagnostics(dynamic, "main.kedi") == []
+
+    duplicate_span = Span(0, 10, 1, 1, 1, 11, "main.kedi")
+    duplicate_field = SettingsField(
+        name="preload_tools",
+        plain_values=["one", "two", "three", "four", "five", "six"],
+        loc=duplicate_span,
+    )
+    duplicate_directive = kedi_ast.CodeModeDirectiveStmt(fields=[duplicate_field])
+    duplicate_program = Program(ordered_toplevel=[duplicate_directive, duplicate_directive])
+    assert (
+        len(
+            lsp_diagnostics_module._codemode_preload_diagnostics(
+                duplicate_program,
+                threshold=5,
+            )
+        )
+        == 1
+    )
+
+
 def test_adapter_capability_diagnostic_helpers_cover_defensive_edges() -> None:
     profile = kedi_ast.ProfileDefStmt(
         agent_members=[

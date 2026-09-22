@@ -67,6 +67,13 @@ from .models import (
     CodexResponsesFallback,
     codex_responses_model,
 )
+from .requirements import (
+    MissingAdapterCapabilityError,
+    RequirementCheck,
+    check_adapter_requirements,
+    normalize_adapter_requirements,
+    validate_adapter_requirements,
+)
 from .subagents import SubagentUsageLimits
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tools.specs import SupportsToolRegistration, ToolSpec
@@ -171,6 +178,7 @@ __all__ = [
     "HistoryProcessingValidationError",
     "HistoryProcessorCallback",
     "HistoryProcessorContext",
+    "MissingAdapterCapabilityError",
     "ApprovalCancelled",
     "AsyncAgentEventQueue",
     "bind_agent_event_dispatcher",
@@ -193,6 +201,7 @@ __all__ = [
     "PostToolUseFailureEvent",
     "PreToolUseDecision",
     "PreToolUseRequest",
+    "RequirementCheck",
     "pydantic_approval_request_from_deferred",
     "pydantic_code_mode_capability",
     "pydantic_deferred_results_from_decisions",
@@ -210,9 +219,12 @@ __all__ = [
     "UserPromptSubmitRequest",
     "WebGPUAdapter",
     "adapters",
+    "check_adapter_requirements",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
     "observe_agent_events",
     "codex_responses_model",
     "current_subagent_execution",
+    "normalize_adapter_requirements",
+    "validate_adapter_requirements",
 ]

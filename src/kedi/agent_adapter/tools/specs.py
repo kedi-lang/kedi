@@ -16,6 +16,7 @@ from typing import (
 from ..approvals.policy import (
     ToolRisk,
 )
+from .retry import ToolRetryPolicy
 
 if TYPE_CHECKING:
     from kedi.lang.ast import ProcedureDef
@@ -43,6 +44,7 @@ class ToolSpec:
     artifact_result: ToolArtifactMode = "auto"
     sequential: bool = False
     result_admitter: ToolResultAdmitter | None = field(default=None, repr=False, compare=False)
+    retry_policy: ToolRetryPolicy = field(default_factory=ToolRetryPolicy)
 
 
 def tool_has_artifact_boundary(tool: ToolSpec) -> bool:

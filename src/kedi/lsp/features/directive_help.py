@@ -36,9 +36,11 @@ from kedi.lang.ast import (
     ProfileHooksEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
+    ProfileRequiresEntry,
     ProfileSettingsEntry,
     ProfileSkillsEntry,
     ProfileSystemEntry,
+    RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
@@ -50,6 +52,7 @@ from kedi.lang.ast import (
     TypeField,
     TypeRef,
     TypeUnion,
+    ToolDeclaration,
     UseDirectiveStmt,
 )
 
@@ -72,6 +75,37 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
         f"`> use: {stmt.name}`\n\n"
         "Configures the current scope for subsequent agent calls. A procedure target is "
         "registered as an agent tool; a profile target applies its agent configuration."
+    )
+
+
+def _requires_directive_markdown(
+    stmt: RequiresDirectiveStmt | ProfileRequiresEntry,
+) -> str:
+    requirements = ", ".join(f"`{name}`" for name in stmt.requirements)
+    scope = (
+        "stored in this profile and checked when the profile is applied"
+        if isinstance(stmt, ProfileRequiresEntry)
+        else "required by subsequent agent calls in this lexical scope"
+    )
+    return (
+        f"`> requires:` {requirements}\n\n"
+        "Declares adapter capabilities that must be available before a model request starts. "
+        f"These capabilities are {scope}; unsupported adapters fail before transport."
+    )
+
+
+def _tool_declaration_markdown(tool: ToolDeclaration) -> str:
+    exposed = f"`{tool.name}`" if tool.name is not None else "the procedure name"
+    retry_filter = (
+        "all ordinary exceptions"
+        if tool.retry_on is None
+        else ", ".join(f"`{name}`" for name in tool.retry_on) or "no exceptions"
+    )
+    return (
+        "**Procedure tool metadata** `> tool:`\n\n"
+        f"Exposed name: {exposed}. Risk: `{tool.risk}`. Body retries: `{tool.retries}` "
+        f"for {retry_filter}. Retries cover only tool-body failures; argument and return "
+        "validation are never repeated."
     )
 
 
@@ -270,6 +304,10 @@ def _settings_field_markdown(field: SettingsField) -> str:
         "max_total_tool_result_bytes": "Maximum aggregate nested tool-result size per execution.",
         "max_print_bytes": "Maximum captured standard output from one Monty execution.",
         "request_timeout": "Timeout in seconds for one nested host tool call.",
+        "preload_tools": (
+            "Exact exposed tool names whose schemas and sandbox callable names are included "
+            "in the first CodeMode request. Preloading hydrates tools but does not call them."
+        ),
     }
     if field.name in codemode_descriptions:
         return f"`{field.name}` = {value}\n\n{codemode_descriptions[field.name]}"
@@ -541,6 +579,8 @@ def _mcp_field_value_preview(field: McpField) -> str:
 def _settings_field_value_preview(field: SettingsField) -> str:
     if field.backtick_code is not None:
         return f"`{field.backtick_code}`"
+    if field.plain_values is not None:
+        return "`[" + ", ".join(field.plain_values) + "]`"
     return f"`{field.plain_value or ''}`"
 
 

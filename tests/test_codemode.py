@@ -55,6 +55,7 @@ from kedi.agent_adapter.tools.scope import artifact_admission_scope, current_req
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile, CodeModeSettings
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
+from kedi.lang import compile_program, parse_program
 from tests.telemetry_helpers import installed_recording_backend
 
 
@@ -268,6 +269,42 @@ def test_codemode_hydration_is_exact_and_exposes_callable_alias() -> None:
         session.get_tool_schema(tool_names=["mcp__files__read", "mcp__files__read"])
 
 
+def test_codemode_preload_is_atomic_and_restart_preserves_hydration() -> None:
+    async def run() -> None:
+        session = CodeModeSession(CodeModeLimits(max_hydrated_tools=1))
+        session.update_tools([_integer_tool("lookup"), _integer_tool("other")])
+
+        payload = session.preload_tools(tool_names=["lookup"])
+        assert payload["tools"][0]["callable_name"] == "lookup"
+        assert session.hydrated_names == {"lookup"}
+        with pytest.raises(CodeModeHydrationError, match="Unknown"):
+            session.preload_tools(tool_names=["missing"])
+        with pytest.raises(CodeModeHydrationError, match="at most 1"):
+            session.preload_tools(tool_names=["other"])
+        assert session.hydrated_names == {"lookup"}
+
+        calls = 0
+
+        async def invoke(name: str, arguments: dict[str, Any]) -> Any:
+            nonlocal calls
+            calls += 1
+            assert name == "lookup"
+            return arguments["value"]
+
+        assert (
+            await session.execute_code(
+                code="await lookup(value=7)",
+                invoke=invoke,
+                restart=True,
+            )
+            == 7
+        )
+        assert calls == 1
+        await session.close()
+
+    asyncio.run(run())
+
+
 def test_codemode_bounds_discovery_payloads_and_validates_limits() -> None:
     with pytest.raises(ValueError, match="default_search_limit"):
         CodeModeLimits(default_search_limit=2, max_search_limit=1)
@@ -288,6 +325,7 @@ def test_codemode_bounds_discovery_payloads_and_validates_limits() -> None:
     )
     with pytest.raises(CodeModeBoundaryError, match="get_tool_schema"):
         session.get_tool_schema(tool_names=["large_schema"])
+    assert session.hydrated_names == set()
 
     hydration = CodeModeSession(CodeModeLimits(max_hydrated_tools=1))
     hydration.update_tools([_integer_tool("first"), _integer_tool("second")])
@@ -758,6 +796,149 @@ def test_pydantic_codemode_wrapper_preserves_lifecycle_instructions_and_native_t
         assert await projected.__aexit__(None, None, None) is None
 
     asyncio.run(run())
+
+
+def test_pydantic_codemode_preloads_schema_before_model_and_executes_once() -> None:
+    calls = 0
+    model_calls = 0
+
+    def lookup_release(*, version: str) -> dict[str, str]:
+        nonlocal calls
+        calls += 1
+        return {"version": version}
+
+    async def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            instructions = info.instructions
+            assert isinstance(instructions, str)
+            assert '"name":"lookup_release"' in instructions
+            assert '"callable_name":"lookup_release"' in instructions
+            assert '"version":{"type":"string"}' in instructions
+            assert [tool.name for tool in info.function_tools] == [
+                "search_tools",
+                "get_tool_schema",
+                "execute_code",
+            ]
+            assert calls == 0
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "execute_code",
+                        {"code": 'await lookup_release(version="v1")'},
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond),
+        tools=[Tool(lookup_release)],
+        codemode=CodeModeSettings(preload_tools=("lookup_release",)),
+    )
+    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        result = adapter.run_sync("Read the release.")
+
+    assert result.output == "done"
+    assert calls == 1
+    assert model_calls == 2
+
+
+def test_native_tool_requirements_preload_and_selective_retry_compose() -> None:
+    class ReleaseClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch(self, version: str) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("temporary release index failure")
+            return f"release:{version}"
+
+    client = ReleaseClient()
+    model_calls = 0
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            instructions = info.instructions
+            assert isinstance(instructions, str)
+            assert '"name":"lookup_release"' in instructions
+            assert '"version"' in instructions
+            assert '"type":"string"' in instructions
+            assert client.calls == 0
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "execute_code",
+                        {"code": 'await lookup_release(version="v1")'},
+                    )
+                ]
+            )
+
+        tool_results = [
+            part
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart)
+        ]
+        assert tool_results
+        assert "release:v1" in str(tool_results[-1].content)
+        return ModelResponse(parts=[TextPart("Release v1 is available.")])
+
+    source = """
+> requires:
+    tool_registration
+    codemode
+> approval: allow
+
+@read_release(version: str) -> str:
+    > tool:
+        name: lookup_release
+        description: Read one exact release version.
+        risk: read_only
+        retries: 1
+        retry_on:
+            TimeoutError
+    = `release_client.fetch(version)`
+
+> use: read_release
+> codemode:
+    preload_tools: lookup_release
+
+[answer] << Read release v1 with the available tool.
+= <answer>
+"""
+    adapter = PydanticAdapter(FunctionModel(respond))
+    runtime = compile_program(
+        parse_program(source),
+        adapter=adapter,
+        runtime_globals={"release_client": client},
+    )
+
+    assert runtime.run_main() == "Release v1 is available."
+    assert model_calls == 2
+    assert client.calls == 2
+
+
+def test_pydantic_codemode_unknown_preload_fails_before_model_request() -> None:
+    model_calls = 0
+
+    async def respond(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        return ModelResponse(parts=[TextPart("unexpected")])
+
+    adapter = PydanticAdapter(
+        FunctionModel(respond),
+        tools=[Tool(lambda: "ok", name="known")],
+        codemode=CodeModeSettings(preload_tools=("missing",)),
+    )
+    with pytest.raises(UserError, match="Unknown CodeMode tool name"):
+        adapter.run_sync("Do not call the model.")
+    assert model_calls == 0
 
 
 def test_pydantic_nested_tool_manager_reports_missing_private_contracts() -> None:

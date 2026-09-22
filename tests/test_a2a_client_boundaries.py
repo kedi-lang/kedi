@@ -395,7 +395,8 @@ def test_profile_connection_and_noncontinuable_error_checkpoint():
     client_module._validate_card_auth(AgentCard(), None)
 
 
-def test_client_rejects_unadvertised_structured_output(monkeypatch):
+@pytest.mark.parametrize("structured", [True, False])
+def test_client_rejects_unadvertised_structured_output(monkeypatch, structured):
     adapter = A2AAdapter()
     connection = A2AConnection(endpoint="https://agent.example")
     monkeypatch.setattr(
@@ -411,8 +412,11 @@ def test_client_rejects_unadvertised_structured_output(monkeypatch):
     )
 
     async def scenario():
-        with pytest.raises(A2ARemoteTaskError, match="does not advertise"):
-            async with adapter._client_scope(connection, structured=True):
+        with (
+            adapter.profile_override(AgentProfile(requirements=("structured_output",))),
+            pytest.raises(A2ARemoteTaskError, match="does not advertise"),
+        ):
+            async with adapter._client_scope(connection, structured=structured):
                 pass
 
     asyncio.run(scenario())

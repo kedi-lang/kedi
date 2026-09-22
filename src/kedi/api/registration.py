@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import builtins
 import dataclasses
-import functools
 import inspect
 from collections.abc import Sequence
 from typing import (
@@ -19,6 +18,7 @@ from kedi.agent_adapter.approvals.policy import (
     ToolRisk,
 )
 from kedi.agent_adapter.hooks import HookEventName, HookHandler, validate_hook_event_names
+from kedi.agent_adapter.tools.retry import ToolRetryPolicy, normalize_retry_on, with_body_retry
 from kedi.agent_profile import AgentProfile, HookSettings
 from kedi.api.state import ClassT, P, R, _config_var
 
@@ -46,7 +46,13 @@ def _callable_name(fn: Callable[..., Any]) -> str:
 
 
 def _tool_mapping(tools: Sequence[Callable[..., Any]]) -> dict[str, Callable[..., Any]]:
-    return {_callable_name(tool): tool for tool in tools}
+    mapped: dict[str, Callable[..., Any]] = {}
+    for tool_value in tools:
+        name = _callable_name(tool_value)
+        if name in mapped:
+            raise ValueError(f"duplicate exposed tool name: {name!r}")
+        mapped[name] = tool_value
+    return mapped
 
 
 def _is_existing_type_surface(cls: builtins.type[Any]) -> bool:
@@ -154,6 +160,7 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    retry_on: Sequence[builtins.type[Exception]] | None = None,
     risk: ToolRisk = "mutating",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
 
@@ -164,10 +171,10 @@ def tool(
     name: str | None = None,
     description: str | None = None,
     retries: int = 0,
+    retry_on: Sequence[builtins.type[Exception]] | None = None,
     risk: ToolRisk = "mutating",
 ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
-    if retries < 0:
-        raise ValueError("tool retries must be >= 0")
+    policy = ToolRetryPolicy(retries=retries, retry_on=normalize_retry_on(retry_on))
     if risk not in ("read_only", "mutating", "sensitive"):
         raise ValueError("tool risk must be 'read_only', 'mutating', or 'sensitive'")
 
@@ -175,36 +182,10 @@ def tool(
         tool_name = name or _callable_name(inner)
         tool_description = description or inspect.getdoc(inner)
 
-        if _is_async_callable(inner):
-
-            @functools.wraps(inner)
-            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                attempts = retries + 1
-                last_error: Exception | None = None
-                for _ in range(attempts):
-                    try:
-                        return await cast(Any, inner)(*args, **kwargs)
-                    except Exception as exc:
-                        last_error = exc
-                assert last_error is not None
-                raise last_error
-
-            wrapped = cast(Callable[P, R], async_wrapper)
-        else:
-
-            @functools.wraps(inner)
-            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                attempts = retries + 1
-                last_error: Exception | None = None
-                for _ in range(attempts):
-                    try:
-                        return inner(*args, **kwargs)
-                    except Exception as exc:
-                        last_error = exc
-                assert last_error is not None
-                raise last_error
-
-            wrapped = sync_wrapper
+        wrapped = cast(
+            Callable[P, R],
+            with_body_retry(inner, policy, isolate_arguments=False),
+        )
 
         setattr(wrapped, _TOOL_NAME_ATTR, tool_name)
         setattr(wrapped, _TOOL_RISK_ATTR, risk)

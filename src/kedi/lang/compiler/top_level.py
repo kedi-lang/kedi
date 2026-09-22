@@ -17,6 +17,7 @@ from kedi.agent_profile.directives import (
     eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_requires_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -42,6 +43,7 @@ from kedi.lang.ast import (
     ProfileDefStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
@@ -244,6 +246,11 @@ def _execute_top_level_sequence(
         if isinstance(item, CodeModeDirectiveStmt):
             state.active_profile = state.active_profile.merge(
                 eval_codemode_directive(self.rt, item, env)
+            )
+            continue
+        if isinstance(item, RequiresDirectiveStmt):
+            state.active_profile = state.active_profile.merge(
+                eval_requires_directive(self.rt, item, env)
             )
             continue
         if isinstance(item, SystemDirectiveStmt):

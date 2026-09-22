@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, List, Literal, cast
 
 from tree_sitter import Node
 
+from kedi.agent_adapter.meta import adapter_capability_names
 from kedi.agent_adapter.hooks import HOOK_EVENT_NAMES
 from kedi.agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from kedi.agent_profile.settings import (
@@ -30,12 +31,14 @@ from kedi.lang.ast import (
     McpField,
     ModelDirectiveStmt,
     PackageMetadata,
+    RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
     TemplateLine,
     TextSegment,
+    ToolDeclaration,
     UseDirectiveStmt,
 )
 from kedi.lang.parser.cst_helpers import _field, _identifier_name, _named_children, _src_text
@@ -194,6 +197,133 @@ def _walk_auto_directive(self: _Walker, node: Node) -> AutoSpec:
     dedented = dedent_block(prompt_lines)
     prompt = "\n".join(dedented).strip("\n")
     return AutoSpec(prompt=prompt, loc=self._span(node))
+
+
+def _walk_tool_directive(self: _Walker, node: Node) -> ToolDeclaration:
+    body_node = _field(node, "body")
+    assert body_node is not None
+    values: dict[str, str] = {}
+    retry_on: tuple[str, ...] | None = None
+    field_locs = {}
+    known_fields = {"name", "description", "risk", "retries", "retry_on"}
+
+    for child in _named_children(body_node):
+        if child.type in ("line_comment", "block_comment"):
+            continue
+        if child.type == "tool_retry_on":
+            field_name = "retry_on"
+            if field_name in field_locs:
+                self._error(child, "Duplicate tool field: 'retry_on'", code="K-TOOL-FIELD-DUP")
+                continue
+            field_locs[field_name] = self._span(child)
+            retry_body = _field(child, "body")
+            assert retry_body is not None
+            names: list[str] = []
+            seen_names: set[str] = set()
+            for entry in _named_children(retry_body):
+                if entry.type != "tool_exception_name":
+                    continue
+                name_node = _field(entry, "name")
+                assert name_node is not None
+                name = _identifier_name(self.source, name_node)
+                if name not in seen_names:
+                    seen_names.add(name)
+                    names.append(name)
+            retry_on = tuple(names)
+            continue
+
+        name_node = _field(child, "name")
+        value_node = _field(child, "value")
+        assert name_node is not None and value_node is not None
+        field_name = _identifier_name(self.source, name_node)
+        if field_name not in known_fields:
+            self._error(
+                name_node,
+                f"Unknown tool field {field_name!r}; expected one of: "
+                + ", ".join(sorted(known_fields)),
+                code="K-TOOL-FIELD",
+            )
+            continue
+        if field_name in field_locs:
+            self._error(
+                child,
+                f"Duplicate tool field: {field_name!r}",
+                code="K-TOOL-FIELD-DUP",
+            )
+            continue
+        field_locs[field_name] = self._span(child)
+        values[field_name] = _src_text(self.source, value_node).strip()
+
+    exposed_name = values.get("name")
+
+    risk_value = values.get("risk", "mutating")
+    if risk_value not in {"read_only", "mutating", "sensitive"}:
+        self._error(
+            body_node,
+            "tool risk must be 'read_only', 'mutating', or 'sensitive'",
+            code="K-TOOL-RISK",
+        )
+        risk_value = "mutating"
+    risk = cast(Literal["read_only", "mutating", "sensitive"], risk_value)
+
+    retries_text = values.get("retries", "0")
+    if re.fullmatch(r"[0-9]+", retries_text) is None:
+        self._error(
+            body_node,
+            "tool retries must be a nonnegative integer",
+            code="K-TOOL-RETRIES",
+        )
+        retries = 0
+    else:
+        retries = int(retries_text)
+
+    return ToolDeclaration(
+        name=exposed_name,
+        description=values.get("description"),
+        risk=risk,
+        retries=retries,
+        retry_on=retry_on,
+        field_locs=field_locs,
+        loc=self._span(node),
+    )
+
+
+def _walk_requires_directive(self: _Walker, node: Node) -> RequiresDirectiveStmt:
+    entries: list[Node] = []
+    name_node = _field(node, "name")
+    if name_node is not None:
+        entries.append(name_node)
+    body_node = _field(node, "body")
+    if body_node is not None:
+        for child in _named_children(body_node):
+            if child.type != "requirement_name":
+                continue
+            entry_node = _field(child, "name")
+            assert entry_node is not None
+            entries.append(entry_node)
+
+    known = adapter_capability_names()
+    requirements: list[str] = []
+    requirement_locs = {}
+    for entry in entries:
+        requirement = _identifier_name(self.source, entry)
+        if requirement not in known:
+            self._error(
+                entry,
+                f"Unknown adapter requirement {requirement!r}; expected one of: "
+                + ", ".join(sorted(known)),
+                code="K-REQUIRES-UNKNOWN",
+            )
+            continue
+        if requirement not in requirement_locs:
+            requirements.append(requirement)
+            requirement_locs[requirement] = self._span(entry)
+
+    return RequiresDirectiveStmt(
+        requirements=requirements,
+        requirement_locs=requirement_locs,
+        loc=self._span(node),
+    )
 
 
 def _walk_model_directive(self: _Walker, node: Node) -> ModelDirectiveStmt:
@@ -541,7 +671,24 @@ def _walk_codemode_directive(self: _Walker, node: Node) -> CodeModeDirectiveStmt
     for child in _named_children(body_node):
         if child.type in ("line_comment", "block_comment"):
             continue
-        field = self._walk_settings_value_field(child)
+        if child.type == "codemode_preload_tools_field":
+            preload_body = _field(child, "body")
+            if preload_body is None:
+                field = self._walk_settings_value_field(child)
+            else:
+                preload_tools = [
+                    _src_text(self.source, preload_node).strip()
+                    for item in _named_children(preload_body)
+                    if item.type == "codemode_preload_tool_name"
+                    and (preload_node := _field(item, "value")) is not None
+                ]
+                field = SettingsField(
+                    name="preload_tools",
+                    plain_values=preload_tools,
+                    loc=self._span(child),
+                )
+        else:
+            field = self._walk_settings_value_field(child)
         name = field.name
         if name not in CODEMODE_SETTING_FIELDS:
             self._error(

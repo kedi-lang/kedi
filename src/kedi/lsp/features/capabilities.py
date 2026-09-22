@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import cast
 
 from lsprotocol import types as lsp
 
@@ -27,6 +28,7 @@ from kedi.lang.ast import (
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    RequiresDirectiveStmt,
     Program,
     ProgramWithValidation,
     SettingsDirectiveStmt,
@@ -47,11 +49,13 @@ from kedi.lang.ast import (
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.features.capability_state import (
+    _adapter_capability_status,
     _adapter_state_from_plain_value,
     _adapter_supports,
     _AdapterDiagnosticState,
     _merge_adapter_state,
     _with_hooks_state,
+    _with_requirements_state,
 )
 from kedi.lsp.features.symbols import (
     _approval_value_span,
@@ -117,6 +121,7 @@ def _profile_capability_diagnostics(
                     code="K-ADAPTER-CODEMODE",
                 )
             )
+    diagnostics.extend(_explicit_requirement_diagnostics(state))
     diagnostics.extend(_hooks_capability_diagnostics(state))
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
@@ -158,6 +163,7 @@ def _scan_capability_scope(
 
     for stmt in statements:
         if isinstance(stmt, AgentDirectiveStmt):
+            before_selection = active
             diagnostics.extend(
                 _adapter_selection_diagnostics(
                     prog,
@@ -170,6 +176,9 @@ def _scan_capability_scope(
             if selected is not None:
                 active = _merge_adapter_state(active, selected)
                 diagnostics.extend(
+                    _newly_unsupported_requirement_diagnostics(before_selection, active)
+                )
+                diagnostics.extend(
                     _native_approval_capability_diagnostics(
                         prog,
                         active,
@@ -181,6 +190,7 @@ def _scan_capability_scope(
                 diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
+            before_selection = active
             diagnostics.extend(
                 _adapter_selection_diagnostics(
                     prog,
@@ -192,6 +202,9 @@ def _scan_capability_scope(
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
             if selected is not None:
                 active = _merge_adapter_state(active, selected)
+                diagnostics.extend(
+                    _newly_unsupported_requirement_diagnostics(before_selection, active)
+                )
                 diagnostics.extend(
                     _native_approval_capability_diagnostics(
                         prog,
@@ -248,6 +261,17 @@ def _scan_capability_scope(
                 codemode_enabled=stmt.enabled,
             )
             diagnostics.extend(_codemode_capability_diagnostics(active))
+            continue
+        if isinstance(stmt, RequiresDirectiveStmt):
+            active = _with_requirements_state(active, stmt)
+            entries = tuple(
+                (
+                    cast(AdapterCapability, requirement),
+                    stmt.requirement_locs.get(requirement),
+                )
+                for requirement in stmt.requirements
+            )
+            diagnostics.extend(_explicit_requirement_diagnostics(active, entries=entries))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -591,6 +615,13 @@ def _use_capability_diagnostics(
         proc_names=proc_names,
     )
     diagnostics: list[lsp.Diagnostic] = []
+    diagnostics.extend(
+        _newly_unsupported_requirement_diagnostics(
+            state,
+            merged,
+            span_override=target_span,
+        )
+    )
     if "tool_registration" in capabilities:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
@@ -828,6 +859,56 @@ def _unsupported_capability_diagnostics(
         for span in spans
         if span is not None
     ]
+
+
+def _explicit_requirement_diagnostics(
+    state: _AdapterDiagnosticState,
+    *,
+    entries: Sequence[tuple[AdapterCapability, Span | None]] | None = None,
+    span_override: Span | None = None,
+) -> list[lsp.Diagnostic]:
+    if state.shortname is None:
+        return []
+    diagnostics: list[lsp.Diagnostic] = []
+    selected_entries = state.requirements if entries is None else entries
+    for requirement, source_span in selected_entries:
+        if _adapter_capability_status(state, requirement) is not False:
+            continue
+        span = span_override or source_span
+        if span is None:
+            continue
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-REQUIREMENT",
+                source="kedi",
+                message=(
+                    f"Adapter '{state.shortname}' does not satisfy required capability "
+                    f"'{requirement}'."
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _newly_unsupported_requirement_diagnostics(
+    before: _AdapterDiagnosticState,
+    after: _AdapterDiagnosticState,
+    *,
+    span_override: Span | None = None,
+) -> list[lsp.Diagnostic]:
+    entries = tuple(
+        entry
+        for entry in after.requirements
+        if entry not in before.requirements
+        or _adapter_capability_status(before, entry[0]) is not False
+    )
+    return _explicit_requirement_diagnostics(
+        after,
+        entries=entries,
+        span_override=span_override,
+    )
 
 
 def _native_approval_capability_diagnostics(

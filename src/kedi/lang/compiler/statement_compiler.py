@@ -16,6 +16,7 @@ from ...agent_profile.directives import (
     eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_requires_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -44,6 +45,7 @@ from ..ast import (
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
+    RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -530,6 +532,11 @@ class StatementExecutor:
         if isinstance(stmt, CodeModeDirectiveStmt):
             return (
                 active.merge(eval_codemode_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, RequiresDirectiveStmt):
+            return (
+                active.merge(eval_requires_directive(self.rt, stmt, closure_env)),
                 adapter_selection_kind,
             )
         if isinstance(stmt, SystemDirectiveStmt):

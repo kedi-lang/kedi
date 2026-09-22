@@ -205,7 +205,10 @@ def _run_kwargs(
         capabilities = _with_capability(
             capabilities,
             PydanticCodeModeCapability,
-            lambda: pydantic_code_mode_capability(limits=CodeModeLimits(**codemode.limit_values())),
+            lambda: pydantic_code_mode_capability(
+                limits=CodeModeLimits(**codemode.limit_values()),
+                preload_tools=codemode.preload_tools,
+            ),
         )
     if approval_resolution == "kedi" and (
         caller_toolsets or toolsets is not None or self._has_native_approval_tools()

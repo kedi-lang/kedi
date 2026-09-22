@@ -34,7 +34,8 @@ CODEMODE_INSTRUCTIONS = """\
 CodeMode is enabled. Application tools are available only through three control tools:
 
 1. Call `search_tools` to browse tool names. `query` is optional; use `cursor` for another page.
-2. Call `get_tool_schema` with the exact names you intend to use. Do not guess arguments.
+2. Call `get_tool_schema` with the exact names you intend to use unless their schemas are already
+   included in the preloaded application tools below. Do not guess arguments.
 3. Call `execute_code` with small, task-focused Python that invokes only hydrated functions.
 
 The sandbox supports ordinary literals, indexing and slicing, arithmetic, comparisons, boolean
@@ -385,11 +386,23 @@ class CodeModeSession:
                 raise CodeModeHydrationError(
                     f"CodeMode allows at most {self.limits.max_hydrated_tools} hydrated tools per run"
                 )
-            self._hydrated = hydrated
             result = {"tools": [tool.schema_payload() for tool in tools]}
             bounded = self._bounded_discovery_result(result, operation="get_tool_schema")
+            self._hydrated = hydrated
             active.set_attribute("kedi.codemode.schema.hydrated_count", len(self._hydrated))
             return bounded
+
+    def preload_tools(self, *, tool_names: Sequence[str]) -> dict[str, Any]:
+        tools = self._catalog.resolve_exact(tool_names)
+        hydrated = self._hydrated | {tool.name for tool in tools}
+        if len(hydrated) > self.limits.max_hydrated_tools:
+            raise CodeModeHydrationError(
+                f"CodeMode allows at most {self.limits.max_hydrated_tools} hydrated tools per run"
+            )
+        result = {"tools": [tool.schema_payload() for tool in tools]}
+        bounded = self._bounded_discovery_result(result, operation="preload_tools")
+        self._hydrated = hydrated
+        return bounded
 
     async def execute_code(
         self,
@@ -590,6 +603,23 @@ def _external_tool(
     invoke.__name__ = tool.callable_name
     invoke.__doc__ = tool.description
     return invoke
+
+
+def codemode_instructions(preloaded_tools: Sequence[Mapping[str, Any]] = ()) -> str:
+    if not preloaded_tools:
+        return CODEMODE_INSTRUCTIONS
+    payload = json.dumps(
+        {"tools": list(preloaded_tools)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        f"{CODEMODE_INSTRUCTIONS.rstrip()}\n\n"
+        "Preloaded application tools are already hydrated. Call them directly from `execute_code` "
+        "using each `callable_name`; do not call `get_tool_schema` for them again. Their exact "
+        f"schemas are:\n{payload}\n"
+    )
 
 
 def _json_boundary_value(value: Any) -> tuple[Any, int]:

@@ -10,7 +10,12 @@ from typing import (
 
 import dotenv
 
-from kedi.agent_adapter import AgentAdapter, AgentAdapterKind, ConversationState
+from kedi.agent_adapter import (
+    AdapterCapability,
+    AgentAdapter,
+    AgentAdapterKind,
+    ConversationState,
+)
 from kedi.agent_adapter.adapters.lazy import LazyAdapter
 from kedi.agent_adapter.approvals.policy import (
     ApprovalHandler,
@@ -65,6 +70,7 @@ def _agent_profile_overrides(
     system: str | None,
     effort: EffortValue | None,
     settings: Mapping[str, Any] | None,
+    requires: Sequence[AdapterCapability],
     tools: Sequence[Callable[..., Any]],
     mcp_servers: Sequence[McpServerSpec],
     approval_policy: ApprovalPolicy | ApprovalMode | ApprovalHandler | None,
@@ -81,6 +87,7 @@ def _agent_profile_overrides(
         effort=effort,
         system=system,
         settings=dict(settings or {}),
+        requirements=tuple(requires),
         tools=tuple(tool_map),
         mcp_servers=tuple(mcp_servers),
         approval=_coerce_approval(approval_policy),

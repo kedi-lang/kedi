@@ -230,6 +230,7 @@ class ClaudeAdapter(HookRegistrationMixin):
                 run_kwargs=run_kwargs,
                 tools=cast(Sequence[ToolSpec], projection.tools),
                 codemode_settings=codemode_settings,
+                codemode_preloaded_tools=projection.preloaded_tools,
             )
             result = None
             message_index = 0
@@ -370,6 +371,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         run_kwargs: Mapping[str, Any],
         tools: Sequence[ToolSpec] | None = None,
         codemode_settings: CodeModeSettings | None = None,
+        codemode_preloaded_tools: Sequence[Mapping[str, Any]] = (),
     ) -> tuple[Any, str]:
         run_tools = tuple(self.scoped_tools if tools is None else tools)
         codemode_enabled = codemode_settings is not None and codemode_settings.enabled
@@ -388,8 +390,14 @@ class ClaudeAdapter(HookRegistrationMixin):
         system_prompt = append_codemode_instructions(
             instructions or self.active_profile.system,
             enabled=codemode_enabled,
+            preloaded_tools=codemode_preloaded_tools,
         )
-        _set_claude_system_prompt(options_kwargs, system_prompt, codemode_enabled=codemode_enabled)
+        _set_claude_system_prompt(
+            options_kwargs,
+            system_prompt,
+            codemode_enabled=codemode_enabled,
+            codemode_preloaded_tools=codemode_preloaded_tools,
+        )
 
         mcp_servers, allowed_tools = self._mcp_servers_for_run(
             sdk,
@@ -493,6 +501,7 @@ class ClaudeAdapter(HookRegistrationMixin):
                 self._approval_ceiling_var.get(),
             ),
             adapter_shortname=self.shortname,
+            preload_tools=settings.preload_tools,
         )
         stack.push_async_callback(projection.close)
         return projection, settings

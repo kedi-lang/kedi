@@ -28,6 +28,7 @@ from kedi.agent_adapter.adapters.codex.app_server import (
     CodexTurnResult,
 )
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
+from kedi.agent_adapter.codemode import CodeModeHydrationError
 from kedi.agent_adapter.conversation import AdapterConversationContext, ConversationState
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
@@ -40,7 +41,7 @@ from kedi.agent_adapter.subagents import SubagentExecutionRequest
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.execution import arguments_target_secret_file
 from kedi.agent_adapter.tools.specs import ToolSpec
-from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile
+from kedi.agent_profile import CODEX_AGENT_SETTING_KEYS, AgentProfile, CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings
 from kedi.agent_profile.mcp import McpServerSpec
 
@@ -638,7 +639,10 @@ def test_codex_codemode_projects_dynamic_controls_and_executes_nested_tool() -> 
             tools = kwargs["tools"]
             assert set(tools) == {"search_tools", "get_tool_schema", "execute_code"}
             assert tools["search_tools"]()["tool_names"] == ["double"]
-            tools["get_tool_schema"](tool_names=["double"])
+            assert calls == []
+            instructions = kwargs["thread_params"]["developerInstructions"]
+            assert '"name":"double"' in instructions
+            assert '"value":{"type":"integer"}' in instructions
             result = await tools["execute_code"](code="await double(value=6)")
             return CodexTurnResult(text=str(result), turn={})
 
@@ -658,7 +662,12 @@ def test_codex_codemode_projects_dynamic_controls_and_executes_nested_tool() -> 
         codemode=True,
     )
     with (
-        adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())),
+        adapter.profile_override(
+            AgentProfile(
+                approval=ApprovalPolicy.allow(),
+                codemode=CodeModeSettings(preload_tools=("double",)),
+            )
+        ),
         adapter.tool_scope(
             (
                 ToolSpec(
@@ -683,6 +692,37 @@ def test_codex_codemode_projects_dynamic_controls_and_executes_nested_tool() -> 
         "execute_code",
     }
     assert "CodeMode" in seen["thread_params"]["developerInstructions"]
+
+
+def test_codex_codemode_rejects_unknown_preload_before_client_request() -> None:
+    calls = 0
+
+    class FakeClient:
+        async def run_stateless_turn(self, **kwargs: Any) -> CodexTurnResult:
+            nonlocal calls
+            calls += 1
+            return CodexTurnResult(text="unexpected", turn={})
+
+        def close(self) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            pass
+
+    adapter = CodexAdapter(
+        model="gpt-test",
+        client=cast(CodexAppServerClient, FakeClient()),
+        codemode=True,
+    )
+    with (
+        adapter.profile_override(
+            AgentProfile(codemode=CodeModeSettings(preload_tools=("missing",)))
+        ),
+        pytest.raises(CodeModeHydrationError, match="Unknown"),
+    ):
+        adapter.invoke_sync(prompt="Do not reach the client.")
+
+    assert calls == 0
 
 
 def test_codex_codemode_sync_produce_uses_async_execution(

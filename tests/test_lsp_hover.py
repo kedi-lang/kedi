@@ -93,6 +93,34 @@ def test_hover_on_profile_codemode_directive_and_limit() -> None:
     assert "Maximum host tool calls" in limit
 
 
+def test_hover_describes_tool_metadata_and_adapter_requirements() -> None:
+    source = """
+@lookup() -> str:
+    > tool:
+        name: lookup_release
+        retries: 2
+        retry_on:
+            TimeoutError
+    = ok
+> requires:
+    codemode
+    stream_events
+> profile: worker:
+    > requires: structured_output
+"""
+
+    tool = hover_text_at(source, "example.kedi", "tool")
+    requires = hover_text_at(source, "example.kedi", "requires", occurrence=1)
+    profile_requires = hover_text_at(source, "example.kedi", "requires", occurrence=2)
+
+    assert "Procedure tool metadata" in tool
+    assert "lookup_release" in tool
+    assert "TimeoutError" in tool
+    assert "before a model request" in requires
+    assert "codemode" in requires
+    assert "stored in this profile" in profile_requires
+
+
 def test_hover_on_hooks_directive_and_profile_handler() -> None:
     source = """
 > hooks:

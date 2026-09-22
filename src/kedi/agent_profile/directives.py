@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
+from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
@@ -25,6 +26,7 @@ from .definitions import (
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
+    ProfileRequiresMember,
     ProfileSettingsMember,
     ProfileSkillsMember,
     ProfileSubagentMember,
@@ -52,6 +54,7 @@ if TYPE_CHECKING:
         McpDirectiveStmt,
         McpField,
         ModelDirectiveStmt,
+        RequiresDirectiveStmt,
         SettingsDirectiveStmt,
         SettingsField,
         SkillsDirectiveStmt,
@@ -492,6 +495,8 @@ def eval_mcp_directive(
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
         return rt.executor.evaluate_inline(rt, field.backtick_code, env)
+    if field.plain_values is not None:
+        return tuple(field.plain_values)
     if field.plain_value is not None:
         if field.name == "tool_reason":
             if field.plain_value not in {"enabled", "disabled"}:
@@ -609,6 +614,23 @@ def eval_codemode_directive(
     return AgentProfile(codemode=normalize_codemode_settings(values))
 
 
+def eval_requires_directive(
+    rt: KediRuntime,
+    stmt: RequiresDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    del rt, env
+    requirements = normalize_adapter_requirements(stmt.requirements)
+    return AgentProfile(
+        requirements=requirements,
+        requirement_origins={
+            requirement: (stmt.requirement_locs[requirement],)
+            for requirement in requirements
+            if requirement in stmt.requirement_locs
+        },
+    )
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -621,6 +643,7 @@ def _member_to_patch(
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
+        | ProfileRequiresMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -713,6 +736,16 @@ def _member_to_patch(
         values = eval_settings_fields(rt, member.fields, env)
         values["enabled"] = member.enabled
         return AgentProfile(codemode=normalize_codemode_settings(values))
+    if member.kind == "requires":
+        requirements = normalize_adapter_requirements(list(member.requirements))
+        return AgentProfile(
+            requirements=requirements,
+            requirement_origins={
+                requirement: (member.requirement_locs[requirement],)
+                for requirement in requirements
+                if requirement in member.requirement_locs
+            },
+        )
     if member.kind == "system":
         system = eval_system_value(
             rt,

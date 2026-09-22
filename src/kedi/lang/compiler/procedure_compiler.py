@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Callable
 
+from ...agent_adapter.tools.retry import ToolRetryPolicy, resolve_retry_on
 from ...core import KediRuntime
 from ...errors import KediTypeExecutionError
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
@@ -30,9 +31,7 @@ class ProcedureCompiler:
     ) -> Callable:
         """Create procedure implementation with scoping."""
 
-        def _body(**kwargs: Any) -> Any:
-            self._enforce_param_types(proc, kwargs)
-
+        def _validated_body(**kwargs: Any) -> Any:
             lexical_parent = parent_env if parent_env is not None else self.rt._globals_env
             closure_env = ScopeFrame(parent=lexical_parent)
             for name, value in kwargs.items():
@@ -56,10 +55,24 @@ class ProcedureCompiler:
             finally:
                 self.rt._current_env.reset(token)
 
+        def _body(**kwargs: Any) -> Any:
+            self._enforce_param_types(proc, kwargs)
+            return _validated_body(**kwargs)
+
         defaults = self._evaluate_param_defaults(proc, parent_env)
 
         # Create dynamic function with proper signature
         fn = self._create_dynamic_function(proc.name, proc.params, _body, defaults)
+        setattr(fn, "__kedi_validated_procedure_body__", _validated_body)
+        if proc.tool is not None:
+            policy = ToolRetryPolicy(
+                retries=proc.tool.retries,
+                retry_on=resolve_retry_on(
+                    proc.tool.retry_on,
+                    build_python_env(self.rt, parent_env or {}),
+                ),
+            )
+            setattr(fn, "__kedi_tool_retry_policy__", policy)
         return attach_procedure_metadata(fn, proc, defaults)
 
     def _evaluate_param_defaults(

@@ -995,6 +995,7 @@ def test_official_a2a_sdk_text_structured_status_and_context_continuation(
 
         kedi_source = f"""
 > profile: remote:
+    > requires: structured_output
     > agent: a2a:
         endpoint: {public_url}
         auth:

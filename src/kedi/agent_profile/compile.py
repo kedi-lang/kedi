@@ -17,6 +17,7 @@ from .definitions import (
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
+    ProfileRequiresMember,
     ProfileSettingsMember,
     ProfileSkillsMember,
     ProfileSubagentMember,
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
         ProfileMcpEntry,
         ProfileModelEntry,
         ProfileOutputEntry,
+        ProfileRequiresEntry,
         ProfileSettingsEntry,
         ProfileSkillsEntry,
         ProfileSystemEntry,
@@ -59,6 +61,7 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
+        | ProfileRequiresMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember
@@ -89,6 +92,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_skills_entry_to_member(entry))
     for entry in stmt.codemode_members:
         members.append(_codemode_entry_to_member(entry))
+    for entry in stmt.requires_members:
+        members.append(_requires_entry_to_member(entry))
     for entry in stmt.system_members:
         members.append(_system_entry_to_member(entry))
     for entry in stmt.mcp_members:
@@ -171,6 +176,13 @@ def _skills_entry_to_member(entry: ProfileSkillsEntry) -> ProfileSkillsMember:
 
 def _codemode_entry_to_member(entry: ProfileCodeModeEntry) -> ProfileCodeModeMember:
     return ProfileCodeModeMember(enabled=entry.enabled, fields=tuple(entry.fields))
+
+
+def _requires_entry_to_member(entry: ProfileRequiresEntry) -> ProfileRequiresMember:
+    return ProfileRequiresMember(
+        requirements=tuple(entry.requirements),
+        requirement_locs=dict(entry.requirement_locs),
+    )
 
 
 def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
@@ -285,6 +297,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
+        RequiresDirectiveStmt,
         SettingsDirectiveStmt,
         SkillsDirectiveStmt,
         SystemDirectiveStmt,
@@ -302,6 +315,7 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_hooks_directive,
         eval_mcp_directive,
         eval_model_directive,
+        eval_requires_directive,
         eval_settings_directive,
         eval_skills_directive,
         eval_system_directive,
@@ -340,6 +354,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_skills_directive(rt, item, env))
         elif isinstance(item, CodeModeDirectiveStmt):
             active = active.merge(eval_codemode_directive(rt, item, env))
+        elif isinstance(item, RequiresDirectiveStmt):
+            active = active.merge(eval_requires_directive(rt, item, env))
         elif isinstance(item, SystemDirectiveStmt):
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, McpDirectiveStmt):

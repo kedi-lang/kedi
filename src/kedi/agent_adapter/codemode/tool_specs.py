@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,7 +10,7 @@ from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_re
 from ..tools.execution import resolve_tool_arguments_async
 from ..tools.scope import defer_artifact_admission
 from ..tools.specs import ToolResultAdmitter, ToolSpec
-from .core import CODEMODE_INSTRUCTIONS, CodeModeLimits, CodeModeSession, CodeModeTool
+from .core import CodeModeLimits, CodeModeSession, CodeModeTool, codemode_instructions
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
 
@@ -78,6 +78,12 @@ class CodeModeProjection:
     def enabled(self) -> bool:
         return self.bridge is not None
 
+    @property
+    def preloaded_tools(self) -> tuple[dict[str, Any], ...]:
+        if self.bridge is None:
+            return ()
+        return self.bridge.preloaded_tools
+
     async def close(self) -> None:
         if self.bridge is not None:
             await self.bridge.close()
@@ -94,6 +100,7 @@ class CodeModeToolSpecBridge:
         policies: Sequence[ApprovalPolicy | None],
         adapter_shortname: str,
         tool_reason: bool = False,
+        preload_tools: Sequence[str] = (),
     ) -> None:
         self._tools = {tool.name: tool for tool in tools}
         if len(self._tools) != len(tools):
@@ -106,7 +113,14 @@ class CodeModeToolSpecBridge:
         self._session.update_tools(
             [_codemode_tool(tool, tool_reason=tool_reason) for tool in tools]
         )
+        self._preloaded_tools = tuple(
+            self._session.preload_tools(tool_names=preload_tools)["tools"]
+        )
         self._result_admitter = shared_result_admitter(tools)
+
+    @property
+    def preloaded_tools(self) -> tuple[dict[str, Any], ...]:
+        return self._preloaded_tools
 
     @property
     def control_tools(self) -> tuple[ToolSpec, ...]:
@@ -212,6 +226,7 @@ def codemode_projection(
     policies: Sequence[ApprovalPolicy | None],
     adapter_shortname: str,
     tool_reason: bool = False,
+    preload_tools: Sequence[str] = (),
 ) -> CodeModeProjection:
     if limits is None:
         return CodeModeProjection(tools=tuple(tools))
@@ -221,16 +236,23 @@ def codemode_projection(
         policies=policies,
         adapter_shortname=adapter_shortname,
         tool_reason=tool_reason,
+        preload_tools=preload_tools,
     )
     return CodeModeProjection(tools=bridge.control_tools, bridge=bridge)
 
 
-def append_codemode_instructions(instructions: str | None, *, enabled: bool) -> str | None:
+def append_codemode_instructions(
+    instructions: str | None,
+    *,
+    enabled: bool,
+    preloaded_tools: Sequence[Mapping[str, Any]] = (),
+) -> str | None:
     if not enabled:
         return instructions
+    codemode_text = codemode_instructions(preloaded_tools)
     if not instructions:
-        return CODEMODE_INSTRUCTIONS
-    return f"{instructions.rstrip()}\n\n{CODEMODE_INSTRUCTIONS}"
+        return codemode_text
+    return f"{instructions.rstrip()}\n\n{codemode_text}"
 
 
 def shared_result_admitter(tools: Sequence[ToolSpec]) -> ToolResultAdmitter | None:

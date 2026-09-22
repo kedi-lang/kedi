@@ -20,6 +20,54 @@ def test_server_can_be_constructed():
     assert server.version == kedi.__version__
 
 
+def test_server_parses_codemode_preload_warning_threshold() -> None:
+    from kedi.lsp.server import _codemode_preload_warning_threshold
+
+    assert _codemode_preload_warning_threshold({"codemode": {"preloadWarningThreshold": 8}}) == 8
+    assert (
+        _codemode_preload_warning_threshold({"kedi": {"codemode": {"preloadWarningThreshold": 0}}})
+        == 0
+    )
+    assert (
+        _codemode_preload_warning_threshold(
+            {"codemode": {"preloadWarningThreshold": True}},
+            default=5,
+        )
+        == 5
+    )
+    assert _codemode_preload_warning_threshold(None, default=7) == 7
+    assert _codemode_preload_warning_threshold({"kedi": "invalid"}, default=7) == 7
+    assert _codemode_preload_warning_threshold({"codemode": "invalid"}, default=7) == 7
+
+
+def test_server_refreshes_diagnostics_when_preload_threshold_changes(monkeypatch) -> None:
+    from kedi.lsp import server as server_module
+
+    uri = "file:///tmp/example.kedi"
+    server = server_module.make_server()
+    cast(Any, server.protocol)._workspace = SimpleNamespace(text_documents={uri: object()})
+    calls: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        server_module,
+        "_publish_diagnostics",
+        lambda _server, document_uri, *, codemode_preload_warning_threshold: calls.append(
+            (document_uri, codemode_preload_warning_threshold)
+        ),
+    )
+    handlers = server.protocol.fm.features
+
+    handlers[lsp.INITIALIZE](
+        SimpleNamespace(
+            initialization_options={"kedi": {"codemode": {"preloadWarningThreshold": 9}}}
+        )
+    )
+    handlers[lsp.WORKSPACE_DID_CHANGE_CONFIGURATION](
+        SimpleNamespace(settings={"kedi": {"codemode": {"preloadWarningThreshold": 3}}})
+    )
+
+    assert calls == [(uri, 3)]
+
+
 def test_server_custom_requests_prefer_request_text():
     from kedi.lsp.server import _request_source
 

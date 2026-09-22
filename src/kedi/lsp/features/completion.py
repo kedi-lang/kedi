@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from lsprotocol import types as lsp
 
+from kedi.agent_profile import CODEMODE_SETTING_FIELDS
 from kedi.lang.ast import (
     LoopStmt,
     OutputSegment,
@@ -51,14 +52,18 @@ _DIRECTIVE_COMPLETIONS = (
     "output",
     "package",
     "profile",
+    "requires",
     "settings",
     "skills",
     "subagent",
     "system",
     "test_data",
+    "tool",
     "use",
     "workflow",
 )
+
+_TOOL_SETTING_FIELDS = ("description", "name", "retries", "retry_on", "risk")
 
 
 _BUILTIN_TYPE_COMPLETIONS = (
@@ -88,7 +93,30 @@ def compute_completion(
 
     line = source.splitlines()[pos.line] if pos.line < len(source.splitlines()) else ""
     before_cursor = line[: pos.character]
+    if _inside_directive_block(source, pos, "codemode"):
+        return [
+            lsp.CompletionItem(
+                label=name,
+                kind=lsp.CompletionItemKind.Property,
+                insert_text=f"{name}: ",
+                detail="CodeMode setting",
+                sort_text=f"0-{name}",
+            )
+            for name in sorted(CODEMODE_SETTING_FIELDS)
+        ]
+    if _inside_directive_block(source, pos, "tool"):
+        return [
+            lsp.CompletionItem(
+                label=name,
+                kind=lsp.CompletionItemKind.Property,
+                insert_text=f"{name}: ",
+                detail="Tool metadata field",
+                sort_text=f"0-{name}",
+            )
+            for name in _TOOL_SETTING_FIELDS
+        ]
     if before_cursor.lstrip().startswith(">"):
+        in_procedure_header = _inside_direct_procedure_body(source, pos)
         return [
             lsp.CompletionItem(
                 label=name,
@@ -98,6 +126,7 @@ def compute_completion(
                 sort_text=f"0-{name}",
             )
             for name in _DIRECTIVE_COMPLETIONS
+            if name != "tool" or in_procedure_header
         ]
 
     items: dict[str, lsp.CompletionItem] = {}
@@ -183,3 +212,31 @@ def compute_completion(
                 add(segment.name, lsp.CompletionItemKind.Variable, "template output")
 
     return sorted(items.values(), key=lambda item: item.label.lower())
+
+
+def _inside_directive_block(source: str, pos: lsp.Position, directive: str) -> bool:
+    return _enclosing_header(source, pos) == f"> {directive}:"
+
+
+def _inside_direct_procedure_body(source: str, pos: lsp.Position) -> bool:
+    """Return whether the cursor is at the direct body indent of a procedure."""
+    header = _enclosing_header(source, pos)
+    return header is not None and header.startswith("@") and header.endswith(":")
+
+
+def _enclosing_header(source: str, pos: lsp.Position) -> str | None:
+    lines = source.splitlines()
+    if pos.line >= len(lines):
+        return None
+    current = lines[pos.line][: pos.character]
+    current_indent = len(current) - len(current.lstrip())
+    if current_indent == 0:
+        return None
+    for line in reversed(lines[: pos.line]):
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent >= current_indent:
+            continue
+        return line.strip()
+    return None

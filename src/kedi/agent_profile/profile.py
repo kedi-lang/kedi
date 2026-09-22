@@ -5,7 +5,8 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..agent_adapter.approvals.policy import ApprovalPolicy
-from ..agent_adapter.meta import AgentAdapterKind
+from ..agent_adapter.meta import AdapterCapability, AgentAdapterKind
+from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
 from .codemode import CodeModeSettings, normalize_codemode_settings
@@ -53,6 +54,8 @@ class AgentProfile:
     history: bool | None = None
     compaction: CompactionSettings | None = None
     codemode: CodeModeSettings | bool | None = None
+    requirements: tuple[AdapterCapability, ...] = ()
+    requirement_origins: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
     output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
 
@@ -60,6 +63,16 @@ class AgentProfile:
         tool_reason_enabled(self.settings)
         object.__setattr__(self, "skills", skills_settings(self.skills))
         object.__setattr__(self, "codemode", normalize_codemode_settings(self.codemode))
+        normalized_requirements = normalize_adapter_requirements(list(self.requirements))
+        object.__setattr__(self, "requirements", normalized_requirements)
+        object.__setattr__(
+            self,
+            "requirement_origins",
+            {
+                requirement: tuple(self.requirement_origins.get(requirement, ()))
+                for requirement in normalized_requirements
+            },
+        )
         object.__setattr__(self, "hooks", normalize_hook_settings(self.hooks))
         object.__setattr__(
             self,
@@ -139,6 +152,18 @@ class AgentProfile:
             updates["compaction"] = other.compaction
         if other.codemode is not None:
             updates["codemode"] = other.codemode
+        if other.requirements:
+            updates["requirements"] = _merge_requirements(
+                self.requirements,
+                other.requirements,
+            )
+            origins = dict(self.requirement_origins)
+            for requirement in other.requirements:
+                origins[requirement] = (
+                    *origins.get(requirement, ()),
+                    *other.requirement_origins.get(requirement, ()),
+                )
+            updates["requirement_origins"] = origins
         if other.output_type is not None:
             updates["output_type"] = other.output_type
         if other.artifacts is not None:
@@ -164,6 +189,9 @@ class AgentProfile:
             settings=dict(self.settings or {}),
             tool_bindings=dict(self.tool_bindings),
             subagent_bindings=dict(self.subagent_bindings),
+            requirement_origins={
+                name: tuple(origins) for name, origins in self.requirement_origins.items()
+            },
         )
 
     def needs_adapter_selection(self, adapter_shortname: str | None) -> bool:
@@ -200,4 +228,15 @@ def _merge_names(left: tuple[str, ...], right: tuple[str, ...]) -> tuple[str, ..
         if name in merged:
             merged.remove(name)
         merged.append(name)
+    return tuple(merged)
+
+
+def _merge_requirements(
+    left: tuple[AdapterCapability, ...],
+    right: tuple[AdapterCapability, ...],
+) -> tuple[AdapterCapability, ...]:
+    merged = list(left)
+    for requirement in right:
+        if requirement not in merged:
+            merged.append(requirement)
     return tuple(merged)

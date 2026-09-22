@@ -8,6 +8,7 @@ requests used by editor extension forwarding.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, List, Optional, cast
 from urllib.parse import unquote, urlparse
 
@@ -35,16 +36,52 @@ def _is_python_uri(uri: str) -> bool:
 
 def make_server() -> LanguageServer:
     server = LanguageServer(name="kedi-lsp", version=__version__)
+    diagnostic_settings = {"codemode_preload_warning_threshold": 5}
+
+    @server.feature(lsp.INITIALIZE)
+    def _initialize(params: lsp.InitializeParams) -> None:
+        diagnostic_settings["codemode_preload_warning_threshold"] = (
+            _codemode_preload_warning_threshold(params.initialization_options)
+        )
+
+    @server.feature(lsp.WORKSPACE_DID_CHANGE_CONFIGURATION)
+    def _did_change_configuration(params: lsp.DidChangeConfigurationParams) -> None:
+        diagnostic_settings["codemode_preload_warning_threshold"] = (
+            _codemode_preload_warning_threshold(
+                params.settings,
+                default=diagnostic_settings["codemode_preload_warning_threshold"],
+            )
+        )
+        for uri in tuple(server.workspace.text_documents):
+            _publish_diagnostics(
+                server,
+                uri,
+                codemode_preload_warning_threshold=diagnostic_settings[
+                    "codemode_preload_warning_threshold"
+                ],
+            )
 
     # ----- Document lifecycle: re-parse + publish diagnostics -----
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_OPEN)
     def _did_open(params: lsp.DidOpenTextDocumentParams) -> None:
-        _publish_diagnostics(server, params.text_document.uri)
+        _publish_diagnostics(
+            server,
+            params.text_document.uri,
+            codemode_preload_warning_threshold=diagnostic_settings[
+                "codemode_preload_warning_threshold"
+            ],
+        )
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_CHANGE)
     def _did_change(params: lsp.DidChangeTextDocumentParams) -> None:
-        _publish_diagnostics(server, params.text_document.uri)
+        _publish_diagnostics(
+            server,
+            params.text_document.uri,
+            codemode_preload_warning_threshold=diagnostic_settings[
+                "codemode_preload_warning_threshold"
+            ],
+        )
 
     @server.feature(lsp.TEXT_DOCUMENT_DID_CLOSE)
     def _did_close(params: lsp.DidCloseTextDocumentParams) -> None:
@@ -466,7 +503,27 @@ def _request_include_declaration(params: Any) -> bool:
     return False
 
 
-def _publish_diagnostics(server: LanguageServer, uri: str) -> None:
+def _codemode_preload_warning_threshold(value: Any, *, default: int = 5) -> int:
+    if not isinstance(value, Mapping):
+        return default
+    root = value.get("kedi", value)
+    if not isinstance(root, Mapping):
+        return default
+    codemode = root.get("codemode")
+    if not isinstance(codemode, Mapping):
+        return default
+    threshold = codemode.get("preloadWarningThreshold")
+    if isinstance(threshold, int) and not isinstance(threshold, bool) and threshold >= 0:
+        return threshold
+    return default
+
+
+def _publish_diagnostics(
+    server: LanguageServer,
+    uri: str,
+    *,
+    codemode_preload_warning_threshold: int = 5,
+) -> None:
     doc = server.workspace.get_text_document(uri)
     if _is_python_uri(uri):
         diagnostics = cast(
@@ -477,7 +534,11 @@ def _publish_diagnostics(server: LanguageServer, uri: str) -> None:
             ),
         )
     else:
-        diagnostics = features.compute_diagnostics(source=doc.source, source_path=_uri_to_path(uri))
+        diagnostics = features.compute_diagnostics(
+            source=doc.source,
+            source_path=_uri_to_path(uri),
+            codemode_preload_warning_threshold=codemode_preload_warning_threshold,
+        )
     server.text_document_publish_diagnostics(
         lsp.PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
     )

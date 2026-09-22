@@ -15,6 +15,8 @@ from kedi.lang.ast import (
     HooksDirectiveStmt,
     ProfileDefStmt,
     ProfileHooksEntry,
+    ProfileRequiresEntry,
+    RequiresDirectiveStmt,
     SettingsField,
     Span,
 )
@@ -34,6 +36,7 @@ class _AdapterDiagnosticState:
     history_enabled: bool | None = None
     codemode_loc: Span | None = None
     codemode_enabled: bool | None = None
+    requirements: tuple[tuple[AdapterCapability, Span | None], ...] = ()
 
 
 def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
@@ -97,6 +100,8 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
             codemode_loc=latest.loc,
             codemode_enabled=latest.enabled,
         )
+    for member in profile.requires_members:
+        state = _with_requirements_state(state, member)
     return state
 
 
@@ -142,6 +147,32 @@ def _merge_adapter_state(
         history_enabled=history_owner.history_enabled,
         codemode_loc=codemode_owner.codemode_loc,
         codemode_enabled=codemode_owner.codemode_enabled,
+        requirements=_merge_requirement_entries(outer.requirements, inner.requirements),
+    )
+
+
+def _merge_requirement_entries(
+    left: tuple[tuple[AdapterCapability, Span | None], ...],
+    right: tuple[tuple[AdapterCapability, Span | None], ...],
+) -> tuple[tuple[AdapterCapability, Span | None], ...]:
+    merged = list(left)
+    for entry in right:
+        if entry not in merged:
+            merged.append(entry)
+    return tuple(merged)
+
+
+def _with_requirements_state(
+    state: _AdapterDiagnosticState,
+    directive: RequiresDirectiveStmt | ProfileRequiresEntry,
+) -> _AdapterDiagnosticState:
+    entries = tuple(
+        (cast(AdapterCapability, requirement), directive.requirement_locs.get(requirement))
+        for requirement in directive.requirements
+    )
+    return replace(
+        state,
+        requirements=_merge_requirement_entries(state.requirements, entries),
     )
 
 
@@ -156,6 +187,19 @@ def _adapter_supports(
     except Exception:  # pragma: no cover - keep LSP diagnostics resilient
         capabilities = AdapterCapabilities()
     return capabilities.supports(feature)
+
+
+def _adapter_capability_status(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+) -> bool | None:
+    if state.shortname is None:
+        return None
+    try:
+        capabilities = adapter_capabilities(state.shortname)
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        return None
+    return capabilities.capability_status(feature)
 
 
 def _hook_event_changes(

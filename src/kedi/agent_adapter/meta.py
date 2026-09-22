@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, get_args
 
 from typing_extensions import runtime_checkable
 
@@ -54,6 +54,12 @@ AdapterCapability = Literal[
     "stream_events",
     "hooks",
 ]
+
+
+def adapter_capability_names() -> frozenset[str]:
+    """Return the public requirement vocabulary from the canonical capability type."""
+
+    return frozenset(get_args(AdapterCapability))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -139,6 +145,8 @@ class AdapterCapabilities:
     hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
+    # These unknown capabilities are checked by the adapter before starting remote work.
+    negotiated_capabilities: frozenset[AdapterCapability] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if self.supports_artifacts and not (
@@ -150,7 +158,7 @@ class AdapterCapabilities:
         if self.supports_native_artifacts and not self.supports_artifacts:
             raise ValueError("Native artifact support requires artifact support")
 
-    def supports(self, feature: AdapterCapability) -> bool:
+    def capability_status(self, feature: AdapterCapability) -> bool | None:
         values = {
             "structured_output": self.supports_structured_output,
             "tool_registration": self.supports_tool_registration,
@@ -172,7 +180,10 @@ class AdapterCapabilities:
             "stream_events": self.supports_stream_events,
             "hooks": self.hooks is not None,
         }
-        return bool(values[feature])
+        return values[feature]
+
+    def supports(self, feature: AdapterCapability) -> bool:
+        return self.capability_status(feature) is True
 
 
 @dataclass(frozen=True, slots=True)

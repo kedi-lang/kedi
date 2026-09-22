@@ -41,6 +41,7 @@ from kedi.api.configuration import (
     _execution_engine,
     _resolve_selection,
 )
+from kedi.agent_adapter import AdapterCapability
 from kedi.api.registration import _auto_type_env, _callable_name, _is_async_callable
 from kedi.api.state import _UNSET, AdapterLike, AgentName, FrameworkAdapterName, P, R, _config_var
 from kedi.artifacts import ArtifactPolicyInput
@@ -271,6 +272,7 @@ def query(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -292,6 +294,7 @@ def query(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -313,6 +316,7 @@ def query(
         system=system,
         effort=effort,
         settings=settings,
+        requires=requires,
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
@@ -355,6 +359,7 @@ def bind(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -377,6 +382,7 @@ def bind(
         system=system,
         effort=effort,
         settings=settings,
+        requires=requires,
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,

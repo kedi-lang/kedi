@@ -49,6 +49,7 @@ from kedi.lang.ast import (
     ProfileMcpEntry,
     ProfileModelEntry,
     ProfileOutputEntry,
+    ProfileRequiresEntry,
     ProfileSettingsEntry,
     ProfileSkillsEntry,
     ProfileSystemEntry,
@@ -58,6 +59,7 @@ from kedi.lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
+    RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
     SettingsDirectiveStmt,
@@ -70,6 +72,7 @@ from kedi.lang.ast import (
     TestCase,
     TestSuite,
     TextSegment,
+    ToolDeclaration,
     TypeDef,
     TypeField,
     UseDirectiveStmt,
@@ -111,6 +114,7 @@ from kedi.lsp.features.directive_help import (
     _profile_hooks_entry_markdown,
     _profile_mcp_entry_markdown,
     _profile_model_entry_markdown,
+    _requires_directive_markdown,
     _profile_settings_entry_markdown,
     _profile_signature_markdown,
     _profile_skills_entry_markdown,
@@ -120,6 +124,7 @@ from kedi.lsp.features.directive_help import (
     _settings_field_markdown,
     _skills_directive_markdown,
     _system_directive_markdown,
+    _tool_declaration_markdown,
     _type_expr_to_str,
     _type_field_annotation,
     _type_signature_markdown,
@@ -395,6 +400,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         best = node
         # Procedure → body + optimize spans + auto spec
         if isinstance(node, ProcedureDef):
+            if node.tool is not None:
+                visit(node.tool)
             for stmt in node.body:
                 visit(stmt)
             if node.auto_spec is not None:
@@ -420,6 +427,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for member in node.skills_members:
                 visit(member)
             for member in node.codemode_members:
+                visit(member)
+            for member in node.requires_members:
                 visit(member)
             for member in node.system_members:
                 visit(member)
@@ -733,6 +742,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _skills_directive_markdown(node)
     if isinstance(node, CodeModeDirectiveStmt):
         return _codemode_directive_markdown(node)
+    if isinstance(node, (RequiresDirectiveStmt, ProfileRequiresEntry)):
+        return _requires_directive_markdown(node)
+    if isinstance(node, ToolDeclaration):
+        return _tool_declaration_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):
