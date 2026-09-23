@@ -68,6 +68,7 @@ from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run, current_agent_run_identity
+from kedi.agent_adapter.model_resolution import resolve_pydantic_model
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
     HistoryProcessorRunner,
@@ -1005,7 +1006,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 self._model_overrides[model] = resolved
             return resolved
         if not is_codex_model_id(model):
-            return normalize_for_pydantic_ai(model)
+            return resolve_pydantic_model(normalize_for_pydantic_ai(model))
         resolved = self._model_overrides.get(model)
         if resolved is None:
             resolved = cast(Model, codex_responses_model(model, adapter="pydantic"))

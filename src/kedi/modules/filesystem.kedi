@@ -3,15 +3,21 @@ import os
 from pathlib import Path
 import shutil
 
-from kedi import ArtifactStream
-from kedi.tool_context import inside_kedi_tool_call
-
 _ROOT = Path.cwd().resolve()
 _MAX_READ_BYTES = 1_000_000
 _MAX_READ_CHARS = 65_536
 _MAX_DIRECTORY_ENTRIES = 1_000
 _WORKSPACE_POLICY_ENV = "KEDI_WORKSPACE_POLICY"
 _WORKSPACE_POLICIES = {"none", "strict"}
+
+def _inside_kedi_tool_call() -> bool:
+    try:
+        from kedi.tool_context import inside_kedi_tool_call
+    except ModuleNotFoundError as exc:
+        if exc.name != "kedi":
+            raise
+        return False
+    return inside_kedi_tool_call()
 
 def _workspace_policy() -> str:
     policy = (os.getenv(_WORKSPACE_POLICY_ENV) or "strict").strip().lower()
@@ -23,7 +29,7 @@ def _workspace_policy() -> str:
     return policy
 
 def _reject_patch(message: str, error_type: type[Exception] = ValueError) -> str:
-    if inside_kedi_tool_call():
+    if _inside_kedi_tool_call():
         return f"Patch rejected; no changes made: {message}. Read the current file and use a unique exact old_text for update."
     raise error_type(message)
 
@@ -100,7 +106,9 @@ def _read_text_chunks(path: Path, *, offset: int, limit: int | None):
             )
     limit = None if max_chars == -1 else max_chars
     chunks = _read_text_chunks(path, offset=offset, limit=limit)
-    if inside_kedi_tool_call():
+    if _inside_kedi_tool_call():
+        from kedi import ArtifactStream
+
         return ArtifactStream.text(chunks)
     return "".join(chunks)
     ```

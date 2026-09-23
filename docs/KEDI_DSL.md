@@ -267,8 +267,18 @@ runtime type and attaches the string as schema/LLM field description metadata wi
 using inline Python. The description must be a single-line string literal inside the
 `Annotated[...]` arguments; standalone string literals are not valid type annotations.
 Adapters that expose JSON schema, such as Pydantic AI and LangChain, pass this metadata
-as the field description. `Annotated[type]` still resolves as `type`, but the LSP warns
-because no description metadata was provided; extra `Annotated[...]` metadata is ignored.
+as the field description. Descriptions inside `list`, `dict`, union, and optional
+annotations describe the corresponding item, value, or union branch:
+
+```kedi
+>> The contributors are [contributors: list[Annotated[str, "Full name of each contributor"]]].
+```
+
+`Annotated[type]` still resolves as `type`, but the LSP warns because no
+description metadata was provided. The description must be the first metadata
+argument you write; metadata inherited from a type alias such as `Probability`
+may precede it. Other string metadata is ignored. Computed Python annotations
+retain non-string Pydantic validation metadata and Jev criteria.
 
 ```kedi
 >> Extract the customer as [name: Annotated[str, "Full customer name"]].
@@ -3288,6 +3298,14 @@ model with `> model:` in an earlier Kedi cell. Calling `load_dotenv()` inside a
 host Python cell changes only its isolated worker process, not the server that
 owns agent adapters; browser Python cannot read the host project's `.env`.
 
+Missing native Pydantic AI provider SDKs are installed on demand in the notebook
+server environment, using only the provider group requested by Pydantic AI.
+Other provider groups are not installed. Existing package versions are preserved,
+and earlier cell statements are never replayed after installation. First use
+requires package-index access; installation failures or dependency conflicts
+surface as cell errors. This behavior is notebook-specific and does not change
+ordinary CLI or Python API model construction.
+
 Use **Secret Manager** in the notebook top bar to configure model names,
 provider credentials, and other environment values without placing them in a
 notebook. It stores values in `~/.kedi/notebook/secrets.json` with user-only
@@ -3326,6 +3344,8 @@ browser mode embedded Python operations are bridged to one persistent Pyodide
 worker. In host mode they are bridged to one persistent worker launched by the
 managed environment's executable, so Python objects remain available to later
 cells without modifying the selected base interpreter.
+The bundled `filesystem` module uses Pyodide's temporary virtual filesystem in
+browser mode and the notebook working directory on disk in host mode.
 
 The browser runtime begins loading when the page opens rather than when the
 first cell is run. Its worker and installed packages remain available for the

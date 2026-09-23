@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from functools import reduce
+from operator import or_
 from types import GenericAlias, UnionType
-from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin
+from typing import Annotated, Any, TypeAlias, Union, cast, get_args, get_origin
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
+from pydantic.fields import FieldInfo
 
 ResolvedKediType: TypeAlias = type | GenericAlias | UnionType
 
@@ -13,11 +16,49 @@ ResolvedKediType: TypeAlias = type | GenericAlias | UnionType
 def annotated_field_metadata(annotation: Any) -> tuple[Any, str | None]:
     """Extract Kedi's description while retaining native validation metadata."""
     if get_origin(annotation) is not Annotated:
-        return annotation, None
+        return _nested_descriptions(annotation), None
     base, *metadata = get_args(annotation)
-    description = metadata[0] if metadata and isinstance(metadata[0], str) else None
+    description = _description(metadata)
     retained = tuple(item for item in metadata if not isinstance(item, str))
+    base = _nested_descriptions(base)
     return (Annotated[(base, *retained)] if retained else base), description
+
+
+def _nested_descriptions(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        base, *metadata = get_args(annotation)
+        base = _nested_descriptions(base)
+        description = _description(metadata)
+        retained = tuple(item for item in metadata if not isinstance(item, str))
+        if description is not None:
+            retained = (*retained, Field(description=description))
+        return Annotated[(base, *retained)] if retained else base
+
+    args = get_args(annotation)
+    if not args:
+        return annotation
+    normalized = tuple(_nested_descriptions(arg) for arg in args)
+    if normalized == args:
+        return annotation
+    if origin in (Union, UnionType):
+        return reduce(or_, normalized) if origin is UnionType else Union[normalized]
+    return origin[normalized[0] if len(normalized) == 1 else normalized]
+
+
+def _description(metadata: list[Any]) -> str | None:
+    # Python flattens Annotated aliases, placing their schema metadata before the description.
+    for index, item in enumerate(metadata):
+        if isinstance(item, str):
+            if all(
+                isinstance(prefix, FieldInfo)
+                or hasattr(prefix, "__get_pydantic_json_schema__")
+                or hasattr(prefix, "__get_pydantic_core_schema__")
+                for prefix in metadata[:index]
+            ):
+                return item
+            break
+    return None
 
 
 def is_resolved_kedi_type(value: object) -> bool:
