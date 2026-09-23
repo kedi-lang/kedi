@@ -32,6 +32,7 @@ from kedi.lang.compiler.control_flow import (
 )
 from kedi.lang.compiler.environment import ScopeFrame
 from kedi.lang.parser import KediParseError
+from kedi.lang.parser.cst_helpers import _template_condition_has_bare_python
 from kedi.lang.parser.cst_to_ast import _Walker
 from kedi.promise import KediPromise
 from kedi.utils import AttrDict
@@ -559,7 +560,7 @@ def test_parse_distinguishes_deterministic_and_template_conditions() -> None:
         """
 > if: `ready`:
   [deterministic] = yes
-> if: `ready`
+> if: <`ready`>
   [classified] = yes
 > loop: `ready`:
   `ready = False`
@@ -580,6 +581,55 @@ def test_parse_distinguishes_deterministic_and_template_conditions() -> None:
     assert deterministic_loop.condition_segments is None
     assert isinstance(classified_loop, ConditionalLoopStmt)
     assert classified_loop.condition_segments is not None
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "> if: `is_ready`",
+        "> if: Foo bar `value` bar baz foo",
+        "> loop: `is_ready`",
+        "> loop: Work remains while `pending`",
+    ],
+)
+def test_template_condition_rejects_bare_inline_python_during_parsing(header: str) -> None:
+    with pytest.raises(KediParseError) as error:
+        parse_program(f"{header}\n  > show: unreachable\n")
+
+    assert "must be wrapped as <`...`>" in error.value.diagnostics[0].message
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("> if: `is_ready`", True),
+        ("> loop: Work remains while `pending`", True),
+        ("> if: <something>", False),
+        ("> if: <`something`>", False),
+        ('> if: <`"escaped \\` delimiter"`>', False),
+        (r"> if: The literal \`marker\` remains text", False),
+        ("ordinary template `value`", False),
+    ],
+)
+def test_bare_condition_python_detection(source: str, expected: bool) -> None:
+    assert _template_condition_has_bare_python(source) is expected
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        "> if: <something>",
+        "> if: <`something`>",
+        "> if: Foobar baz <baz> bar <`bazbaz`>",
+        "> loop: Work remains while <`pending`>",
+    ],
+)
+def test_template_condition_accepts_only_wrapped_dynamic_segments(header: str) -> None:
+    program = parse_program(f"{header}\n  > show: reachable\n")
+
+    condition = program.ordered_toplevel[0]
+    assert isinstance(condition, (IfStmt, ConditionalLoopStmt))
+    assert condition.condition_segments is not None
 
 
 def test_template_condition_preserves_nonterminal_colons_as_text() -> None:
@@ -744,7 +794,7 @@ def test_template_if_renders_native_segments_and_uses_annotated_bool() -> None:
 [city] = Ankara
 [minimum: int] = `5`
 [status] = unknown
-> if: <city> has `len(city)` letters
+> if: <city> has <`len(city)`> letters
   `status = "accepted"`
 > else:
   `status = "rejected"`
@@ -858,7 +908,7 @@ def test_template_conditional_loop_rerenders_claim_each_iteration() -> None:
         parse_program(
             """
 [count: int] = `0`
-> loop: <count> remains below `3`
+> loop: <count> remains below <`3`>
   `count += 1`
 = `count`
 """.lstrip()

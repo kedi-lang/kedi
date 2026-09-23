@@ -617,12 +617,12 @@ def test_python_virtual_document_maps_control_flow_headers_and_bodies() -> None:
 def test_python_virtual_document_maps_template_and_conditional_loop_headers() -> None:
     src = (
         "[city] = Ankara\n"
-        "> if: <city> has `len(city)` letters\n"
+        "> if: <city> has <`len(city)`> letters\n"
         "  [status] = yes\n"
         "[remaining: int] = `2`\n"
         "> loop: `remaining > 0`:\n"
         "  `remaining -= 1`\n"
-        "> loop: <remaining> is below `3`\n"
+        "> loop: <remaining> is below <`3`>\n"
         "  `remaining += 1`\n"
     )
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from lsprotocol import types as lsp
 
 import kedi.lang.ast as kedi_ast
@@ -281,6 +282,23 @@ def test_template_condition_diagnostic_and_control_hover() -> None:
     assert model_loop_hover is not None
     assert "Model-classified loop" in model_loop_hover.contents.value
     assert city_hover is not None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> if: `is_ready`\n  > show: unreachable\n",
+        "> if: Work remains while `pending`\n  > show: unreachable\n",
+        "> loop: `is_ready`\n  > show: unreachable\n",
+        "> loop: Work remains while `pending`\n  > show: unreachable\n",
+    ],
+)
+def test_template_condition_bare_python_reports_wrapped_syntax(source: str) -> None:
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(source, "/tmp/control.kedi")
+
+    assert diagnostics
+    assert diagnostics[0].code == "K-PARSE"
+    assert "must be wrapped as <`...`>" in diagnostics[0].message
 
 
 def test_loop_binder_definition_and_references_respect_nested_shadowing() -> None:

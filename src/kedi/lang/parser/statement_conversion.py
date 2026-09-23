@@ -296,7 +296,11 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
         elif t == "ERROR" or child.is_error:
-            self._error(child, self._parse_error_message(child, "unexpected source at top level"))
+            self._error(
+                child,
+                self._parse_error_message(child, "unexpected source at top level"),
+                code="K-PARSE",
+            )
         else:
             self._error(child, f"unexpected top-level node {t!r}")
 
@@ -602,7 +606,11 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
                 code="K-OPT-EMPTY",
             )
         else:
-            self._error(node, self._parse_error_message(node, f"unexpected statement node {t!r}"))
+            self._error(
+                node,
+                self._parse_error_message(node, f"unexpected statement node {t!r}"),
+                code="K-PARSE",
+            )
         return None
     # Anything else is an unexpected node — surface a diagnostic
     # but keep parsing the rest of the body.

@@ -689,7 +689,8 @@ def _describe_ast_node(node) -> Optional[str]:
             return (
                 "**Model-classified condition** `> if: claim`\n\n"
                 "Renders the claim through Kedi template substitutions and continues only when "
-                "the active adapter establishes it as true."
+                "the active adapter establishes it as true. Python values must use "
+                "``<`expression`>``; bare backticks are reserved for deterministic conditions."
             )
         return (
             "**Conditional branch** ``> if: `condition`:``\n\n"
@@ -713,7 +714,8 @@ def _describe_ast_node(node) -> Optional[str]:
             return (
                 "**Model-classified loop** `> loop: claim`\n\n"
                 "Re-renders and classifies the claim before every iteration. The loop stops when "
-                "the claim cannot be established as true."
+                "the claim cannot be established as true. Python values must use "
+                "``<`expression`>``; bare backticks are reserved for deterministic loops."
             )
         return (
             "**Conditional loop** ``> loop: `condition`:``\n\n"
