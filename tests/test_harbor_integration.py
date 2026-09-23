@@ -447,7 +447,7 @@ def test_terminal_waits_for_background_process_without_stopping_on_timeout(
     terminal: TerminalSession,
 ) -> None:
     process = terminal.start_process(
-        [sys.executable, "-c", "import time; time.sleep(0.15); print('done')"]
+        [sys.executable, "-c", "import sys; sys.stdin.readline(); print('done')"]
     )
     process_id = cast(str, process["process_id"])
 
@@ -456,7 +456,8 @@ def test_terminal_waits_for_background_process_without_stopping_on_timeout(
     assert running["status"] == "running"
     assert "stdout" not in running
 
-    finished = terminal.wait_process(process_id, timeout_seconds=2)
+    terminal.write_process_input(process_id, "continue", append_newline=True)
+    finished = terminal.wait_process(process_id, timeout_seconds=5)
     assert finished["wait_completed"] is True
     assert finished["status"] == "finished"
     assert finished["stdout"] == "done\n"
@@ -773,14 +774,16 @@ def test_terminal_retained_process_has_a_bounded_lifetime(tmp_path: Path) -> Non
     terminal = TerminalSession(
         root=tmp_path,
         records_dir=tmp_path / "records",
-        retained_process_timeout_seconds=0.1,
+        retained_process_timeout_seconds=5,
     )
     process = terminal.start_process([sys.executable, "-c", "import time; time.sleep(30)"])
     process_id = cast(str, process["process_id"])
     try:
         terminal.retain_process(process_id)
         terminal.finish_session()
-        deadline = time.monotonic() + 3
+        managed = terminal._process(process_id)
+        assert managed.retention_deadline_monotonic == managed.started_monotonic + 5
+        deadline = time.monotonic() + 10
         while terminal.process_status(process_id)["status"] == "running":
             assert time.monotonic() < deadline
             time.sleep(0.02)

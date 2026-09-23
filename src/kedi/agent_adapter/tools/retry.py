@@ -6,8 +6,8 @@ import copy
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial, wraps
-from typing import Any, TypeVar, cast, get_type_hints
+from functools import partial, update_wrapper, wraps
+from typing import Any, TypeVar, cast
 
 from kedi.errors import KediExecutionError, KediLoopIterationLimitError
 from kedi.run_budget import RunBudgetExceeded, admit_run_operation
@@ -170,11 +170,8 @@ def with_body_retry(
         if not inspect.isfunction(annotation_source) and not inspect.ismethod(annotation_source):
             annotation_source = annotation_source.__call__
         setattr(wrapped, "__signature__", inspect.signature(fn))
-        setattr(wrapped, "__wrapped__", annotation_source)
-        try:
-            wrapped.__annotations__ = get_type_hints(annotation_source, include_extras=True)
-        except (NameError, TypeError):
-            wrapped.__annotations__ = inspect.get_annotations(annotation_source, eval_str=False)
+        # Preserve deferred annotations too, so another wrapper can copy them on Python 3.14.
+        update_wrapper(wrapped, annotation_source, updated=())
     return cast(Callable[..., T], wrapped)
 
 

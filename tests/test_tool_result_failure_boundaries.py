@@ -39,6 +39,57 @@ def dispatcher(handler: Any) -> HookDispatcher:
     )
 
 
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("invalid_result", [False, True])
+def test_result_failure_observers_follow_the_notification_contract(
+    asynchronous: bool, invalid_result: bool
+) -> None:
+    from kedi.agent_adapter.hooks.tool_wrapper import (
+        dispatch_post_tool_result_failure,
+        dispatch_post_tool_result_failure_sync,
+    )
+
+    events = []
+
+    def first(event):
+        events.append(("first", event))
+        return "invalid" if invalid_result else None
+
+    def second(event):
+        events.append(("second", event))
+
+    chain = HookDispatcher(
+        HookDispatcherSnapshot.compose(
+            AdapterHookSnapshot.empty(),
+            HookSettings(post_tool_result_failure=(first, second)),
+        )
+    )
+    error = ValueError("schema rejected result")
+    tracker = ToolCallTracker("one")
+    tracker.start()
+    tracker.returned(None)
+    record = tracker.result_failed("result_validation")
+
+    def dispatch():
+        args = (ToolSpec(name="body", fn=lambda: None), {}, error, record)
+        kwargs = {"adapter_shortname": "fake", "tool_call_id": "one"}
+        if asynchronous:
+            return asyncio.run(dispatch_post_tool_result_failure(*args, **kwargs))
+        return dispatch_post_tool_result_failure_sync(*args, **kwargs)
+
+    with bind_hook_dispatcher(chain):
+        if invalid_result:
+            with pytest.raises(
+                TypeError, match="post_tool_result_failure handlers must return None"
+            ):
+                dispatch()
+        else:
+            assert dispatch() is None
+    assert [name for name, _ in events] == (["first"] if invalid_result else ["first", "second"])
+    assert events[0][1].record is record
+    assert events[0][1].sequence == 1
+
+
 @pytest.mark.parametrize("callable_object", [False, True])
 def test_partial_tool_preserves_bound_signature_for_both_framework_schemas(
     callable_object: bool,
@@ -102,7 +153,11 @@ def test_async_body_errors_keep_execution_failure_record() -> None:
         assert raised.value.tool_call.execution_state == "raised"
 
 
-def test_pydantic_untracked_post_hook_error_does_not_fabricate_record() -> None:
+@pytest.mark.parametrize("recorded", [False, True])
+@pytest.mark.parametrize("observer_fails", [False, True])
+def test_pydantic_post_hook_errors_preserve_available_records(
+    recorded: bool, observer_fails: bool
+) -> None:
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
@@ -110,10 +165,20 @@ def test_pydantic_untracked_post_hook_error_does_not_fabricate_record() -> None:
     from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
 
     capability = _KediHookCapability(PydanticAdapter(TestModel()))
+    observations = []
+    if recorded:
+        tracker = ToolCallTracker("one")
+        tracker.start()
+        tracker.returned("native")
+        capability._records["one"] = tracker
 
     def observe(event: Any) -> None:
         if isinstance(event, PostToolUseEvent):
             raise RuntimeError("post observer failed")
+        if isinstance(event, PostToolResultFailureEvent):
+            observations.append(event)
+            if observer_fails:
+                raise ValueError("failure observer also failed")
 
     with (
         bind_hook_dispatcher(dispatcher(observe)),
@@ -128,7 +193,18 @@ def test_pydantic_untracked_post_hook_error_does_not_fabricate_record() -> None:
                 result="native",
             )
         )
-    assert raised.value.tool_call is None
+    if recorded:
+        assert raised.value.tool_call.output == "native"
+        assert raised.value.tool_call.failure_stage == "post_hook"
+        assert len(observations) == 1
+    else:
+        assert raised.value.tool_call is None
+        assert not observations
+    if recorded and observer_fails and callable(getattr(raised.value, "add_note", None)):
+        assert "observer raised" in raised.value.__notes__[0]
+    else:
+        assert not getattr(raised.value, "__notes__", ())
+    assert not capability._records
 
 
 @pytest.mark.parametrize("style", ["async", "awaitable", "sync"])
@@ -178,7 +254,10 @@ def test_post_hook_failure_never_repeats_body_and_preserves_original_error(
         assert raised.value.tool_call.output is None
         assert raised.value.tool_call.failure_stage == "post_hook"
         assert len(observations) == 1
-        assert "observer raised" in raised.value.__notes__[0]
+        if callable(getattr(raised.value, "add_note", None)):
+            assert "observer raised" in raised.value.__notes__[0]
+        else:
+            assert not getattr(raised.value, "__notes__", ())
     else:
         assert not observations
 
@@ -391,8 +470,10 @@ def test_pydantic_preserves_returned_evidence_when_framework_validation_fails(
     assert error.tool_call.output_available and error.tool_call.output is None
     assert error.tool_call.failure_stage == "result_validation"
     assert len(events) == 1
-    if observer_fails:
+    if observer_fails and callable(getattr(error, "add_note", None)):
         assert error.__notes__
+    else:
+        assert not getattr(error, "__notes__", ())
 
 
 @dataclass(frozen=True)

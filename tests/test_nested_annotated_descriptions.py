@@ -129,12 +129,14 @@ def test_nested_constraint_without_description_is_preserved() -> None:
 
 
 def test_optional_jev_choice_preserves_criteria_and_instructions() -> None:
+    # Python 3.10 unions hash their members; ChoiceCriteria contains unhashable metadata.
+    # Annotating the nullable type keeps the same schema without hashing that metadata.
     choice = Annotated[
-        Literal["keep", "drop"],
+        Literal["keep", "drop"] | None,
         "Select the matching route",
         ChoiceCriteria({"keep": "Retain it", "drop": "Discard it"}),
     ]
-    schema = PydanticAdapter.type_builder({"route": choice | None}).model_json_schema()
+    schema = PydanticAdapter.type_builder({"route": choice}).model_json_schema()
     plan = build_evaluation_plan(schema)
 
     assert plan.questions[0].instructions == "Select the matching route"
