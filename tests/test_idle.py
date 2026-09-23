@@ -16,6 +16,7 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 import kedi
+from tests.interactive_helpers import inspect_fragment
 import kedi.cli as cli_module
 import kedi.idle as idle_module
 import kedi.idle_input as idle_input_module
@@ -30,7 +31,7 @@ def test_idle_console_persists_native_values_and_uses_repr() -> None:
         console = IdleConsole(session, stdout=stdout, stderr=stderr)
         assert console.prompt == "+++ "
         assert console.push("[value: int] = `40`") is False
-        assert console.push("= `value + 2`") is False
+        assert console.push("> show: `value + 2`") is False
 
     assert stdout.getvalue() == "42\n"
     assert stderr.getvalue() == ""
@@ -46,7 +47,7 @@ def test_idle_console_uses_continuation_prompt_and_preserves_tab_indentation() -
         assert console.push("\t= `value * 2`") is True
         assert console.push("") is False
         assert console.prompt == "+++ "
-        console.push("= `double(4)`")
+        console.push("> show: `double(4)`")
 
     assert stdout.getvalue() == "8\n"
 
@@ -74,7 +75,7 @@ def test_idle_console_executes_explicit_multiline_fragment_once() -> None:
     line_prompts: list[str] = []
     multiline_prompts: list[str] = []
     lines = iter([":multiline", ":exit"])
-    source = "@double(value: int) -> int:\n  = `value * 2`\n\n= `double(4)`"
+    source = "@double(value: int) -> int:\n  = `value * 2`\n\n> show: `double(4)`"
 
     def read_line(prompt: str) -> str:
         line_prompts.append(prompt)
@@ -170,8 +171,8 @@ def test_idle_console_multiline_command_validates_usage() -> None:
 @pytest.mark.parametrize(
     "source, expected",
     [
-        ("= `1`", False),
-        ("= `1`\n", True),
+        ("> show: `1`", False),
+        ("> show: `1`\n", True),
         ("@value() -> int:\n", False),
         ("\n", True),
     ],
@@ -321,7 +322,7 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
 
     tab_buffer = Buffer()
     force_buffer = Buffer()
-    submit_buffer = Buffer("= `1`\n")
+    submit_buffer = Buffer("> show: `1`\n")
     continue_buffer = Buffer("@value() -> int:\n")
     bindings = prompt_input._multiline_bindings.bindings
     bindings[0].handler(SimpleNamespace(current_buffer=tab_buffer))
@@ -341,7 +342,7 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
 def test_multiline_input_preserves_bracketed_paste_until_explicit_submission(
     monkeypatch: Any,
 ) -> None:
-    source = "@double(value: int) -> int:\n\t= `value * 2`\n\n= `double(4)`"
+    source = "@double(value: int) -> int:\n\t= `value * 2`\n\n> show: `double(4)`"
 
     with create_pipe_input() as pipe_input:
         monkeypatch.setattr(
@@ -408,7 +409,7 @@ def test_highlighted_line_input_preserves_unicode_backspace_and_delete(
         "> profile: helper:",
         "```",
         "~Person(",
-        "= `sum(",
+        "> show: `sum(",
         "> use: \\",
     ],
 )
@@ -440,13 +441,13 @@ def test_idle_console_renders_parse_execution_and_generic_errors() -> None:
     with kedi.interactive() as session:
         console = IdleConsole(session, stdout=StringIO(), stderr=stderr)
         console.push("@")
-        console.push("= `1 / 0`")
+        console.push("> show: `1 / 0`")
 
     class BrokenSession:
         def execute(self, _source: str) -> None:
             raise ValueError("broken backend")
 
-    IdleConsole(BrokenSession(), stdout=StringIO(), stderr=stderr).push("= broken")  # type: ignore[arg-type]
+    IdleConsole(BrokenSession(), stdout=StringIO(), stderr=stderr).push("> show: broken")  # type: ignore[arg-type]
 
     output = stderr.getvalue()
     assert "unexpected" in output
@@ -463,7 +464,7 @@ def test_idle_console_handles_keyboard_interrupt_from_execution() -> None:
     stderr = StringIO()
     console = IdleConsole(InterruptedSession(), stdout=StringIO(), stderr=stderr)  # type: ignore[arg-type]
 
-    assert console.push("= interrupted") is False
+    assert console.push("> show: interrupted") is False
     assert console.exit_requested is True
     assert stderr.getvalue() == ""
 
@@ -546,7 +547,7 @@ def test_idle_console_exit_command_stops_interaction() -> None:
 
     assert console.push(" :exit ") is False
     assert console.exit_requested is True
-    assert console.push("= ignored") is False
+    assert console.push("> show: ignored") is False
 
 
 @pytest.mark.parametrize("source", ["exit()", "quit()"])
@@ -602,7 +603,7 @@ def test_idle_console_show_is_repl_only_expression_shorthand() -> None:
 
     assert console.push(":show <value>") is False
 
-    assert seen == ["= <value>"]
+    assert seen == ["> show: <value>"]
     assert stdout.getvalue() == "'rendered'\n"
     assert stderr.getvalue() == ""
 
@@ -678,7 +679,7 @@ def test_idle_console_propagates_system_exit_from_kedi_execution() -> None:
     )
 
     with pytest.raises(SystemExit) as info:
-        console.push("= `exit_now()`")
+        console.push("> show: `exit_now()`")
     assert info.value.code == 7
 
 
@@ -715,7 +716,7 @@ def test_idle_readline_history_is_loaded_configured_and_saved(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     history = tmp_path / "history"
-    history.write_text("= `1`\n", encoding="utf-8")
+    history.write_text("> show: `1`\n", encoding="utf-8")
     calls: list[tuple[str, object]] = []
 
     class Readline:
@@ -805,7 +806,7 @@ def test_idle_readline_tolerates_unwritable_history(tmp_path: Path, monkeypatch:
 
 
 def test_prompt_toolkit_uses_existing_readline_history(monkeypatch: Any) -> None:
-    entries = ["= `1`", "@value():\n  = `2`"]
+    entries = ["> show: `1`", "@value():\n  = `2`"]
 
     class Readline:
         @staticmethod
@@ -823,7 +824,7 @@ def test_prompt_toolkit_uses_existing_readline_history(monkeypatch: Any) -> None
     monkeypatch.setitem(sys.modules, "readline", Readline)
     history = idle_input_module.ReadlineHistory()
 
-    assert history.load_history_strings() == ["@value():\n  = `2`", "= `1`"]
+    assert history.load_history_strings() == ["@value():\n  = `2`", "> show: `1`"]
     history.store_string("> if: `True`:\n  = done")
     assert entries[-1] == "> if: `True`:\n  = done"
 
@@ -991,7 +992,7 @@ def test_run_idle_record_and_load_round_trip_real_session(
     )
 
     with kedi.load_session(snapshot) as restored:
-        assert restored.execute("= `value`") == 42
+        assert inspect_fragment(restored, "[inspection_value: Any] = `value`") == 42
 
 
 def test_run_idle_records_before_propagating_real_system_exit(
@@ -1013,7 +1014,7 @@ def test_run_idle_records_before_propagating_real_system_exit(
 
     assert info.value.code == 5
     with kedi.load_session(snapshot) as restored:
-        assert restored.execute("= `42`") == 42
+        assert inspect_fragment(restored, "[inspection_value: Any] = `42`") == 42
 
 
 def test_run_idle_records_after_prompt_keyboard_interrupt(
@@ -1038,7 +1039,7 @@ def test_run_idle_records_after_prompt_keyboard_interrupt(
         == 0
     )
     with kedi.load_session(snapshot) as restored:
-        assert restored.execute("= `42`") == 42
+        assert inspect_fragment(restored, "[inspection_value: Any] = `42`") == 42
 
 
 def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
@@ -1128,7 +1129,7 @@ def test_cli_idle_renders_snapshot_load_failure(monkeypatch: Any) -> None:
     "arguments, message",
     [
         (["--idle", "program.kedi"], "does not accept SOURCE"),
-        (["--idle", "-c", "= done"], "does not accept SOURCE"),
+        (["--idle", "-c", "> show: done"], "does not accept SOURCE"),
         (["--idle", "--test"], "cannot be combined"),
         (["--idle", "--eval"], "cannot be combined"),
         (["--idle", "--optimize"], "cannot be combined"),

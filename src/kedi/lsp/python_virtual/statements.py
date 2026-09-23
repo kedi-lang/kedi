@@ -24,6 +24,7 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     Span,
     Stmt,
     TemplateBlock,
@@ -188,6 +189,8 @@ def _emit_statements(
             for line in stmt.lines:
                 _emit_segments(builder, cursor, line, scope, indent)
         elif isinstance(stmt, TemplateLine):
+            _emit_segments(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, ShowStmt):
             _emit_segments(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, ReturnStmt):
             _emit_return(builder, cursor, stmt, scope, indent)
@@ -500,9 +503,12 @@ def _emit_return(
             if region.kind == "fenced":
                 builder.add_mapped_region(region, indent)
             else:
-                _emit_inline_expression_stub(builder, region, indent)
+                builder.add(f"{indent}return (")
+                builder.add_mapped_region(region, indent + "    ")
+                builder.add(f"{indent})")
         return
     _emit_segments(builder, cursor, stmt, scope, indent)
+    builder.add(f"{indent}return cast(Any, _kedi_placeholder())")
 
 
 def _emit_segments(

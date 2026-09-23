@@ -62,6 +62,7 @@ from kedi.lang.ast import (
     RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
@@ -555,7 +556,7 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for seg in node.segments:
                 visit(seg)
             return
-        if isinstance(node, ReturnStmt):
+        if isinstance(node, (ReturnStmt, ShowStmt)):
             for seg in node.segments:
                 visit(seg)
             return
@@ -608,7 +609,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
     if package is not None:
         visit(package)
     toplevel_return = prog.toplevel_return if hasattr(prog, "toplevel_return") else None
-    if toplevel_return is not None:
+    if toplevel_return is not None and not any(
+        item is toplevel_return for item in ordered_toplevel
+    ):
         visit(toplevel_return)
     if isinstance(prog, ProgramWithValidation):
         for s in prog.tests or []:
@@ -673,7 +676,9 @@ def _describe_ast_node(node) -> Optional[str]:
             "The Python block result updates the nearest visible Kedi binding."
         )
     if isinstance(node, ReturnStmt):
-        return "**Return**\n\nFinal value emitted by this procedure or top-level program."
+        return "**Return**\n\nEnds this procedure or regular program invocation immediately."
+    if isinstance(node, ShowStmt):
+        return "**Display** `> show:`\n\nDisplays a value once and continues execution without returning."
     if isinstance(node, ReturnBlockStmt):
         return (
             "**Python return**\n\n"

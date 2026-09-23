@@ -107,7 +107,7 @@ def _execute_top_level_sequence(
                         body,
                     )
             if result is not _NO_TOP_LEVEL_RESULT:
-                last_result = result
+                return result
             continue
         if isinstance(item, LoopStmt):
             with loop_trace(self.rt, item):
@@ -125,16 +125,17 @@ def _execute_top_level_sequence(
                             )
                             records.append((iteration_env, iteration_state))
                         if result is not _NO_TOP_LEVEL_RESULT:
-                            last_result = result
+                            return result
 
                 if item.map_body is not None:
                     frames = [record[0] for record in records]
+                    results: list[Any] = [_NO_TOP_LEVEL_RESULT] * len(frames)
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_state = records[index]
                         with active_scope(self.rt, frame):
                             with block_agent_profile_scope(map_state.active_profile):
-                                self._execute_top_level_sequence(
+                                results[index] = self._execute_top_level_sequence(
                                     prepared,
                                     frame,
                                     map_state,
@@ -142,6 +143,9 @@ def _execute_top_level_sequence(
                                 )
 
                     run_map_continuations(self.rt, item, frames, run_map)
+                    for result in results:
+                        if result is not _NO_TOP_LEVEL_RESULT:
+                            return result
             continue
         if isinstance(item, ConditionalLoopStmt):
             completed_iterations = 0
@@ -162,7 +166,7 @@ def _execute_top_level_sequence(
                         )
                     completed_iterations += 1
                     if result is not _NO_TOP_LEVEL_RESULT:
-                        last_result = result
+                        return result
             continue
         if isinstance(item, ProcedureDef):
             if not item.auto_spec and not item.ai_prompt:
@@ -294,12 +298,10 @@ def _execute_top_level_sequence(
             )
         if isinstance(item, ReturnStmt):
             with block_agent_profile_scope(state.active_profile):
-                last_result = self.stmt_compiler.compile_return(item)(**env)
-            continue
+                return self.stmt_compiler.compile_return(item)(**env)
         if isinstance(item, ReturnBlockStmt):
             with block_agent_profile_scope(state.active_profile):
-                last_result = self.stmt_compiler.compile_return_block(item, env)
-            continue
+                return self.stmt_compiler.compile_return_block(item, env)
         with block_agent_profile_scope(state.active_profile):
             self.executor.execute_single_statement(item, env, is_toplevel=True)
 

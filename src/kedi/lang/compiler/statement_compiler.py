@@ -48,6 +48,7 @@ from ..ast import (
     RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     Stmt,
@@ -181,6 +182,14 @@ class StatementCompiler:
                 return rendered
 
         return _fn
+
+    def execute_show(self, stmt: ShowStmt, env: dict[str, Any]) -> None:
+        """Render once and use the executor's existing output destination."""
+        with self.rt.trace_frame(KediTraceFrame(kind="show", label="show", span=stmt.loc)):
+            text = render_expression(self.rt, stmt.segments, env, context="show")
+            self.rt.executor.evaluate_inline(
+                self.rt, "print(__kedi_display_text)", {"__kedi_display_text": text}
+            )
 
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
@@ -387,7 +396,7 @@ class StatementExecutor:
         self.compiler = StatementCompiler(rt)
 
     def execute(self, proc: ProcedureDef, closure_env: dict[str, Any]) -> Any:
-        """Execute procedure body statements and return the last return value."""
+        """Execute procedure statements until the first evaluated return."""
         from .type_system import pop_type_env, push_type_env
 
         last_return: Any = None
@@ -474,7 +483,7 @@ class StatementExecutor:
                     profile_registry,
                 )
             if result is not _NO_RETURN:
-                last_return = result
+                return result, active, adapter_selection_kind
 
         return last_return, active, adapter_selection_kind
 
@@ -636,16 +645,17 @@ class StatementExecutor:
                                 (iteration_env, iteration_active, iteration_adapter_kind)
                             )
                         if result is not _NO_RETURN:
-                            last_return = result
+                            return result
 
                 if stmt.map_body is not None:
                     frames = [record[0] for record in records]
+                    results: list[Any] = [_NO_RETURN] * len(frames)
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_active, map_adapter_kind = records[index]
                         with active_scope(self.rt, frame):
                             with block_agent_profile_scope(map_active):
-                                self._execute_block(
+                                results[index], _, _ = self._execute_block(
                                     stmt.map_body or [],
                                     proc,
                                     frame,
@@ -658,6 +668,9 @@ class StatementExecutor:
                                 )
 
                     run_map_continuations(self.rt, stmt, frames, run_map)
+                    for result in results:
+                        if result is not _NO_RETURN:
+                            return result
             return last_return
 
         if isinstance(stmt, ConditionalLoopStmt):
@@ -680,8 +693,12 @@ class StatementExecutor:
                         )
                     completed_iterations += 1
                     if result is not _NO_RETURN:
-                        conditional_last_return = result
+                        return result
             return conditional_last_return
+
+        if isinstance(stmt, ShowStmt):
+            self.compiler.execute_show(stmt, closure_env)
+            return _NO_RETURN
 
         if isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**closure_env)
@@ -764,7 +781,10 @@ class StatementExecutor:
         """Execute a single statement (for top-level execution)."""
         from ..ast import ProcDefStmt
 
-        if isinstance(stmt, TemplateBlock):
+        if isinstance(stmt, ShowStmt):
+            self.compiler.execute_show(stmt, env)
+
+        elif isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**env)
             self._sync_env(env)
 

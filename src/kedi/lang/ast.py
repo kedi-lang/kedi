@@ -219,6 +219,13 @@ class RawInvokeStmt(Stmt):
 
 
 @dataclass
+class ShowStmt(Stmt):
+    """Display an expression without changing the invocation result."""
+
+    segments: Expr = field(default_factory=list)
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 

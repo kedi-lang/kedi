@@ -16,6 +16,7 @@ import pytest
 from pydantic import BaseModel
 
 import kedi
+from tests.interactive_helpers import inspect_fragment
 from kedi._interactive import persistence, state
 from kedi._interactive.persistence import (
     SessionDumpError,
@@ -485,15 +486,15 @@ def test_session_load_restores_binding_types_and_python_writeback_contracts(
 
     with kedi.load_session(snapshot) as restored:
         restored.execute("[count] := `2`")
-        assert restored.execute("= `count`") == 2
+        assert inspect_fragment(restored, "[inspection_value: Any] = `count`") == 2
 
         with pytest.raises(TypeError, match="annotated type"):
             restored.execute('[count] := `"invalid"`')
-        assert restored.execute("= `count`") == 2
+        assert inspect_fragment(restored, "[inspection_value: Any] = `count`") == 2
 
         with pytest.raises(TypeError, match="annotated type"):
             restored.execute('`count = "invalid"`')
-        assert restored.execute("= `count`") == 2
+        assert inspect_fragment(restored, "[inspection_value: Any] = `count`") == 2
 
 
 def test_session_load_preserves_runtime_owned_reserved_binding(tmp_path: Path) -> None:
@@ -502,7 +503,7 @@ def test_session_load_preserves_runtime_owned_reserved_binding(tmp_path: Path) -
         session.dump(snapshot)
 
     with kedi.load_session(snapshot) as restored:
-        assert restored.execute("= `args`") == ["value"]
+        assert inspect_fragment(restored, "[inspection_value: Any] = `args`") == ["value"]
         with pytest.raises(ValueError, match="Reserved identifier"):
             restored.execute('[args] := `["replacement"]`')
 

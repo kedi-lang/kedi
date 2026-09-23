@@ -9,6 +9,7 @@ from typing import Annotated, Any, get_args, get_origin
 import pytest
 
 import kedi
+from tests.interactive_helpers import inspect_fragment
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import current_block_agent_profile
@@ -907,12 +908,12 @@ def test_conditional_loop_false_first_runs_zero_iterations() -> None:
     assert runtime.run_main() == 0
 
 
-def test_top_level_conditional_loop_keeps_the_last_body_return() -> None:
+def test_top_level_conditional_loop_exits_on_first_body_return() -> None:
     runtime = compile_program(
         parse_program("[count: int] = `0`\n> loop: `count < 2`:\n  `count += 1`\n  = `count`\n")
     )
 
-    assert runtime.run_main() == 2
+    assert runtime.run_main() == 1
 
 
 def test_interactive_python_api_forwards_conditional_loop_limit() -> None:
@@ -920,7 +921,7 @@ def test_interactive_python_api_forwards_conditional_loop_limit() -> None:
         session.execute("[count: int] = `0`\n")
         with pytest.raises(kedi.LoopIterationLimitError, match=r"iteration limit \(1\)"):
             session.execute("> loop: `True`:\n  `count += 1`\n")
-        assert session.execute("= `count`\n") == 1
+        assert inspect_fragment(session, "[inspection_value: Any] = `count`\n") == 1
 
 
 def test_procedure_if_else_and_nested_if() -> None:
@@ -1050,7 +1051,10 @@ def test_incremental_session_preserves_control_flow_writes() -> None:
         session.execute("> loop [n]: `range(1, 4)`:\n  `total += n`\n")
         session.execute("[status] = unknown\n")
         session.execute('> if: `total == 6`:\n  `status = "passed"`\n')
-        assert session.execute("= `total, status`\n") == (6, "passed")
+        assert inspect_fragment(session, "[inspection_value: Any] = `total, status`\n") == (
+            6,
+            "passed",
+        )
 
 
 def test_control_flow_headers_are_evaluated_once() -> None:
@@ -1166,7 +1170,7 @@ def test_top_level_return_inside_selected_branch_is_preserved() -> None:
     assert runtime.run_main() == 42
 
 
-def test_procedure_range_result_and_unselected_if_without_else() -> None:
+def test_procedure_range_return_exits_before_later_condition() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -1181,7 +1185,7 @@ def test_procedure_range_result_and_unselected_if_without_else() -> None:
         )
     )
 
-    assert runtime.run_main() == "item-2"
+    assert runtime.run_main() == "item-0"
 
 
 def test_procedure_range_without_body_return_runs_every_iteration() -> None:
@@ -1225,7 +1229,7 @@ def test_procedure_map_and_both_assignment_forms_share_iteration_scope() -> None
     assert runtime.run_main() == [2, 4, 6, 12]
 
 
-def test_procedure_conditional_loop_re_evaluates_and_keeps_last_return() -> None:
+def test_procedure_conditional_loop_exits_before_second_iteration() -> None:
     runtime = compile_program(
         parse_program(
             "@count_to_two() -> int:\n"
@@ -1238,7 +1242,7 @@ def test_procedure_conditional_loop_re_evaluates_and_keeps_last_return() -> None
         )
     )
 
-    assert runtime.run_main() == 2
+    assert runtime.run_main() == 1
 
 
 def test_procedure_conditional_loop_continues_without_body_return() -> None:
@@ -1272,7 +1276,7 @@ def test_top_level_control_flow_registers_nested_procedure_and_type() -> None:
     assert runtime.run_main() == 7
 
 
-def test_top_level_range_keeps_last_template_return_and_false_if_is_a_noop() -> None:
+def test_top_level_range_returns_first_value_and_false_if_is_a_noop() -> None:
     runtime = compile_program(
         parse_program(
             """
@@ -1284,7 +1288,7 @@ def test_top_level_range_keeps_last_template_return_and_false_if_is_a_noop() -> 
         )
     )
 
-    assert runtime.run_main() == "item-2"
+    assert runtime.run_main() == "item-0"
 
 
 def test_loop_binding_handles_current_env_identity_and_manual_binder_removal() -> None:

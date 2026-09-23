@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 
 import kedi
+from tests.interactive_helpers import inspect_fragment
 from kedi._interactive import persistence as persistence_module
 from kedi.agent_adapter import ConversationState
 from kedi.errors import KediExecutionError
@@ -24,7 +25,7 @@ def test_interactive_session_persists_native_values_without_replay() -> None:
 
     with kedi.interactive(env={"record": record}) as session:
         assert session.execute("`record('first')`\n[value: int] = `40`") is None
-        assert session.execute("= `value + 2`") == 42
+        assert inspect_fragment(session, "[inspection_value: Any] = `value + 2`") == 42
 
     assert calls == ["first"]
 
@@ -39,11 +40,15 @@ def test_interactive_session_persists_map_aggregate_without_iteration_locals() -
             "  `results.append((item, scaled))`\n"
         )
 
-        assert session.execute("= `sorted(results)`") == [(1, 11), (2, 22), (3, 33)]
+        assert inspect_fragment(session, "[inspection_value: Any] = `sorted(results)`") == [
+            (1, 11),
+            (2, 22),
+            (3, 33),
+        ]
         with pytest.raises(KediExecutionError, match="item"):
-            session.execute("= `item`")
+            inspect_fragment(session, "[inspection_value: Any] = `item`")
         with pytest.raises(KediExecutionError, match="scaled"):
-            session.execute("= `scaled`")
+            inspect_fragment(session, "[inspection_value: Any] = `scaled`")
 
 
 def test_interactive_session_procedure_reads_latest_global_value() -> None:
@@ -58,7 +63,7 @@ def test_interactive_session_procedure_reads_latest_global_value() -> None:
         )
         session.execute("[value: int] = `2`")
 
-        assert session.execute("= `read_value()`") == 2
+        assert inspect_fragment(session, "[inspection_value: Any] = `read_value()`") == 2
 
 
 def test_interactive_session_preludes_share_live_python_globals() -> None:
@@ -75,13 +80,15 @@ def read_value():
         )
         session.execute("```\nvalue = 2\n```")
 
-        assert session.execute("= `read_value()`") == 2
+        assert inspect_fragment(session, "[inspection_value: Any] = `read_value()`") == 2
 
 
 def test_interactive_session_preserves_types_across_fragments() -> None:
     with kedi.interactive() as session:
         session.execute("~Person(name: str, age: int)")
-        person = cast(Any, session.execute('= `Person(name="Ada", age=42)`'))
+        person = cast(
+            Any, inspect_fragment(session, '[inspection_value: Any] = `Person(name="Ada", age=42)`')
+        )
 
     assert person.name == "Ada"
     assert person.age == 42
@@ -98,7 +105,12 @@ def test_interactive_session_preserves_profile_selection_across_fragments() -> N
         )
         session.execute("> use: retained")
 
-        assert session.execute(">> The result is [answer].\n= `answer`") == "answer-value"
+        assert (
+            inspect_fragment(
+                session, ">> The result is [answer].\n[inspection_value: str] = `answer`"
+            )
+            == "answer-value"
+        )
 
     assert adapter.model_calls == ["retained-model"]
 
@@ -108,7 +120,12 @@ def test_interactive_session_preserves_direct_model_selection_across_fragments()
     with kedi.interactive(adapter=adapter) as session:
         session.execute("> model: retained-model")
 
-        assert session.execute(">> The result is [answer].\n= `answer`") == "answer-value"
+        assert (
+            inspect_fragment(
+                session, ">> The result is [answer].\n[inspection_value: str] = `answer`"
+            )
+            == "answer-value"
+        )
 
     assert adapter.model_calls == ["retained-model"]
 
@@ -116,9 +133,9 @@ def test_interactive_session_preserves_direct_model_selection_across_fragments()
 def test_interactive_session_keeps_prior_state_after_failure() -> None:
     with kedi.interactive() as session:
         with pytest.raises(KediExecutionError, match="division by zero"):
-            session.execute("[saved: int] = `7`\n= `1 / 0`")
+            inspect_fragment(session, "[saved: int] = `7`\n[inspection_value: Any] = `1 / 0`")
 
-        assert session.execute("= `saved`") == 7
+        assert inspect_fragment(session, "[inspection_value: Any] = `saved`") == 7
 
 
 def test_interactive_session_traceback_retains_defining_fragment() -> None:
@@ -131,7 +148,7 @@ def test_interactive_session_traceback_retains_defining_fragment() -> None:
         )
 
         with pytest.raises(KediExecutionError) as info:
-            session.execute("= `explode()`")
+            inspect_fragment(session, "[inspection_value: Any] = `explode()`")
 
     rendered = str(info.value)
     assert 'File "<interactive:1>", line 2' in rendered
@@ -152,8 +169,18 @@ def test_interactive_session_resolves_relative_import_once(tmp_path: Path) -> No
     )
 
     with kedi.interactive(cwd=tmp_path, env={"mark": mark}) as session:
-        assert session.execute("> import: helper\n= `imported_value`") == 1
-        assert session.execute("> import: helper\n= `imported_value`") == 1
+        assert (
+            inspect_fragment(
+                session, "> import: helper\n[inspection_value: Any] = `imported_value`"
+            )
+            == 1
+        )
+        assert (
+            inspect_fragment(
+                session, "> import: helper\n[inspection_value: Any] = `imported_value`"
+            )
+            == 1
+        )
 
     assert calls == 1
 
@@ -169,8 +196,9 @@ def test_interactive_session_resolves_import_relative_to_explicit_source_name(
     )
 
     with kedi.interactive(cwd=tmp_path / "elsewhere") as session:
-        result = session.execute(
-            "> import: helper\n= `answer`",
+        result = inspect_fragment(
+            session,
+            "> import: helper\n[inspection_value: Any] = `answer`",
             source_name=str(package / "cell.kedi"),
         )
 
@@ -180,7 +208,7 @@ def test_interactive_session_resolves_import_relative_to_explicit_source_name(
 def test_interactive_session_uses_active_python_api_context() -> None:
     with kedi.context(env={"base": 40}):
         with kedi.interactive(env={"increment": 2}) as session:
-            assert session.execute("= `base + increment`") == 42
+            assert inspect_fragment(session, "[inspection_value: Any] = `base + increment`") == 42
 
 
 def test_interactive_session_accepts_supplied_conversation_and_parallel_engine() -> None:
@@ -191,7 +219,7 @@ def test_interactive_session_accepts_supplied_conversation_and_parallel_engine()
         max_workers=1,
     )
     try:
-        assert session.execute("= `42`") == 42
+        assert inspect_fragment(session, "[inspection_value: Any] = `42`") == 42
         assert session._compiler.rt._engine.parallel is True
     finally:
         session.close()
@@ -205,8 +233,8 @@ def test_interactive_sessions_are_isolated() -> None:
         first.execute("[value: int] = `1`")
         second.execute("[value: int] = `2`")
 
-        assert first.execute("= `value`") == 1
-        assert second.execute("= `value`") == 2
+        assert inspect_fragment(first, "[inspection_value: Any] = `value`") == 1
+        assert inspect_fragment(second, "[inspection_value: Any] = `value`") == 2
     finally:
         first.close()
         second.close()
@@ -216,7 +244,7 @@ def test_interactive_session_rejects_reentry_and_execution_after_close() -> None
     session: kedi.InteractiveSession
 
     def reenter() -> Any:
-        return session.execute("= `1`")
+        return inspect_fragment(session, "[inspection_value: Any] = `1`")
 
     session = kedi.interactive(env={"reenter": reenter})
     with pytest.raises(KediExecutionError, match="already executing"):
@@ -225,7 +253,7 @@ def test_interactive_session_rejects_reentry_and_execution_after_close() -> None
     session.close()
     session.close()
     with pytest.raises(RuntimeError, match="closed"):
-        session.execute("= `1`")
+        inspect_fragment(session, "[inspection_value: Any] = `1`")
     with pytest.raises(RuntimeError, match="closed"):
         session.__enter__()
 
@@ -233,9 +261,11 @@ def test_interactive_session_rejects_reentry_and_execution_after_close() -> None
 def test_interactive_session_rejects_duplicate_sources_and_close_while_executing() -> None:
     session = kedi.interactive()
     try:
-        assert session.execute("= `1`", source_name="cell.kedi") == 1
+        assert (
+            inspect_fragment(session, "[inspection_value: Any] = `1`", source_name="cell.kedi") == 1
+        )
         with pytest.raises(ValueError, match="already used"):
-            session.execute("= `2`", source_name="cell.kedi")
+            inspect_fragment(session, "[inspection_value: Any] = `2`", source_name="cell.kedi")
 
         session._execute_lock.acquire()
         try:
@@ -262,7 +292,7 @@ def test_fragment_preparation_tolerates_missing_source_map(tmp_path: Path) -> No
     compiler.initialize_fragments()
 
     prepared = compiler.prepare_fragment(
-        parse_program("= `42`"),
+        parse_program("> show: `42`"),
         import_source_path=tmp_path / "cell.kedi",
     )
 
@@ -316,8 +346,11 @@ def test_interactive_session_dump_load_restores_values_types_and_procedures_with
         assert session.dump(snapshot) == snapshot
 
     with kedi.InteractiveSession.load(snapshot) as restored:
-        assert restored.execute("= `double(value) + person.age`") == 42
-        assert restored.execute('= `data["items"]`') == [1, 2, 3]
+        assert (
+            inspect_fragment(restored, "[inspection_value: Any] = `double(value) + person.age`")
+            == 42
+        )
+        assert inspect_fragment(restored, '[inspection_value: Any] = `data["items"]`') == [1, 2, 3]
 
     assert marker.read_text(encoding="utf-8") == "executed\n"
 
@@ -330,7 +363,12 @@ def test_interactive_session_dump_load_preserves_active_profile(tmp_path: Path) 
 
     adapter = MockAdapter()
     with kedi.InteractiveSession.load(snapshot, adapter=adapter) as restored:
-        assert restored.execute(">> The result is [answer].\n= `answer`") == "answer-value"
+        assert (
+            inspect_fragment(
+                restored, ">> The result is [answer].\n[inspection_value: str] = `answer`"
+            )
+            == "answer-value"
+        )
 
     assert adapter.model_calls == ["retained-model"]
 
@@ -351,7 +389,7 @@ def test_public_session_factories_round_trip_with_custom_session_type(
         session_type=CustomInteractiveSession,
     ) as restored:
         assert type(restored) is CustomInteractiveSession
-        assert restored.execute("= `value`") == 42
+        assert inspect_fragment(restored, "[inspection_value: Any] = `value`") == 42
 
     load = cast(Any, kedi.load_session)
     with pytest.raises(TypeError, match="positional"):
@@ -364,11 +402,11 @@ def test_interactive_session_dump_preserves_state_committed_before_execution_fai
     snapshot = tmp_path / "failed-fragment.kedi-state"
     with kedi.interactive() as session:
         with pytest.raises(KediExecutionError, match="division by zero"):
-            session.execute("[saved: int] = `7`\n= `1 / 0`")
+            inspect_fragment(session, "[saved: int] = `7`\n[inspection_value: Any] = `1 / 0`")
         session.dump(snapshot)
 
     with kedi.InteractiveSession.load(snapshot) as restored:
-        assert restored.execute("= `saved`") == 7
+        assert inspect_fragment(restored, "[inspection_value: Any] = `saved`") == 7
 
 
 def test_interactive_session_dump_rejects_all_unsupported_state_atomically(

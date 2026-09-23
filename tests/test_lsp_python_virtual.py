@@ -273,12 +273,12 @@ def test_nested_python_scope_inherits_outer_kedi_locals() -> None:
     assert "def __kedi_scope_inner" not in virtual["text"]
 
 
-def test_python_virtual_document_emits_pass_for_empty_toplevel_scope():
+def test_python_virtual_document_emits_literal_toplevel_return():
     src = "= done\n"
     virtual = compute_python_virtual_document(src, "/tmp/x.kedi")
     ast.parse(virtual["text"])
     assert "def __kedi_toplevel__() -> Any:" in virtual["text"]
-    assert "    pass" in virtual["text"]
+    assert "    return cast(Any, _kedi_placeholder())" in virtual["text"]
 
 
 def test_python_virtual_document_includes_prelude_symbols_for_toplevel_scope():
@@ -946,7 +946,7 @@ def test_python_virtual_document_imports_typing_symbols_used_in_backtick_types()
 def test_python_virtual_document_preserves_annotated_metadata():
     src = (
         '~Person(name: Annotated[str, "Full name"])\n'
-        "= ok\n\n"
+        "> show: ok\n\n"
         '@p(name: Annotated[str, "Full name"]) -> str:\n'
         "  = <name>\n"
     )

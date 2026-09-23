@@ -56,10 +56,15 @@ def compute_diagnostics(
     source_path: Optional[str],
     *,
     codemode_preload_warning_threshold: int = 5,
+    interactive: bool = False,
 ) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
         prog = parse_program(source, source_path=source_path)
+        if interactive:
+            from kedi.lang.parser.control_flow_validation import validate_control_flow
+
+            validate_control_flow(prog, interactive=True)
         out = _missing_import_diagnostics(prog)
         out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))

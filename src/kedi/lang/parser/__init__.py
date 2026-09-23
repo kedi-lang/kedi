@@ -22,6 +22,7 @@ from ...telemetry import capture_enabled, record_histogram, runtime_span
 from ...telemetry.naming import program_name
 from ..ast import Program, ProgramWithValidation
 from .cst_to_ast import cst_to_ast
+from .control_flow_validation import validate_control_flow
 from .diagnostics import KediDiagnostic, KediParseError
 from .parser import parse as _parse
 
@@ -84,6 +85,7 @@ def parse_program(
                 source_path=source_path,
                 source_map=resolved_source_map,
             )
+            validate_control_flow(program)
         except KediParseError as exc:
             active.set_attribute("error.type", type(exc).__name__)
             active.set_attribute("kedi.parse.error_count", len(exc.diagnostics))
@@ -112,7 +114,10 @@ def parse_program(
             + len(program.exports)
             + int(program.package is not None)
             + int(program.prelude is not None)
-            + int(program.toplevel_return is not None)
+            + int(
+                program.toplevel_return is not None
+                and not any(item is program.toplevel_return for item in program.ordered_toplevel)
+            )
         )
         if isinstance(program, ProgramWithValidation):
             statement_count += len(program.tests) + len(program.evals)

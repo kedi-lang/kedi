@@ -29,6 +29,7 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     Segment,
     Span,
     Stmt,
@@ -274,8 +275,14 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.ordered_toplevel.append(stmt)
         elif t == "return_stmt":
             prog.toplevel_return = self._walk_return_stmt(child)
+            prog.ordered_toplevel.append(prog.toplevel_return)
         elif t == "return_block_stmt":
             prog.toplevel_return = self._walk_return_block_stmt(child)
+            prog.ordered_toplevel.append(prog.toplevel_return)
+        elif t == "show_stmt":
+            stmt = _walk_show_stmt(self, child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
         elif t == "backtick_line_stmt":
             stmt = self._walk_backtick_line_stmt(child)
             prog.toplevel_body.append(stmt)
@@ -564,6 +571,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_raw_invoke_stmt(node)
     if t == "return_stmt":
         return self._walk_return_stmt(node)
+    if t == "show_stmt":
+        return _walk_show_stmt(self, node)
     if t == "return_block_stmt":
         return self._walk_return_block_stmt(node)
     if t == "python_block":
@@ -894,6 +903,23 @@ def _walk_raw_invoke_stmt(self: _Walker, node: Node) -> RawInvokeStmt:
         type_expr=type_expr,
         loc=self._span(node),
     )
+
+
+def _walk_show_stmt(self: _Walker, node: Node) -> ShowStmt:
+    value_node = _field(node, "value")
+    native_expr = self._sole_inline_python_expr(value_node)
+    segments: list[Segment]
+    if native_expr is not None:
+        segments = [
+            PythonExprNativeSegment(
+                code=self._walk_inline_python_expr(native_expr), loc=self._span(native_expr)
+            )
+        ]
+    else:
+        segments = self._walk_template_expr(value_node) if value_node is not None else []
+    if any(isinstance(segment, OutputSegment) for segment in segments):
+        self._error(node, "Show cannot declare output captures", code="kedi.show_capture")
+    return ShowStmt(segments=segments, loc=self._span(node))
 
 
 def _walk_return_stmt(self: _Walker, node: Node) -> Union[ReturnStmt, ReturnBlockStmt]:

@@ -895,17 +895,17 @@ def test_collect_loop_binder_refs_respects_nested_shadowing_and_map_scope() -> N
     source = (
         "[outside] = value\n"
         "> loop [item]: `[1]`:\n"
-        "  = <item>\n"
+        "  > show: <item>\n"
         "  > if: `True`:\n"
-        "    = <item>\n"
+        "    > show: <item>\n"
         "  > loop [item]: `[2]`:\n"
-        "    = <item>\n"
+        "    > show: <item>\n"
         "  > loop [other]: `[3]`:\n"
-        "    = <item>\n"
+        "    > show: <item>\n"
         "  > loop: `False`:\n"
-        "    = <item>\n"
+        "    > show: <item>\n"
         "> map:\n"
-        "  = <item>\n"
+        "  > show: <item>\n"
         "@worker() -> str:\n"
         "  > loop [worker_item]: `[1]`:\n"
         "    = <worker_item>\n"
@@ -925,11 +925,11 @@ def test_collect_loop_binder_refs_respects_nested_shadowing_and_map_scope() -> N
     lsp_navigation_module._collect_loop_binder_refs(program, target, refs)
 
     assert [(span.start_line, span.start_col) for span in refs] == [
-        (3, 6),
-        (5, 8),
-        (9, 8),
-        (11, 8),
-        (13, 6),
+        (3, 12),
+        (5, 14),
+        (9, 14),
+        (11, 14),
+        (13, 12),
     ]
 
     worker_loop = program.procedures[0].body[0]

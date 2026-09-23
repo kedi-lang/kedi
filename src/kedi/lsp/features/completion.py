@@ -53,6 +53,7 @@ _DIRECTIVE_COMPLETIONS = (
     "package",
     "profile",
     "requires",
+    "show",
     "settings",
     "skills",
     "subagent",
@@ -115,7 +116,7 @@ def compute_completion(
             )
             for name in _TOOL_SETTING_FIELDS
         ]
-    if before_cursor.lstrip().startswith(">"):
+    if before_cursor.lstrip().startswith(">") and not before_cursor.lstrip().startswith("> show:"):
         in_procedure_header = _inside_direct_procedure_body(source, pos)
         return [
             lsp.CompletionItem(

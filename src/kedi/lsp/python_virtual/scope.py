@@ -16,6 +16,7 @@ from kedi.lang.ast import (
     PythonBlock,
     RawInvokeStmt,
     ReturnStmt,
+    ShowStmt,
     Span,
     Stmt,
     TemplateBlock,
@@ -445,7 +446,7 @@ def _stmt_segments(stmt: Stmt) -> list:
         return list(stmt.segments)
     if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
-    if isinstance(stmt, ReturnStmt):
+    if isinstance(stmt, (ReturnStmt, ShowStmt)):
         return list(stmt.segments)
     if isinstance(stmt, (VariableInitStmt, AssignmentStmt)):
         return list(stmt.expr)

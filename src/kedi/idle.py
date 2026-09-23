@@ -114,7 +114,7 @@ class IdleConsole:
             if not expression:
                 self._stderr.write("Usage: :show <expression>\n")
                 return False
-            self._execute(f"= {expression}")
+            self._execute(f"> show: {expression}")
             return False
         if _requires_continuation(line):
             self._buffer.append(line)
