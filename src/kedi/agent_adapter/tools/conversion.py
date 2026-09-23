@@ -90,11 +90,7 @@ def python_callable_tool_spec(name: str, fn: Callable[..., Any]) -> ToolSpec:
 
     retry_policy = tool_retry_policy(fn)
     callable_body, logical_return = callable_with_logical_stream_return(tool_body(fn))
-    tool_fn = (
-        with_body_retry(callable_body, retry_policy, isolate_arguments=True)
-        if retry_policy.retries
-        else callable_body
-    )
+    tool_fn = with_body_retry(callable_body, retry_policy, isolate_arguments=True)
     description = getattr(fn, "__kedi_tool_description__", None)
     if not isinstance(description, str):
         description = _callable_description(fn)
@@ -204,11 +200,7 @@ def _make_tool_function(
         with kedi_tool_call_context():
             return _invoke_procedure_body(rt, validated_body, kwargs)
 
-    retried_body = (
-        with_body_retry(_procedure_body, policy, isolate_arguments=True)
-        if policy.retries
-        else _procedure_body
-    )
+    retried_body = with_body_retry(_procedure_body, policy, isolate_arguments=True)
 
     @wraps(proc_fn)
     def _tool_function(**kwargs: Any) -> Any:

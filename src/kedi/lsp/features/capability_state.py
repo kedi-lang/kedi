@@ -213,6 +213,7 @@ def _hook_event_changes(
             "pre_tool_use",
             "post_tool_use",
             "post_tool_use_failure",
+            "post_tool_result_failure",
         }:
             continue
         event = cast(HookCapabilityEvent, field.name)

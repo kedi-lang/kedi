@@ -40,6 +40,7 @@ from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import normalize_codemode_settings
 from kedi.agent_profile.settings import pydantic_model_settings
 from kedi.effort import pydantic_effort_value
+from kedi.run_budget import assert_run_budget_supported, current_run_budget
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter
@@ -154,6 +155,18 @@ def _run_kwargs(
         )
     )
     caller_toolsets = _toolset_sequence(run_kwargs.get("toolsets"))
+    budget = current_run_budget()
+    assert_run_budget_supported(
+        self,
+        opaque_tools=bool(caller_toolsets)
+        or bool(self.active_profile.mcp_servers)
+        or any((tool.metadata or {}).get("source") == "external" for tool in tool_specs)
+        or bool(
+            budget is not None
+            and budget.has_limit("tool_attempt")
+            and self._has_native_approval_tools()
+        ),
+    )
     if caller_toolsets or toolsets:
         run_kwargs["toolsets"] = [
             *(
@@ -178,9 +191,17 @@ def _run_kwargs(
         )
     approval_resolution = self.active_approval_resolution
     dispatcher = current_hook_dispatcher()
-    if dispatcher is not None and any(
-        dispatcher.handlers_for(event)
-        for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+    if any((tool.metadata or {}).get("source") != "external" for tool in tool_specs) or (
+        dispatcher is not None
+        and any(
+            dispatcher.handlers_for(event)
+            for event in (
+                "pre_tool_use",
+                "post_tool_use",
+                "post_tool_use_failure",
+                "post_tool_result_failure",
+            )
+        )
     ):
         capabilities = _with_capability(
             capabilities,

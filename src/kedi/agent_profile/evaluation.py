@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from ..errors import KediExecutionError
 from .definitions import ProfileDefinition, ProfileUseMember
@@ -10,6 +10,22 @@ from .profile import AgentProfile
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
     from kedi.lang.ast import UseDirectiveStmt
+
+
+_State = TypeVar("_State")
+
+
+def apply_profile_members(
+    definition: ProfileDefinition,
+    initial: _State,
+    apply_member: Callable[[_State, Any], _State],
+    apply_use: Callable[[_State, ProfileUseMember], _State],
+) -> _State:
+    """Shared profile precedence for runtime evaluation and symbolic inspection."""
+    state = initial
+    for member in definition.members:
+        state = apply_use(state, member) if member.kind == "use" else apply_member(state, member)
+    return state
 
 
 def eval_profile_definition(
@@ -35,22 +51,22 @@ def eval_profile_definition(
     effective_procedures = (
         available_procedures if available_procedures is not None else set(rt._procedures)
     )
-    profile = AgentProfile.empty()
-    for member in definition.members:
-        if member.kind == "use":
-            profile = profile.merge(
-                _eval_profile_use_member(
-                    rt,
-                    definition,
-                    member,
-                    env,
-                    registry=effective_registry,
-                    available_procedures=effective_procedures,
-                    active_definitions=active_definitions,
-                )
+    profile = apply_profile_members(
+        definition,
+        AgentProfile.empty(),
+        lambda current, member: current.merge(_member_to_patch(rt, member, env)),
+        lambda current, member: current.merge(
+            _eval_profile_use_member(
+                rt,
+                definition,
+                member,
+                env,
+                registry=effective_registry,
+                available_procedures=effective_procedures,
+                active_definitions=active_definitions,
             )
-        else:
-            profile = profile.merge(_member_to_patch(rt, member, env))
+        ),
+    )
     return profile.merge(
         AgentProfile(
             name=definition.name,

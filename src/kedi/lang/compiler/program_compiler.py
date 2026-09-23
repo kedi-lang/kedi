@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kedi.agent_profile import AgentProfile
+from kedi.run_budget import RunBudget
 from kedi.agent_profile.compile import (
     build_profile_registry,
     capture_procedure_profiles,
@@ -66,6 +67,7 @@ def compile_program(
     subagent_state_path: str | Path | None = None,
     conversation_state: ConversationState | None = None,
     loop_iteration_limit: int = 10_000,
+    run_budget: RunBudget | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -106,6 +108,7 @@ def compile_program(
         subagent_state_path=subagent_state_path,
         conversation_state=conversation_state,
         loop_iteration_limit=loop_iteration_limit,
+        run_budget=run_budget,
     )
     with runtime_span(
         f"compile {display_name}",
@@ -140,6 +143,7 @@ class ProgramCompiler:
         subagent_state_path: str | Path | None = None,
         conversation_state: ConversationState | None = None,
         loop_iteration_limit: int = 10_000,
+        run_budget: RunBudget | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -165,6 +169,7 @@ class ProgramCompiler:
             subagent_state_path=subagent_state_path,
             conversation_state=conversation_state,
             loop_iteration_limit=loop_iteration_limit,
+            run_budget=run_budget,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)

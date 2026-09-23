@@ -48,6 +48,7 @@ from kedi.lang.parser.cst_helpers import (
     _src_text,
 )
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
+from kedi.lang.parser.control_flow_validation import contains_output_captures
 
 if TYPE_CHECKING:
     from kedi.lang.parser.cst_to_ast import _Walker
@@ -172,6 +173,10 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.ordered_toplevel.append(stmt)
         elif t == "requires_directive":
             stmt = self._walk_requires_directive(child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t == "budget_directive":
+            stmt = self._walk_budget_directive(child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
         elif t == "system_directive":
@@ -544,6 +549,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_codemode_directive(node)
     if t == "requires_directive":
         return self._walk_requires_directive(node)
+    if t == "budget_directive":
+        return self._walk_budget_directive(node)
     if t == "system_directive":
         return self._walk_system_directive(node)
     if t == "mcp_directive":
@@ -925,7 +932,7 @@ def _walk_show_stmt(self: _Walker, node: Node) -> ShowStmt:
         ]
     else:
         segments = self._walk_template_expr(value_node) if value_node is not None else []
-    if any(isinstance(segment, OutputSegment) for segment in segments):
+    if contains_output_captures(segments):
         self._error(node, "Show cannot declare output captures", code="kedi.show_capture")
     return ShowStmt(segments=segments, loc=self._span(node))
 

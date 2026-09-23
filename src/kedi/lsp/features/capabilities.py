@@ -17,6 +17,7 @@ from kedi.lang.ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
+    BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     HistoryDirectiveStmt,
@@ -28,6 +29,7 @@ from kedi.lang.ast import (
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    ProfileBudgetEntry,
     RequiresDirectiveStmt,
     Program,
     ProgramWithValidation,
@@ -109,6 +111,8 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
+    for member in profile.budget_members:
+        diagnostics.extend(_budget_capability_diagnostics(state, member))
     for member in profile.codemode_members:
         if member.enabled:
             diagnostics.extend(
@@ -273,6 +277,9 @@ def _scan_capability_scope(
             )
             diagnostics.extend(_explicit_requirement_diagnostics(active, entries=entries))
             continue
+        if isinstance(stmt, BudgetDirectiveStmt):
+            diagnostics.extend(_budget_capability_diagnostics(active, stmt))
+            continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
                 _unsupported_capability_diagnostics(
@@ -412,6 +419,32 @@ def _scan_capability_scope(
                 )
             )
             continue
+    return diagnostics
+
+
+def _budget_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    directive: BudgetDirectiveStmt | ProfileBudgetEntry,
+) -> list[lsp.Diagnostic]:
+    loc = directive.loc
+    if loc is None:
+        return []
+    diagnostics: list[lsp.Diagnostic] = []
+    for field, capability in (
+        ("request_limit", "request_budget"),
+        ("tool_attempt_limit", "tool_attempt_budget"),
+    ):
+        if getattr(directive, field) is not None:
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    state,
+                    cast(AdapterCapability, capability),
+                    [loc],
+                    f"{field} run budget",
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-ADAPTER-BUDGET",
+                )
+            )
     return diagnostics
 
 

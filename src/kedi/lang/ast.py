@@ -374,6 +374,12 @@ class RequiresDirectiveStmt(Stmt):
 
 
 @dataclass
+class BudgetDirectiveStmt(Stmt):
+    request_limit: int | None = None
+    tool_attempt_limit: int | None = None
+
+
+@dataclass
 class SystemDirectiveStmt(Stmt):
     plain_value: Optional[str] = None
     backtick_code: Optional[str] = None
@@ -450,6 +456,7 @@ class ProfileDefStmt(Stmt):
     skills_members: List["ProfileSkillsEntry"] = field(default_factory=list)
     codemode_members: List["ProfileCodeModeEntry"] = field(default_factory=list)
     requires_members: List["ProfileRequiresEntry"] = field(default_factory=list)
+    budget_members: List["ProfileBudgetEntry"] = field(default_factory=list)
     system_members: List["ProfileSystemEntry"] = field(default_factory=list)
     mcp_members: List["ProfileMcpEntry"] = field(default_factory=list)
     settings_members: List["ProfileSettingsEntry"] = field(default_factory=list)
@@ -534,6 +541,13 @@ class ProfileCodeModeEntry:
 class ProfileRequiresEntry:
     requirements: List[str] = field(default_factory=list)
     requirement_locs: dict[str, Span] = field(default_factory=dict, repr=False, compare=False)
+    loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class ProfileBudgetEntry:
+    request_limit: int | None = None
+    tool_attempt_limit: int | None = None
     loc: Optional[Span] = field(default=None, repr=False, compare=False)
 
 

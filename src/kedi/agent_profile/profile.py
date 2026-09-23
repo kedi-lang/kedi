@@ -9,6 +9,7 @@ from ..agent_adapter.meta import AdapterCapability, AgentAdapterKind
 from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy
 from ..effort import EffortValue
+from ..run_budget import RunBudget
 from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
 from .connection import A2AConnection
@@ -58,6 +59,7 @@ class AgentProfile:
     requirement_origins: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
     output_type: Any | None = None
     artifacts: ArtifactPolicy | None = None
+    run_budget: RunBudget | None = None
 
     def __post_init__(self) -> None:
         tool_reason_enabled(self.settings)
@@ -171,6 +173,12 @@ class AgentProfile:
                 other.artifacts
                 if self.artifacts is None
                 else self.artifacts.overlay(other.artifacts)
+            )
+        if other.run_budget is not None:
+            updates["run_budget"] = (
+                other.run_budget
+                if self.run_budget is None
+                else self.run_budget.overlay(other.run_budget)
             )
         if not updates:
             return self

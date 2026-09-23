@@ -167,6 +167,7 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
         get_procedure_def,
         get_procedure_metadata,
     )
+    from kedi.run_budget import RunBudget, run_budget_scope
 
     sig = inspect.signature(fn)
     bound = sig.bind_partial(*args)
@@ -174,6 +175,11 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
     local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
     metadata = get_procedure_metadata(fn)
     procedure_def = get_procedure_def(fn)
+    procedure_budget = (
+        getattr(procedure_def.captured_agent_profile, "run_budget", None)
+        if procedure_def is not None and procedure_def.captured_agent_profile is not None
+        else None
+    )
     proc_span = procedure_def.loc if procedure_def is not None else None
     proc_name = metadata.name if metadata is not None else callable_display_name(fn)
     should_trace_procedure = not (fn is self._main and metadata is None)
@@ -195,12 +201,16 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
 
     from kedi.telemetry import runtime_span
 
-    with runtime_span(
-        f"call {telemetry_name}",
-        "call_procedure",
-        attributes=attributes,
-        metric_attributes={"procedure_kind": procedure_kind},
-    ) as active:
+    with (
+        run_budget_scope(self.run_budget if depth == 0 else None),
+        run_budget_scope(procedure_budget or RunBudget()),
+        runtime_span(
+            f"call {telemetry_name}",
+            "call_procedure",
+            attributes=attributes,
+            metric_attributes={"procedure_kind": procedure_kind},
+        ) as active,
+    ):
         depth_token = self._invoke_depth.set(depth + 1)
         request_budget_token = None
         invocation_token = None

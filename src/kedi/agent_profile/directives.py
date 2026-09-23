@@ -10,6 +10,7 @@ from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
 from .compaction import CompactionSettings, normalize_compaction_settings
 from .connection import A2AAuthConfig, A2AConnection
@@ -17,6 +18,7 @@ from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileBudgetMember,
     ProfileArtifactsMember,
     ProfileCodeModeMember,
     ProfileEffortMember,
@@ -45,6 +47,7 @@ if TYPE_CHECKING:
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
         ApprovalDirectiveStmt,
+        BudgetDirectiveStmt,
         ArtifactsDirectiveStmt,
         ArtifactsField,
         CodeModeDirectiveStmt,
@@ -631,6 +634,20 @@ def eval_requires_directive(
     )
 
 
+def eval_budget_directive(
+    rt: KediRuntime,
+    stmt: BudgetDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    del rt, env
+    return AgentProfile(
+        run_budget=RunBudget(
+            request_limit=stmt.request_limit,
+            tool_attempt_limit=stmt.tool_attempt_limit,
+        )
+    )
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -644,6 +661,7 @@ def _member_to_patch(
         | ProfileSkillsMember
         | ProfileCodeModeMember
         | ProfileRequiresMember
+        | ProfileBudgetMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -745,6 +763,13 @@ def _member_to_patch(
                 for requirement in requirements
                 if requirement in member.requirement_locs
             },
+        )
+    if member.kind == "budget":
+        return AgentProfile(
+            run_budget=RunBudget(
+                request_limit=member.request_limit,
+                tool_attempt_limit=member.tool_attempt_limit,
+            )
         )
     if member.kind == "system":
         system = eval_system_value(

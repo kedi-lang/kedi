@@ -1159,6 +1159,33 @@ def test_diagnostics_warn_for_nested_scoped_unsupported_capabilities(
     assert any(diag.range.start.line == 36 for diag in diags)
 
 
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "> if: `True`:\n{body}",
+        "> if: `False`:\n  > show: skipped\n> else:\n{body}",
+        "> loop [item]: `range(1)`:\n{body}",
+        "> loop: `False`:\n{body}",
+        "> loop [item]: `range(1)`:\n  > show: <item>\n> map:\n{body}",
+    ],
+)
+def test_codemode_preload_warning_in_top_level_control_flow(wrapper) -> None:
+    body = "  > codemode:\n    preload_tools:\n" + "".join(
+        f"      tool{index}\n" for index in range(6)
+    )
+    source = wrapper.format(body=body)
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(source, "main.kedi")
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "kedi.codemode.excessive_preload"
+    assert source.splitlines()[diagnostics[0].range.start.line].strip() == "preload_tools:"
+    assert (
+        lsp_diagnostics_module.compute_diagnostics(
+            source, "main.kedi", codemode_preload_warning_threshold=6
+        )
+        == []
+    )
+
+
 def test_codemode_preload_warning_counts_unique_static_names_and_is_configurable() -> None:
     five = """
 > codemode:

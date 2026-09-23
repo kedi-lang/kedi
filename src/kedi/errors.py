@@ -82,6 +82,7 @@ class KediExecutionError(RuntimeError):
     frames: tuple[KediTraceFrame, ...] = field(default_factory=tuple)
     python_traces: tuple[KediPythonTrace, ...] = field(default_factory=tuple)
     original: BaseException | None = None
+    tool_call: Any | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         RuntimeError.__init__(self, self.message)
@@ -190,6 +191,7 @@ def build_execution_error(
         frames=frames,
         python_traces=python_traces,
         original=exc,
+        tool_call=getattr(exc, "tool_call", None),
     )
 
 

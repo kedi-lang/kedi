@@ -108,6 +108,13 @@ def _run_conversation_call(
         resume_state: Mapping[str, Any] | None = None,
         conversation_scope: Any = None,
     ) -> Any:
+        from kedi.run_budget import assert_run_budget_supported
+
+        assert_run_budget_supported(
+            adapter,
+            opaque_tools=bool(profile.mcp_servers)
+            or any((tool.metadata or {}).get("source") == "external" for tool in tools),
+        )
         record_conversation_assets(
             prompt=request.prompt.content,
             instructions=request.instruction_text,

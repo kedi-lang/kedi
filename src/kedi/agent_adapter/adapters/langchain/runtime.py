@@ -22,6 +22,7 @@ from kedi.agent_adapter.history_processing import (
     rebase_history_cache_key,
 )
 from kedi.agent_adapter.invocation import InvocationUsage
+from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries
 
 
 @dataclass
@@ -127,6 +128,8 @@ class LangChainRunMiddleware(AgentMiddleware):
                     changed = True
         if changed:
             request = request.override(model=model, model_settings=settings)
+        assert_no_hidden_model_retries(model)
+        admit_run_operation("request")
         response = await handler(request)
         if state is not None:
             usage = _langchain_invocation_usage({"messages": response.result})

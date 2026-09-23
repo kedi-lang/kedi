@@ -32,6 +32,7 @@ _DIRECTIVE_COMPLETIONS = (
     "approval",
     "artifacts",
     "auto",
+    "budget",
     "case",
     "codemode",
     "data",
@@ -104,6 +105,17 @@ def compute_completion(
                 sort_text=f"0-{name}",
             )
             for name in sorted(CODEMODE_SETTING_FIELDS)
+        ]
+    if _inside_directive_block(source, pos, "budget"):
+        return [
+            lsp.CompletionItem(
+                label=name,
+                kind=lsp.CompletionItemKind.Property,
+                insert_text=f"{name}: ",
+                detail="Run budget ceiling",
+                sort_text=f"0-{name}",
+            )
+            for name in ("request_limit", "tool_attempt_limit")
         ]
     if _inside_directive_block(source, pos, "tool"):
         return [

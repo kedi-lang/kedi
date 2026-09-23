@@ -52,6 +52,7 @@ from kedi.lsp.features.symbols import (
     _location_for_span,
     _profile_use_entry_spans,
     _use_single_target_span,
+    _use_tool_entry_spans,
     _validation_procedure_span,
     _validation_suites,
 )
@@ -114,9 +115,11 @@ def _find_all_references(
                     procedure_candidates.append(suite_span)
         for p in _all_procedures(prog):
             for stmt in _iter_control_statements(p.body):
+                _collect_use_refs(prog, stmt, sym.name, procedure_candidates)
                 for seg in _segments_of(stmt):
                     _collect_call_refs(seg, sym.name, procedure_candidates)
-        for stmt in _iter_control_statements(prog.toplevel_body):
+        for stmt in _iter_control_statements(prog.ordered_toplevel or prog.toplevel_body):
+            _collect_use_refs(prog, stmt, sym.name, procedure_candidates)
             for seg in _segments_of(stmt):
                 _collect_call_refs(seg, sym.name, procedure_candidates)
         if prog.toplevel_return is not None:
@@ -237,6 +240,19 @@ def _reference_resolves_to(
         and target.kind in parameter_kinds
     )
     return same_kind and resolved.declaration_span == target.declaration_span
+
+
+def _collect_use_refs(
+    prog: Program | ProgramWithValidation, stmt: object, name: str, out: list[Span]
+) -> None:
+    if not isinstance(stmt, UseDirectiveStmt):
+        return
+    if stmt.tool_names:
+        out.extend(span for target, span in _use_tool_entry_spans(prog, stmt) if target == name)
+    elif stmt.name == name:
+        span = _use_single_target_span(prog, stmt)
+        if span is not None:
+            out.append(span)
 
 
 def _collect_literal_arg_refs(arg: CallArg, name: str, out: List[Span], collector) -> None:

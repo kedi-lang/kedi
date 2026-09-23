@@ -6,10 +6,13 @@ import copy
 import inspect
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import wraps
-from typing import Any, TypeVar, cast
+from functools import partial, wraps
+from typing import Any, TypeVar, cast, get_type_hints
 
 from kedi.errors import KediExecutionError, KediLoopIterationLimitError
+from kedi.run_budget import RunBudgetExceeded, admit_run_operation
+
+from .records import attach_tool_call, current_tool_call_tracker
 
 _TOOL_RETRY_POLICY_ATTR = "__kedi_tool_retry_policy__"
 _TOOL_BODY_ATTR = "__kedi_tool_body__"
@@ -108,12 +111,22 @@ def with_body_retry(
                 call_args, call_kwargs = (
                     _fresh_arguments(frozen) if frozen is not None else (args, kwargs)
                 )
+                admit_run_operation("tool_attempt")
+                tracker = current_tool_call_tracker()
+                if tracker is not None:
+                    tracker.start()
                 try:
-                    return await cast(Any, fn)(*call_args, **call_kwargs)
+                    result = await cast(Any, fn)(*call_args, **call_kwargs)
                 except BaseException as exc:
+                    if tracker is not None:
+                        attach_tool_call(exc, tracker.body_failed(exc))
                     if attempt >= policy.retries or not policy.matches(exc):
                         raise
                     attempt += 1
+                else:
+                    if tracker is not None:
+                        tracker.returned(result)
+                    return result
 
         wrapped = async_retry
     else:
@@ -127,18 +140,89 @@ def with_body_retry(
                 call_args, call_kwargs = (
                     _fresh_arguments(frozen) if frozen is not None else (args, kwargs)
                 )
+                admit_run_operation("tool_attempt")
+                tracker = current_tool_call_tracker()
+                if tracker is not None:
+                    tracker.start()
                 try:
-                    return fn(*call_args, **call_kwargs)
+                    result = fn(*call_args, **call_kwargs)
                 except BaseException as exc:
+                    if tracker is not None:
+                        attach_tool_call(exc, tracker.body_failed(exc))
                     if attempt >= policy.retries or not policy.matches(exc):
                         raise
                     attempt += 1
+                else:
+                    if inspect.isawaitable(result):
+                        return _await_sync_body(
+                            fn, args, kwargs, frozen, policy, tracker, result, attempt
+                        )
+                    if tracker is not None:
+                        tracker.returned(result)
+                    return result
 
         wrapped = sync_retry
 
     setattr(wrapped, _TOOL_RETRY_POLICY_ATTR, policy)
     setattr(wrapped, _TOOL_BODY_ATTR, fn)
+    if not inspect.isfunction(fn) and not inspect.ismethod(fn):
+        annotation_source = fn.func if isinstance(fn, partial) else fn
+        if not inspect.isfunction(annotation_source) and not inspect.ismethod(annotation_source):
+            annotation_source = annotation_source.__call__
+        setattr(wrapped, "__signature__", inspect.signature(fn))
+        setattr(wrapped, "__wrapped__", annotation_source)
+        try:
+            wrapped.__annotations__ = get_type_hints(annotation_source, include_extras=True)
+        except (NameError, TypeError):
+            wrapped.__annotations__ = inspect.get_annotations(annotation_source, eval_str=False)
     return cast(Callable[..., T], wrapped)
+
+
+async def _await_sync_body(
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    frozen: tuple[tuple[Any, ...], dict[str, Any]] | None,
+    policy: ToolRetryPolicy,
+    tracker: Any,
+    first_result: Any,
+    attempt: int,
+) -> Any:
+    pending = first_result
+    while True:
+        try:
+            resolved = await pending
+        except BaseException as exc:
+            if tracker is not None:
+                attach_tool_call(exc, tracker.body_failed(exc))
+            if attempt >= policy.retries or not policy.matches(exc):
+                raise
+            attempt += 1
+            while True:
+                admit_run_operation("tool_attempt")
+                if tracker is not None:
+                    tracker.start()
+                call_args, call_kwargs = (
+                    _fresh_arguments(frozen) if frozen is not None else (args, kwargs)
+                )
+                try:
+                    pending = fn(*call_args, **call_kwargs)
+                except BaseException as sync_error:
+                    if tracker is not None:
+                        attach_tool_call(sync_error, tracker.body_failed(sync_error))
+                    if attempt >= policy.retries or not policy.matches(sync_error):
+                        raise
+                    attempt += 1
+                    continue
+                if not inspect.isawaitable(pending):
+                    if tracker is not None:
+                        tracker.returned(pending)
+                    return pending
+                break
+        else:
+            if tracker is not None:
+                tracker.returned(resolved)
+            return resolved
 
 
 def _freeze_arguments(
@@ -154,7 +238,7 @@ def _fresh_arguments(
 
 
 def _retry_candidate(exc: BaseException) -> Exception | None:
-    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+    if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit, RunBudgetExceeded)):
         return None
     if isinstance(exc, KediExecutionError):
         from kedi.agent_adapter.hooks.models import HookExecutionError

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from ..ast import (
+    CallSegment,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -16,9 +17,23 @@ from ..ast import (
     ReturnStmt,
     ShowStmt,
     OutputSegment,
+    Segment,
     Span,
 )
+from ..call_arg_access import iter_call_arg_nested
 from .diagnostics import KediDiagnostic, KediParseError
+
+
+def contains_output_captures(segments: Iterable[Segment]) -> bool:
+    """Include captures in literal arguments and nested procedure calls."""
+    for segment in segments:
+        if isinstance(segment, OutputSegment):
+            return True
+        if isinstance(segment, CallSegment) and any(
+            contains_output_captures(iter_call_arg_nested(argument)) for argument in segment.args
+        ):
+            return True
+    return False
 
 
 def validate_control_flow(program: Program, *, interactive: bool = False) -> None:
@@ -67,7 +82,7 @@ def validate_control_flow(program: Program, *, interactive: bool = False) -> Non
                     )
                 terminal = statement
             elif isinstance(statement, ShowStmt):
-                if any(isinstance(segment, OutputSegment) for segment in statement.segments):
+                if contains_output_captures(statement.segments):
                     error(statement, "Show cannot declare output captures", "kedi.show_capture")
             elif isinstance(statement, ProcedureDef):
                 block(statement.body, root=False)

@@ -102,7 +102,9 @@ def _codemode_preload_diagnostics(
     threshold: int,
 ) -> list[lsp.Diagnostic]:
     directives: list[CodeModeDirectiveStmt | object] = [
-        item for item in prog.ordered_toplevel if isinstance(item, CodeModeDirectiveStmt)
+        item
+        for item in _iter_control_statements(prog.ordered_toplevel or prog.toplevel_body)
+        if isinstance(item, CodeModeDirectiveStmt)
     ]
     for procedure in _all_procedures(prog):
         directives.extend(

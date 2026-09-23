@@ -274,7 +274,8 @@ def test_codemode_preload_is_atomic_and_restart_preserves_hydration() -> None:
         session = CodeModeSession(CodeModeLimits(max_hydrated_tools=1))
         session.update_tools([_integer_tool("lookup"), _integer_tool("other")])
 
-        payload = session.preload_tools(tool_names=["lookup"])
+        payload = session.preload_tools(tool_names=["lookup", "lookup"])
+        assert len(payload["tools"]) == 1
         assert payload["tools"][0]["callable_name"] == "lookup"
         assert session.hydrated_names == {"lookup"}
         with pytest.raises(CodeModeHydrationError, match="Unknown"):
@@ -303,6 +304,44 @@ def test_codemode_preload_is_atomic_and_restart_preserves_hydration() -> None:
         await session.close()
 
     asyncio.run(run())
+
+
+def test_codemode_preload_deduplication_preserves_first_occurrence_order() -> None:
+    session = CodeModeSession(CodeModeLimits(max_hydrated_tools=2))
+    session.update_tools([_integer_tool("alpha"), _integer_tool("beta")])
+    payload = session.preload_tools(tool_names=["beta", "alpha", "beta", "alpha"])
+    assert [tool["name"] for tool in payload["tools"]] == ["beta", "alpha"]
+    assert session.hydrated_names == {"alpha", "beta"}
+
+
+def test_native_pydantic_codemode_deduplicates_preloads_before_model_request() -> None:
+    from pydantic_ai import Agent
+    from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeCapability
+
+    model_calls = 0
+
+    def lookup(value: str) -> str:
+        raise AssertionError("Preloading must not execute tools")
+
+    async def respond(_messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        assert isinstance(info.instructions, str)
+        assert info.instructions.count('"name":"lookup"') == 1
+        return ModelResponse(parts=[TextPart("ready")])
+
+    agent = Agent(
+        FunctionModel(respond),
+        tools=[lookup],
+        capabilities=[
+            PydanticCodeModeCapability(
+                limits=CodeModeLimits(max_hydrated_tools=1),
+                preload_tools=("lookup", "lookup"),
+            )
+        ],
+    )
+    assert agent.run_sync("No tool execution required.").output == "ready"
+    assert model_calls == 1
 
 
 def test_codemode_bounds_discovery_payloads_and_validates_limits() -> None:

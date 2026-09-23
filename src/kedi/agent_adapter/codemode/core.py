@@ -23,8 +23,12 @@ from .errors import (
     CodeModeCursorError,
     CodeModeExecutionError,
     CodeModeHydrationError,
+    CodeModeResultError,
 )
 from .telemetry import codemode_span
+from ..tools.records import ToolResultHandoff, defer_tool_handoff
+from kedi.errors import KediExecutionError
+from kedi.run_budget import RunBudgetExceeded
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
 _INVALID_IDENTIFIER = re.compile(r"\W+")
@@ -393,7 +397,9 @@ class CodeModeSession:
             return bounded
 
     def preload_tools(self, *, tool_names: Sequence[str]) -> dict[str, Any]:
-        tools = self._catalog.resolve_exact(tool_names)
+        from kedi.agent_profile.codemode import _normalize_preload_tools
+
+        tools = self._catalog.resolve_exact(_normalize_preload_tools(tool_names))
         hydrated = self._hydrated | {tool.name for tool in tools}
         if len(hydrated) > self.limits.max_hydrated_tools:
             raise CodeModeHydrationError(
@@ -436,6 +442,7 @@ class CodeModeSession:
         call_count = 0
         total_result_bytes = 0
         host_error: Exception | None = None
+        handoffs: list[ToolResultHandoff] = []
 
         async def dispatch(
             tool: CodeModeTool,
@@ -461,19 +468,30 @@ class CodeModeSession:
                     if task is not None:
                         self._active_host_tasks.discard(task)
 
-            async with dispatch_slots, dispatch_gate.enter(sequential=tool.sequential):
-                result = await perform()
-            jsonable, size = _json_boundary_value(result)
-            if size > self.limits.max_tool_result_bytes:
-                raise CodeModeBoundaryError(
-                    f"Tool {tool.name!r} returned {size} bytes; CodeMode allows "
-                    f"{self.limits.max_tool_result_bytes} bytes per nested result"
+            handoff = ToolResultHandoff()
+            handoffs.append(handoff)
+            with defer_tool_handoff(handoff):
+                async with dispatch_slots, dispatch_gate.enter(sequential=tool.sequential):
+                    result = await perform()
+            try:
+                jsonable, size = _json_boundary_value(result)
+                if size > self.limits.max_tool_result_bytes:
+                    raise CodeModeBoundaryError(
+                        f"Tool {tool.name!r} returned {size} bytes; CodeMode allows "
+                        f"{self.limits.max_tool_result_bytes} bytes per nested result"
+                    )
+                total_result_bytes += size
+                if total_result_bytes > self.limits.max_total_tool_result_bytes:
+                    raise CodeModeBoundaryError(
+                        "CodeMode nested tool results exceeded the aggregate byte budget"
+                    )
+            except Exception as exc:
+                error = CodeModeResultError(
+                    f"Tool {tool.name!r} executed successfully but its result could not be "
+                    f"delivered to CodeMode; do not repeat the tool body: {exc}",
                 )
-            total_result_bytes += size
-            if total_result_bytes > self.limits.max_total_tool_result_bytes:
-                raise CodeModeBoundaryError(
-                    "CodeMode nested tool results exceeded the aggregate byte budget"
-                )
+                await handoff.fail(error, "serialization")
+                raise error from exc
             return jsonable
 
         async def call(tool: CodeModeTool, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
@@ -481,7 +499,7 @@ class CodeModeSession:
             try:
                 return await dispatch(tool, args, kwargs)
             except Exception as exc:
-                if host_error is None:
+                if host_error is None or isinstance(exc, (KediExecutionError, CodeModeResultError)):
                     host_error = exc
                 raise
 
@@ -502,21 +520,32 @@ class CodeModeSession:
                 session = await self._get_monty_session()
                 capture = CollectString(max_bytes=self.limits.max_print_bytes)
                 error: str | None = None
+                accepted = False
                 try:
                     result = await session.feed_run(
                         code,
                         external_lookup=external_lookup,
                         print_callback=capture,
                     )
+                    accepted = True
                 except asyncio.CancelledError:
                     await self._cancel_host_tasks()
                     raise
                 except MontyError as exc:
                     await self._cancel_host_tasks()
                     if host_error is not None:
+                        if isinstance(
+                            host_error, (KediExecutionError, RunBudgetExceeded, CodeModeResultError)
+                        ):
+                            raise host_error
                         raise CodeModeExecutionError(str(exc)) from host_error
                     result = None
                     error = str(exc)
+                finally:
+                    # A failed script may have consumed some results, but Monty
+                    # does not acknowledge individual deliveries. Report unknown.
+                    for handoff in handoffs:
+                        handoff.finish(accepted=accepted)
             active.set_attribute("kedi.codemode.execute.nested_calls", call_count)
             active.set_attribute(
                 "kedi.codemode.execute.nested_result_bytes",

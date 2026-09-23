@@ -44,6 +44,7 @@ from kedi.agent_adapter.adapters.pydantic import hooks as _hooks
 from kedi.agent_adapter.adapters.pydantic import messages as _messages
 from kedi.agent_adapter.adapters.pydantic import run_config as _run_config
 from kedi.agent_adapter.adapters.pydantic import tools as _tools
+from kedi.agent_adapter.adapters.pydantic.budget import budget_model
 from kedi.agent_adapter.adapters.pydantic.capabilities import (
     _KediAgentEventCapability,
     _KediDeferredApprovalCapability,
@@ -51,6 +52,7 @@ from kedi.agent_adapter.adapters.pydantic.capabilities import (
 )
 from kedi.agent_adapter.adapters.pydantic.compat import (
     application_toolset_count,
+    effective_model,
     has_application_tools,
     infer_agent_name,
 )
@@ -103,6 +105,7 @@ from kedi.agent_adapter.tools.scope import (
     required_tool_call_scope,
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.run_budget import current_run_budget
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from kedi.agent_profile.settings import (
     KEDI_RUNTIME_SETTING_KEYS,
@@ -145,6 +148,8 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
+        supports_request_budget=True,
+        supports_tool_attempt_budget=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -645,6 +650,10 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     self,
                     cast("Model | str | None", run_kwargs.get("model")),
                 )
+                if current_run_budget() is not None:
+                    run_kwargs["model"] = budget_model(
+                        effective_model(self, cast("Model | str | None", run_kwargs.get("model")))
+                    )
                 async with (
                     _model_responses_turn(selected_model),
                     super().iter(hooked_prompt, **cast(Any, run_kwargs)) as agent_run,
@@ -705,6 +714,10 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                     agent,
                     cast("Model | str | None", run_kwargs.get("model")),
                 )
+                if current_run_budget() is not None:
+                    run_kwargs["model"] = budget_model(
+                        effective_model(agent, cast("Model | str | None", run_kwargs.get("model")))
+                    )
                 # This adapter's native iter() owns the turn when agent is self.
                 model_scope = _model_responses_session if agent is self else _model_responses_turn
                 async with model_scope(selected_model):

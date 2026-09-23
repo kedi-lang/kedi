@@ -51,10 +51,16 @@ from kedi.agent_adapter.hooks import (
     current_hook_dispatcher,
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
+    dispatch_post_tool_result_failure,
     dispatch_pre_tool_use,
     is_tool_execution_interrupted,
 )
+from kedi.agent_adapter.hooks.tool_wrapper import (
+    note_result_observer_failure,
+    defer_result_observation,
+)
 from kedi.agent_adapter.tools.specs import ToolSpec
+from kedi.agent_adapter.tools.records import ToolCallTracker, attach_tool_call, track_tool_call
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter
@@ -65,6 +71,7 @@ class _KediHookCapability(AbstractCapability[Any]):
 
     def __init__(self, adapter: PydanticAdapter[Any, Any]) -> None:
         self.adapter = adapter
+        self._records: dict[str, ToolCallTracker] = {}
 
     def get_ordering(self) -> CapabilityOrdering:
         return CapabilityOrdering(
@@ -119,12 +126,17 @@ class _KediHookCapability(AbstractCapability[Any]):
         del ctx
         self.adapter._remember_hook_started(call.tool_call_id)
         try:
-            return await handler(args)
+            with track_tool_call(call.tool_call_id) as tracker:
+                self._records[call.tool_call_id] = tracker
+                result = await handler(args)
+                tracker.ready()
+                return result
         except (
             ApprovalRequired,
             CallDeferred,
             SkipToolExecution,
         ):
+            self._records.pop(call.tool_call_id, None)
             self.adapter._consume_hook_started(call.tool_call_id)
             raise
         except (
@@ -170,6 +182,29 @@ class _KediHookCapability(AbstractCapability[Any]):
             consume=True,
         )
         duration = self.adapter._consume_hook_started(call.tool_call_id)
+        tracker = self._records.pop(call.tool_call_id, None)
+        record = tracker.latest if tracker is not None else None
+        if record is not None:
+            assert tracker is not None
+            if record.execution_state == "returned":
+                stage = getattr(error, "kedi_result_failure_stage", "result_validation")
+                record = tracker.result_failed(stage) or record
+                attach_tool_call(error, record)
+                try:
+                    await dispatch_post_tool_result_failure(
+                        tool,
+                        final_arguments,
+                        error,
+                        record,
+                        adapter_shortname=self.adapter.shortname,
+                        tool_call_id=call.tool_call_id,
+                        origin=origin,
+                        native_tool_name=call.tool_name,
+                    )
+                except BaseException as observer_error:
+                    note_result_observer_failure(error, observer_error)
+                return
+            attach_tool_call(error, record)
         await dispatch_post_tool_use_failure(
             tool,
             final_arguments,
@@ -203,15 +238,41 @@ class _KediHookCapability(AbstractCapability[Any]):
             consume=True,
         )
         self.adapter._consume_hook_started(call.tool_call_id)
-        await dispatch_post_tool_use(
-            tool,
-            final_arguments,
-            result,
-            adapter_shortname=self.adapter.shortname,
-            tool_call_id=call.tool_call_id,
-            origin=origin,
-            native_tool_name=call.tool_name,
-        )
+        tracker = self._records.pop(call.tool_call_id, None)
+        try:
+            await dispatch_post_tool_use(
+                tool,
+                final_arguments,
+                result,
+                adapter_shortname=self.adapter.shortname,
+                tool_call_id=call.tool_call_id,
+                origin=origin,
+                native_tool_name=call.tool_name,
+            )
+        except BaseException as exc:
+            record = tracker.result_failed("post_hook") if tracker is not None else None
+            if record is not None:
+                attach_tool_call(exc, record)
+                try:
+                    await dispatch_post_tool_result_failure(
+                        tool,
+                        final_arguments,
+                        exc,
+                        record,
+                        adapter_shortname=self.adapter.shortname,
+                        tool_call_id=call.tool_call_id,
+                        origin=origin,
+                        native_tool_name=call.tool_name,
+                    )
+                except BaseException as observer_error:
+                    note_result_observer_failure(exc, observer_error)
+            raise
+        if tracker is not None and not defer_result_observation(
+            tracker, tool, final_arguments, adapter_shortname=self.adapter.shortname, origin=origin
+        ):
+            if tracker.latest is not None:
+                tracker.update(destination="framework")
+            tracker.handed_off()
         return result
 
     async def on_tool_execute_error(

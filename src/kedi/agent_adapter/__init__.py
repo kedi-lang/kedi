@@ -43,6 +43,7 @@ from .hooks import (
     HookTimeoutError,
     PostToolUseEvent,
     PostToolUseFailureEvent,
+    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     ToolHookContext,
@@ -77,6 +78,7 @@ from .requirements import (
 from .subagents import SubagentUsageLimits
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tools.specs import SupportsToolRegistration, ToolSpec
+from .tools.records import ToolCallRecord
 
 if TYPE_CHECKING:
     from . import adapters
@@ -199,6 +201,7 @@ __all__ = [
     "PydanticCodeModeCapability",
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
+    "PostToolResultFailureEvent",
     "PreToolUseDecision",
     "PreToolUseRequest",
     "RequirementCheck",
@@ -213,6 +216,7 @@ __all__ = [
     "SubagentUsageLimits",
     "T",
     "ToolSpec",
+    "ToolCallRecord",
     "ToolHookContext",
     "ToolOrigin",
     "UserPromptSubmitDecision",

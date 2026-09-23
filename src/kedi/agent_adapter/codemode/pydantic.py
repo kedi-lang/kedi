@@ -18,7 +18,7 @@ from ..adapters.pydantic.compat import build_nested_tool_manager
 from ..tools.scope import defer_artifact_admission
 from ..tools.specs import ToolResultAdmitter, ToolSpec
 from .core import CodeModeLimits, CodeModeSession, CodeModeTool, codemode_instructions
-from .errors import CodeModeError
+from .errors import CodeModeError, CodeModeResultError
 
 
 class _SearchToolsArguments(TypedDict):
@@ -234,6 +234,8 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
                 return self._session.get_tool_schema(tool_names=tool_args["tool_names"])
             return await self._execute_code(tool_args, ctx, tool)
         except CodeModeError as exc:
+            if isinstance(exc, CodeModeResultError):
+                raise
             raise ModelRetry(str(exc)) from exc
 
     def _control_tool(

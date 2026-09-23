@@ -77,7 +77,7 @@ class SessionValueEncoder:
     ) -> None:
         self._kedi_models = dict(kedi_models)
         self._decision_records = decision_records
-        self._seen: dict[int, str] = {}
+        self._seen: dict[int, tuple[object, str]] = {}
 
     def bind_decision_records(self, records: dict[str, dict[str, Any]]) -> None:
         """Attach the snapshot-owned decision table without changing encoder subclasses."""
@@ -204,9 +204,10 @@ class SessionValueEncoder:
             raise UnsupportedSessionValue(
                 path,
                 value,
-                f"shared or cyclic object also appears at {previous}",
+                f"shared or cyclic object also appears at {previous[1]}",
             )
-        self._seen[value_id] = path
+        # Retain temporary values so Python cannot recycle an already-seen ID.
+        self._seen[value_id] = (value, path)
 
 
 class SessionValueDecoder:

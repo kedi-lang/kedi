@@ -31,6 +31,7 @@ from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, V
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.executors.base import DefaultExecutor, Executor
 from kedi.promise import KediPromise, force
+from kedi.run_budget import RunBudget
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
@@ -68,11 +69,13 @@ class KediRuntime:
         subagent_state_path: str | Path | None = None,
         conversation_state: "ConversationState | None" = None,
         loop_iteration_limit: int = DEFAULT_LOOP_ITERATION_LIMIT,
+        run_budget: RunBudget | None = None,
     ) -> None:
         from kedi.agent_profile import AgentProfile
         from kedi.artifacts import ArtifactManager
 
         self.adapter = adapter
+        self.run_budget = run_budget
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
         self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}

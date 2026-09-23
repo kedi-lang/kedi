@@ -7,6 +7,15 @@ from .specs import ToolSpec
 
 
 def correctable_tool_error(tool: ToolSpec, exc: Exception) -> str | None:
+    from kedi.run_budget import RunBudgetExceeded
+
+    if isinstance(exc, RunBudgetExceeded):
+        return None
+    record = getattr(exc, "tool_call", None)
+    if getattr(exc, "kedi_result_failure_stage", None) is not None or (
+        record is not None and getattr(record, "execution_state", None) == "returned"
+    ):
+        return None
     metadata = tool.metadata or {}
     kind = metadata.get("kedi_tool_kind") or metadata.get("kind")
     original = exc.original if isinstance(exc, KediExecutionError) else exc

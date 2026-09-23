@@ -20,3 +20,9 @@ class CodeModeExecutionError(CodeModeError):
 
 class CodeModeBoundaryError(CodeModeExecutionError):
     """A value cannot cross the tool-to-sandbox boundary safely."""
+
+
+class CodeModeResultError(CodeModeBoundaryError):
+    """A successful body produced an undeliverable result; never request a retry."""
+
+    kedi_result_failure_stage = "serialization"

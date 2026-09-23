@@ -23,6 +23,7 @@ from kedi.lang.ast import (
     ArtifactsDirectiveStmt,
     ArtifactsField,
     AutoSpec,
+    BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     EffortDirectiveStmt,
     HistoryDirectiveStmt,
@@ -324,6 +325,26 @@ def _walk_requires_directive(self: _Walker, node: Node) -> RequiresDirectiveStmt
         requirement_locs=requirement_locs,
         loc=self._span(node),
     )
+
+
+def _walk_budget_directive(self: _Walker, node: Node) -> BudgetDirectiveStmt:
+    values: dict[str, int] = {}
+    body = _field(node, "body")
+    if body is not None:
+        for child in _named_children(body):
+            if child.type != "budget_field":
+                continue
+            name_node = _field(child, "name")
+            value_node = _field(child, "value")
+            assert name_node is not None and value_node is not None
+            name = _identifier_name(self.source, name_node)
+            if name not in {"request_limit", "tool_attempt_limit"}:
+                self._error(name_node, f"Unknown budget field {name!r}", code="K-BUDGET-FIELD")
+            elif name in values:
+                self._error(name_node, f"Duplicate budget field {name!r}", code="K-BUDGET-DUP")
+            else:
+                values[name] = int(_src_text(self.source, value_node))
+    return BudgetDirectiveStmt(**values, loc=self._span(node))
 
 
 def _walk_model_directive(self: _Walker, node: Node) -> ModelDirectiveStmt:

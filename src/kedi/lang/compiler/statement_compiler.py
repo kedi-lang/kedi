@@ -17,6 +17,7 @@ from ...agent_profile.directives import (
     eval_mcp_directive,
     eval_model_directive,
     eval_requires_directive,
+    eval_budget_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -46,6 +47,7 @@ from ..ast import (
     PythonBlock,
     RawInvokeStmt,
     RequiresDirectiveStmt,
+    BudgetDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
     ShowStmt,
@@ -73,6 +75,7 @@ from .control_flow import (
     run_map_continuations,
 )
 from .evaluation import (
+    NO_NATIVE_VALUE,
     evaluate_binding_rhs,
     evaluate_python_inline,
     execute_inline_side_effects,
@@ -262,7 +265,7 @@ class StatementCompiler:
         ):
             kedi_type = self._assignment_type(stmt.name, closure_env)
             native, rendered = evaluate_binding_rhs(self.rt, stmt.expr, closure_env)
-            value = native if native is not None else rendered
+            value = native if native is not NO_NATIVE_VALUE else rendered
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
@@ -302,7 +305,7 @@ class StatementCompiler:
     ) -> Any:
         native, rendered = evaluate_binding_rhs(self.rt, segments, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(segments)
-        if native is not None:
+        if native is not NO_NATIVE_VALUE:
             if is_backtick:
                 return initialize_value_from_native(
                     native, kedi_type, self.rt, closure_env, strict_native=True
@@ -548,6 +551,14 @@ class StatementExecutor:
                 active.merge(eval_requires_directive(self.rt, stmt, closure_env)),
                 adapter_selection_kind,
             )
+        if isinstance(stmt, BudgetDirectiveStmt):
+            from kedi.run_budget import current_run_budget
+
+            patch = eval_budget_directive(self.rt, stmt, closure_env)
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
+            return active.merge(patch), adapter_selection_kind
         if isinstance(stmt, SystemDirectiveStmt):
             return active.merge(
                 eval_system_directive(self.rt, stmt, closure_env)
@@ -567,16 +578,20 @@ class StatementExecutor:
                 adapter_selection_kind,
             )
         if isinstance(stmt, UseDirectiveStmt):
+            from kedi.run_budget import current_run_budget
+
+            patch = eval_use_directive(
+                self.rt,
+                stmt,
+                profile_registry,
+                closure_env,
+                available_procedures=set(self.rt._procedures.keys()),
+            )
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
             return (
-                active.merge(
-                    eval_use_directive(
-                        self.rt,
-                        stmt,
-                        profile_registry,
-                        closure_env,
-                        available_procedures=set(self.rt._procedures.keys()),
-                    )
-                ),
+                active.merge(patch),
                 adapter_selection_kind,
             )
         return None
@@ -596,6 +611,7 @@ class StatementExecutor:
         from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
+        from kedi.run_budget import RunBudget, run_budget_scope
 
         if profile_registry is None:
             profile_registry = self.rt._profile_registry
@@ -606,7 +622,7 @@ class StatementExecutor:
             if body is None:
                 return _NO_RETURN
             with branch_trace(self.rt, stmt, alternative=not condition):
-                with child_scope(self.rt, closure_env) as branch_env:
+                with child_scope(self.rt, closure_env) as branch_env, run_budget_scope(RunBudget()):
                     result, _, _ = self._execute_block(
                         body,
                         proc,
@@ -627,9 +643,10 @@ class StatementExecutor:
                 values = evaluate_iterable(self.rt, stmt, closure_env)
                 with managed_loop_iterator(values):
                     for value in values:
-                        with loop_binding(
-                            self.rt, closure_env, stmt.binder, value
-                        ) as iteration_env:
+                        with (
+                            loop_binding(self.rt, closure_env, stmt.binder, value) as iteration_env,
+                            run_budget_scope(RunBudget()),
+                        ):
                             result, iteration_active, iteration_adapter_kind = self._execute_block(
                                 stmt.body,
                                 proc,
@@ -653,7 +670,7 @@ class StatementExecutor:
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_active, map_adapter_kind = records[index]
-                        with active_scope(self.rt, frame):
+                        with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
                             with block_agent_profile_scope(map_active):
                                 results[index], _, _ = self._execute_block(
                                     stmt.map_body or [],
@@ -679,7 +696,10 @@ class StatementExecutor:
             with loop_trace(self.rt, stmt):
                 while evaluate_condition(self.rt, stmt, closure_env):
                     assert_conditional_loop_capacity(self.rt, completed_iterations)
-                    with child_scope(self.rt, closure_env) as iteration_env:
+                    with (
+                        child_scope(self.rt, closure_env) as iteration_env,
+                        run_budget_scope(RunBudget()),
+                    ):
                         result, _, _ = self._execute_block(
                             stmt.body,
                             proc,
@@ -767,7 +787,11 @@ class StatementExecutor:
             )
             if not return_kedi_type.is_none():
                 native, rendered = evaluate_binding_rhs(self.rt, stmt.segments, closure_env)
-                return native if native is not None else preserve_escaped_whitespace(rendered)
+                return (
+                    native
+                    if native is not NO_NATIVE_VALUE
+                    else preserve_escaped_whitespace(rendered)
+                )
             return self.compiler.compile_return(stmt)(**closure_env)
 
         if isinstance(stmt, ReturnBlockStmt):

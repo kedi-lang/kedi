@@ -27,12 +27,14 @@ from .agent_adapter import (
     HookTimeoutError,
     PostToolUseEvent,
     PostToolUseFailureEvent,
+    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     SubagentExecutionContext,
     SubagentUsageLimits,
     ToolHookContext,
     ToolOrigin,
+    ToolCallRecord,
     UserPromptSubmitDecision,
     UserPromptSubmitRequest,
     bind_agent_event_dispatcher,
@@ -93,8 +95,10 @@ from .executors.debug import (
     MarkdownDebugExporter,
     default_debug_export_path,
 )
+from .explain import ExplainReport, ExplainedCall, explain
 from .interactive_session import InteractiveSession, dump_session, load_session
 from .promise import KediPromise, KediPromiseLeak, force
+from .run_budget import RunBudget, RunBudgetExceeded
 
 __all__ = [
     "__version__",
@@ -134,6 +138,9 @@ __all__ = [
     "CodexResponsesFallback",
     "CodeModeSettings",
     "FrameworkAdapterName",
+    "ExplainReport",
+    "ExplainedCall",
+    "explain",
     "HookContext",
     "HookDecisionKind",
     "HookDeniedError",
@@ -146,6 +153,7 @@ __all__ = [
     "McpServerSpec",
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
+    "PostToolResultFailureEvent",
     "PreToolUseDecision",
     "PreToolUseRequest",
     "SkillsSettings",
@@ -171,6 +179,9 @@ __all__ = [
     "type",
     "ToolHookContext",
     "ToolOrigin",
+    "ToolCallRecord",
+    "RunBudget",
+    "RunBudgetExceeded",
     "UserPromptSubmitDecision",
     "UserPromptSubmitRequest",
     "KediRuntime",

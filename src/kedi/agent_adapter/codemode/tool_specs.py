@@ -10,6 +10,7 @@ from ..approvals.reason import accepts_tool_reason, reason_schema, split_tool_re
 from ..tools.execution import resolve_tool_arguments_async
 from ..tools.scope import defer_artifact_admission
 from ..tools.specs import ToolResultAdmitter, ToolSpec
+from ..hooks.tool_wrapper import with_hook_lifecycle
 from .core import CodeModeLimits, CodeModeSession, CodeModeTool, codemode_instructions
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
@@ -213,7 +214,8 @@ class CodeModeToolSpecBridge:
                 tool_reason_enabled=self._tool_reason,
             )
         with defer_artifact_admission():
-            result = tool.fn(**final_arguments)
+            wrapped = with_hook_lifecycle(tool, adapter_shortname=self._adapter_shortname)
+            result = wrapped.fn(**final_arguments)
             if inspect.isawaitable(result):
                 result = await result
         return result

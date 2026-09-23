@@ -130,6 +130,13 @@ async def _execute_run(
                 span.set_attribute("gen_ai.request.model", model)
             self._deps.assert_profile_override_supported(child_profile, child_adapter)
             child_tools = self._deps.resolve_tools(child_profile, child_adapter)
+            from kedi.run_budget import assert_run_budget_supported, run_budget_scope
+
+            with run_budget_scope(child_profile.run_budget):
+                assert_run_budget_supported(
+                    child_adapter,
+                    opaque_tools=bool(child_profile.mcp_servers),
+                )
             instructions = self._deps.instructions_for_profile(child_profile, child_adapter)
             conversation = self._conversation_context(conversation_id)
             child_call = self._run_child(
@@ -150,10 +157,11 @@ async def _execute_run(
                 parent_run_id=event_parent_run_id,
                 agent_name=subagent,
             ):
-                with observe_invocations(
-                    lambda usage: self._record_and_assert_usage(run_id, span, usage)
-                ):
-                    result = await child_call
+                with run_budget_scope(child_profile.run_budget):
+                    with observe_invocations(
+                        lambda usage: self._record_and_assert_usage(run_id, span, usage)
+                    ):
+                        result = await child_call
             self._assert_usage_limits(run_id)
             if self.runs.get(run_id).status != "running":
                 raise asyncio.CancelledError

@@ -32,6 +32,7 @@ HookCapabilityEvent = Literal[
     "pre_tool_use",
     "post_tool_use",
     "post_tool_use_failure",
+    "post_tool_result_failure",
 ]
 AdapterCapability = Literal[
     "structured_output",
@@ -52,6 +53,8 @@ AdapterCapability = Literal[
     "history_replay",
     "native_compaction",
     "stream_events",
+    "request_budget",
+    "tool_attempt_budget",
     "hooks",
 ]
 
@@ -75,6 +78,7 @@ class HookCapabilities:
     pre_tool_use: HookEventCapability | None = None
     post_tool_use: HookEventCapability | None = None
     post_tool_use_failure: HookEventCapability | None = None
+    post_tool_result_failure: HookEventCapability | None = None
 
     @classmethod
     def full(
@@ -100,6 +104,10 @@ class HookCapabilities:
             post_tool_use_failure=HookEventCapability(
                 bridge=tool_bridge,
                 origins=tool_origins,
+            ),
+            post_tool_result_failure=HookEventCapability(
+                bridge=tool_bridge,
+                origins=tool_origins & {"kedi"},
             ),
         )
 
@@ -142,6 +150,8 @@ class AdapterCapabilities:
     supports_history_replay: bool | None = None
     supports_native_compaction: bool | None = None
     supports_stream_events: bool | None = None
+    supports_request_budget: bool | None = None
+    supports_tool_attempt_budget: bool | None = None
     hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
@@ -178,6 +188,8 @@ class AdapterCapabilities:
             "history_replay": self.supports_history_replay,
             "native_compaction": self.supports_native_compaction,
             "stream_events": self.supports_stream_events,
+            "request_budget": self.supports_request_budget,
+            "tool_attempt_budget": self.supports_tool_attempt_budget,
             "hooks": self.hooks is not None,
         }
         return values[feature]

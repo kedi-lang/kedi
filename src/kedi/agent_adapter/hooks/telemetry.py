@@ -13,6 +13,7 @@ _EVENT_LABELS = {
     "pre_tool_use": "pre tool use",
     "post_tool_use": "post tool use",
     "post_tool_use_failure": "post tool use failure",
+    "post_tool_result_failure": "post tool result failure",
 }
 
 

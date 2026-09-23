@@ -59,6 +59,7 @@ from kedi.agent_adapter.hooks import (
     current_hook_dispatcher,
     hooked_agent_run,
 )
+from kedi.run_budget import assert_run_budget_supported, current_run_budget
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.models import (
@@ -111,6 +112,8 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_history_replay=True,
         supports_native_compaction=True,
         supports_stream_events=True,
+        supports_request_budget=True,
+        supports_tool_attempt_budget=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -704,14 +707,24 @@ class LangChainAdapter(HookRegistrationMixin):
     ) -> list[Any]:
         if not tools:
             return []
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         dispatcher = current_hook_dispatcher()
         has_tool_hooks = dispatcher is not None and any(
             dispatcher.handlers_for(event)
-            for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+            for event in (
+                "pre_tool_use",
+                "post_tool_use",
+                "post_tool_use_failure",
+                "post_tool_result_failure",
+            )
         )
-        if not approval_enabled and not has_tool_hooks and current_artifact_admission() is None:
+        if (
+            not approval_enabled
+            and not has_tool_hooks
+            and current_artifact_admission() is None
+            and current_run_budget() is None
+        ):
             return []
-        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         tool_specs = list(known_specs.values())
         for tool in tools:
             name = getattr(tool, "name", None)
@@ -756,6 +769,18 @@ class LangChainAdapter(HookRegistrationMixin):
     @asynccontextmanager
     async def _projected_tools_for_run(self) -> AsyncIterator[CodeModeProjection]:
         native_tools = await self._tools_for_run()
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
+        # Validate application tools before replacing them with CodeMode controls.
+        assert_run_budget_supported(
+            self,
+            opaque_tools=bool(self.active_profile.mcp_servers)
+            or any(
+                not isinstance(name := getattr(tool, "name", None), str)
+                or name not in known_specs
+                or (known_specs[name].metadata or {}).get("source") == "external"
+                for tool in native_tools
+            ),
+        )
         settings = normalize_codemode_settings(
             self.active_profile.codemode or getattr(self, "codemode", None)
         )

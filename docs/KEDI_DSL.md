@@ -1413,7 +1413,7 @@ enable scoped skill discovery.
   ````
 
   The supported events are `user_prompt_submit`, `pre_tool_use`,
-  `post_tool_use`, and `post_tool_use_failure`. Prompt and pre-tool handlers
+  `post_tool_use`, `post_tool_use_failure`, and `post_tool_result_failure`. Prompt and pre-tool handlers
   may return a typed `continue`, `deny`, or `edit` decision. Post handlers are
   observers and must return `None`. Tool arguments are canonicalized before
   `pre_tool_use`; an edit is validated again before approval and execution.
@@ -1421,6 +1421,10 @@ enable scoped skill discovery.
   `post_tool_use_failure` is emitted only after tool execution starts. Its event
   records the observed execution duration and whether execution was interrupted;
   pre-hook and approval denials are not execution failures.
+  `post_tool_result_failure` observes a failure after the tool body returned
+  (for example artifact admission or a post-success hook). Its `tool_call`
+  record retains the native body output when available. Such failures do not
+  trigger an automatic body retry.
 
   Handlers run in registration/source order. Each edit becomes the next
   handler's input, and denial stops the chain. Adapter-instance handlers run
@@ -1743,7 +1747,7 @@ enable scoped skill discovery.
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> agent:`,
   `> adapter:`, `> model:`, `> effort:`, `> approval:`, `> system:`,
-  `> settings:`, `> requires:`, `> mcp:`, `> output:`, `> subagent:`,
+  `> settings:`, `> requires:`, `> budget:`, `> mcp:`, `> output:`, `> subagent:`,
   `> workflow:`, and/or `> use:`
   members. A profile that delegates may also set `> max_agents: N`.
 - Profile docstrings: if the first statement inside a profile body is a block
@@ -1763,6 +1767,28 @@ enable scoped skill discovery.
   runs. `> use:` tool registration and `> mcp:` servers remain capability
   warnings: when an adapter later advertises support for that feature, the same
   Kedi code stops warning without syntax changes.
+
+### Run budgets
+
+```kedi
+> budget:
+    request_limit: 10
+    tool_attempt_limit: 20
+```
+
+Each field is optional, but at least one is required. Values are nonnegative
+integers; `0` prohibits new operations of that kind. A request is counted at
+each actual model generation, including tool-loop and output-repair turns.
+An attempt is counted when a Kedi-managed tool body starts; each body retry
+counts again. Argument validation and approval denial do not consume attempts.
+Nested procedure and subagent budgets add ceilings without resetting or
+relaxing ancestor ceilings. Budgets do not intercept arbitrary provider calls
+made directly from embedded Python or unobservable remote tool executions.
+Fallback model generations are charged separately. With a finite request limit,
+provider SDK retries must be disabled (`max_retries=0`); an enabled or opaque
+provider retry policy is rejected before generation rather than undercounted.
+CodeMode control calls do not count as application tool attempts; each nested
+application body and each of its retries counts once on both framework adapters.
 
 ### Subagents
 
@@ -3263,7 +3289,7 @@ directory by default):
 ```python
 with kedi.interactive(cwd="examples/cells") as session:
     session.execute(
-        "> import: helpers\n= `answer`",
+        "> import: helpers\n> show: `answer`",
         source_name="answer.kedi",
     )
 ```

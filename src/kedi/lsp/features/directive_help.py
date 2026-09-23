@@ -281,6 +281,7 @@ def _settings_field_markdown(field: SettingsField) -> str:
         "pre_tool_use": "Runs before approval and tool execution; it may edit or deny canonical arguments.",
         "post_tool_use": "Observes the final model-visible result after successful tool execution.",
         "post_tool_use_failure": "Observes execution failures, excluding hook and approval denials.",
+        "post_tool_result_failure": "Observes failures after a tool body returned, without retrying that body.",
     }
     if field.name in hook_descriptions:
         return f"`{field.name}` = {value}\n\n{hook_descriptions[field.name]}"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import json
 import math
 import operator
@@ -41,6 +42,12 @@ from kedi.lang.ast import IfStmt, ProcDefStmt, TypeDefStmt
 from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
 from kedi.lang.compiler.type_system import KediType
 from kedi.promise import KediPromise
+
+
+def test_encoder_does_not_confuse_temporary_objects_with_shared_references() -> None:
+    encoder = SessionValueEncoder(kedi_models={})
+    for index in range(100):
+        encoder.encode({}, path=f"temporary_{index}")
 
 
 class SnapshotModel(BaseModel):

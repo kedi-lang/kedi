@@ -117,6 +117,17 @@ def _decorate_kedi_program(
     cache: bool,
     conversation_override: ConversationState | None | object,
 ) -> Callable[P, R]:
+    from kedi.explain import _InspectionSource
+
+    inspection_source = _InspectionSource(
+        program=program,
+        kind=kind,
+        reload_program=reload_program,
+        profile=profile_override,
+        adapter_shortname=profile_override.adapter_shortname,
+        tools=dict(tool_map),
+    )
+
     def _run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
         active_program = program
@@ -250,12 +261,14 @@ def _decorate_kedi_program(
             # active kedi config/profile contextvars still reach run().
             return await asyncio.to_thread(run, *args, **kwargs)
 
+        setattr(async_wrapper, "__kedi_inspection_source__", inspection_source)
         return cast(Callable[P, R], async_wrapper)
 
     @functools.wraps(inner)
     def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         return run(*args, **kwargs)
 
+    setattr(sync_wrapper, "__kedi_inspection_source__", inspection_source)
     return sync_wrapper
 
 

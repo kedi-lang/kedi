@@ -42,6 +42,7 @@ from kedi.lang.ast import (
     AssignmentStmt,
     AutoSpec,
     BacktickLineStmt,
+    BudgetDirectiveStmt,
     CallArg,
     CallSegment,
     CodeModeDirectiveStmt,
@@ -463,6 +464,9 @@ class _Walker:
 
     def _walk_requires_directive(self, node: Node) -> RequiresDirectiveStmt:
         return _directive_conversion._walk_requires_directive(self, node)
+
+    def _walk_budget_directive(self, node: Node) -> BudgetDirectiveStmt:
+        return _directive_conversion._walk_budget_directive(self, node)
 
     def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
         return _directive_conversion._walk_model_directive(self, node)

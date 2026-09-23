@@ -51,7 +51,10 @@ def test_tool_spec_bridge_exposes_only_uniform_controls() -> None:
     asyncio.run(bridge.close())
 
 
-def test_tool_spec_bridge_preloads_exact_exposed_name_without_running_body() -> None:
+@pytest.mark.parametrize(
+    "preload_tools", [("lookup_release",), ("lookup_release", "lookup_release")]
+)
+def test_tool_spec_bridge_preloads_exact_exposed_name_without_running_body(preload_tools) -> None:
     calls = 0
 
     def lookup(*, version: str) -> str:
@@ -76,10 +79,11 @@ def test_tool_spec_bridge_preloads_exact_exposed_name_without_running_body() -> 
         limits=CodeModeLimits(),
         policies=(ApprovalPolicy.allow(),),
         adapter_shortname="test",
-        preload_tools=("lookup_release",),
+        preload_tools=preload_tools,
     )
 
     assert calls == 0
+    assert len(bridge.preloaded_tools) == 1
     assert bridge.preloaded_tools[0]["name"] == "lookup_release"
     assert bridge.preloaded_tools[0]["callable_name"] == "lookup_release"
     instructions = append_codemode_instructions(
