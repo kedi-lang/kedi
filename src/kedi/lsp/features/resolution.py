@@ -7,6 +7,7 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     CallSegment,
     InputSegment,
     LoopStmt,
@@ -14,6 +15,7 @@ from kedi.lang.ast import (
     ProcedureDef,
     Program,
     ProgramWithValidation,
+    TaskStmt,
     TypeApply,
     TypeDef,
     TypeDefStmt,
@@ -441,6 +443,39 @@ def _resolve_in_stmt(
             scope_proc=proc,
             cursor_span=stmt.binder_loc,
         )
+    if isinstance(stmt, (TaskStmt, AwaitStmt)) and stmt.binder_loc is not None:
+        if _position_inside(pos, stmt.binder_loc):
+            return SymbolRef(
+                kind="local" if proc is not None else "module_value",
+                name=stmt.binder or "",
+                declaration_span=stmt.binder_loc,
+                scope_proc=proc,
+                cursor_span=stmt.binder_loc,
+            )
+    if isinstance(stmt, TaskStmt) and stmt.subagent_loc is not None:
+        if _position_inside(pos, stmt.subagent_loc):
+            profile = _merged_profile_defs(prog, imported_surface_for_program(prog)).get(
+                stmt.subagent
+            )
+            return SymbolRef(
+                kind="agent_profile",
+                name=stmt.subagent,
+                declaration_span=profile.loc if profile is not None else None,
+                scope_proc=proc,
+                cursor_span=stmt.subagent_loc,
+            )
+    if isinstance(stmt, AwaitStmt) and stmt.handle_loc is not None:
+        if _position_inside(pos, stmt.handle_loc):
+            declaration = _resolve_value_declaration(
+                prog, proc, ancestor_procs, stmt.handle, stmt.handle_loc
+            )
+            return SymbolRef(
+                kind=declaration.kind if declaration is not None else "local",
+                name=stmt.handle,
+                declaration_span=declaration.declaration_span if declaration is not None else None,
+                scope_proc=declaration.scope_proc if declaration is not None else proc,
+                cursor_span=stmt.handle_loc,
+            )
     if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
         return _resolve_in_type_def(stmt.typedef, pos, type_by_name, imported_values)
     # VariableInitStmt / VariableInitBlockStmt target name

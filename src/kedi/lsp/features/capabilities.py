@@ -38,6 +38,7 @@ from kedi.lang.ast import (
     SettingsField,
     SkillsDirectiveStmt,
     Span,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TypeApply,
@@ -162,9 +163,11 @@ def _scan_capability_scope(
     proc_names: set[str],
     type_defs: dict[str, TypeDef],
     warned_approval_spans: set[tuple[str | None, int, int]] | None = None,
+    active_profile_name: str | None = None,
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     active = state
+    selected_profile = active_profile_name
     if warned_approval_spans is None:
         warned_approval_spans = set()
 
@@ -314,6 +317,7 @@ def _scan_capability_scope(
                 )
             )
             if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
+                selected_profile = stmt.name
                 active = _merge_adapter_state(
                     active,
                     profile_states.get(stmt.name, _AdapterDiagnosticState()),
@@ -330,6 +334,45 @@ def _scan_capability_scope(
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
             continue
+        if isinstance(stmt, TaskStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "background_subagents",
+                    [stmt.subagent_loc],
+                    "background subagents",
+                    severity=lsp.DiagnosticSeverity.Error,
+                )
+            )
+            if stmt.subagent not in profile_defs and stmt.subagent_loc is not None:
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(stmt.subagent_loc),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-TASK-SUBAGENT",
+                        source="kedi",
+                        message=f"Unknown subagent profile {stmt.subagent!r}.",
+                    )
+                )
+            elif (
+                stmt.subagent_loc is not None
+                and selected_profile in profile_defs
+                and stmt.subagent
+                not in {member.name for member in profile_defs[selected_profile].subagent_members}
+            ):
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(stmt.subagent_loc),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-TASK-NOT-CHILD",
+                        source="kedi",
+                        message=(
+                            f"Profile {stmt.subagent!r} is not a direct child "
+                            f"of {selected_profile!r}."
+                        ),
+                    )
+                )
+            continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
             continue
@@ -344,6 +387,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             if stmt.else_body is not None:
@@ -357,6 +401,7 @@ def _scan_capability_scope(
                         proc_names,
                         type_defs,
                         warned_approval_spans,
+                        selected_profile,
                     )
                 )
             continue
@@ -374,6 +419,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -388,6 +434,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -402,6 +449,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -416,6 +464,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue

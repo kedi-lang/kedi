@@ -226,6 +226,23 @@ class ShowStmt(Stmt):
 
 
 @dataclass
+class TaskStmt(Stmt):
+    binder: str = ""
+    binder_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    subagent: str = ""
+    subagent_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    template: TemplateBlock = field(default_factory=TemplateBlock)
+
+
+@dataclass
+class AwaitStmt(Stmt):
+    handle: str = ""
+    handle_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    binder: Optional[str] = None
+    binder_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 

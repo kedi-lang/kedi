@@ -9,6 +9,7 @@ from lsprotocol import types as lsp
 
 from kedi.lang.ast import (
     AssignmentStmt,
+    AwaitStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -22,6 +23,7 @@ from kedi.lang.ast import (
     ReturnStmt,
     ShowStmt,
     Span,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TypeDef,
@@ -50,6 +52,8 @@ def _segments_of(stmt) -> list:
         for line in stmt.lines:
             segs.extend(line.segments)
         return segs
+    if isinstance(stmt, TaskStmt):
+        return _segments_of(stmt.template)
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)
     if isinstance(stmt, RawInvokeStmt):
@@ -215,8 +219,23 @@ def _direct_statement_declarations(
                     scope_proc=proc,
                 )
             )
+    if isinstance(stmt, (TaskStmt, AwaitStmt)) and stmt.binder == name:
+        span = stmt.binder_loc
+        if span is not None:
+            declarations.append(
+                _ValueDeclaration(
+                    kind="local" if proc is not None else "module_value",
+                    name=name,
+                    declaration_span=span,
+                    scope_proc=proc,
+                )
+            )
     for segment in _segments_of(stmt):
-        if isinstance(segment, OutputSegment) and segment.name == name:
+        if (
+            not isinstance(stmt, TaskStmt)
+            and isinstance(segment, OutputSegment)
+            and segment.name == name
+        ):
             span = _output_name_span(segment)
             if span is not None:
                 declarations.append(

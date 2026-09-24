@@ -9,6 +9,7 @@ from tree_sitter import Node
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -34,6 +35,7 @@ from kedi.lang.ast import (
     Span,
     Stmt,
     TemplateLine,
+    TaskStmt,
     TestSuite,
     TypeDefStmt,
     TypeExpr,
@@ -286,6 +288,10 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.ordered_toplevel.append(prog.toplevel_return)
         elif t == "show_stmt":
             stmt = _walk_show_stmt(self, child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t in ("task_stmt", "await_stmt"):
+            stmt = _walk_task_or_await(self, child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
         elif t == "backtick_line_stmt":
@@ -584,6 +590,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_return_stmt(node)
     if t == "show_stmt":
         return _walk_show_stmt(self, node)
+    if t in ("task_stmt", "await_stmt"):
+        return _walk_task_or_await(self, node)
     if t == "return_block_stmt":
         return self._walk_return_block_stmt(node)
     if t == "python_block":
@@ -916,6 +924,43 @@ def _walk_raw_invoke_stmt(self: _Walker, node: Node) -> RawInvokeStmt:
         segments=segments,
         type_annotation=type_anno,
         type_expr=type_expr,
+        loc=self._span(node),
+    )
+
+
+def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:
+    if node.type == "await_stmt":
+        handle = _field(node, "handle")
+        binder = _field(node, "binder")
+        assert handle is not None
+        return AwaitStmt(
+            handle=_identifier_name(self.source, handle),
+            handle_loc=self._span(handle),
+            binder=_identifier_name(self.source, binder) if binder is not None else None,
+            binder_loc=self._span(binder) if binder is not None else None,
+            loc=self._span(node),
+        )
+
+    binder = _field(node, "binder")
+    subagent = _field(node, "subagent")
+    body = _field(node, "body")
+    assert binder is not None and subagent is not None and body is not None
+    template_node = _field(body, "template")
+    assert template_node is not None
+    if _field(body, "extra_template") is not None:
+        self._error(
+            body,
+            "A subagent task accepts exactly one >> template block",
+            code="kedi.task_template_count",
+        )
+    template = self._walk_template_block_stmt(template_node)
+    self._validate_template_block_scope(template.lines)
+    return TaskStmt(
+        binder=_identifier_name(self.source, binder),
+        binder_loc=self._span(binder),
+        subagent=_identifier_name(self.source, subagent),
+        subagent_loc=self._span(subagent),
+        template=template,
         loc=self._span(node),
     )
 

@@ -110,6 +110,9 @@ class KediRuntime:
             "kedi_invocation_id",
             default=None,
         )
+        self._native_subagent_owner: ContextVar[Any | None] = ContextVar(
+            "kedi_native_subagent_owner", default=None
+        )
         from kedi.agent_adapter.request_budget import ModelRequestBudget
 
         self._request_budget: ContextVar[ModelRequestBudget | None] = ContextVar(
@@ -627,6 +630,8 @@ class KediRuntime:
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
         subagent_definitions: Mapping[str, Any] | None = None,
+        evaluated_profile: Any | None = None,
+        retain_for_native_owner: bool = False,
     ) -> Any:
         return self._subagent_coordinator.start(
             allowed_subagents=allowed_subagents,
@@ -637,6 +642,8 @@ class KediRuntime:
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
+            evaluated_profile=evaluated_profile,
+            retain_for_native_owner=retain_for_native_owner,
         )
 
     async def _continue_subagent(
@@ -701,6 +708,12 @@ class KediRuntime:
 
     def _new_subagent_concurrency(self) -> "DelegationConcurrency":
         return self._subagent_coordinator.new_concurrency()
+
+    def subagents(self, *, parent: str) -> Any:
+        """Open a program-controlled subagent scope for an async Python caller."""
+        from kedi.agent_adapter.subagents.native import SubagentScope
+
+        return SubagentScope(self, parent)
 
     def _evaluate_profile_definition(self, definition: Any) -> Any:
         from kedi.agent_profile.compile import build_capture_env

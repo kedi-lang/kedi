@@ -5,6 +5,7 @@ from typing import Any, Iterable, Optional
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -27,6 +28,7 @@ from kedi.lang.ast import (
     ShowStmt,
     Span,
     Stmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
@@ -177,6 +179,37 @@ def _emit_statements(
             _emit_assignment_stmt(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, RawInvokeStmt):
             _emit_raw_invoke_stmt(builder, stmt, scope, indent)
+        elif isinstance(stmt, TaskStmt):
+            _emit_segments(builder, cursor, stmt, scope, indent, emit_outputs=False)
+            line = builder.add(
+                f"{indent}{stmt.binder}: SubagentTask = cast(SubagentTask, _kedi_placeholder())"
+            )
+            source_range = _span_range(stmt.binder_loc) if stmt.binder_loc else None
+            builder.add_symbol(
+                kind="local",
+                name=stmt.binder,
+                source_range=source_range,
+                virtual_range=_line_range(line, len(indent), stmt.binder),
+            )
+            scope[stmt.binder] = ScopeName(typ="SubagentTask", source_range=source_range)
+        elif isinstance(stmt, AwaitStmt):
+            prefix = f"{indent}{stmt.binder}: SubagentResult = " if stmt.binder else indent
+            line = builder.add(f"{prefix}__kedi_await({stmt.handle})")
+            builder.add_symbol(
+                kind="reference",
+                name=stmt.handle,
+                source_range=_span_range(stmt.handle_loc) if stmt.handle_loc else None,
+                virtual_range=_line_range(line, len(prefix) + len("__kedi_await("), stmt.handle),
+            )
+            if stmt.binder:
+                source_range = _span_range(stmt.binder_loc) if stmt.binder_loc else None
+                builder.add_symbol(
+                    kind="local",
+                    name=stmt.binder,
+                    source_range=source_range,
+                    virtual_range=_line_range(line, len(indent), stmt.binder),
+                )
+                scope[stmt.binder] = ScopeName(typ="SubagentResult", source_range=source_range)
         elif isinstance(stmt, PythonBlock):
             region = cursor.next("fenced", stmt.loc)
             if region is not None:
@@ -517,9 +550,13 @@ def _emit_segments(
     stmt: Any,
     scope: dict[str, ScopeName],
     indent: str,
+    *,
+    emit_outputs: bool = True,
 ) -> None:
     for segment in _stmt_segments(stmt):
         if isinstance(segment, OutputSegment):
+            if not emit_outputs:
+                continue
             typ = _type_to_python(segment.type_expr, segment.type_annotation)
             line = builder.add(f"{indent}{segment.name}: {typ} = cast({typ}, _kedi_placeholder())")
             source_range = _output_name_range(segment)

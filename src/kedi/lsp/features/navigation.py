@@ -9,6 +9,7 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     CallArg,
     CallSegment,
     ConditionalLoopStmt,
@@ -20,6 +21,7 @@ from kedi.lang.ast import (
     Program,
     ProgramWithValidation,
     Span,
+    TaskStmt,
     TypeApply,
     TypeDef,
     TypeExpr,
@@ -165,6 +167,15 @@ def _find_all_references(
                 target_span = _use_single_target_span(prog, stmt)
                 if target_span is not None:
                     out.append(target_span)
+        for stmt in _iter_control_statements(prog.toplevel_body):
+            if isinstance(stmt, TaskStmt) and stmt.subagent == sym.name:
+                if stmt.subagent_loc is not None:
+                    out.append(stmt.subagent_loc)
+        for procedure in _all_procedures(prog):
+            for stmt in _iter_control_statements(procedure.body):
+                if isinstance(stmt, TaskStmt) and stmt.subagent == sym.name:
+                    if stmt.subagent_loc is not None:
+                        out.append(stmt.subagent_loc)
     elif sym.kind in {
         "parameter",
         "param_decl",
@@ -283,6 +294,9 @@ def _collect_value_reference_candidates(
     out: List[Span],
 ) -> None:
     for stmt in _iter_control_statements(statements):
+        if isinstance(stmt, AwaitStmt) and stmt.handle == name:
+            if stmt.handle_loc is not None:
+                out.append(stmt.handle_loc)
         if isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)) and stmt.name == name:
             target_span = binding_name_span(stmt)
             if target_span is not None:

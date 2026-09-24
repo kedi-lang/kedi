@@ -297,13 +297,13 @@ def _stringify_segments(
         elif isinstance(seg, InputSegment):
             value = (
                 model_lookup_value(rt, seg.name, kwargs)
-                if context == "system"
+                if context in {"system", "task"}
                 else lookup_value(rt, seg.name, kwargs)
             )
-            parts.append(model_text(value) if context == "system" else str(value))
+            parts.append(model_text(value) if context in {"system", "task"} else str(value))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            parts.append(str(value))
+            parts.append(model_text(value) if context == "task" else str(value))
         elif isinstance(seg, OutputSegment):
             if seg.name in kwargs:
                 parts.append(str(force(kwargs[seg.name])))
@@ -315,6 +315,6 @@ def _stringify_segments(
                     parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            parts.append(str(value))
+            parts.append(model_text(value) if context == "task" else str(value))
 
     return "".join(parts)

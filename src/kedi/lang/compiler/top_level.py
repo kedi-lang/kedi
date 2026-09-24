@@ -27,6 +27,7 @@ from kedi.agent_profile.use_resolution import eval_use_directive
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    AwaitStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     CodeModeDirectiveStmt,
@@ -49,6 +50,7 @@ from kedi.lang.ast import (
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
+    TaskStmt,
     TemplateLine,
     TypeDef,
     TypeDefStmt,
@@ -311,6 +313,14 @@ def _execute_top_level_sequence(
                 "Top-level TemplateLine is not a valid program node; "
                 "use '>>' for a top-level template prompt."
             )
+        if isinstance(item, TaskStmt):
+            with block_agent_profile_scope(state.active_profile):
+                self.stmt_compiler.execute_task(item, env, state.active_profile)
+            continue
+        if isinstance(item, AwaitStmt):
+            with block_agent_profile_scope(state.active_profile):
+                self.stmt_compiler.execute_await(item, env)
+            continue
         if isinstance(item, ReturnStmt):
             with block_agent_profile_scope(state.active_profile):
                 return self.stmt_compiler.compile_return(item)(**env)

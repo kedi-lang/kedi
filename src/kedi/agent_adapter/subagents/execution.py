@@ -67,6 +67,7 @@ async def _execute_run(
     parent_run_id: str | None,
     child_depth: int,
     definition: Any,
+    evaluated_profile: Any | None,
     subagent: str,
     task: str,
     final_schema: dict[str, Any] | None,
@@ -97,7 +98,11 @@ async def _execute_run(
         if parent_run_id is not None:
             span.set_attribute("kedi.subagent.parent_run_id", parent_run_id)
         try:
-            child_profile = self._deps.evaluate_profile(definition)
+            child_profile = (
+                evaluated_profile
+                if evaluated_profile is not None
+                else self._deps.evaluate_profile(definition)
+            )
             enforcement = getattr(parent_profile, "_hook_enforcement", None)
             if enforcement is not None and enforcement.active:
                 child_hooks = getattr(child_profile, "hooks", None)

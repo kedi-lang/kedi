@@ -79,6 +79,7 @@ from .requirements import (
     validate_adapter_requirements,
 )
 from .subagents import SubagentUsageLimits
+from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tools.specs import SupportsToolRegistration, ToolSpec
 from .tools.records import ToolCallRecord
@@ -220,6 +221,9 @@ __all__ = [
     "SupportsConversationState",
     "SubagentExecutionContext",
     "SubagentUsageLimits",
+    "SubagentResult",
+    "SubagentScope",
+    "SubagentTask",
     "T",
     "ToolSpec",
     "ToolCallRecord",

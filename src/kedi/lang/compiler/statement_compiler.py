@@ -32,6 +32,7 @@ from ..ast import (
     ArtifactsDirectiveStmt,
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
@@ -55,6 +56,7 @@ from ..ast import (
     SkillsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     UseDirectiveStmt,
@@ -193,6 +195,39 @@ class StatementCompiler:
             self.rt.executor.evaluate_inline(
                 self.rt, "print(__kedi_display_text)", {"__kedi_display_text": text}
             )
+
+    def execute_task(self, stmt: TaskStmt, env: dict[str, Any], active: AgentProfile) -> None:
+        from kedi.agent_adapter.subagents.native import NativeSubagentOwner
+        from .subagent_tasks import prepare_subagent_task
+
+        with self.rt.trace_frame(KediTraceFrame(kind="task", label=stmt.subagent, span=stmt.loc)):
+            owner: NativeSubagentOwner | None = self.rt._native_subagent_owner.get()
+            if owner is None:
+                raise RuntimeError("Subagent tasks require an active Kedi invocation")
+            prompt, schema, output_adapter = prepare_subagent_task(self.rt, stmt, env)
+            job = owner.start_sync(
+                stmt.subagent,
+                task=prompt,
+                parent_profile=active,
+                final_schema=schema,
+                output_adapter=output_adapter,
+            )
+            self._declare_value(stmt.binder, job, env, source=stmt.loc)
+
+    def execute_await(self, stmt: AwaitStmt, env: dict[str, Any]) -> None:
+        from kedi.agent_adapter.subagents.native import SubagentTask
+        from .evaluation import lookup_value
+
+        with self.rt.trace_frame(KediTraceFrame(kind="await", label=stmt.handle, span=stmt.loc)):
+            job = lookup_value(self.rt, stmt.handle, env)
+            if not isinstance(job, SubagentTask):
+                raise TypeError(f"> await expects a subagent task, got {type(job).__name__}")
+            owner = self.rt._native_subagent_owner.get()
+            if owner is None:
+                raise RuntimeError("Subagent await requires an active Kedi invocation")
+            result = owner.wait_sync(job)
+            if stmt.binder is not None:
+                self._declare_value(stmt.binder, result, env, source=stmt.loc)
 
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
@@ -718,6 +753,14 @@ class StatementExecutor:
 
         if isinstance(stmt, ShowStmt):
             self.compiler.execute_show(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TaskStmt):
+            self.compiler.execute_task(stmt, closure_env, active)
+            return _NO_RETURN
+
+        if isinstance(stmt, AwaitStmt):
+            self.compiler.execute_await(stmt, closure_env)
             return _NO_RETURN
 
         if isinstance(stmt, TemplateBlock):

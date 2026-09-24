@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import re
 from typing import List, Optional
 
 from lsprotocol import types as lsp
 
 from kedi.agent_profile import CODEMODE_SETTING_FIELDS
 from kedi.lang.ast import (
+    AwaitStmt,
     LoopStmt,
     OutputSegment,
     ProcedureDef,
+    TaskStmt,
+    UseDirectiveStmt,
     VariableInitBlockStmt,
     VariableInitStmt,
 )
@@ -29,6 +33,7 @@ from kedi.lsp.module_surface import imported_surface_for_program
 _DIRECTIVE_COMPLETIONS = (
     "adapter",
     "agent",
+    "await",
     "approval",
     "artifacts",
     "auto",
@@ -59,6 +64,7 @@ _DIRECTIVE_COMPLETIONS = (
     "skills",
     "subagent",
     "system",
+    "task",
     "test_data",
     "tool",
     "use",
@@ -145,13 +151,23 @@ def compute_completion(
             )
             for name in _TOOL_SETTING_FIELDS
         ]
+    if re.fullmatch(r"\s*>\s*task\s+\[\w+\]\s*:\s*\w*", before_cursor):
+        return _native_task_completions(source, source_path, pos, child=True)
+    if re.fullmatch(r"\s*>\s*await(?:\s+\[\w+\])?\s*:\s*\w*", before_cursor):
+        return _native_task_completions(source, source_path, pos, child=False)
     if before_cursor.lstrip().startswith(">") and not before_cursor.lstrip().startswith("> show:"):
         in_procedure_header = _inside_direct_procedure_body(source, pos)
         return [
             lsp.CompletionItem(
                 label=name,
                 kind=lsp.CompletionItemKind.Keyword,
-                insert_text=f"{name}: ",
+                insert_text=(
+                    "task [job]: "
+                    if name == "task"
+                    else "await: "
+                    if name == "await"
+                    else f"{name}: "
+                ),
                 detail="Kedi directive",
                 sort_text=f"0-{name}",
             )
@@ -237,11 +253,79 @@ def compute_completion(
             add(statement.name, lsp.CompletionItemKind.Variable, "Kedi value")
         if isinstance(statement, LoopStmt) and statement.binder:
             add(statement.binder, lsp.CompletionItemKind.Variable, "loop value")
+        if isinstance(statement, TaskStmt):
+            add(statement.binder, lsp.CompletionItemKind.Variable, "subagent task")
+        if isinstance(statement, AwaitStmt) and statement.binder:
+            add(statement.binder, lsp.CompletionItemKind.Variable, "subagent result")
         for segment in _segments_of(statement):
-            if isinstance(segment, OutputSegment):
+            if isinstance(segment, OutputSegment) and not isinstance(statement, TaskStmt):
                 add(segment.name, lsp.CompletionItemKind.Variable, "template output")
 
     return sorted(items.values(), key=lambda item: item.label.lower())
+
+
+def _native_task_completions(
+    source: str, source_path: Optional[str], pos: lsp.Position, *, child: bool
+) -> List[lsp.CompletionItem]:
+    try:
+        program = parse_program(source, source_path=source_path)
+    except KediParseError:
+        prefix = "\n".join(source.splitlines()[: pos.line]) + "\n"
+        try:
+            program = parse_program(prefix, source_path=source_path)
+        except KediParseError:
+            current_line = source.splitlines()[pos.line]
+            indent = current_line[: len(current_line) - len(current_line.lstrip())]
+            try:
+                program = parse_program(
+                    prefix + indent + "> show: ready\n", source_path=source_path
+                )
+            except KediParseError:
+                return []
+
+    procedures = [
+        proc
+        for proc in _all_procedures(program)
+        if proc.loc is not None
+        and proc.loc.start_line - 1 <= pos.line
+        and proc.loc.end_line >= pos.line
+    ]
+    current_procedure = procedures[-1] if procedures else None
+    if child:
+        selected = [
+            stmt.name
+            for stmt in program.ordered_toplevel
+            if isinstance(stmt, UseDirectiveStmt)
+            and not stmt.tool_names
+            and stmt.loc is not None
+            and stmt.loc.start_line - 1 < pos.line
+        ]
+        if current_procedure is not None:
+            selected.extend(
+                stmt.name
+                for stmt in _iter_control_statements(current_procedure.body)
+                if isinstance(stmt, UseDirectiveStmt)
+                and not stmt.tool_names
+                and stmt.loc is not None
+                and stmt.loc.start_line - 1 < pos.line
+            )
+        profiles = _merged_profile_defs(program, imported_surface_for_program(program))
+        parent = profiles.get(selected[-1]) if selected else None
+        names = (member.name for member in parent.subagent_members) if parent else ()
+        kind = lsp.CompletionItemKind.Struct
+    else:
+        statements = list(program.toplevel_body)
+        if current_procedure is not None:
+            statements.extend(current_procedure.body)
+        names = (
+            stmt.binder
+            for stmt in _iter_control_statements(statements)
+            if isinstance(stmt, TaskStmt)
+            and stmt.loc is not None
+            and stmt.loc.start_line - 1 < pos.line
+        )
+        kind = lsp.CompletionItemKind.Variable
+    return [lsp.CompletionItem(label=name, kind=kind) for name in dict.fromkeys(names)]
 
 
 def _inside_directive_block(source: str, pos: lsp.Position, directive: str) -> bool:

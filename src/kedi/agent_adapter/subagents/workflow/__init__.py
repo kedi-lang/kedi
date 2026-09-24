@@ -120,11 +120,15 @@ def _dynamic_workflow_span(
 def dynamic_workflow_tool_spec(rt: KediRuntime, profile: AgentProfile) -> ToolSpec:
     allowed = tuple(profile.subagents)
     definitions = _snapshot_subagent_definitions(rt, profile, allowed)
-    budget = DelegationBudget.for_profile(
-        profile_name=profile.name,
-        max_agents=profile.max_agents,
+    native_owner = rt._native_subagent_owner.get()
+    budget = (
+        native_owner.budget_for(profile)
+        if native_owner is not None
+        else DelegationBudget.for_profile(profile_name=profile.name, max_agents=profile.max_agents)
     )
-    concurrency = rt._new_subagent_concurrency()
+    concurrency = (
+        native_owner.concurrency if native_owner is not None else rt._new_subagent_concurrency()
+    )
     sandbox_to_profile = _sandbox_names(allowed)
     descriptions = {
         sandbox_name: _profile_description(rt, profile_name, definitions)
