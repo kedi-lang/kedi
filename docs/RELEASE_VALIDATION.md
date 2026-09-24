@@ -38,6 +38,8 @@ remain enabled on Windows. This does not claim native Windows support for the
 Linux Harbor sandbox runner.
 JUnit results are uploaded for diagnosis. The existing Linux compatibility
 matrix covers Python 3.11 through 3.14; Python 3.10 is covered by the new job.
+Platform jobs print individual test names and fail with all-thread stack traces
+if a single test exceeds 120 seconds, rather than waiting for the job deadline.
 Configuring a job is not proof it has passed: native Windows and Linux results
 must be checked after the changes and submodule revisions are pushed.
 

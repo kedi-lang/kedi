@@ -72,7 +72,9 @@ jobs:
       - name: Run complete test suite
         run: >-
           uv run --locked --group dev --python 3.10
-          pytest --record-mode=none -q -p no:cov --junitxml=test-results.xml
+          pytest --record-mode=none -vv --tb=short -p no:cov
+          -o faulthandler_timeout=120 -o faulthandler_exit_on_timeout=true
+          --junitxml=test-results.xml
 
       - name: Upload test results
         if: ${{ always() }}
