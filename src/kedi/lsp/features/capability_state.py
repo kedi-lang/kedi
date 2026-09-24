@@ -12,11 +12,11 @@ from kedi.agent_adapter.meta import (
 )
 from kedi.agent_adapter.registry import adapter_capabilities, adapter_factory
 from kedi.lang.ast import (
-    HooksDirectiveStmt,
     HistoryDirectiveStmt,
+    HooksDirectiveStmt,
     ProfileDefStmt,
-    ProfileHooksEntry,
     ProfileHistoryEntry,
+    ProfileHooksEntry,
     ProfileRequiresEntry,
     RequiresDirectiveStmt,
     SettingsField,

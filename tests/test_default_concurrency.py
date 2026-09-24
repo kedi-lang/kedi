@@ -8,13 +8,13 @@ from typing import Any
 import pytest
 
 import kedi
-from kedi.promise import force
-from tests.interactive_helpers import inspect_fragment
 import kedi.api.configuration as api_configuration_module
 import kedi.api.state as api_state_module
 from kedi.core.engines import shared_thread_engine
 from kedi.engine import SequentialEngine
 from kedi.lang import compile_program, parse_program
+from kedi.promise import force
+from tests.interactive_helpers import inspect_fragment
 from tests.mock_adapter import MockAdapter
 
 SOURCE = (

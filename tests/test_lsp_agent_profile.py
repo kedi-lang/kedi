@@ -23,10 +23,10 @@ from kedi.lang.ast import (
     ProfileOutputEntry,
     ProfileSettingsEntry,
     ProfileSystemEntry,
+    SettingsField,
     Span,
     TemplateLine,
     TextSegment,
-    SettingsField,
     TypeRef,
     UseDirectiveStmt,
 )

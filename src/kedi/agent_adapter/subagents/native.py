@@ -13,11 +13,11 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import TypeAdapter
 
-from kedi.agent_profile import current_block_agent_profile
 from kedi.agent_adapter.execution import OwnedAsyncLoop, _resolve_deadline
 from kedi.agent_adapter.subagents import DelegationResult
 from kedi.agent_adapter.subagents.attempts import track_delegation_attempt
 from kedi.agent_adapter.subagents.budget import DelegationBudget
+from kedi.agent_profile import current_block_agent_profile
 from kedi.errors import KediExecutionError
 
 if TYPE_CHECKING:

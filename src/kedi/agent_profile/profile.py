@@ -13,8 +13,8 @@ from ..run_budget import RunBudget
 from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
 from .connection import A2AConnection
-from .hooks import HookSettings, normalize_hook_settings
 from .history import HistoryProcessingSettings
+from .hooks import HookSettings, normalize_hook_settings
 from .mcp import McpServerSpec
 from .settings import tool_reason_enabled
 from .skills import SkillsSettings, skills_settings

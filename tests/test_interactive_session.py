@@ -7,13 +7,13 @@ from typing import Any, cast
 import pytest
 
 import kedi
-from tests.interactive_helpers import inspect_fragment
 from kedi._interactive import persistence as persistence_module
 from kedi.agent_adapter import ConversationState
 from kedi.errors import KediExecutionError
 from kedi.executors.base import Executor
 from kedi.lang.compiler.program_compiler import ProgramCompiler
 from kedi.lang.parser import parse_program
+from tests.interactive_helpers import inspect_fragment
 from tests.mock_adapter import MockAdapter
 
 

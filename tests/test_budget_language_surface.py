@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import pytest
 from lsprotocol import types as lsp
-from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.models.function import FunctionModel
 
 from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
 from kedi.lang import compile_program, parse_program
+from kedi.lang.ast import BudgetDirectiveStmt
 from kedi.lsp.features.capabilities import _budget_capability_diagnostics
 from kedi.lsp.features.capability_state import _AdapterDiagnosticState
 from kedi.lsp.features.completion import compute_completion
 from kedi.lsp.features.diagnostics import compute_diagnostics
-from kedi.lang.ast import BudgetDirectiveStmt
 from kedi.run_budget import RunBudgetExceeded
 
 
 def test_partial_budget_nodes_are_safe_for_editor_parsing() -> None:
-    from tests.test_parser_grammar import _FakeNode, _fake_walker
+    from tests.test_parser_grammar import _fake_walker, _FakeNode
 
     walker = _fake_walker()
     assert walker._walk_budget_directive(_FakeNode("budget_directive")).request_limit is None
@@ -28,8 +28,8 @@ def test_partial_budget_nodes_are_safe_for_editor_parsing() -> None:
 
 
 def test_budget_declarations_preserve_profile_when_no_ambient_ledger(monkeypatch) -> None:
-    import kedi.run_budget as module
     import kedi.lang.compiler.top_level as top_level
+    import kedi.run_budget as module
 
     monkeypatch.setattr(module, "current_run_budget", lambda: None)
     monkeypatch.setattr(top_level, "current_run_budget", lambda: None)

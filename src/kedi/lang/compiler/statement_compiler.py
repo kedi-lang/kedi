@@ -11,6 +11,7 @@ from ...agent_profile.directives import (
     eval_agent_directive,
     eval_approval_directive,
     eval_artifacts_directive,
+    eval_budget_directive,
     eval_codemode_directive,
     eval_effort_directive,
     eval_history_directive,
@@ -18,7 +19,6 @@ from ...agent_profile.directives import (
     eval_mcp_directive,
     eval_model_directive,
     eval_requires_directive,
-    eval_budget_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -35,6 +35,7 @@ from ..ast import (
     AssignmentStmt,
     AwaitStmt,
     BacktickLineStmt,
+    BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     EffortDirectiveStmt,
@@ -49,11 +50,10 @@ from ..ast import (
     PythonBlock,
     RawInvokeStmt,
     RequiresDirectiveStmt,
-    BudgetDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
-    ShowStmt,
     SettingsDirectiveStmt,
+    ShowStmt,
     SkillsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
@@ -200,6 +200,7 @@ class StatementCompiler:
 
     def execute_task(self, stmt: TaskStmt, env: dict[str, Any], active: AgentProfile) -> None:
         from kedi.agent_adapter.subagents.native import NativeSubagentOwner
+
         from .subagent_tasks import prepare_subagent_task
 
         with self.rt.trace_frame(KediTraceFrame(kind="task", label=stmt.subagent, span=stmt.loc)):
@@ -218,6 +219,7 @@ class StatementCompiler:
 
     def execute_await(self, stmt: AwaitStmt, env: dict[str, Any]) -> None:
         from kedi.agent_adapter.subagents.native import SubagentTask
+
         from .evaluation import lookup_value
 
         with self.rt.trace_frame(KediTraceFrame(kind="await", label=stmt.handle, span=stmt.loc)):
@@ -648,10 +650,11 @@ class StatementExecutor:
         adapter_selection_kind: str | None = None,
         profile_registry: dict[str, Any] | None = None,
     ) -> Any:
+        from kedi.run_budget import RunBudget, run_budget_scope
+
         from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
-        from kedi.run_budget import RunBudget, run_budget_scope
 
         if profile_registry is None:
             profile_registry = self.rt._profile_registry

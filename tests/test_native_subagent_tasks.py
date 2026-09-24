@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import time
 import warnings
 from dataclasses import replace
@@ -33,9 +33,8 @@ from kedi.lsp.features.scope import _direct_statement_declarations
 from kedi.lsp.features.symbols import SymbolRef
 from kedi.lsp.python_virtual.document import compute_python_virtual_document
 from kedi.run_budget import RunBudget, current_run_budget
-from tests.test_subagents import RecordingPydanticAdapter
 from tests.lsp_helpers import definition_at, diagnostics_for, position_of, references_at
-
+from tests.test_subagents import RecordingPydanticAdapter
 
 PROFILES = """
 > profile: worker:

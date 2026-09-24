@@ -46,13 +46,13 @@ from kedi.lang.ast import (
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
     TextSegment,
+    ToolDeclaration,
     TypeApply,
     TypeDef,
     TypeExpr,
     TypeField,
     TypeRef,
     TypeUnion,
-    ToolDeclaration,
     UseDirectiveStmt,
 )
 

@@ -22,9 +22,9 @@ from .models import (
     HookHandler,
     HookResult,
     HookTimeoutError,
+    PostToolResultFailureEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
-    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     ToolHookContext,
@@ -36,11 +36,11 @@ from .models import (
 )
 from .registration import AdapterHookSnapshot, HookRegistrationMixin, handler_identity
 from .tool_wrapper import (
+    dispatch_post_tool_result_failure,
+    dispatch_post_tool_result_failure_sync,
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
     dispatch_post_tool_use_failure_sync,
-    dispatch_post_tool_result_failure,
-    dispatch_post_tool_result_failure_sync,
     dispatch_post_tool_use_sync,
     dispatch_pre_tool_use,
     dispatch_pre_tool_use_sync,

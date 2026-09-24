@@ -96,8 +96,10 @@ def test_partial_tool_preserves_bound_signature_for_both_framework_schemas(
 ) -> None:
     from functools import partial
     from inspect import signature
-    from pydantic_ai.tools import Tool
+
     from langchain_core.tools import StructuredTool
+    from pydantic_ai.tools import Tool
+
     from kedi.agent_adapter.tools.conversion import python_callable_tool_spec
 
     def format_number(prefix: str, value: int) -> str:
@@ -158,9 +160,10 @@ def test_async_body_errors_keep_execution_failure_record() -> None:
 def test_pydantic_post_hook_errors_preserve_available_records(
     recorded: bool, observer_fails: bool
 ) -> None:
-    from pydantic_ai.models.test import TestModel
     from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.models.test import TestModel
     from pydantic_ai.tools import ToolDefinition
+
     from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
     from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
 
@@ -436,9 +439,10 @@ def test_result_failure_dispatch_can_be_disabled_and_unresolved_annotations_are_
 def test_pydantic_preserves_returned_evidence_when_framework_validation_fails(
     observer_fails: bool,
 ) -> None:
-    from pydantic_ai.models.test import TestModel
     from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.models.test import TestModel
     from pydantic_ai.tools import ToolDefinition
+
     from kedi.agent_adapter.adapters.pydantic import PydanticAdapter
     from kedi.agent_adapter.adapters.pydantic.hooks import _KediHookCapability
 

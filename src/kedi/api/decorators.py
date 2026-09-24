@@ -15,7 +15,7 @@ from typing import (
     overload,
 )
 
-from kedi.agent_adapter import ConversationState
+from kedi.agent_adapter import AdapterCapability, ConversationState
 from kedi.agent_adapter.approvals.policy import ApprovalHandler, ApprovalMode, ApprovalPolicy
 from kedi.agent_profile import (
     AgentProfile,
@@ -41,7 +41,6 @@ from kedi.api.configuration import (
     _execution_engine,
     _resolve_selection,
 )
-from kedi.agent_adapter import AdapterCapability
 from kedi.api.registration import _auto_type_env, _callable_name, _is_async_callable
 from kedi.api.state import _UNSET, AdapterLike, AgentName, FrameworkAdapterName, P, R, _config_var
 from kedi.artifacts import ArtifactPolicyInput

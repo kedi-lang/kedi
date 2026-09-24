@@ -316,6 +316,7 @@ def test_codemode_preload_deduplication_preserves_first_occurrence_order() -> No
 
 def test_native_pydantic_codemode_deduplicates_preloads_before_model_request() -> None:
     from pydantic_ai import Agent
+
     from kedi.agent_adapter.codemode.pydantic import PydanticCodeModeCapability
 
     model_calls = 0

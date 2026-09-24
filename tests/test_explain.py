@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import kedi
 import pytest
 from click.testing import CliRunner
 
+import kedi
 from kedi.cli import main
 from kedi.explain import explain_program, render_explain
 from kedi.lang import parse_program
@@ -109,6 +109,7 @@ def test_explain_cli_fails_for_known_missing_requirement(tmp_path) -> None:
 
 def test_render_explain_distinguishes_unknown_effects_from_empty_set() -> None:
     from dataclasses import replace
+
     from kedi.explain import ExplainedTool
 
     report = explain_program(parse_program(">> Answer is [answer: str].\n"))
@@ -275,15 +276,15 @@ def test_explain_profile_cycles_unknown_effects_and_capability_lookup_failure(mo
 
 def test_explain_handles_legacy_partial_asts_without_evaluating_unknowns() -> None:
     from kedi.lang.ast import (
-        Program,
-        ModelDirectiveStmt,
-        ProcDefStmt,
-        UseDirectiveStmt,
-        TemplateLine,
+        BudgetDirectiveStmt,
         IfStmt,
         LoopStmt,
-        BudgetDirectiveStmt,
+        ModelDirectiveStmt,
+        ProcDefStmt,
         ProfileDefStmt,
+        Program,
+        TemplateLine,
+        UseDirectiveStmt,
     )
 
     program = Program(
@@ -324,6 +325,7 @@ def test_explain_artifact_mcp_and_budget_configuration(enabled) -> None:
 
 def test_python_profile_inspection_distinguishes_unknown_and_known_tools() -> None:
     from dataclasses import replace
+
     from kedi.agent_profile import AgentProfile
 
     @kedi.query(requires=["tool_registration"])

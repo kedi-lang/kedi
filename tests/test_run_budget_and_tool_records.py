@@ -32,8 +32,7 @@ from kedi.agent_adapter.tools.execution import with_artifact_result
 from kedi.agent_adapter.tools.records import ToolCallRecord, ToolCallTracker
 from kedi.agent_adapter.tools.retry import ToolRetryPolicy, with_body_retry
 from kedi.agent_profile import AgentProfile, HookSettings
-from kedi.lang import parse_program
-from kedi.lang import compile_program
+from kedi.lang import compile_program, parse_program
 from kedi.run_budget import (
     RunBudget,
     RunBudgetExceeded,

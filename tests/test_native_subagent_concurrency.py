@@ -3,14 +3,15 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from threading import Barrier, BrokenBarrierError, Lock, enumerate as enumerate_threads
+from threading import Barrier, BrokenBarrierError, Lock
+from threading import enumerate as enumerate_threads
 from typing import Any
 
 import pytest
 
 import kedi.agent_adapter.subagents.native as native_module
-from kedi.agent_adapter.execution import OwnedAsyncLoop
 from kedi.agent_adapter import LangChainAdapter
+from kedi.agent_adapter.execution import OwnedAsyncLoop
 from kedi.agent_adapter.subagents.budget import SubagentBudgetExceeded, SubagentConcurrencyExceeded
 from kedi.agent_adapter.subagents.native import NativeSubagentOwner
 from kedi.agent_adapter.subagents.workflow import dynamic_workflow_tool_spec

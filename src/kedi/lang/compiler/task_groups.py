@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from concurrent.futures import CancelledError, Future
 from collections import deque
+from concurrent.futures import CancelledError, Future
 from functools import partial
 from threading import Lock
 from typing import Any

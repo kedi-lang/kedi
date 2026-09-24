@@ -6,8 +6,8 @@ from typing import cast
 
 from lsprotocol import types as lsp
 
-from kedi.agent_adapter.meta import AdapterCapability, AgentAdapterKind
 from kedi.agent_adapter.history_processing import HISTORY_PROCESSOR_CACHE_WARNING
+from kedi.agent_adapter.meta import AdapterCapability, AgentAdapterKind
 from kedi.agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,
@@ -29,17 +29,17 @@ from kedi.lang.ast import (
     OutputSegment,
     ProcDefStmt,
     ProcedureDef,
-    ProfileDefStmt,
     ProfileBudgetEntry,
-    RequiresDirectiveStmt,
+    ProfileDefStmt,
     Program,
     ProgramWithValidation,
+    RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
     Span,
-    TaskStmt,
     TaskGroupStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TypeApply,
@@ -59,8 +59,8 @@ from kedi.lsp.features.capability_state import (
     _adapter_supports,
     _AdapterDiagnosticState,
     _merge_adapter_state,
-    _with_hooks_state,
     _with_history_state,
+    _with_hooks_state,
     _with_requirements_state,
 )
 from kedi.lsp.features.symbols import (

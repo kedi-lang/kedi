@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import re
 
 import pytest
 
@@ -304,6 +304,7 @@ def test_manual_program_return_and_capture_validation():
 
 def test_show_hover():
     from lsprotocol.types import Position
+
     from kedi.lang.ast import Program, ReturnStmt, Span
     from kedi.lsp.features.hover import _generic_hover, compute_hover
 

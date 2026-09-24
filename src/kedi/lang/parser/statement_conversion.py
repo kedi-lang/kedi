@@ -30,20 +30,21 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
-    ShowStmt,
     Segment,
+    ShowStmt,
     Span,
     Stmt,
-    TemplateLine,
-    TaskStmt,
     TaskGroupArm,
     TaskGroupStmt,
+    TaskStmt,
+    TemplateLine,
     TestSuite,
     TypeDefStmt,
     TypeExpr,
     VariableInitBlockStmt,
     VariableInitStmt,
 )
+from kedi.lang.parser.control_flow_validation import contains_output_captures
 from kedi.lang.parser.cst_helpers import (
     _decode_block_comment_body,
     _field,
@@ -52,7 +53,6 @@ from kedi.lang.parser.cst_helpers import (
     _src_text,
 )
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
-from kedi.lang.parser.control_flow_validation import contains_output_captures
 
 if TYPE_CHECKING:
     from kedi.lang.parser.cst_to_ast import _Walker

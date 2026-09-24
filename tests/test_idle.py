@@ -16,11 +16,11 @@ from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 import kedi
-from tests.interactive_helpers import inspect_fragment
 import kedi.cli as cli_module
 import kedi.idle as idle_module
 import kedi.idle_input as idle_input_module
 from kedi.idle import IdleConsole
+from tests.interactive_helpers import inspect_fragment
 
 
 def test_idle_console_persists_native_values_and_uses_repr() -> None:

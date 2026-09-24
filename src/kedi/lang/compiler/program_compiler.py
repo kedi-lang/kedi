@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from kedi.agent_profile import AgentProfile
-from kedi.run_budget import RunBudget
 from kedi.agent_profile.compile import (
     build_profile_registry,
     capture_procedure_profiles,
@@ -22,6 +21,7 @@ from kedi.lang.compiler.procedure_compiler import ProcedureCompiler
 from kedi.lang.compiler.statement_compiler import StatementCompiler, StatementExecutor
 from kedi.lang.compiler.type_system import register_type
 from kedi.module_registry import resolve_module_path
+from kedi.run_budget import RunBudget
 from kedi.source_loading import CompositeSourceMap, load_kedi_source_bundle
 from kedi.telemetry import capture_enabled, runtime_span
 from kedi.telemetry.naming import program_name

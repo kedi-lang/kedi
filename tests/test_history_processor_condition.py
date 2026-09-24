@@ -5,7 +5,6 @@ import threading
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-import kedi.agent_adapter.history_processing as history_processing
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic_ai.messages import (
     ModelRequest,
@@ -17,6 +16,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 
+import kedi.agent_adapter.history_processing as history_processing
 from kedi.agent_adapter import (
     HistoryProcessingError,
     HistoryProcessorState,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import json
 import math
 import operator
@@ -17,7 +16,6 @@ import pytest
 from pydantic import BaseModel
 
 import kedi
-from tests.interactive_helpers import inspect_fragment
 from kedi._interactive import persistence, state
 from kedi._interactive.persistence import (
     SessionDumpError,
@@ -42,6 +40,7 @@ from kedi.lang.ast import IfStmt, ProcDefStmt, TypeDefStmt
 from kedi.lang.compiler.environment import BindingMetadata, ScopeFrame
 from kedi.lang.compiler.type_system import KediType
 from kedi.promise import KediPromise
+from tests.interactive_helpers import inspect_fragment
 
 
 def test_encoder_does_not_confuse_temporary_objects_with_shared_references() -> None:

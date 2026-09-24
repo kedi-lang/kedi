@@ -17,6 +17,10 @@ from typing import Any
 from pydantic_core import to_jsonable_python
 from pydantic_monty import AsyncMonty, AsyncMontySession, CollectString, MontyError
 
+from kedi.errors import KediExecutionError
+from kedi.run_budget import RunBudgetExceeded
+
+from ..tools.records import ToolResultHandoff, defer_tool_handoff
 from .errors import (
     CodeModeBoundaryError,
     CodeModeCatalogError,
@@ -26,9 +30,6 @@ from .errors import (
     CodeModeResultError,
 )
 from .telemetry import codemode_span
-from ..tools.records import ToolResultHandoff, defer_tool_handoff
-from kedi.errors import KediExecutionError
-from kedi.run_budget import RunBudgetExceeded
 
 CONTROL_TOOL_NAMES = frozenset({"search_tools", "get_tool_schema", "execute_code"})
 _INVALID_IDENTIFIER = re.compile(r"\W+")

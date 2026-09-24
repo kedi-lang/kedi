@@ -6,13 +6,17 @@ from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters
-from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import RunContext
 
-from kedi.run_budget import admit_run_operation, assert_no_hidden_model_retries, RunBudgetExceeded
-from kedi.run_budget import current_run_budget
+from kedi.run_budget import (
+    RunBudgetExceeded,
+    admit_run_operation,
+    assert_no_hidden_model_retries,
+    current_run_budget,
+)
 
 
 class BudgetedModel(WrapperModel):

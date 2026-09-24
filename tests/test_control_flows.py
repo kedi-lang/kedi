@@ -9,7 +9,6 @@ from typing import Annotated, Any, get_args, get_origin
 import pytest
 
 import kedi
-from tests.interactive_helpers import inspect_fragment
 from kedi.agent_adapter import AgentAdapter
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import current_block_agent_profile
@@ -36,6 +35,7 @@ from kedi.lang.parser.cst_helpers import _template_condition_has_bare_python
 from kedi.lang.parser.cst_to_ast import _Walker
 from kedi.promise import KediPromise
 from kedi.utils import AttrDict
+from tests.interactive_helpers import inspect_fragment
 from tests.mock_adapter import MockAdapter
 from tests.telemetry_helpers import installed_recording_backend
 

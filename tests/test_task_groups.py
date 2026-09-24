@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import ast
+import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
@@ -10,20 +10,19 @@ from typing import Any
 
 import pytest
 
-from kedi.engine import SequentialEngine, ThreadEngine
 from kedi.agent_adapter import LangChainAdapter
 from kedi.agent_adapter.execution import RunDeadlineExceeded, use_run_deadline
+from kedi.engine import SequentialEngine, ThreadEngine
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import TaskGroupStmt
 from kedi.lang.compiler.task_groups import execute_task_group
 from kedi.lsp.features.completion import compute_completion
 from kedi.lsp.python_virtual.document import compute_python_virtual_document
+from kedi.run_budget import RunBudget, RunBudgetExceeded, current_run_budget
 from tests.lsp_helpers import definition_at, diagnostics_for, position_of
 from tests.test_native_subagent_tasks import PROFILES
 from tests.test_subagents import RecordingPydanticAdapter
-from kedi.run_budget import RunBudget, RunBudgetExceeded, current_run_budget
-
 
 TWO_TASKS = """
 > task [first]: worker:

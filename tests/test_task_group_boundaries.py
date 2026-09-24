@@ -15,15 +15,14 @@ from kedi.explain import explain_program
 from kedi.lang import KediParseError, compile_program, parse_program
 from kedi.lang.ast import AwaitStmt, Program, TaskGroupArm, TaskGroupStmt
 from kedi.lang.compiler.task_groups import execute_task_group
-from kedi.lsp.features.scope import _declaration_in_scope_path
-from kedi.lsp.python_virtual.document import compute_python_virtual_document
 from kedi.lsp.features.completion import compute_completion
 from kedi.lsp.features.navigation import _collect_loop_binder_refs
+from kedi.lsp.features.scope import _declaration_in_scope_path
 from kedi.lsp.features.symbols import SymbolRef
+from kedi.lsp.python_virtual.document import compute_python_virtual_document
 from kedi.lsp.python_virtual.scope import _all_procedures as virtual_procedures
-from tests.lsp_helpers import definition_at, hover_text_at, references_at
-from tests.test_task_groups import GroupAdapter, TWO_TASKS, runtime_for
-from tests.lsp_helpers import position_of
+from tests.lsp_helpers import definition_at, hover_text_at, position_of, references_at
+from tests.test_task_groups import TWO_TASKS, GroupAdapter, runtime_for
 
 
 def test_regions_cancel_late_registrations_and_ignore_foreign_children(

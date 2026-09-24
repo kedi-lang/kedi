@@ -2,6 +2,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 from .approvals.policy import ApprovalCancelled
+from .compaction.models import HistoryOrigin
 from .conversation import (
     AdapterConversationContext,
     AdapterStateSnapshot,
@@ -22,7 +23,6 @@ from .events import (
     bind_agent_event_dispatcher,
     observe_agent_events,
 )
-from .compaction.models import HistoryOrigin
 from .history_processing import (
     HistoryProcessingError,
     HistoryProcessingValidationError,
@@ -44,9 +44,9 @@ from .hooks import (
     HookRegistrationMixin,
     HookResult,
     HookTimeoutError,
+    PostToolResultFailureEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
-    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     ToolHookContext,
@@ -79,10 +79,10 @@ from .requirements import (
     validate_adapter_requirements,
 )
 from .subagents import SubagentUsageLimits
-from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
-from .tools.specs import SupportsToolRegistration, ToolSpec
+from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .tools.records import ToolCallRecord
+from .tools.specs import SupportsToolRegistration, ToolSpec
 
 if TYPE_CHECKING:
     from . import adapters

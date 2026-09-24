@@ -18,9 +18,9 @@ from kedi.agent_adapter.approvals.reason import accepts_tool_reason, split_tool_
 from kedi.agent_adapter.hooks import (
     HookDeniedError,
     ToolOrigin,
+    dispatch_post_tool_result_failure,
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
-    dispatch_post_tool_result_failure,
     dispatch_pre_tool_use,
     is_tool_execution_interrupted,
     new_tool_call_id,
@@ -31,8 +31,8 @@ from kedi.agent_adapter.tools.execution import (
     admit_current_artifact_result,
     resolve_tool_arguments_async,
 )
-from kedi.agent_adapter.tools.specs import ToolSpec, tool_has_artifact_boundary
 from kedi.agent_adapter.tools.records import attach_tool_call, track_tool_call
+from kedi.agent_adapter.tools.specs import ToolSpec, tool_has_artifact_boundary
 from kedi.agent_profile import AgentProfile
 
 

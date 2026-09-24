@@ -5,8 +5,8 @@ from typing import TYPE_CHECKING, List, Literal, cast
 
 from tree_sitter import Node
 
-from kedi.agent_adapter.meta import adapter_capability_names
 from kedi.agent_adapter.hooks import HOOK_EVENT_NAMES
+from kedi.agent_adapter.meta import adapter_capability_names
 from kedi.agent_profile.codemode import CODEMODE_SETTING_FIELDS
 from kedi.agent_profile.settings import (
     MODEL_SETTING_KEYS,

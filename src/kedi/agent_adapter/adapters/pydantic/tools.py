@@ -47,10 +47,10 @@ from kedi.agent_adapter.tools.execution import (
     resolve_tool_arguments_async,
     with_required_before_output,
 )
+from kedi.agent_adapter.tools.retry import tool_body
 from kedi.agent_adapter.tools.scope import (
     current_required_tool_calls,
 )
-from kedi.agent_adapter.tools.retry import tool_body
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 

@@ -25,9 +25,9 @@ from .agent_adapter import (
     HookExecutionError,
     HookHandler,
     HookTimeoutError,
+    PostToolResultFailureEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
-    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     SubagentExecutionContext,
@@ -35,9 +35,9 @@ from .agent_adapter import (
     SubagentScope,
     SubagentTask,
     SubagentUsageLimits,
+    ToolCallRecord,
     ToolHookContext,
     ToolOrigin,
-    ToolCallRecord,
     UserPromptSubmitDecision,
     UserPromptSubmitRequest,
     bind_agent_event_dispatcher,
@@ -98,7 +98,7 @@ from .executors.debug import (
     MarkdownDebugExporter,
     default_debug_export_path,
 )
-from .explain import ExplainReport, ExplainedCall, explain
+from .explain import ExplainedCall, ExplainReport, explain
 from .interactive_session import InteractiveSession, dump_session, load_session
 from .promise import KediPromise, KediPromiseLeak, force
 from .run_budget import RunBudget, RunBudgetExceeded

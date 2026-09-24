@@ -21,10 +21,10 @@ result Future is fulfilled. The promise/dataflow layer (``promise.py``) decides 
 from __future__ import annotations
 
 import contextvars
-from collections import deque
 import random
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, Callable, Sequence
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, Mapping, Optional
 
 import pytest
+from kedi_typesafe.core.schema import build_evaluation_plan
 from pydantic import ValidationError
 from pydantic_ai.models.test import TestModel
 
@@ -11,7 +12,6 @@ from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
 from kedi.lang import compile_program, parse_program
 from kedi.lang.procedure_schema import procedure_json_schema, procedure_return_json_schema
 from kedi.typesafe import BooleanCriteria, ChoiceCriteria, Probability, Rubric
-from kedi_typesafe.core.schema import build_evaluation_plan
 from tests.mock_adapter import MockAdapter
 from tests.utils_llm import run_without_llm
 

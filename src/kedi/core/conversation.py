@@ -45,8 +45,8 @@ def _run_conversation_call(
     """Assemble and execute one adapter-neutral request transaction."""
     from uuid import uuid4
 
-    from kedi.agent_adapter.hooks import HookRegistrationMixin, prepared_agent_hook_run
     from kedi.agent_adapter.history_provenance import history_source_scope
+    from kedi.agent_adapter.hooks import HookRegistrationMixin, prepared_agent_hook_run
     from kedi.agent_adapter.invocation import observe_invocations
     from kedi.agent_adapter.request import (
         AdapterRunOutcome,

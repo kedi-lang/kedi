@@ -21,8 +21,8 @@ from ...source_loading import CompositeSourceMap, single_file_source_map
 from ...telemetry import capture_enabled, record_histogram, runtime_span
 from ...telemetry.naming import program_name
 from ..ast import Program, ProgramWithValidation
-from .cst_to_ast import cst_to_ast
 from .control_flow_validation import validate_control_flow
+from .cst_to_ast import cst_to_ast
 from .diagnostics import KediDiagnostic, KediParseError
 from .parser import parse as _parse
 

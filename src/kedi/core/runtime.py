@@ -26,8 +26,8 @@ from kedi.core import model_calls as _model_calls
 from kedi.core import tool_binding as _tool_binding
 from kedi.core import tracing as _tracing
 from kedi.core.engines import _default_engine
-from kedi.core.scopes import ProcessingScope
 from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, ValueEnv, c, i, o
+from kedi.core.scopes import ProcessingScope
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.executors.base import DefaultExecutor, Executor
 from kedi.promise import KediPromise, force

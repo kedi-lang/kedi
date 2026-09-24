@@ -49,18 +49,18 @@ from kedi.agent_adapter.hooks import (
     HookDeniedError,
     ToolOrigin,
     current_hook_dispatcher,
+    dispatch_post_tool_result_failure,
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
-    dispatch_post_tool_result_failure,
     dispatch_pre_tool_use,
     is_tool_execution_interrupted,
 )
 from kedi.agent_adapter.hooks.tool_wrapper import (
-    note_result_observer_failure,
     defer_result_observation,
+    note_result_observer_failure,
 )
-from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_adapter.tools.records import ToolCallTracker, attach_tool_call, track_tool_call
+from kedi.agent_adapter.tools.specs import ToolSpec
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.adapters.pydantic.adapter import PydanticAdapter

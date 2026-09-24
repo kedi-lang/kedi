@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Final, Mapping, TypedDict
 
 CODEMODE_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(

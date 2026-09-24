@@ -61,7 +61,6 @@ from kedi.agent_adapter.hooks import (
     current_hook_dispatcher,
     hooked_agent_run,
 )
-from kedi.run_budget import assert_run_budget_supported, current_run_budget
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.models import (
@@ -88,6 +87,7 @@ from kedi.agent_profile.settings import (
 )
 from kedi.model_normalization import normalize_for_langchain
 from kedi.resolved_types import ResolvedKediType
+from kedi.run_budget import assert_run_budget_supported, current_run_budget
 
 
 class LangChainAdapter(HookRegistrationMixin):

@@ -21,8 +21,8 @@ from kedi.agent_adapter.tools.conversion import (
     python_callable_tool_spec,
 )
 from kedi.agent_adapter.tools.retry import ToolRetryPolicy, tool_retry_policy
-from kedi.errors import KediExecutionError, KediLoopIterationLimitError, KediTypeExecutionError
 from kedi.agent_profile import HookSettings
+from kedi.errors import KediExecutionError, KediLoopIterationLimitError, KediTypeExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
 from tests.mock_adapter import MockAdapter
 

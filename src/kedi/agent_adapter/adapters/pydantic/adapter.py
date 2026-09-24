@@ -70,7 +70,6 @@ from kedi.agent_adapter.approvals.policy import ApprovalPolicy
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run, current_agent_run_identity
-from kedi.agent_adapter.model_resolution import resolve_pydantic_model
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
     HistoryProcessorCondition,
@@ -86,6 +85,7 @@ from kedi.agent_adapter.hooks import (
 )
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from kedi.agent_adapter.model_resolution import resolve_pydantic_model
 from kedi.agent_adapter.models import (
     close_typesafe_model_current,
     codex_responses_model,
@@ -107,7 +107,6 @@ from kedi.agent_adapter.tools.scope import (
     required_tool_call_scope,
 )
 from kedi.agent_adapter.tools.specs import ToolSpec
-from kedi.run_budget import current_run_budget
 from kedi.agent_profile import AgentProfile, CodeModeSettings, normalize_codemode_settings
 from kedi.agent_profile.settings import (
     KEDI_RUNTIME_SETTING_KEYS,
@@ -116,6 +115,7 @@ from kedi.agent_profile.settings import (
 )
 from kedi.model_normalization import normalize_for_pydantic_ai
 from kedi.resolved_types import ResolvedKediType
+from kedi.run_budget import current_run_budget
 
 if TYPE_CHECKING:
     from pydantic_ai.tools import Tool as PydanticTool
