@@ -31,11 +31,21 @@ installs the locked development dependencies and runs the complete checkout
 test suite with cassette recording disabled. These are separate environments:
 the clean installation must not inherit optional SDKs from development.
 
-No platform failures are ignored and neither job uses `continue-on-error`.
+Neither job uses `continue-on-error`. Harbor's sandbox process-group and shell
+lifecycle tests are POSIX-only and are explicitly skipped on native Windows;
+they still run on Linux. Portable Harbor metadata, routing, and model tests
+remain enabled on Windows. This does not claim native Windows support for the
+Linux Harbor sandbox runner.
 JUnit results are uploaded for diagnosis. The existing Linux compatibility
 matrix covers Python 3.11 through 3.14; Python 3.10 is covered by the new job.
 Configuring a job is not proof it has passed: native Windows and Linux results
 must be checked after the changes and submodule revisions are pushed.
+
+The initial run `36058616061` passed the complete Linux Python 3.10 job. Windows
+passed clean installation, dependency validation, all entrypoints, and the LSP
+lifecycle, then stopped during test collection because a POSIX Harbor test
+referenced `SIGKILL`. The Windows test suite must be rerun after the platform
+guards are applied; the successful installation alone is not a suite pass.
 
 ## Parser Version Blocker
 

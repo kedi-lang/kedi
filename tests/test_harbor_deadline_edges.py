@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from types import SimpleNamespace
 
@@ -127,6 +128,7 @@ def test_runner_deadline_can_expire_during_setup(tmp_path, monkeypatch):
     assert "during runner setup" in record.error_message
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Harbor sandbox process lifecycle requires POSIX")
 def test_terminal_rejects_outside_root_and_foreground_wait(tmp_path):
     with pytest.raises(ValueError, match="inside cwd_root"):
         TerminalSession(root=tmp_path, cwd_root=tmp_path / "other", records_dir=tmp_path / "logs")

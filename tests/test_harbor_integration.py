@@ -54,9 +54,16 @@ from kedi.integrations.harbor.records import (
 from kedi.integrations.harbor.terminal.session import TerminalSession
 from kedi.lang.parser import parse_program
 
+requires_posix_processes = pytest.mark.skipif(
+    os.name != "posix",
+    reason="Harbor sandbox process lifecycle requires POSIX signals and process groups",
+)
+
 
 @pytest.fixture
 def terminal(tmp_path: Path) -> Iterator[TerminalSession]:
+    if os.name != "posix":
+        pytest.skip("Harbor sandbox terminal requires POSIX")
     value = TerminalSession(
         root=tmp_path,
         records_dir=tmp_path / "records",
@@ -463,6 +470,7 @@ def test_terminal_waits_for_background_process_without_stopping_on_timeout(
     assert finished["stdout"] == "done\n"
 
 
+@requires_posix_processes
 def test_terminal_can_use_a_broader_explicit_cwd_root(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     external = tmp_path / "external"
@@ -486,6 +494,7 @@ def test_terminal_can_use_a_broader_explicit_cwd_root(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 @pytest.mark.parametrize("background", [False, True])
+@requires_posix_processes
 def test_terminal_artifact_preview_preserves_full_log_route(
     tmp_path: Path, stream: str, background: bool
 ) -> None:
@@ -728,6 +737,7 @@ def test_terminal_tool_audit_serializes_supported_values_and_flushes_fail_open(
     assert terminal.summary()["tool_audit_errors"] == 1
 
 
+@requires_posix_processes
 def test_terminal_retains_only_explicit_execution_processes(tmp_path: Path) -> None:
     terminal = TerminalSession(
         root=tmp_path,
@@ -770,6 +780,7 @@ def test_terminal_retains_only_explicit_execution_processes(tmp_path: Path) -> N
     assert terminal.process_status(retained_id)["status"] == "finished"
 
 
+@requires_posix_processes
 def test_terminal_retained_process_has_a_bounded_lifetime(tmp_path: Path) -> None:
     terminal = TerminalSession(
         root=tmp_path,
@@ -792,6 +803,7 @@ def test_terminal_retained_process_has_a_bounded_lifetime(tmp_path: Path) -> Non
         terminal.close()
 
 
+@requires_posix_processes
 def test_retained_service_survives_terminal_owner_process_exit(tmp_path: Path) -> None:
     heartbeat = tmp_path / "heartbeat.txt"
     owner_source = "\n".join(
@@ -917,6 +929,7 @@ def test_terminal_rejects_invalid_process_retention(terminal: TerminalSession) -
         terminal.retain_process(process_id)
 
 
+@requires_posix_processes
 def test_terminal_retained_service_survives_agent_deadline(tmp_path: Path) -> None:
     # Give the real supervisor enough time to start even on a loaded CI host. Once it is
     # retained, advance the session's agent deadline directly; retained lifetime is owned by
@@ -943,6 +956,7 @@ def test_terminal_retained_service_survives_agent_deadline(tmp_path: Path) -> No
         terminal.close()
 
 
+@requires_posix_processes
 def test_terminal_supervisor_start_and_state_edge_cases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1053,6 +1067,7 @@ def test_terminal_supervisor_start_and_state_edge_cases(
     mocked.close()
 
 
+@requires_posix_processes
 def test_terminal_supervisor_helpers_and_process_input_cleanup(tmp_path: Path) -> None:
     assert isinstance(
         terminal_processes_module._supervisor_start_error(
@@ -1147,6 +1162,7 @@ def _supervisor_config(
     }
 
 
+@requires_posix_processes
 def test_process_supervisor_success_failure_input_and_limits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1223,6 +1239,7 @@ def test_process_supervisor_success_failure_input_and_limits(
     assert deadline_state["timed_out"] is True
 
 
+@requires_posix_processes
 def test_process_supervisor_validation_signals_and_main(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1405,6 +1422,7 @@ def test_terminal_timeout_path_bounds_and_missing_process(
         terminal.run_command([])
 
 
+@requires_posix_processes
 def test_terminal_output_limit_kills_a_process_that_ignores_sigterm(tmp_path: Path) -> None:
     terminal = TerminalSession(
         root=tmp_path,
@@ -1432,6 +1450,7 @@ def test_terminal_output_limit_kills_a_process_that_ignores_sigterm(tmp_path: Pa
         terminal.close()
 
 
+@requires_posix_processes
 def test_background_supervisor_enforces_output_limit_after_handoff(tmp_path: Path) -> None:
     terminal = TerminalSession(
         root=tmp_path,
@@ -1603,6 +1622,7 @@ def test_terminal_output_boundaries_deadline_and_environment(
     assert not is_secret_name("TOKENIZERS_PARALLELISM")
 
 
+@requires_posix_processes
 def test_terminal_command_classification_and_process_group_races(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1630,6 +1650,7 @@ def test_terminal_command_classification_and_process_group_races(
         assert handle.read(1) == b""
 
 
+@requires_posix_processes
 def test_terminal_shell_close_and_termination_races(tmp_path: Path) -> None:
     session = TerminalSession(
         root=tmp_path,
@@ -1688,6 +1709,7 @@ def test_terminal_shell_close_and_termination_races(tmp_path: Path) -> None:
         kill_session.close()
 
 
+@requires_posix_processes
 def test_terminal_zero_output_budget_records_limit_without_payload(tmp_path: Path) -> None:
     session = TerminalSession(
         root=tmp_path,
@@ -2451,6 +2473,7 @@ def test_runner_absolute_deadline_includes_launch_delay(
     assert record.policy["trial_timeout_seconds"] == 600
 
 
+@requires_posix_processes
 def test_terminal_time_notice_is_once_only_and_preserves_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3946,6 +3969,7 @@ def test_harbor_agent_installs_pinned_codex_helper_distribution(
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])
+@requires_posix_processes
 def test_harbor_runner_wrapper_records_actual_process_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
 ) -> None:
@@ -4129,6 +4153,7 @@ def test_harbor_setup_records_phases_and_preserves_exit_code(
     assert ("last-output" in result.stdout) is (exit_code == 0)
 
 
+@requires_posix_processes
 def test_harbor_setup_keeps_partial_output_when_install_is_cancelled(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

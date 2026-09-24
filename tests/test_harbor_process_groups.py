@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import os
 import signal
 
 import pytest
 
 from kedi.integrations.harbor import process_groups
+
+if os.name != "posix":
+    pytest.skip("Harbor sandbox process groups require POSIX", allow_module_level=True)
 
 
 @pytest.mark.parametrize("error", [ProcessLookupError, PermissionError])
