@@ -50,6 +50,7 @@ from kedi.lang.ast import (
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
+    TaskGroupStmt,
     TaskStmt,
     TemplateLine,
     TypeDef,
@@ -313,6 +314,12 @@ def _execute_top_level_sequence(
                 "Top-level TemplateLine is not a valid program node; "
                 "use '>>' for a top-level template prompt."
             )
+        if isinstance(item, TaskGroupStmt):
+            from .task_groups import execute_task_group
+
+            with block_agent_profile_scope(state.active_profile):
+                execute_task_group(self.rt, item, env, state.active_profile)
+            continue
         if isinstance(item, TaskStmt):
             with block_agent_profile_scope(state.active_profile):
                 self.stmt_compiler.execute_task(item, env, state.active_profile)

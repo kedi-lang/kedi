@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -27,6 +26,7 @@ from kedi.core import model_calls as _model_calls
 from kedi.core import tool_binding as _tool_binding
 from kedi.core import tracing as _tracing
 from kedi.core.engines import _default_engine
+from kedi.core.scopes import ProcessingScope
 from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, ValueEnv, c, i, o
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.executors.base import DefaultExecutor, Executor
@@ -87,7 +87,10 @@ class KediRuntime:
         self._conversation_state_lock = Lock()
         self._lifecycle_lock = Lock()
         self._closed = False
-        self._procedures: Dict[str, Callable[..., Any]] = {}
+        self._processing_scope: ContextVar[ProcessingScope | None] = ContextVar(
+            "kedi_processing_scope", default=None
+        )
+        self._root_procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
@@ -127,7 +130,7 @@ class KediRuntime:
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
-        self._type_env_stack: list[dict[str, Any]] = []
+        self._root_type_env_stack: list[dict[str, Any]] = []
         self._profile_registry: dict[str, Any] = {}
         self.default_agent_profile = (
             default_agent_profile
@@ -752,15 +755,47 @@ class KediRuntime:
         return _tool_binding._artifact_contract_needed(self, profile, adapter, has_tools=has_tools)
 
     def _register_outstanding(self, future: Any) -> None:
+        from kedi.agent_adapter.subagents.groups import register_process_future
+
+        register_process_future(future)
         owner = self._outstanding_owner()
         with self._outstanding_lock:
             self._outstanding.setdefault(owner, []).append(future)
 
     def _outstanding_owner(self) -> object:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            return scope.work_owner
         invocation_id = self._invocation_id.get()
         if invocation_id is not None:
             return invocation_id
         return ("unscoped", id(self), get_ident())
+
+    @property
+    def _procedures(self) -> dict[str, Callable[..., Any]]:
+        scope = self._processing_scope.get()
+        return scope.procedures if scope is not None else self._root_procedures
+
+    @_procedures.setter
+    def _procedures(self, value: dict[str, Callable[..., Any]]) -> None:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            scope.procedures = value
+        else:
+            self._root_procedures = value
+
+    @property
+    def _type_env_stack(self) -> list[dict[str, Any]]:
+        scope = self._processing_scope.get()
+        return scope.types if scope is not None else self._root_type_env_stack
+
+    @_type_env_stack.setter
+    def _type_env_stack(self, value: list[dict[str, Any]]) -> None:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            scope.types = value
+        else:
+            self._root_type_env_stack = value
 
     def drain(self) -> None:
         """Await every scheduled produce Future (parallel mode) at end of run.
@@ -782,9 +817,10 @@ class KediRuntime:
                 break
             for fut in pending:
                 try:
-                    exc = fut.exception()  # blocks until the Future completes
-                except CancelledError as cancelled:
-                    exc = cancelled  # a cancelled job surfaces as an error, not a hang
+                    self._engine.wait(fut)
+                    exc = None
+                except BaseException as failure:
+                    exc = failure
                 if exc is not None:
                     if first_exc is None:
                         first_exc = exc

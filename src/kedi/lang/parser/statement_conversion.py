@@ -36,6 +36,8 @@ from kedi.lang.ast import (
     Stmt,
     TemplateLine,
     TaskStmt,
+    TaskGroupArm,
+    TaskGroupStmt,
     TestSuite,
     TypeDefStmt,
     TypeExpr,
@@ -292,6 +294,10 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.ordered_toplevel.append(stmt)
         elif t in ("task_stmt", "await_stmt"):
             stmt = _walk_task_or_await(self, child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t == "task_group_stmt":
+            stmt = _walk_task_group(self, child, None)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
         elif t == "backtick_line_stmt":
@@ -592,6 +598,8 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return _walk_show_stmt(self, node)
     if t in ("task_stmt", "await_stmt"):
         return _walk_task_or_await(self, node)
+    if t == "task_group_stmt":
+        return _walk_task_group(self, node, proc)
     if t == "return_block_stmt":
         return self._walk_return_block_stmt(node)
     if t == "python_block":
@@ -926,6 +934,28 @@ def _walk_raw_invoke_stmt(self: _Walker, node: Node) -> RawInvokeStmt:
         type_expr=type_expr,
         loc=self._span(node),
     )
+
+
+def _walk_task_group(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> TaskGroupStmt:
+    body = _field(node, "body")
+    assert body is not None
+    arms: list[TaskGroupArm] = []
+    for child in _named_children(body):
+        if child.type != "task_group_arm":
+            continue
+        wait_node = _field(child, "wait")
+        assert wait_node is not None
+        wait = _walk_task_or_await(self, wait_node)
+        assert isinstance(wait, AwaitStmt)
+        arm = TaskGroupArm(wait=wait, loc=self._span(child))
+        process = _field(child, "process")
+        if process is not None:
+            process_body = _field(process, "body")
+            assert process_body is not None
+            arm.body = self._walk_block_statements(process_body, proc)
+            arm.process_loc = self._span(process)
+        arms.append(arm)
+    return TaskGroupStmt(arms=arms, loc=self._span(node))
 
 
 def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:

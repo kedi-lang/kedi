@@ -243,6 +243,18 @@ class AwaitStmt(Stmt):
 
 
 @dataclass
+class TaskGroupArm(Stmt):
+    wait: AwaitStmt = field(default_factory=AwaitStmt)
+    body: Optional[List[Stmt]] = None
+    process_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+
+
+@dataclass
+class TaskGroupStmt(Stmt):
+    arms: List[TaskGroupArm] = field(default_factory=list)
+
+
+@dataclass
 class ReturnStmt(Stmt):
     segments: Expr = field(default_factory=list)
 

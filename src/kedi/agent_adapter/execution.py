@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from threading import Event, Thread
 from typing import (
@@ -60,6 +60,9 @@ class OwnedAsyncLoop:
             self._ready.set()
 
     def run(self, awaitable: Awaitable[_T], *, enforce_deadline: bool = True) -> _T:
+        return self.submit(awaitable, enforce_deadline=enforce_deadline).result()
+
+    def submit(self, awaitable: Awaitable[_T], *, enforce_deadline: bool = True) -> Future[_T]:
         loop = self._loop
         if loop is None or self._stop is None or loop.is_closed():
             raise RuntimeError("Invocation event loop is closed")
@@ -70,7 +73,7 @@ class OwnedAsyncLoop:
             return await awaitable
 
         coroutine = _resolve_deadline(awaitable) if enforce_deadline else resolve()
-        return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
+        return asyncio.run_coroutine_threadsafe(coroutine, loop)
 
     def close(self) -> None:
         loop = self._loop

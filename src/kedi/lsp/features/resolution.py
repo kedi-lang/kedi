@@ -12,10 +12,12 @@ from kedi.lang.ast import (
     InputSegment,
     LoopStmt,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
     Program,
     ProgramWithValidation,
     TaskStmt,
+    TaskGroupStmt,
     TypeApply,
     TypeDef,
     TypeDefStmt,
@@ -42,6 +44,7 @@ from kedi.lsp.features.scope import (
     _resolve_lexical_name,
     _resolve_value_declaration,
     _segments_of,
+    _visible_control_statements,
 )
 from kedi.lsp.features.symbols import (
     SymbolRef,
@@ -351,13 +354,13 @@ def _resolve_in_procedure(
         return None
     scoped_type_by_name = {
         **type_by_name,
-        **{typedef.name: typedef for typedef in _direct_type_defs(proc)},
+        **{typedef.name: typedef for typedef in _direct_type_defs(proc, pos)},
     }
     scoped_proc_by_name = {
         **proc_by_name,
-        **{child.name: child for child in _nested_procedures(proc)},
+        **{child.name: child for child in _nested_procedures(proc, pos)},
     }
-    for child in _nested_procedures(proc):
+    for child in _nested_procedures(proc, pos):
         r = _resolve_in_procedure(
             prog,
             child,
@@ -576,6 +579,43 @@ def _resolve_in_stmt(
                     scope_proc=proc,
                     cursor_span=name_span,
                 )
+    if isinstance(stmt, TaskGroupStmt):
+        for arm in stmt.arms:
+            if arm.loc is None or not _position_inside(pos, arm.loc):
+                continue
+            children = [arm.wait, *(arm.body or [])]
+            scoped_procs = dict(proc_by_name)
+            scoped_types = dict(type_by_name)
+            for child in _visible_control_statements(children, pos):
+                if isinstance(child, ProcDefStmt) and child.proc is not None:
+                    scoped_procs[child.proc.name] = child.proc
+                elif isinstance(child, TypeDefStmt) and child.typedef is not None:
+                    scoped_types[child.typedef.name] = child.typedef
+            for child in children:
+                if isinstance(child, ProcDefStmt) and child.proc is not None:
+                    result = _resolve_in_procedure(
+                        prog,
+                        child.proc,
+                        pos,
+                        scoped_procs,
+                        scoped_types,
+                        imported_values,
+                        (*ancestor_procs, proc) if proc is not None else ancestor_procs,
+                    )
+                else:
+                    result = _resolve_in_stmt(
+                        prog,
+                        child,
+                        pos,
+                        proc,
+                        scoped_procs,
+                        scoped_types,
+                        imported_values,
+                        ancestor_procs,
+                    )
+                if result is not None:
+                    return result
+        return None
     for seg in _segments_of(stmt):
         r = _resolve_in_segment(
             seg,

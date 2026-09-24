@@ -22,6 +22,7 @@ from kedi.lang.ast import (
     ProgramWithValidation,
     Span,
     TaskStmt,
+    TaskGroupStmt,
     TypeApply,
     TypeDef,
     TypeExpr,
@@ -357,6 +358,9 @@ def _collect_loop_binder_refs(
                 visit(stmt.else_body or [], active)
             elif isinstance(stmt, ConditionalLoopStmt):
                 visit(stmt.body, active)
+            elif isinstance(stmt, TaskGroupStmt):
+                for arm in stmt.arms:
+                    visit(arm.body or [], active and arm.wait.binder != target.name)
 
     visit(prog.toplevel_body)
     for proc in _all_procedures(prog):

@@ -31,6 +31,7 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     RequiresDirectiveStmt,
     Span,
+    TaskGroupStmt,
     TemplateBlock,
     TemplateLine,
     UseDirectiveStmt,
@@ -333,6 +334,9 @@ class _Analyzer:
                 self._walk(item.body, state, f"{scope} (loop)")
                 if isinstance(item, LoopStmt) and item.map_body:
                     self._walk(item.map_body, state, f"{scope} (map)")
+            elif isinstance(item, TaskGroupStmt):
+                for arm in item.arms:
+                    self._walk(arm.body or [], state, f"{scope} (process {arm.wait.handle})")
             else:
                 state = self._directive(item, state)
         return state

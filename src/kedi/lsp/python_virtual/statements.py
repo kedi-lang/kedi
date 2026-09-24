@@ -28,6 +28,7 @@ from kedi.lang.ast import (
     ShowStmt,
     Span,
     Stmt,
+    TaskGroupStmt,
     TaskStmt,
     TemplateBlock,
     TemplateLine,
@@ -159,7 +160,19 @@ def _emit_statements(
     header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
 ) -> None:
     for stmt in statements:
-        if isinstance(stmt, IfStmt):
+        if isinstance(stmt, TaskGroupStmt):
+            for index, arm in enumerate(stmt.arms):
+                suffix = f"{stmt.loc.start_byte if stmt.loc else 0}_{index}"
+                builder.add(f"{indent}def __kedi_process_{suffix}() -> None:")
+                _emit_statements(
+                    builder,
+                    cursor,
+                    [arm.wait, *(arm.body or [])],
+                    dict(scope),
+                    indent + "    ",
+                    header_ranges,
+                )
+        elif isinstance(stmt, IfStmt):
             _emit_if_stmt(builder, cursor, stmt, scope, indent, header_ranges)
         elif isinstance(stmt, LoopStmt):
             _emit_loop_stmt(builder, cursor, stmt, scope, indent, header_ranges)

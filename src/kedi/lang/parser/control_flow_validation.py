@@ -19,6 +19,7 @@ from ..ast import (
     OutputSegment,
     Segment,
     Span,
+    TaskGroupStmt,
 )
 from ..call_arg_access import iter_call_arg_nested
 from .diagnostics import KediDiagnostic, KediParseError
@@ -50,7 +51,7 @@ def validate_control_flow(program: Program, *, interactive: bool = False) -> Non
             )
         )
 
-    def block(statements: Sequence[Any], *, root: bool) -> bool:
+    def block(statements: Sequence[Any], *, root: bool, process: bool = False) -> bool:
         terminal: Any = None
         for statement in statements:
             # Generated companion-file procedures are compiled declarations,
@@ -74,7 +75,13 @@ def validate_control_flow(program: Program, *, interactive: bool = False) -> Non
                 )
                 break
             if isinstance(statement, (ReturnStmt, ReturnBlockStmt)):
-                if interactive and root:
+                if process:
+                    error(
+                        statement,
+                        "Direct returns are not allowed in a process; return from a procedure instead",
+                        "kedi.return_in_process",
+                    )
+                elif interactive and root:
                     error(
                         statement,
                         "Interactive root returns are not allowed; use '> show:' instead",
@@ -89,14 +96,23 @@ def validate_control_flow(program: Program, *, interactive: bool = False) -> Non
             elif isinstance(statement, ProcDefStmt) and statement.proc is not None:
                 block(statement.proc.body, root=False)
             elif isinstance(statement, IfStmt):
-                body_returns = block(statement.body, root=root)
-                else_returns = block(statement.else_body or [], root=root)
+                body_returns = block(statement.body, root=root, process=process)
+                else_returns = block(statement.else_body or [], root=root, process=process)
                 if body_returns and else_returns:
                     terminal = statement
             elif isinstance(statement, (LoopStmt, ConditionalLoopStmt)):
-                block(statement.body, root=root)
+                block(statement.body, root=root, process=process)
                 if isinstance(statement, LoopStmt) and statement.map_body is not None:
-                    block(statement.map_body, root=root)
+                    block(statement.map_body, root=root, process=process)
+            elif isinstance(statement, TaskGroupStmt):
+                if not statement.arms:
+                    error(
+                        statement,
+                        "A task group requires at least one await",
+                        "kedi.empty_task_group",
+                    )
+                for arm in statement.arms:
+                    block(arm.body or [], root=False, process=True)
         return terminal is not None
 
     sequence = list(program.ordered_toplevel or program.toplevel_body)

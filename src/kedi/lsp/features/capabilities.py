@@ -39,6 +39,7 @@ from kedi.lang.ast import (
     SkillsDirectiveStmt,
     Span,
     TaskStmt,
+    TaskGroupStmt,
     TemplateBlock,
     TemplateLine,
     TypeApply,
@@ -375,6 +376,22 @@ def _scan_capability_scope(
             continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, TaskGroupStmt):
+            for arm in stmt.arms:
+                diagnostics.extend(
+                    _scan_capability_scope(
+                        prog,
+                        arm.body or [],
+                        active,
+                        profile_defs,
+                        profile_states,
+                        proc_names,
+                        type_defs,
+                        warned_approval_spans,
+                        selected_profile,
+                    )
+                )
             continue
         if isinstance(stmt, IfStmt):
             diagnostics.extend(

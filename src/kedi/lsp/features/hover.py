@@ -68,6 +68,7 @@ from kedi.lang.ast import (
     SkillsDirectiveStmt,
     Span,
     SystemDirectiveStmt,
+    TaskGroupStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
@@ -523,6 +524,12 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, ProcDefStmt) and node.proc is not None:
             visit(node.proc)
             return
+        if isinstance(node, TaskGroupStmt):
+            for arm in node.arms:
+                visit(arm.wait)
+                for stmt in arm.body or []:
+                    visit(stmt)
+            return
         if isinstance(node, IfStmt):
             for segment in node.condition_segments or []:
                 visit(segment)
@@ -683,6 +690,12 @@ def _describe_ast_node(node) -> Optional[str]:
         return (
             "**Python return**\n\n"
             "The Python value becomes the procedure or program result without string rendering."
+        )
+    if isinstance(node, TaskGroupStmt):
+        return (
+            "**Task group** `> task_group:`\n\n"
+            "Processes ready subagent results in isolated lexical scopes and joins all work. "
+            "A process cannot return from the enclosing procedure."
         )
     if isinstance(node, IfStmt):
         if node.condition_segments is not None:

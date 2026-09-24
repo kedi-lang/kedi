@@ -8,6 +8,7 @@ from kedi.lang.ast import (
     AssignmentStmt,
     AwaitStmt,
     TaskStmt,
+    TaskGroupStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -145,6 +146,9 @@ def _iter_control_statements(statements: Iterable[Stmt]) -> Iterable[Stmt]:
             yield from _iter_control_statements(stmt.map_body or [])
         elif isinstance(stmt, ConditionalLoopStmt):
             yield from _iter_control_statements(stmt.body)
+        elif isinstance(stmt, TaskGroupStmt):
+            for arm in stmt.arms:
+                yield from _iter_control_statements([arm.wait, *(arm.body or [])])
 
 
 def _all_procedures(procedures: Iterable[ProcedureDef]) -> list[ProcedureDef]:
@@ -447,6 +451,10 @@ def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
     elif isinstance(stmt, ConditionalLoopStmt):
         for child in stmt.body:
             yield from _iter_stmt_type_exprs(child)
+    elif isinstance(stmt, TaskGroupStmt):
+        for arm in stmt.arms:
+            for child in arm.body or []:
+                yield from _iter_stmt_type_exprs(child)
 
 
 def _stmt_segments(stmt: Stmt) -> list:

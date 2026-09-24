@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import warnings
 from collections.abc import Awaitable, Callable
+from concurrent.futures import Future
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from threading import Lock
@@ -84,6 +85,7 @@ class NativeSubagentOwner:
         self._observed: set[str] = set()
         self._execution_loop: asyncio.AbstractEventLoop | None = None
         self._state_lock = Lock()
+        self._groups: dict[Future[None], Callable[[], None]] = {}
         self._closing = False
         self._closed = False
 
@@ -127,8 +129,11 @@ class NativeSubagentOwner:
         final_schema: dict[str, Any] | None = None,
         output_adapter: TypeAdapter[Any] | None = None,
     ) -> SubagentTask:
+        from .groups import check_process_cancelled, register_process_child
+
         self._check_owner()
         self._bind_execution_loop()
+        check_process_cancelled()
         if self._closing:
             raise KediExecutionError("Subagent invocation is closing")
         if subagent not in parent_profile.subagents:
@@ -166,6 +171,7 @@ class NativeSubagentOwner:
             )
         native_task = SubagentTask(self, handle.run_id, output_adapter)
         self._tasks[handle.run_id] = native_task
+        register_process_child(native_task)
         return native_task
 
     def start_sync(
@@ -197,13 +203,18 @@ class NativeSubagentOwner:
         return self._run_sync(task.wait)
 
     def _run_sync(self, factory: Callable[[], Awaitable[_T]]) -> _T:
+        return self.runtime._engine.wait(self.submit(factory))
+
+    def submit(
+        self, factory: Callable[[], Awaitable[_T]], *, enforce_deadline: bool = True
+    ) -> Future[_T]:
         with self._state_lock:
             if self._loop is None and self._execution_loop is None:
                 self._loop = OwnedAsyncLoop()
             owned_loop = self._loop
             loop = self._execution_loop
         if owned_loop is not None:
-            return owned_loop.run(factory())
+            return owned_loop.submit(factory(), enforce_deadline=enforce_deadline)
         assert loop is not None
         if loop.is_closed():
             raise KediExecutionError("Subagent owner event loop is closed")
@@ -213,30 +224,60 @@ class NativeSubagentOwner:
             current = None
         if current is loop:
             raise KediExecutionError("Cannot synchronously wait on the subagent owner event loop")
-        return asyncio.run_coroutine_threadsafe(_resolve_deadline(factory()), loop).result()
+
+        async def resolve() -> _T:
+            return await factory()
+
+        awaitable = _resolve_deadline(factory()) if enforce_deadline else resolve()
+        return asyncio.run_coroutine_threadsafe(awaitable, loop)
+
+    def register_group(self, finished: Future[None], cancel: Callable[[], None]) -> None:
+        self._check_owner()
+        with self._state_lock:
+            if self._closing:
+                raise KediExecutionError("Subagent invocation is closing")
+            self._groups[finished] = cancel
+
+    def release_group(self, finished: Future[None]) -> None:
+        with self._state_lock:
+            self._groups.pop(finished, None)
 
     async def close(self, primary_error: BaseException | None = None) -> None:
         if self._closed:
             return
         self._bind_execution_loop()
-        self._closing = True
-        pending = tuple(self._tasks)
-        unobserved = set(pending).difference(self._observed)
-        cancelled_on_close: set[str] = set()
+        with self._state_lock:
+            self._closing = True
+            groups = tuple(self._groups.items())
+        for _, cancel in groups:
+            cancel()
         try:
-            for run_id in pending:
-                if self.runtime._subagent_status(run_id) == "running":
-                    if self.runtime._cancel_subagent(run_id):
-                        cancelled_on_close.add(run_id)
-            results = await asyncio.gather(
-                *(self._tasks[run_id].wait() for run_id in pending),
-                return_exceptions=True,
-            )
+            if groups:
+                await asyncio.gather(
+                    *(asyncio.wrap_future(finished) for finished, _ in groups),
+                    return_exceptions=True,
+                )
+            await self.drain_tasks(tuple(self._tasks), primary_error)
         finally:
             self._closed = True
-            self.runtime._subagent_coordinator.release_native_runs(pending)
+            self.runtime._subagent_coordinator.release_native_runs(tuple(self._tasks))
             self._tasks.clear()
             self._observed.clear()
+
+    async def drain_tasks(
+        self, pending: tuple[str, ...], primary_error: BaseException | None = None
+    ) -> None:
+        self._bind_execution_loop()
+        unobserved = set(pending).difference(self._observed)
+        cancelled_on_close: set[str] = set()
+        for run_id in pending:
+            if self.runtime._subagent_status(run_id) == "running":
+                if self.runtime._cancel_subagent(run_id):
+                    cancelled_on_close.add(run_id)
+        results = await asyncio.gather(
+            *(self._tasks[run_id].wait() for run_id in pending),
+            return_exceptions=True,
+        )
         if primary_error is not None:
             return
         for run_id, result in zip(pending, results):

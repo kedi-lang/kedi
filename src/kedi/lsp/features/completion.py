@@ -26,6 +26,7 @@ from kedi.lsp.features.scope import (
     _all_type_defs,
     _iter_control_statements,
     _segments_of,
+    _visible_control_statements,
 )
 from kedi.lsp.features.symbols import _merged_profile_defs
 from kedi.lsp.module_surface import imported_surface_for_program
@@ -58,6 +59,7 @@ _DIRECTIVE_COMPLETIONS = (
     "output",
     "package",
     "profile",
+    "process",
     "requires",
     "show",
     "settings",
@@ -65,6 +67,7 @@ _DIRECTIVE_COMPLETIONS = (
     "subagent",
     "system",
     "task",
+    "task_group",
     "test_data",
     "tool",
     "use",
@@ -205,9 +208,9 @@ def compute_completion(
         return list(items.values())
 
     imported_surface = imported_surface_for_program(prog)
-    for typedef in [*_all_type_defs(prog), *imported_surface.types.values()]:
+    for typedef in [*_all_type_defs(prog, pos), *imported_surface.types.values()]:
         add(typedef.name, lsp.CompletionItemKind.Class, "Kedi type")
-    for procedure in [*_all_procedures(prog), *imported_surface.procedures.values()]:
+    for procedure in [*_all_procedures(prog, pos), *imported_surface.procedures.values()]:
         parameters = ", ".join(procedure.params)
         add(
             procedure.name,
@@ -242,7 +245,7 @@ def compute_completion(
     else:
         statements = prog.toplevel_body
 
-    for statement in _iter_control_statements(statements):
+    for statement in _visible_control_statements(statements, pos):
         loc = getattr(statement, "loc", None)
         if loc is not None and (loc.start_line - 1, loc.start_col - 1) > (
             pos.line,
@@ -319,7 +322,7 @@ def _native_task_completions(
             statements.extend(current_procedure.body)
         names = (
             stmt.binder
-            for stmt in _iter_control_statements(statements)
+            for stmt in _visible_control_statements(statements, pos)
             if isinstance(stmt, TaskStmt)
             and stmt.loc is not None
             and stmt.loc.start_line - 1 < pos.line

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
@@ -56,6 +57,7 @@ from ..ast import (
     SkillsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
+    TaskGroupStmt,
     TaskStmt,
     TemplateBlock,
     TemplateLine,
@@ -497,6 +499,9 @@ class StatementExecutor:
         """Execute one ordered block while keeping directive state block-local."""
         last_return: Any = _NO_RETURN
         for stmt in statements:
+            from kedi.agent_adapter.subagents.groups import check_process_cancelled
+
+            check_process_cancelled()
             updated = self._apply_profile_directive(
                 stmt,
                 active,
@@ -755,6 +760,12 @@ class StatementExecutor:
             self.compiler.execute_show(stmt, closure_env)
             return _NO_RETURN
 
+        if isinstance(stmt, TaskGroupStmt):
+            from .task_groups import execute_task_group
+
+            execute_task_group(self.rt, stmt, closure_env, active)
+            return _NO_RETURN
+
         if isinstance(stmt, TaskStmt):
             self.compiler.execute_task(stmt, closure_env, active)
             return _NO_RETURN
@@ -784,9 +795,9 @@ class StatementExecutor:
             return _NO_RETURN
 
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
-            child = stmt.proc
-            child.captured_agent_profile = active.frozen_copy()
-            child.lexical_env = closure_env
+            child = replace(
+                stmt.proc, captured_agent_profile=active.frozen_copy(), lexical_env=closure_env
+            )
             proc_compiler = ProcedureCompiler(self.rt)
             fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
