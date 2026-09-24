@@ -98,23 +98,59 @@ def test_registry_http_errors_keep_their_meaning(monkeypatch, code):
 
 
 @pytest.mark.parametrize(
-    ("body", "headers", "url"),
+    ("body", "headers", "url", "message"),
     [
-        (b"{}", {"Content-Length": "999999999"}, "http://127.0.0.1:8767/v1/audit.json"),
-        (b"x" * (api.MAX_REGISTRY_RESPONSE_BYTES + 1), {}, "http://127.0.0.1:8767/v1/audit.json"),
-        (b"not json", {}, "http://127.0.0.1:8767/v1/audit.json"),
-        (b"[]", {}, "http://127.0.0.1:8767/v1/audit.json"),
-        (b"{}", {}, "https://other.example.test/v1/audit.json"),
-        (b"{}", {"Content-Length": "invalid"}, "http://127.0.0.1:8767/v1/audit.json"),
+        pytest.param(
+            b"{}",
+            {"Content-Length": "999999999"},
+            "http://127.0.0.1:8767/v1/audit.json",
+            "exceeds the maximum size",
+            id="oversized-content-length",
+        ),
+        pytest.param(
+            b"x" * (api.MAX_REGISTRY_RESPONSE_BYTES + 1),
+            {},
+            "http://127.0.0.1:8767/v1/audit.json",
+            "exceeds the maximum size",
+            id="oversized-body",
+        ),
+        pytest.param(
+            b"not json",
+            {},
+            "http://127.0.0.1:8767/v1/audit.json",
+            "invalid JSON",
+            id="invalid-json",
+        ),
+        pytest.param(
+            b"[]",
+            {},
+            "http://127.0.0.1:8767/v1/audit.json",
+            "must be a JSON object",
+            id="non-object-json",
+        ),
+        pytest.param(
+            b"{}",
+            {},
+            "https://other.example.test/v1/audit.json",
+            "different origin",
+            id="cross-origin-response",
+        ),
+        pytest.param(
+            b"{}",
+            {"Content-Length": "invalid"},
+            "http://127.0.0.1:8767/v1/audit.json",
+            "Could not fetch registry record",
+            id="invalid-content-length",
+        ),
     ],
 )
-def test_registry_rejects_invalid_http_responses(monkeypatch, body, headers, url):
+def test_registry_rejects_invalid_http_responses(monkeypatch, body, headers, url, message):
     response = io.BytesIO(body)
     response.headers = headers
     response.geturl = lambda: url
     monkeypatch.setattr(api, "urlopen", lambda *args, **kwargs: response)
-    with pytest.raises(api.RegistryAPIError):
-        api.HTTPRegistryAPIClient().audit_records()
+    with pytest.raises(api.RegistryAPIError, match=message):
+        api.HTTPRegistryAPIClient("http://127.0.0.1:8767").audit_records()
 
 
 @pytest.mark.parametrize("url", ["https://host.test", "http://localhost:80", "http://[::1]:80"])

@@ -72,7 +72,7 @@ jobs:
       - name: Run complete test suite
         run: >-
           uv run --locked --with pytest-timeout==2.4.0 --group dev --python 3.10
-          pytest --record-mode=none -q --tb=short -p no:cov
+          pytest --record-mode=none -q --tb=short -p no:cov --maxfail=1
           --timeout=150 --session-timeout=900 -o faulthandler_timeout=120
           --junitxml=test-results.xml
 
