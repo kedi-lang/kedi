@@ -93,7 +93,10 @@ def test_ready_arm_runs_before_earlier_slow_child(workers: int) -> None:
         engine.shutdown()
 
 
-def test_ready_processing_runs_concurrently_without_local_declaration_leaks() -> None:
+@pytest.mark.parametrize("from_worker", [False, True])
+def test_ready_processing_runs_concurrently_without_local_declaration_leaks(
+    from_worker: bool,
+) -> None:
     barrier = Barrier(2)
     seen: list[tuple[str, str]] = []
     engine = ThreadEngine(2)
@@ -125,7 +128,10 @@ def test_ready_processing_runs_concurrently_without_local_declaration_leaks() ->
     )
     rt._initial_globals_env.update(barrier=barrier, seen=seen)
     try:
-        assert rt.run_main() == "done"
+        result = (
+            engine.schedule((), rt.run_main).result(timeout=10) if from_worker else rt.run_main()
+        )
+        assert result == "done"
         assert sorted(seen) == [("first", "first"), ("second", "second")]
         assert "local" not in rt._procedures
         assert all("Local" not in scope for scope in rt._type_env_stack)
@@ -165,6 +171,86 @@ def test_nested_groups_and_models_finish_with_one_worker() -> None:
         assert seen == [7]
         assert not rt._outstanding
     finally:
+        engine.shutdown()
+
+
+def test_worker_dispatches_late_ready_sibling_while_an_arm_is_waiting() -> None:
+    entered, released = Event(), Event()
+    engine = ThreadEngine(2)
+
+    class Adapter(GroupAdapter):
+        async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+            if prompt == "Second.":
+                while not entered.is_set():
+                    await asyncio.sleep(0.001)
+            return prompt
+
+    def wait_for_sibling() -> None:
+        entered.set()
+        assert released.wait(5), "ready sibling did not start"
+
+    rt = runtime_for(
+        TWO_TASKS
+        + """
+> task_group:
+    > await: first
+    > process:
+        `wait_for_sibling()`
+    > await: second
+    > process:
+        `released.set()`
+""",
+        adapter=Adapter(),
+        engine=engine,
+    )
+    rt._initial_globals_env.update(wait_for_sibling=wait_for_sibling, released=released)
+    try:
+        engine.schedule((), rt.run_main).result(timeout=10)
+        assert rt._subagent_coordinator.active_runs == 0
+    finally:
+        released.set()
+        engine.shutdown()
+
+
+def test_child_failure_cancels_processing_even_while_dispatcher_is_on_a_worker() -> None:
+    entered, released = Event(), Event()
+    engine = ThreadEngine(1)
+    unexpected: list[str] = []
+
+    class Adapter(GroupAdapter):
+        async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+            if prompt == "Second.":
+                while not entered.is_set():
+                    await asyncio.sleep(0.001)
+                asyncio.get_running_loop().call_later(0.05, released.set)
+                raise ValueError("late child failed")
+            return prompt
+
+    def block() -> None:
+        entered.set()
+        assert released.wait(5)
+
+    rt = runtime_for(
+        TWO_TASKS
+        + """
+> task_group:
+    > await: first
+    > process:
+        `block()`
+        `unexpected.append("continued after sibling failure")`
+    > await: second
+""",
+        adapter=Adapter(),
+        engine=engine,
+    )
+    rt._initial_globals_env.update(block=block, unexpected=unexpected)
+    try:
+        with pytest.raises(ValueError, match="late child failed"):
+            engine.schedule((), rt.run_main).result(timeout=10)
+        assert unexpected == []
+        assert rt._subagent_coordinator.active_runs == 0
+    finally:
+        released.set()
         engine.shutdown()
 
 

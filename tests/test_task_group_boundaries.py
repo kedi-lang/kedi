@@ -125,6 +125,43 @@ def test_registration_failure_joins_already_registered_waiters(
     assert rt._subagent_coordinator.active_runs == 0
 
 
+def test_ready_success_does_not_mask_sibling_failure_with_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = NativeSubagentOwner.submit
+
+    def submit(self, factory, **kwargs):
+        future = original(self, factory, **kwargs)
+        if getattr(factory, "__name__", None) == "wait":
+            future.exception(timeout=5)
+        return future
+
+    class Adapter(GroupAdapter):
+        async def invoke(self, *, prompt: str, **kwargs: Any) -> str:
+            if prompt == "Second.":
+                raise ValueError("second child failed")
+            return prompt
+
+    monkeypatch.setattr(NativeSubagentOwner, "submit", submit)
+    seen: list[str] = []
+    rt = runtime_for(
+        TWO_TASKS
+        + """
+> task_group:
+    > await: first
+    > process:
+        `seen.append("unexpected")`
+    > await: second
+""",
+        adapter=Adapter(),
+    )
+    rt._initial_globals_env["seen"] = seen
+    with pytest.raises(ValueError, match="second child failed"):
+        rt.run_main()
+    assert not seen
+    assert rt._subagent_coordinator.active_runs == 0
+
+
 def test_unconsumed_process_model_failure_surfaces_at_join() -> None:
     class Adapter(GroupAdapter):
         async def produce(self, template: str, **kwargs: Any) -> Any:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from collections import deque
 from functools import partial
 from threading import Lock
@@ -34,10 +34,21 @@ class _Completions:
         self._lock = Lock()
         self._queued: deque[tuple[int, bool, Future[Any]]] = deque()
         self._waiter: Future[tuple[int, bool, Future[Any]]] | None = None
+        self._failure: BaseException | None = None
+
+    def failure_or(self, fallback: BaseException) -> BaseException:
+        with self._lock:
+            return self._failure if self._failure is not None else fallback
 
     def put(self, index: int, processing: bool, future: Future[Any]) -> None:
         event = (index, processing, future)
+        try:
+            failure = future.exception()
+        except CancelledError as exc:
+            failure = exc
         with self._lock:
+            if self._failure is None:
+                self._failure = failure
             waiter, self._waiter = self._waiter, None
             if waiter is None:
                 self._queued.append(event)
@@ -78,6 +89,24 @@ def execute_task_group(
     primary_error: BaseException | None = None
     events = _Completions()
     pending = 0
+    waiters: list[Future[SubagentResult]] = []
+
+    def completed(index: int, processing: bool, future: Future[Any]) -> None:
+        # Publish the primary failure before cancellation generates sibling events.
+        events.put(index, processing, future)
+        if future.cancelled() or future.exception() is not None:
+            region.cancel()
+
+    def schedule_process(index: int, waiter: Future[SubagentResult]) -> None:
+        nonlocal pending
+        arm = stmt.arms[index]
+        if arm.body is not None:
+            process = rt._engine.schedule_control(
+                partial(_execute_process, rt, arm, env, profile, waiter), (waiter,)
+            )
+            register_process_future(process)
+            process.add_done_callback(partial(completed, index, True))
+            pending += 1
 
     try:
         with (
@@ -88,27 +117,26 @@ def execute_task_group(
             for index, job in enumerate(jobs):
                 register_process_child(job)
                 future = owner.submit(job.wait)
-                future.add_done_callback(partial(events.put, index, False))
+                future.add_done_callback(partial(completed, index, False))
+                waiters.append(future)
                 pending += 1
             profile = active.frozen_copy()
+            if rt._engine.parallel:
+                # Dependency callbacks admit ready bodies even while a worker
+                # running this dispatcher is cooperatively joining another arm.
+                for index, waiter in enumerate(waiters):
+                    schedule_process(index, waiter)
             while pending:
                 index, processing, future = rt._engine.wait(events.next())
                 pending -= 1
                 try:
-                    result = future.result()
-                    if not processing and primary_error is None:
+                    future.result()
+                    if not processing and primary_error is None and not rt._engine.parallel:
                         check_process_cancelled()
-                        arm = stmt.arms[index]
-                        if arm.body is not None:
-                            process = rt._engine.schedule_control(
-                                partial(_execute_process, rt, arm, env, profile, result)
-                            )
-                            register_process_future(process)
-                            process.add_done_callback(partial(events.put, index, True))
-                            pending += 1
+                        schedule_process(index, waiters[index])
                 except BaseException as exc:
                     if primary_error is None:
-                        primary_error = exc
+                        primary_error = events.failure_or(exc)
                         region.cancel()
             if primary_error is not None:
                 raise primary_error
@@ -137,10 +165,11 @@ def _execute_process(
     arm: TaskGroupArm,
     env: dict[str, Any],
     profile: AgentProfile,
-    result: SubagentResult,
+    waiter: Future[SubagentResult],
 ) -> None:
     from .statement_compiler import StatementExecutor
 
+    result = waiter.result()
     owner = rt._native_subagent_owner.get()
     assert owner is not None
     region = ProcessingRegion(owner)

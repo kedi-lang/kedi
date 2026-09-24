@@ -51,6 +51,8 @@ class ProcessingRegion:
 
     def cancel(self) -> None:
         with self._lock:
+            if self._cancelled:
+                return
             self._cancelled = True
             children = tuple(self._children)
             futures = tuple(self._futures)

@@ -55,9 +55,9 @@ class Engine:
     def shutdown(self) -> None:  # pragma: no cover - iface
         pass
 
-    def schedule_control(self, job: Job) -> Future:
+    def schedule_control(self, job: Job, deps: Sequence[Future] = ()) -> Future:
         """Run orchestration once, without applying model retry policies to its side effects."""
-        return self.schedule((), job)
+        return self.schedule(deps, job)
 
     def wait(self, future: Future) -> Any:
         """Join a control dependency; parallel engines may advance ready work."""
@@ -139,6 +139,14 @@ class ThreadEngine(Engine):
         return future.result()
 
     def schedule(self, deps: Sequence[Future], job: Job) -> Future:
+        return self._schedule(deps, job, inline=True)
+
+    def schedule_control(self, job: Job, deps: Sequence[Future] = ()) -> Future:
+        # A group dispatcher must register siblings before executing any arm,
+        # including when the dispatcher is already running on this engine.
+        return self._schedule(deps, job, inline=False)
+
+    def _schedule(self, deps: Sequence[Future], job: Job, *, inline: bool) -> Future:
         dep_list = list(deps)
         result: Future = Future()
         ctx = contextvars.copy_context()
@@ -170,7 +178,7 @@ class ThreadEngine(Engine):
         # Re-entrant (a tool on a worker issued this template). Run inline ONLY when every dep is
         # already resolved; otherwise schedule it as a continuation so we neither run before deps
         # are ready nor execute on the foreign thread that completed the final dependency.
-        if self._on_worker():
+        if inline and self._on_worker():
             if all(d.done() for d in dep_list):
                 _run()
             else:
@@ -382,9 +390,6 @@ class JobManagerEngine(ThreadEngine):
         if self._on_worker():
             return super().schedule(deps, job)
         return super().schedule(deps, lambda: self._run_with_policy(job))
-
-    def schedule_control(self, job: Job) -> Future:
-        return super().schedule((), job)
 
     def _run_with_policy(self, job: Job) -> Any:
         self.breaker.check()

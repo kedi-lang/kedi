@@ -762,9 +762,20 @@ def test_primary_error_survives_cleanup_failure(monkeypatch: pytest.MonkeyPatch)
             await job.wait()
             raise ValueError("primary failure")
 
-    with pytest.raises(ValueError, match="primary failure") as error:
-        asyncio.run(run())
-    assert "cleanup failed" in str(getattr(error.value, "__notes__", []))
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="primary failure") as error:
+            asyncio.run(run())
+    if hasattr(error.value, "add_note"):
+        assert "cleanup failed" in str(error.value.__notes__)
+        assert not seen
+    else:
+        assert any(
+            item.category is RuntimeWarning and "cleanup failed" in str(item.message)
+            for item in seen
+        )
+    assert runtime._subagent_coordinator.active_runs == 0
+    assert runtime._native_subagent_owner.get() is None
 
 
 def test_cleanup_warns_when_primary_error_cannot_accept_notes(
