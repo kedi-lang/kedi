@@ -4,10 +4,10 @@ import importlib.metadata
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import sysconfig
+from pathlib import Path
 
 import kedi
 from kedi.lang.ast import AwaitStmt, BudgetDirectiveStmt, ShowStmt, TaskGroupStmt, TaskStmt
