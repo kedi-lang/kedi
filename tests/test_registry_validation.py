@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 from dataclasses import replace
+from pathlib import Path, PureWindowsPath
 from unittest.mock import Mock
 from urllib.error import HTTPError
 
@@ -303,16 +304,34 @@ def test_audit_cli_help_arguments_and_advisory(monkeypatch):
         ("https://user:pass@example.test/demo.git", False, False),
         ("file:relative", True, False),
         ("file:///tmp/demo", False, False),
+        ("file:///tmp/demo", True, True),
+        ("file:///C:/packages/demo", True, True),
+        ("file:///C:/packages/demo", False, False),
+        ("file://localhost/C:/packages/demo%20repo", True, True),
+        ("file://remote-host/share/demo", True, False),
         ("http://localhost/demo", True, True),
         ("http://example.test/demo", True, False),
     ],
 )
-def test_registry_repository_transport_policy(url, local, valid):
+@pytest.mark.parametrize("path_type", [Path, PureWindowsPath], ids=["host-path", "windows-path"])
+def test_registry_repository_transport_policy(url, local, valid, path_type, monkeypatch):
+    monkeypatch.setattr(packages, "Path", path_type)
     if valid:
         assert packages._registry_repository_url(url, allow_local=local) == url
     else:
         with pytest.raises(packages.PackageRegistryError):
             packages._registry_repository_url(url, allow_local=local)
+
+
+@pytest.mark.parametrize("path_type", [Path, PureWindowsPath], ids=["host-path", "windows-path"])
+@pytest.mark.parametrize("source", ["/outside", "C:/outside", "C:outside", "../outside"])
+def test_package_source_rejects_rooted_paths_on_every_host(source, path_type, monkeypatch):
+    monkeypatch.setattr(packages, "Path", path_type)
+    with pytest.raises(ValueError, match="relative path"):
+        packages._package_source_relative_path(source, error_type=ValueError)
+    assert packages._package_source_relative_path("src/demo", error_type=ValueError) == path_type(
+        "src/demo"
+    )
 
 
 def test_registry_cannot_substitute_another_package(tmp_path):

@@ -47,7 +47,9 @@ def _isolated_skill_homes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("KEDI_HOME", str(home / ".kedi"))
+    assert Path.home() == home
 
 
 def test_skill_store_lists_and_reads_plain_project_local_skills(tmp_path: Path) -> None:

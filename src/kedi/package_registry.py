@@ -14,7 +14,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -199,7 +199,8 @@ def _package_source_relative_path(
 
     relative_path = Path(declared_source)
     if (
-        relative_path.is_absolute()
+        PurePosixPath(declared_source).is_absolute()
+        or PureWindowsPath(declared_source).drive
         or relative_path == Path(".")
         or not relative_path.parts
         or ".." in relative_path.parts
@@ -823,7 +824,8 @@ def _registry_repository_url(value: str, *, allow_local: bool) -> str:
     if parsed.scheme == "https" and parsed.hostname:
         return value
     if allow_local and parsed.scheme == "file" and parsed.hostname in {None, "", "localhost"}:
-        if Path(parsed.path).is_absolute():
+        # URL paths use forward slashes even for Windows file:///C:/... URLs.
+        if PurePosixPath(parsed.path).is_absolute():
             return value
     if (
         allow_local

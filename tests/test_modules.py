@@ -5,6 +5,7 @@ import json
 import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1295,6 +1296,9 @@ def test_corrupt_installed_package_does_not_shadow_a_local_module(
         (None, False, "requires a source"),
         ("../outside", False, "relative path"),
         ("/outside", False, "relative path"),
+        ("C:/outside", False, "relative path"),
+        ("C:outside", False, "relative path"),
+        ("//server/share", False, "relative path"),
         ("src/kedi_http", False, "source directory not found"),
         ("src/kedi_http", True, "must contain main.kedi"),
     ],
@@ -1500,6 +1504,7 @@ def test_install_package_rejects_source_tree_symlinks(tmp_path: Path, link_kind:
     assert not (registry / "kedi_http").exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="Named pipes require POSIX mkfifo")
 def test_install_package_rejects_special_files_in_source_tree(tmp_path: Path) -> None:
     package = tmp_path / "package"
     source = package / "src" / "kedi_http"
@@ -1512,6 +1517,23 @@ def test_install_package_rejects_special_files_in_source_tree(tmp_path: Path) ->
 
     with pytest.raises(ValueError, match="regular files and directories"):
         install_package(package / "package.kedi", registry_root=tmp_path / "registry")
+
+
+@pytest.mark.parametrize("mode", [stat.S_IFIFO, stat.S_IFSOCK, stat.S_IFCHR, stat.S_IFBLK])
+def test_copy_source_tree_rejects_special_file_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    entry = SimpleNamespace(
+        name="special",
+        path=str(source / "special"),
+        stat=lambda *, follow_symlinks: SimpleNamespace(st_mode=mode),
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "scandir", lambda _path: nullcontext([entry]))
+        with pytest.raises(ValueError, match="regular files and directories"):
+            package_registry._copy_source_tree(source, tmp_path / "destination")
 
 
 def test_install_package_rejects_package_root_source_cleanly(tmp_path: Path) -> None:
