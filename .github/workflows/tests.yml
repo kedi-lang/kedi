@@ -42,7 +42,7 @@ jobs:
   platform-python310:
     name: Python 3.10 install and tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -71,9 +71,9 @@ jobs:
 
       - name: Run complete test suite
         run: >-
-          uv run --locked --group dev --python 3.10
-          pytest --record-mode=none -vv --tb=short -p no:cov
-          -o faulthandler_timeout=120 -o faulthandler_exit_on_timeout=true
+          uv run --locked --with pytest-timeout==2.4.0 --group dev --python 3.10
+          pytest --record-mode=none -q --tb=short -p no:cov
+          --timeout=150 --session-timeout=900 -o faulthandler_timeout=120
           --junitxml=test-results.xml
 
       - name: Upload test results
