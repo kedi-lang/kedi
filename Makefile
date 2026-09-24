@@ -43,7 +43,11 @@ check-docs:
 	@cmp -s docs/KEDI_DSL.md kedi-vscode/docs/KEDI_DSL.md
 	@printf "$(GREEN)✔ Extension DSL docs are synced.$(RESET)\n"
 
-check-release:
+.PHONY: check-distribution
+check-distribution:
+	@$(UV) run --no-project python scripts/check_distribution.py
+
+check-release: check-distribution
 	@printf "$(BLUE)==>$(RESET) Running release surface checks...\n"
 	@bash scripts/check_release_surfaces.sh
 	@printf "$(GREEN)✔ Release surface checks complete.$(RESET)\n"

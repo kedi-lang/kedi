@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -35,6 +35,52 @@ jobs:
 
       - name: Run tests
         run: uv run --group dev --python ${{ matrix.python-version }} pytest -q -p no:cov
+
+      - name: Validate installed release wheels outside the checkout
+        run: python scripts/check_distribution.py --python ${{ matrix.python-version }}
+
+  platform-python310:
+    name: Python 3.10 install and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.11.21"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.10"
+
+      - name: Verify clean wheel installation, dependencies, and entrypoints
+        run: python scripts/check_distribution.py --python 3.10
+
+      - name: Install locked test dependencies
+        run: uv sync --locked --dev --python 3.10
+
+      - name: Run complete test suite
+        run: >-
+          uv run --locked --group dev --python 3.10
+          pytest --record-mode=none -q -p no:cov --junitxml=test-results.xml
+
+      - name: Upload test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: python310-tests-${{ matrix.os }}
+          path: test-results.xml
+          if-no-files-found: ignore
 
   coverage:
     name: Python 3.11 coverage
