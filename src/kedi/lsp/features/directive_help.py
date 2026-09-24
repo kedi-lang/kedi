@@ -195,6 +195,8 @@ def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
         if compaction is not None
         else ""
     )
+    if any(field.name == "processor" for field in stmt.fields):
+        configured += " A scoped native history processor runs before each model request."
     return (
         f"`> history: {value}`\n\n"
         "Controls conversation continuity through stateful history for subsequent model calls "
@@ -317,6 +319,23 @@ def _settings_field_markdown(field: SettingsField) -> str:
             f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
             "Select provider-native conversation compaction or disable the inherited "
             "compaction policy while retaining stateful history."
+        )
+    if field.name == "processor":
+        return (
+            f"`processor: Callable[[HistoryProcessorContext], Sequence[native message]] | None` = {value}\n\n"
+            "Process detached native history before each model request. Sync and async callbacks "
+            "are supported by Pydantic and LangChain. Use `ctx.keep_recent_groups(n)` for "
+            "lifecycle-safe retention and `group.origins` for known lineage. `None` clears an "
+            "inherited callback. Rewriting earlier history may reduce prefix-cache reuse."
+        )
+    if field.name == "processor_condition":
+        return (
+            f"`processor_condition: Callable[[HistoryProcessorState], bool] | None` = {value}\n\n"
+            "Evaluate before each logical model request. Exact `True` runs the history "
+            "processor; `False` skips its detached snapshot and rewrite validation. "
+            "The state provides an estimated history token count, request index, cache epoch, "
+            "model ID, and opaque history version. Omission keeps processing unconditional; "
+            "a condition alone can inherit a processor. It does not guarantee a cache hit."
         )
     if field.name == "compaction_threshold":
         return (
@@ -459,7 +478,9 @@ def _profile_hooks_entry_markdown(entry: ProfileHooksEntry) -> str:
 
 def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
     value = "enabled" if entry.enabled else "disabled"
-    configured = " Includes a compaction policy." if entry.fields else ""
+    configured = (
+        " Includes native history processing or compaction settings." if entry.fields else ""
+    )
     return (
         f"`> history: {value}`\n\n"
         "Conversation continuity policy stored in this profile. Applied when the profile is used."

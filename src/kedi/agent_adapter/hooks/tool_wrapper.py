@@ -47,6 +47,9 @@ async def dispatch_pre_tool_use(
     native_tool_name: str | None = None,
 ) -> dict[str, Any]:
     canonical = validate_tool_arguments(tool, arguments)
+    from ..history_provenance import record_history_tool_origin
+
+    record_history_tool_origin(tool.name, tool_call_id)
     dispatcher = current_hook_dispatcher()
     if dispatcher is None or not dispatcher.handlers_for("pre_tool_use"):
         return canonical
@@ -73,6 +76,9 @@ def dispatch_pre_tool_use_sync(
     native_tool_name: str | None = None,
 ) -> dict[str, Any]:
     canonical = validate_tool_arguments(tool, arguments)
+    from ..history_provenance import record_history_tool_origin
+
+    record_history_tool_origin(tool.name, tool_call_id)
     dispatcher = current_hook_dispatcher()
     if dispatcher is None or not dispatcher.handlers_for("pre_tool_use"):
         return canonical

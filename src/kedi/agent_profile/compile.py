@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import KediExecutionError
 from .definitions import (
@@ -296,7 +296,7 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
     return env
 
 
-def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
+def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Callable[..., Any]]:
     from kedi.lang.ast import (
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
@@ -337,7 +337,17 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     from .use_resolution import eval_use_directive
 
     if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
-        return
+        return {}
+
+    # Profile capture precedes compilation. These references are filled with the
+    # exact compiled definitions, never resolved through a caller's shadowed name.
+    bindings: dict[int, Callable[..., Any]] = {}
+
+    def reference(definition: ProcedureDef) -> Callable[..., Any]:
+        def invoke(*args: Any) -> Any:
+            return rt._invoke_procedure(bindings[id(definition)], list(args))
+
+        return invoke
 
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
@@ -393,6 +403,10 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         elif isinstance(item, ProcedureDef):
             item.captured_agent_profile = active.frozen_copy()
             defined_procedures.add(item.name)
+            if not item.auto_spec and not item.ai_prompt:
+                env[item.name] = reference(item)
+
+    return bindings
 
 
 def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:

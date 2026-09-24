@@ -14,6 +14,7 @@ from .codemode import CodeModeSettings, normalize_codemode_settings
 from .compaction import CompactionSettings
 from .connection import A2AConnection
 from .hooks import HookSettings, normalize_hook_settings
+from .history import HistoryProcessingSettings
 from .mcp import McpServerSpec
 from .settings import tool_reason_enabled
 from .skills import SkillsSettings, skills_settings
@@ -53,6 +54,7 @@ class AgentProfile:
     max_agents: int | None = None
     workflow_mode: WorkflowMode | None = None
     history: bool | None = None
+    history_processing: HistoryProcessingSettings | None = None
     compaction: CompactionSettings | None = None
     codemode: CodeModeSettings | bool | None = None
     requirements: tuple[AdapterCapability, ...] = ()
@@ -150,6 +152,12 @@ class AgentProfile:
             updates["workflow_mode"] = other.workflow_mode
         if other.history is not None:
             updates["history"] = other.history
+        if other.history_processing is not None:
+            updates["history_processing"] = (
+                other.history_processing
+                if self.history_processing is None
+                else self.history_processing.merge(other.history_processing)
+            )
         if other.compaction is not None:
             updates["compaction"] = other.compaction
         if other.codemode is not None:
@@ -222,6 +230,7 @@ class AgentProfile:
             or bool(self.mcp_servers)
             or bool(self.settings)
             or self.compaction is not None
+            or self.history_processing is not None
             or self.needs_model_override(adapter_default)
         )
 

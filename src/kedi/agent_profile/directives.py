@@ -12,7 +12,7 @@ from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
 from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
-from .compaction import CompactionSettings, normalize_compaction_settings
+from .compaction import normalize_compaction_settings
 from .connection import A2AAuthConfig, A2AConnection
 from .definitions import (
     ProfileAdapterMember,
@@ -565,7 +565,9 @@ def _eval_history_fields(
     enabled: bool,
     fields: list[SettingsField] | tuple[SettingsField, ...],
     env: dict[str, Any],
-) -> CompactionSettings | None:
+) -> AgentProfile:
+    from .history import HistoryProcessingSettings, bind_history_processor
+
     values = eval_settings_fields(rt, fields, env)
     compaction_values = {
         name.removeprefix("compaction_"): value
@@ -575,7 +577,27 @@ def _eval_history_fields(
     compaction = normalize_compaction_settings(compaction_values or None)
     if not enabled and compaction is not None and compaction.mode == "native":
         raise KediExecutionError("native compaction requires history to be enabled")
-    return compaction
+    return AgentProfile(
+        history=enabled,
+        compaction=compaction,
+        history_processing=(
+            HistoryProcessingSettings(
+                processor=(
+                    bind_history_processor(rt, values["processor"])
+                    if "processor" in values
+                    else None
+                ),
+                condition=(
+                    bind_history_processor(rt, values["processor_condition"])
+                    if "processor_condition" in values
+                    else None
+                ),
+                inherit_processor="processor" not in values,
+            )
+            if "processor" in values or "processor_condition" in values
+            else None
+        ),
+    )
 
 
 def eval_history_directive(
@@ -583,14 +605,11 @@ def eval_history_directive(
     stmt: HistoryDirectiveStmt,
     env: dict[str, Any],
 ) -> AgentProfile:
-    return AgentProfile(
-        history=stmt.enabled,
-        compaction=_eval_history_fields(
-            rt,
-            enabled=stmt.enabled,
-            fields=stmt.fields,
-            env=env,
-        ),
+    return _eval_history_fields(
+        rt,
+        enabled=stmt.enabled,
+        fields=stmt.fields,
+        env=env,
     )
 
 
@@ -734,14 +753,11 @@ def _member_to_patch(
             env=env,
         )
     if member.kind == "history":
-        return AgentProfile(
-            history=member.enabled,
-            compaction=_eval_history_fields(
-                rt,
-                enabled=member.enabled,
-                fields=member.fields,
-                env=env,
-            ),
+        return _eval_history_fields(
+            rt,
+            enabled=member.enabled,
+            fields=member.fields,
+            env=env,
         )
     if member.kind == "skills":
         from .skills import normalize_skills_settings

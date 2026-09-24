@@ -536,10 +536,16 @@ def _walk_history_directive(self: _Walker, node: Node) -> HistoryDirectiveStmt:
             continue
         field = self._walk_settings_value_field(child)
         name = field.name
-        if name not in {"enabled", "compaction_mode", "compaction_threshold"}:
+        if name not in {
+            "enabled",
+            "compaction_mode",
+            "compaction_threshold",
+            "processor",
+            "processor_condition",
+        }:
             self._error(
                 child,
-                "history setting must be one of: enabled, compaction_mode, compaction_threshold",
+                "history setting must be one of: enabled, compaction_mode, compaction_threshold, processor, processor_condition",
                 code="K-HISTORY-KEY",
             )
             continue
@@ -578,6 +584,12 @@ def _walk_history_directive(self: _Walker, node: Node) -> HistoryDirectiveStmt:
                 child,
                 "history compaction_mode must be 'native' or 'disabled'",
                 code="K-COMPACTION-MODE",
+            )
+        if name == "processor_condition" and field.backtick_code is None:
+            self._error(
+                child,
+                "history processor_condition must be an inline Python callable reference",
+                code="K-HISTORY-CONDITION",
             )
         fields.append(field)
     if enabled is None:

@@ -51,6 +51,7 @@ AdapterCapability = Literal[
     "native_artifacts",
     "stateful_history",
     "history_replay",
+    "history_processing",
     "native_compaction",
     "stream_events",
     "request_budget",
@@ -148,6 +149,7 @@ class AdapterCapabilities:
     supports_native_artifacts: bool | None = None
     supports_stateful_history: bool | None = None
     supports_history_replay: bool | None = None
+    supports_history_processing: bool | None = None
     supports_native_compaction: bool | None = None
     supports_stream_events: bool | None = None
     supports_request_budget: bool | None = None
@@ -186,6 +188,7 @@ class AdapterCapabilities:
             "native_artifacts": self.supports_native_artifacts,
             "stateful_history": self.supports_stateful_history,
             "history_replay": self.supports_history_replay,
+            "history_processing": self.supports_history_processing,
             "native_compaction": self.supports_native_compaction,
             "stream_events": self.supports_stream_events,
             "request_budget": self.supports_request_budget,

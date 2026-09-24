@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import (
     Any,
@@ -51,7 +51,9 @@ from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
+    HistoryProcessorCondition,
     HistoryProcessorRunner,
+    warn_history_processor_cache,
 )
 from kedi.agent_adapter.hooks import (
     HookHandler,
@@ -110,6 +112,7 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_native_artifacts=True,
         supports_stateful_history=True,
         supports_history_replay=True,
+        supports_history_processing=True,
         supports_native_compaction=True,
         supports_stream_events=True,
         supports_request_budget=True,
@@ -141,6 +144,7 @@ class LangChainAdapter(HookRegistrationMixin):
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
         history_processor: HistoryProcessorCallback[Any] | None = None,
+        history_processor_condition: HistoryProcessorCondition | None = None,
         tool_retries: int = 3,
         **kwargs: Any,
     ) -> None:
@@ -155,16 +159,19 @@ class LangChainAdapter(HookRegistrationMixin):
             raise ValueError("tool_retries must be a non-negative integer")
         self._default_usage_limits = default_usage_limits
         self._history_archive = history_archive
-        self._history_processor_runner: HistoryProcessorRunner[Any] | None = None
-        if history_processor is not None:
-            from kedi.agent_adapter.adapters.langchain.history_processing import (
-                LangChainHistoryMessageCodec,
-            )
+        from kedi.agent_adapter.adapters.langchain.history_processing import (
+            LangChainHistoryMessageCodec,
+        )
 
-            self._history_processor_runner = HistoryProcessorRunner(
-                history_processor,
-                LangChainHistoryMessageCodec(),
-            )
+        self._default_history_processor = history_processor
+        self._default_history_processor_condition = history_processor_condition
+        self._history_processor_runner = HistoryProcessorRunner(
+            history_processor,
+            LangChainHistoryMessageCodec(),
+            history_processor_condition,
+        )
+        if history_processor is not None:
+            warn_history_processor_cache()
         self._tool_retries = tool_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
@@ -219,6 +226,24 @@ class LangChainAdapter(HookRegistrationMixin):
     def active_profile(self) -> AgentProfile:
         stack = self._profile_stack_var.get()
         return stack[-1] if stack else AgentProfile.empty()
+
+    @property
+    def active_history_processor(self) -> HistoryProcessorCallback[Any] | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[0]
+            if policy is not None
+            else self._default_history_processor
+        )
+
+    @property
+    def active_history_processor_condition(self) -> HistoryProcessorCondition | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[1]
+            if policy is not None
+            else self._default_history_processor_condition
+        )
 
     @property
     def active_tool_reason(self) -> bool:
@@ -477,10 +502,10 @@ class LangChainAdapter(HookRegistrationMixin):
             if request_limit is not None:
                 config["recursion_limit"] = request_limit * 3 + 5
         with (
-            (
-                self._history_processor_runner.run_scope(self._conversation_var.get())
-                if self._history_processor_runner is not None
-                else nullcontext()
+            self._history_processor_runner.run_scope(
+                self._conversation_var.get(),
+                processor=self.active_history_processor,
+                condition=self.active_history_processor_condition,
             ),
             langchain_run_scope(limits) as run_state,
             delegation_scope(self._subagent_failure_policy),
@@ -665,6 +690,9 @@ class LangChainAdapter(HookRegistrationMixin):
             conversation.result_state["langchain_messages"] = [
                 message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
+            self._history_processor_runner.capture(
+                messages, conversation.result_state["langchain_messages"]
+            )
             conversation.mark_completed()
 
     def _create_agent(

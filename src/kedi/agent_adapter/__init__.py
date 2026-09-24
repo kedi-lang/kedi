@@ -22,11 +22,14 @@ from .events import (
     bind_agent_event_dispatcher,
     observe_agent_events,
 )
+from .compaction.models import HistoryOrigin
 from .history_processing import (
     HistoryProcessingError,
     HistoryProcessingValidationError,
     HistoryProcessorCallback,
+    HistoryProcessorCondition,
     HistoryProcessorContext,
+    HistoryProcessorState,
 )
 from .hooks import (
     HOOK_EVENT_NAMES,
@@ -177,9 +180,12 @@ __all__ = [
     "HookResult",
     "HookTimeoutError",
     "HistoryProcessingError",
+    "HistoryOrigin",
     "HistoryProcessingValidationError",
     "HistoryProcessorCallback",
+    "HistoryProcessorCondition",
     "HistoryProcessorContext",
+    "HistoryProcessorState",
     "MissingAdapterCapabilityError",
     "ApprovalCancelled",
     "AsyncAgentEventQueue",

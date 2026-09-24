@@ -76,6 +76,7 @@ class A2AAdapter(HookRegistrationMixin):
         supports_artifacts=False,
         supports_native_artifacts=False,
         supports_stateful_history=True,
+        supports_history_processing=False,
         supports_history_replay=False,
         supports_native_compaction=False,
         supports_stream_events=True,

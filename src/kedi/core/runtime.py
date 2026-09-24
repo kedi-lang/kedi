@@ -475,6 +475,12 @@ class KediRuntime:
             origins=dict(profile.requirement_origins),
         )
 
+        if profile.history_processing is not None and (
+            profile.history_processing.processor is not None
+            or profile.history_processing.condition is not None
+        ):
+            validate_adapter_requirements(adapter=adapter, requirements=("history_processing",))
+
         if profile.settings.get("tool_reason") is True:
             capabilities = getattr(adapter, "capabilities", None)
             if (

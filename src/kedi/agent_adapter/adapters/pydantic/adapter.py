@@ -73,7 +73,9 @@ from kedi.agent_adapter.events import agent_event_run, current_agent_run_identit
 from kedi.agent_adapter.model_resolution import resolve_pydantic_model
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
+    HistoryProcessorCondition,
     HistoryProcessorRunner,
+    warn_history_processor_cache,
 )
 from kedi.agent_adapter.hooks import (
     HookHandler,
@@ -146,6 +148,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_native_artifacts=True,
         supports_stateful_history=True,
         supports_history_replay=True,
+        supports_history_processing=True,
         supports_native_compaction=True,
         supports_stream_events=True,
         supports_request_budget=True,
@@ -185,6 +188,7 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
         history_processor: HistoryProcessorCallback[ModelMessage] | None = None,
+        history_processor_condition: HistoryProcessorCondition | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the native Pydantic AI adapter.
@@ -267,18 +271,23 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
             # Native constructor settings include provider-specific keys, unlike DSL settings.
             kwargs["model_settings"] = dict(model_settings)
         kwargs.setdefault("retries", {"tools": _DEFAULT_TOOL_RETRIES})
-        self._history_processor_runner: HistoryProcessorRunner[ModelMessage] | None = None
-        if history_processor is not None:
-            from kedi.agent_adapter.adapters.pydantic.history_processing import (
-                PydanticHistoryMessageCodec,
-                reject_conflicting_history_capabilities,
-            )
+        from kedi.agent_adapter.adapters.pydantic.history_processing import (
+            PydanticHistoryMessageCodec,
+            PydanticHistoryProcessingCapability,
+            reject_conflicting_history_capabilities,
+        )
 
+        self._default_history_processor = history_processor
+        self._default_history_processor_condition = history_processor_condition
+        if history_processor is not None:
             reject_conflicting_history_capabilities(kwargs.get("capabilities"))
-            self._history_processor_runner = HistoryProcessorRunner(
-                history_processor,
-                PydanticHistoryMessageCodec(),
-            )
+        self._history_processor_runner = HistoryProcessorRunner(
+            history_processor,
+            PydanticHistoryMessageCodec(),
+            history_processor_condition,
+        )
+        if history_processor is not None:
+            warn_history_processor_cache()
         if history_archive is not None:
             from kedi.agent_adapter.compaction.pydantic_archive import (
                 PydanticArtifactHistoryCapability,
@@ -289,21 +298,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 PydanticArtifactHistoryCapability,
                 lambda: PydanticArtifactHistoryCapability(history_archive),
             )
-        if self._history_processor_runner is not None:
-            from kedi.agent_adapter.adapters.pydantic.history_processing import (
-                PydanticHistoryProcessingCapability,
-            )
-
-            kwargs["capabilities"] = _with_capability(
-                kwargs.get("capabilities"),
-                PydanticHistoryProcessingCapability,
-                lambda: PydanticHistoryProcessingCapability(
-                    cast(
-                        "HistoryProcessorRunner[ModelMessage]",
-                        self._history_processor_runner,
-                    )
-                ),
-            )
+        kwargs["capabilities"] = _with_capability(
+            kwargs.get("capabilities"),
+            PydanticHistoryProcessingCapability,
+            lambda: PydanticHistoryProcessingCapability(self._history_processor_runner),
+        )
         self._agent_init_kwargs = dict(kwargs)
         super().__init__(model, **kwargs)
 
@@ -434,6 +433,24 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         stack_var = getattr(self, "_profile_stack_var", None)
         stack = stack_var.get() if stack_var is not None else ()
         return stack[-1] if stack else AgentProfile.empty()
+
+    @property
+    def active_history_processor(self) -> HistoryProcessorCallback[ModelMessage] | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[0]
+            if policy is not None
+            else self._default_history_processor
+        )
+
+    @property
+    def active_history_processor_condition(self) -> HistoryProcessorCondition | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[1]
+            if policy is not None
+            else self._default_history_processor_condition
+        )
 
     @property
     def active_tool_reason(self) -> bool:
@@ -627,15 +644,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 else agent_event_run(self.shortname)
             )
             with (
-                (
-                    self._history_processor_runner.run_scope(
-                        conversation
-                        if isinstance(conversation, AdapterConversationContext)
-                        else None,
-                        reuse_existing=True,
-                    )
-                    if self._history_processor_runner is not None
-                    else nullcontext()
+                self._history_processor_runner.run_scope(
+                    conversation if isinstance(conversation, AdapterConversationContext) else None,
+                    reuse_existing=True,
+                    processor=self.active_history_processor,
+                    condition=self.active_history_processor_condition,
                 ),
                 self._run_tool_spec_scope(tool_specs),
                 delegation_scope(self._subagent_failure_policy),
@@ -678,12 +691,10 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         if tool_specs is None:
             tool_specs = self._tool_specs_for_run(run_kwargs)
         with (
-            (
-                self._history_processor_runner.run_scope(
-                    conversation if isinstance(conversation, AdapterConversationContext) else None
-                )
-                if self._history_processor_runner is not None
-                else nullcontext()
+            self._history_processor_runner.run_scope(
+                conversation if isinstance(conversation, AdapterConversationContext) else None,
+                processor=self.active_history_processor,
+                condition=self.active_history_processor_condition,
             ),
             self._run_tool_spec_scope(tool_specs),
             delegation_scope(self._subagent_failure_policy),
@@ -754,12 +765,16 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
     def _run_tool_spec_scope(self, tool_specs: Sequence[ToolSpec]) -> Iterator[None]:
         yield from _hooks._run_tool_spec_scope(self, tool_specs)
 
-    @staticmethod
     def _capture_conversation_messages(
+        self,
         conversation: AdapterConversationContext | SubagentConversationContext | None,
         result: Any,
     ) -> None:
-        return _messages._capture_conversation_messages(conversation, result)
+        _messages._capture_conversation_messages(conversation, result)
+        if isinstance(conversation, AdapterConversationContext):
+            self._history_processor_runner.capture(
+                result.all_messages(), conversation.result_state["pydantic_messages"]
+            )
 
     @staticmethod
     def _apply_conversation_history(

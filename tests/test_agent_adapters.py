@@ -511,6 +511,8 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
     monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.run_config.Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
+    capabilities = created_agents[0]["kwargs"].pop("capabilities")
+    assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]
@@ -3581,6 +3583,8 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
         with kedi_tool_call_context():
             assert adapter.invoke_sync(prompt="raw") == "fresh raw"
 
+    capabilities = created_agents[0]["kwargs"].pop("capabilities")
+    assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]
@@ -4371,6 +4375,7 @@ def test_pydantic_external_tool_approval_elevates_secret_paths(
 
 def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_toolsets() -> None:
     adapter = object.__new__(PydanticAdapter)
+    adapter._default_history_processor = None
     adapter._tool_scope = ToolScope()
     _set_profile_stack(adapter)
     adapter.register_tool(ToolSpec(fn=lambda: "ok", name="read_status", risk="read_only"))

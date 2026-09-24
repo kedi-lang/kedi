@@ -46,6 +46,7 @@ def _run_conversation_call(
     from uuid import uuid4
 
     from kedi.agent_adapter.hooks import HookRegistrationMixin, prepared_agent_hook_run
+    from kedi.agent_adapter.history_provenance import history_source_scope
     from kedi.agent_adapter.invocation import observe_invocations
     from kedi.agent_adapter.request import (
         AdapterRunOutcome,
@@ -161,6 +162,7 @@ def _run_conversation_call(
                     else nullcontext()
                 )
                 with (
+                    history_source_scope(request.metadata.run_id, source_span),
                     required_tool_call_scope(tools),
                     artifact_scope,
                     conversation_scope or nullcontext(),

@@ -16,6 +16,7 @@ from .codecs import (
 from .models import (
     CompactionCheckpoint,
     HistoryEntryKind,
+    HistoryOrigin,
     HistoryRange,
     HistorySnapshot,
     HistoryStorageFormat,
@@ -178,6 +179,15 @@ class PydanticHistoryCodec:
                 or _contains_provider_replay_data(canonical)
             ),
             searchable_text=encoded.decode("utf-8", errors="replace"),
+            origins=tuple(
+                HistoryOrigin(
+                    kind="tool-call" if isinstance(part, BaseToolCallPart) else "tool-result",
+                    tool_name=part.tool_name,
+                    tool_call_id=part.tool_call_id or None,
+                )
+                for part in message.parts
+                if isinstance(part, (BaseToolCallPart, BaseToolReturnPart))
+            ),
         )
 
     @staticmethod

@@ -179,10 +179,11 @@ def _run_kwargs(
             *(toolsets or ()),
         ]
     capabilities = run_kwargs.get("capabilities")
-    if getattr(self, "_history_processor_runner", None) is not None:
+    if self.active_history_processor is not None:
         from .history_processing import reject_conflicting_history_capabilities
 
         reject_conflicting_history_capabilities(capabilities)
+        reject_conflicting_history_capabilities(self._agent_init_kwargs.get("capabilities"))
     if self.active_tool_reason:
         from .reason import ToolReasonCapability
 

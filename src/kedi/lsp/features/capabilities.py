@@ -7,6 +7,7 @@ from typing import cast
 from lsprotocol import types as lsp
 
 from kedi.agent_adapter.meta import AdapterCapability, AgentAdapterKind
+from kedi.agent_adapter.history_processing import HISTORY_PROCESSOR_CACHE_WARNING
 from kedi.agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,
@@ -57,6 +58,7 @@ from kedi.lsp.features.capability_state import (
     _AdapterDiagnosticState,
     _merge_adapter_state,
     _with_hooks_state,
+    _with_history_state,
     _with_requirements_state,
 )
 from kedi.lsp.features.symbols import (
@@ -130,6 +132,7 @@ def _profile_capability_diagnostics(
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
         diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
+        diagnostics.extend(_history_prefix_cache_warning(member.fields))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -239,13 +242,10 @@ def _scan_capability_scope(
             diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, HistoryDirectiveStmt):
-            active = replace(
-                active,
-                history_loc=stmt.loc,
-                history_enabled=stmt.enabled,
-            )
+            active = _with_history_state(active, stmt)
             diagnostics.extend(_history_capability_diagnostics(active))
             diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
+            diagnostics.extend(_history_prefix_cache_warning(stmt.fields))
             continue
         if isinstance(stmt, SkillsDirectiveStmt):
             if stmt.enabled:
@@ -477,16 +477,54 @@ def _compaction_capability_diagnostics(
 def _history_capability_diagnostics(
     state: _AdapterDiagnosticState,
 ) -> list[lsp.Diagnostic]:
-    if state.history_enabled is not True or state.history_loc is None:
-        return []
-    return _unsupported_capability_diagnostics(
-        state,
-        "stateful_history",
-        [state.history_loc],
-        "stateful conversation history",
-        severity=lsp.DiagnosticSeverity.Error,
-        code="K-ADAPTER-HISTORY",
+    diagnostics: list[lsp.Diagnostic] = []
+    if state.history_enabled is True and state.history_loc is not None:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "stateful_history",
+                [state.history_loc],
+                "stateful conversation history",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-HISTORY",
+            )
+        )
+    processing_loc = (
+        state.history_processor_loc
+        if state.history_processor_enabled is True
+        else state.history_condition_loc
+        if state.history_condition_enabled is True
+        else None
     )
+    if processing_loc is not None:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "history_processing",
+                [processing_loc],
+                "native history processing",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-HISTORY-PROCESSOR",
+            )
+        )
+    return diagnostics
+
+
+def _history_prefix_cache_warning(fields: Sequence[SettingsField]) -> list[lsp.Diagnostic]:
+    processor = next((field for field in fields if field.name == "processor"), None)
+    if processor is None or processor.loc is None:
+        return []
+    if (processor.backtick_code or processor.plain_value or "").strip() == "None":
+        return []
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(processor.loc),
+            severity=lsp.DiagnosticSeverity.Warning,
+            code="K-HISTORY-PREFIX-CACHE",
+            source="kedi",
+            message=HISTORY_PROCESSOR_CACHE_WARNING,
+        )
+    ]
 
 
 def _codemode_capability_diagnostics(

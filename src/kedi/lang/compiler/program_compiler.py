@@ -299,7 +299,7 @@ class ProgramCompiler:
         local_profiles = build_profile_registry(prog)
         self.rt._profile_registry.update(local_profiles)
         validate_subagent_graph(self.rt._profile_registry)
-        capture_procedure_profiles(self.rt, prog)
+        procedure_bindings = capture_procedure_profiles(self.rt, prog)
 
         type_env = self.rt._type_env_stack[0]
         for typedef in prog.type_defs:
@@ -308,7 +308,9 @@ class ProgramCompiler:
         for proc in prog.procedures:
             if proc.auto_spec or proc.ai_prompt:
                 continue
-            self.rt.procedure(self.proc_compiler.compile_procedure(proc))
+            compiled = self.proc_compiler.compile_procedure(proc)
+            procedure_bindings[id(proc)] = compiled
+            self.rt.procedure(compiled)
 
         sequence = list(prog.ordered_toplevel or prog.toplevel_body)
         if prog.toplevel_return is not None and not any(

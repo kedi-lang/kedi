@@ -95,6 +95,23 @@ def compute_completion(
 
     line = source.splitlines()[pos.line] if pos.line < len(source.splitlines()) else ""
     before_cursor = line[: pos.character]
+    if _inside_directive_block(source, pos, "history"):
+        return [
+            lsp.CompletionItem(
+                label=name,
+                kind=lsp.CompletionItemKind.Property,
+                insert_text=f"{name}: ",
+                detail="Native history setting",
+                sort_text=f"0-{name}",
+            )
+            for name in (
+                "enabled",
+                "processor",
+                "processor_condition",
+                "compaction_mode",
+                "compaction_threshold",
+            )
+        ]
     if _inside_directive_block(source, pos, "codemode"):
         return [
             lsp.CompletionItem(

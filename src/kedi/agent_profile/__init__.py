@@ -62,6 +62,7 @@ from .errors import (
 )
 from .evaluation import eval_use_profile
 from .hooks import HookInput, HookSettings, normalize_hook_settings
+from .history import HistoryProcessingSettings
 from .mcp import McpServerSpec, McpTransport
 from .profile import AgentProfile, WorkflowMode
 from .scope import block_agent_profile_scope, current_block_agent_profile
@@ -100,6 +101,7 @@ __all__ = [
     "CodeModeSettings",
     "HookInput",
     "HookSettings",
+    "HistoryProcessingSettings",
     "ProfileApprovalMember",
     "ProfileCodeModeMember",
     "ProfileHistoryMember",

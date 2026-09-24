@@ -84,6 +84,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         supports_artifacts=True,
         supports_native_artifacts=False,
         supports_stateful_history=True,
+        supports_history_processing=False,
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
