@@ -16,6 +16,7 @@ class HookSettings:
     pre_tool_use: tuple[HookHandler, ...] | None = None
     post_tool_use: tuple[HookHandler, ...] | None = None
     post_tool_use_failure: tuple[HookHandler, ...] | None = None
+    post_tool_result_failure: tuple[HookHandler, ...] | None = None
 
     def handlers_for(self, event: HookEventName) -> tuple[HookHandler, ...]:
         if self.enabled is False:
@@ -99,6 +100,7 @@ def _settings_from_values(
         pre_tool_use=values.get("pre_tool_use"),
         post_tool_use=values.get("post_tool_use"),
         post_tool_use_failure=values.get("post_tool_use_failure"),
+        post_tool_result_failure=values.get("post_tool_result_failure"),
     )
 
 

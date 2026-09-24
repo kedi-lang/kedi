@@ -6,6 +6,9 @@ from typing import Any, Iterable, Optional
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
+    TaskStmt,
+    TaskGroupStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -16,6 +19,7 @@ from kedi.lang.ast import (
     PythonBlock,
     RawInvokeStmt,
     ReturnStmt,
+    ShowStmt,
     Span,
     Stmt,
     TemplateBlock,
@@ -34,6 +38,7 @@ from kedi.lsp.python_virtual.builder import (
     ScopeName,
     VirtualBuilder,
     _line_range,
+    _span_range,
 )
 
 
@@ -141,6 +146,9 @@ def _iter_control_statements(statements: Iterable[Stmt]) -> Iterable[Stmt]:
             yield from _iter_control_statements(stmt.map_body or [])
         elif isinstance(stmt, ConditionalLoopStmt):
             yield from _iter_control_statements(stmt.body)
+        elif isinstance(stmt, TaskGroupStmt):
+            for arm in stmt.arms:
+                yield from _iter_control_statements([arm.wait, *(arm.body or [])])
 
 
 def _all_procedures(procedures: Iterable[ProcedureDef]) -> list[ProcedureDef]:
@@ -173,8 +181,18 @@ def _collect_toplevel_scope(statements: Iterable[Stmt]) -> dict[str, ScopeName]:
                 typ="str",
                 source_range=_raw_invoke_name_range(stmt),
             )
+        elif isinstance(stmt, TaskStmt):
+            scope[stmt.binder] = ScopeName(
+                typ="SubagentTask",
+                source_range=_span_range(stmt.binder_loc) if stmt.binder_loc else None,
+            )
+        elif isinstance(stmt, AwaitStmt) and stmt.binder:
+            scope[stmt.binder] = ScopeName(
+                typ="SubagentResult",
+                source_range=_span_range(stmt.binder_loc) if stmt.binder_loc else None,
+            )
         for segment in _stmt_segments(stmt):
-            if isinstance(segment, OutputSegment):
+            if isinstance(segment, OutputSegment) and not isinstance(stmt, TaskStmt):
                 scope[segment.name] = ScopeName(
                     typ=_type_to_python(segment.type_expr, segment.type_annotation),
                     source_range=_output_name_range(segment),
@@ -433,6 +451,10 @@ def _iter_stmt_type_exprs(stmt: Stmt) -> Iterable[Optional[TypeExpr]]:
     elif isinstance(stmt, ConditionalLoopStmt):
         for child in stmt.body:
             yield from _iter_stmt_type_exprs(child)
+    elif isinstance(stmt, TaskGroupStmt):
+        for arm in stmt.arms:
+            for child in arm.body or []:
+                yield from _iter_stmt_type_exprs(child)
 
 
 def _stmt_segments(stmt: Stmt) -> list:
@@ -441,11 +463,13 @@ def _stmt_segments(stmt: Stmt) -> list:
         for line in stmt.lines:
             segments.extend(line.segments)
         return segments
+    if isinstance(stmt, TaskStmt):
+        return _stmt_segments(stmt.template)
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)
     if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
-    if isinstance(stmt, ReturnStmt):
+    if isinstance(stmt, (ReturnStmt, ShowStmt)):
         return list(stmt.segments)
     if isinstance(stmt, (VariableInitStmt, AssignmentStmt)):
         return list(stmt.expr)

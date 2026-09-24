@@ -238,7 +238,7 @@ def test_processor_requires_run_scope_for_processing_and_transport() -> None:
 
 def test_processor_configuration_must_be_callable() -> None:
     with pytest.raises(TypeError, match="must be callable"):
-        HistoryProcessorRunner(cast("Any", None), LangChainHistoryMessageCodec())
+        HistoryProcessorRunner(cast("Any", "not callable"), LangChainHistoryMessageCodec())
 
 
 def test_codec_inspection_failures_are_wrapped_without_message_contents() -> None:

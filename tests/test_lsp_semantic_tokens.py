@@ -229,7 +229,13 @@ def test_semantic_tokens_cover_artifact_policy_fields_and_values() -> None:
 
 
 def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
-    src = "> codemode:\n  enabled: true\n  max_nested_calls: `8`\n"
+    src = (
+        "> codemode:\n"
+        "  enabled: true\n"
+        "  max_nested_calls: `8`\n"
+        "  preload_tools:\n"
+        "    lookup_release\n"
+    )
     tokens = decode_semantic_tokens(
         lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/codemode.kedi").data
     )
@@ -256,6 +262,36 @@ def test_semantic_tokens_cover_codemode_directive_fields_and_values() -> None:
         line == 2 and col == 2 and length == len("max_nested_calls") and token_type == property_type
         for line, col, length, token_type, _ in tokens
     )
+    assert (3, 2, len("preload_tools"), property_type) in [token[:4] for token in tokens]
+    assert (4, 4, len("lookup_release"), string_type) in [token[:4] for token in tokens]
+
+
+def test_semantic_tokens_cover_tool_metadata_and_requirements() -> None:
+    src = (
+        "@lookup() -> str:\n"
+        "  > tool:\n"
+        "    name: lookup_release\n"
+        "    retry_on:\n"
+        "      TimeoutError\n"
+        "  = ok\n"
+        "> requires:\n"
+        "  codemode\n"
+    )
+    tokens = decode_semantic_tokens(
+        lsp_semantic_tokens_module.compute_semantic_tokens_full(src, "/tmp/tools.kedi").data
+    )
+    token_spans = [token[:4] for token in tokens]
+    keyword_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("keyword")
+    property_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("property")
+    string_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("string")
+    type_type = lsp_semantic_tokens_module.SEMANTIC_TOKEN_TYPES.index("type")
+
+    assert (1, 4, len("tool"), keyword_type) in token_spans
+    assert (2, 4, len("name"), property_type) in token_spans
+    assert (2, 10, len("lookup_release"), string_type) in token_spans
+    assert (3, 4, len("retry_on"), property_type) in token_spans
+    assert (4, 6, len("TimeoutError"), type_type) in token_spans
+    assert (6, 2, len("requires"), keyword_type) in token_spans
 
 
 def test_semantic_tokens_cover_hooks_directive_fields_and_python_values() -> None:

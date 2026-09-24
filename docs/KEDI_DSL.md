@@ -267,8 +267,18 @@ runtime type and attaches the string as schema/LLM field description metadata wi
 using inline Python. The description must be a single-line string literal inside the
 `Annotated[...]` arguments; standalone string literals are not valid type annotations.
 Adapters that expose JSON schema, such as Pydantic AI and LangChain, pass this metadata
-as the field description. `Annotated[type]` still resolves as `type`, but the LSP warns
-because no description metadata was provided; extra `Annotated[...]` metadata is ignored.
+as the field description. Descriptions inside `list`, `dict`, union, and optional
+annotations describe the corresponding item, value, or union branch:
+
+```kedi
+>> The contributors are [contributors: list[Annotated[str, "Full name of each contributor"]]].
+```
+
+`Annotated[type]` still resolves as `type`, but the LSP warns because no
+description metadata was provided. The description must be the first metadata
+argument you write; metadata inherited from a type alias such as `Probability`
+may precede it. Other string metadata is ignored. Computed Python annotations
+retain non-string Pydantic validation metadata and Jev criteria.
 
 ```kedi
 >> Extract the customer as [name: Annotated[str, "Full customer name"]].
@@ -386,10 +396,10 @@ update a binding that already exists in a containing scope. Python-only names
 never become Kedi bindings. `> else:` is optional. There is no
 `elif`; use a nested `> if:` when another condition is required.
 
-Directives selected inside a branch apply only within that branch. Existing
-Kedi return behavior remains unchanged: a return in a selected body contributes
-to the scope's last return value; it does not introduce Python-style early
-return.
+Directives selected inside a branch apply only within that branch.
+The first evaluated `=` in a selected body ends the enclosing procedure or
+regular program. Other branches remain valid return sites; later statements
+on the selected path do not execute.
 
 ### Template conditions
 
@@ -398,7 +408,7 @@ return.
 [minimum_population: int] = `5_000_000`
 [result] = unknown
 
-> if: <city> has more than `minimum_population` residents
+> if: <city> has more than <`minimum_population`> residents
   [result] := major city
 > else:
   [result] := smaller city
@@ -407,10 +417,12 @@ return.
 ```
 
 A template condition has no trailing `:` after its claim. Plain text,
-`<name>` substitutions, procedure calls, and inline Python values are rendered
-with the same native Kedi semantics used by other templates. Output fields such
-as `[answer]` are invalid because a condition does not produce a user-visible
-binding.
+`<name>` substitutions, procedure calls, and Python substitutions such as
+``<`minimum_population`>`` are rendered with the same native Kedi semantics
+used by other templates. Bare backtick expressions are rejected during
+parsing; angle brackets make their place in the rendered claim explicit.
+Output fields such as `[answer]` are invalid because a condition does not
+produce a user-visible binding.
 
 Kedi evaluates the rendered claim using the current agent profile. It
 prioritizes the current context and relevant available tools. If neither
@@ -428,7 +440,7 @@ The trailing colon is the unambiguous boundary between both forms:
   # Deterministic: evaluate is_ready as an exact Python bool.
   [mode] = deterministic
 
-> if: `is_ready`
+> if: <`is_ready`>
   # Model-classified: render the Python value into the claim.
   [mode] = classified
 ```
@@ -739,7 +751,12 @@ def helper(x):
 
 ## Returns
 
-Lines starting with `=` return values:
+The first evaluated `=` returns a value and ends the current procedure or
+regular program invocation. Statements after a definitely terminal path are
+rejected before execution. Different reachable branches may each return.
+Already started work is drained under the normal failure/cleanup contract.
+
+These are separate examples of return forms:
 
 ```kedi
 @get_value():
@@ -748,10 +765,14 @@ Lines starting with `=` return values:
 
 # Direct return
 = The answer is <value>
+```
 
+```kedi
 # Python return
 = `compute_result()`
+```
 
+```kedi
 # Multiline return with backslash continuation
 = Start \
   middle \
@@ -759,6 +780,28 @@ Lines starting with `=` return values:
 ```
 
 Whitespace is trimmed only at line ends, internal spaces preserved.
+
+### Display Without Returning
+
+`> show:` displays text or a value once and continues execution:
+
+```kedi
+[city] = Ankara
+> show: The selected city is <city>.
+> show: `len(city)`
+```
+
+Show is an executable statement, not an inherited setting. Bare text is
+literal; substitutions and inline Python use their normal semantics. New
+output captures are rejected. Show does not implicitly call a model, although
+reading an existing pending capture resolves its computation. Output is not
+automatically added to model history. Python `print` remains available.
+
+Notebook/IDLE root returns are rejected before fragment execution, including
+returns inside root branches and loops. Use show instead. Procedures defined
+or called there keep normal typed returns. IDLE also accepts `:show` as an
+alias, recorded as native `> show:`. Old user files are not silently rewritten;
+migrate only intended displays, retaining genuine procedure/program returns.
 
 ## Custom Types
 
@@ -1072,7 +1115,8 @@ Dataset items can follow two conventions:
 ## Agent Profiles and Tools
 
 Kedi routes LLM calls through agent adapters. Use `> adapter:`, `> agent:`,
-`> model:`, `> effort:`, `> approval:`, `> hooks:`, `> skills:`, `> system:`, `> mcp:`, `> profile:`, and `> use:`
+`> model:`, `> requires:`, `> effort:`, `> approval:`, `> hooks:`, `> skills:`,
+`> system:`, `> mcp:`, `> profile:`, and `> use:`
 to choose adapter implementations, choose models, set reasoning effort, set
 agent instructions, load MCP tools, expose Kedi procedures as agent tools, and
 enable scoped skill discovery.
@@ -1099,6 +1143,7 @@ enable scoped skill discovery.
 > profile: quality:
     > agent: codex
     > model: gpt-5.6-luna
+    > requires: stream_events
     > effort: high
     > system: Be precise and cite the relevant tool output.
     > settings:
@@ -1148,6 +1193,30 @@ enable scoped skill discovery.
   (`api_key_env` or `api_key_file`, with optional `header`). Generic
   `credential_env`/`credential_file` aliases and Python credential providers
   are also accepted. Exactly one credential source is permitted.
+- `> requires: capability` declares a capability that the selected adapter must
+  provide before Kedi performs model I/O. Use the block form for several
+  requirements:
+
+  ```kedi
+  > requires:
+      structured_output
+      tool_registration
+      stream_events
+  ```
+
+  Requirements are additive across lexical scopes and applied profiles, and
+  duplicate names are removed while preserving declaration order. Literal
+  adapter selections are checked by the LSP. Dynamic selections defer the
+  check to runtime, but still fail before dependent work begins. With A2A peer
+  capability negotiation, Kedi may fetch an authenticated
+  Agent Card first, then rejects unsupported requirements before sending a task.
+  Requirement names come from the same registry:
+  `structured_output`, `tool_registration`, `mcp`,
+  `profile_override`, `model_override`, `effort`, `settings`, `codemode`,
+  `native_approvals`, `native_approval_handler`, `subagents`,
+  `background_subagents`, `artifacts`, `native_artifacts`,
+  `stateful_history`, `history_replay`, `history_processing`, `native_compaction`,
+  `stream_events`, `request_budget`, `tool_attempt_budget`, and `hooks`.
 - `> model: name` — set the active model for subsequent procedure captures (plain
   name or `` `expression` ``). With the Pydantic adapter, `codex/<model>` selects
   a Codex-authenticated Responses model on Python 3.11+ through the optional
@@ -1344,7 +1413,7 @@ enable scoped skill discovery.
   ````
 
   The supported events are `user_prompt_submit`, `pre_tool_use`,
-  `post_tool_use`, and `post_tool_use_failure`. Prompt and pre-tool handlers
+  `post_tool_use`, `post_tool_use_failure`, and `post_tool_result_failure`. Prompt and pre-tool handlers
   may return a typed `continue`, `deny`, or `edit` decision. Post handlers are
   observers and must return `None`. Tool arguments are canonicalized before
   `pre_tool_use`; an edit is validated again before approval and execution.
@@ -1352,6 +1421,10 @@ enable scoped skill discovery.
   `post_tool_use_failure` is emitted only after tool execution starts. Its event
   records the observed execution duration and whether execution was interrupted;
   pre-hook and approval denials are not execution failures.
+  `post_tool_result_failure` observes a failure after the tool body returned
+  (for example artifact admission or a post-success hook). Its `tool_call`
+  record retains the native body output when available. Such failures do not
+  trigger an automatic body retry.
 
   Handlers run in registration/source order. Each edit becomes the next
   handler's input, and denial stops the chain. Adapter-instance handlers run
@@ -1506,6 +1579,66 @@ enable scoped skill discovery.
   provider continuation internally because its public message result does not
   expose a stable cross-provider compaction marker.
 
+  Pydantic and LangChain also support an opt-in native history processor:
+
+  ```kedi
+  @keep_recent(ctx: Any) -> list[Any]:
+      = `ctx.keep_recent_groups(4)`
+
+  > history:
+      enabled: true
+      processor: `keep_recent`
+  ```
+
+  A predicate can gate processing without disabling history:
+
+  ```kedi
+  @needs_compaction(state: Any) -> bool:
+      = `state.estimated_tokens >= 80_000`
+
+  > history:
+      enabled: true
+      processor: `keep_recent`
+      processor_condition: `needs_compaction`
+  ```
+
+  `processor_condition` receives a frozen `HistoryProcessorState` before each
+  logical model request, including tool-loop requests. Its exact `bool` result
+  determines whether the processor runs. `estimated_tokens` describes candidate
+  history, not the complete wire request. The state also carries
+  `adapter_shortname`, `model_id`, one-based `request_index`, `cache_epoch`, and
+  opaque `history_version`; a true result gives the processor the same history
+  revision. A false result skips processor cloning and rewrite validation but
+  not ordinary request validation. The predicate may be sync or async;
+  exceptions and non-boolean results fail before model transport. Without a
+  condition, processing remains unconditional. A condition-only lexical
+  override inherits the effective processor. Selecting a new processor without
+  a condition clears an inherited condition; a non-null condition without any
+  effective processor is invalid.
+
+  The callable receives detached `HistoryProcessorContext` native messages before
+  each logical model request, including tool-loop requests. It may be sync or
+  async and returns a sequence of the same framework's native message types.
+  `keep_recent_groups(n)` retains the last `n` closed, unprotected groups plus all
+  protected, unfinished, and current-request groups, without breaking tool
+  lifecycles. `n` must be a nonnegative integer, not a boolean. `group.origins`
+  exposes known run/source/tool lineage outside the model-visible message content.
+  Unknown lineage remains absent; it is not inferred from assistant text.
+
+  The `processor` field is lexical: omission inherits, while an explicit
+  ``processor: `None` `` clears the callback for that scope. Python constructor
+  `history_processor=` defaults are not mutated. `enabled` still controls
+  conversation continuity; disabled history does not disable processing of an
+  invocation's ephemeral tool loop. Only adapters advertising `history_processing`
+  accept an active processor. No-op callbacks preserve native message identity
+  and cache generation. A validated rewrite invalidates stale continuation and
+  stages a new cache generation; outer failure/cancellation does not commit it.
+  Rewriting earlier history may reduce provider prefix-cache reuse. Kedi warns
+  about this at processor configuration sites, including external callables.
+  A condition can reduce how often processing runs but cannot guarantee prefix
+  preservation or a provider cache hit. A semantic no-op preserves native
+  message identity and cache generation.
+
   Kedi also contains an adapter-neutral, deterministic history processor and
   transactional checkpoint foundation for future Kedi-owned compaction. The
   semantic summarizer that will produce those checkpoints is tracked in
@@ -1599,13 +1732,27 @@ enable scoped skill discovery.
 
   ```kedi
   > codemode:
+      preload_tools:
+          lookup_release
+          list_versions
       default_search_limit: 10
       max_search_limit: 50
-      max_hydrated_tools: 32
-      max_nested_calls: 48
+      max_hydrated_tools: 64
+      max_nested_calls: 64
       max_concurrent_calls: 8
       request_timeout: 60
   ```
+
+  `preload_tools` accepts one exact exposed tool name or an indented list. Kedi
+  resolves these names atomically before the first model request, hydrates their
+  schemas into the run-local sandbox, and includes those schemas in the first
+  CodeMode instruction. Preloading never executes a tool and does not expose
+  its result. Unknown or ambiguous names, duplicate catalog names, and
+  `max_hydrated_tools` overflow fail before model I/O without partially
+  hydrating the run. Aliased tools use their exposed names. Preloaded tools
+  count toward `max_hydrated_tools` and remain hydrated after a sandbox restart.
+  The LSP warns when a static list exceeds five unique names by default; editor
+  configuration may change this lint threshold without changing runtime limits.
 
   It replaces the model-facing application tool catalog with
   `search_tools`, `get_tool_schema`, and `execute_code`. Search returns only
@@ -1660,7 +1807,8 @@ enable scoped skill discovery.
   literal code fence marker.
 - `> profile: name:` — define a reusable profile with nested `> agent:`,
   `> adapter:`, `> model:`, `> effort:`, `> approval:`, `> system:`,
-  `> settings:`, `> mcp:`, `> output:`, `> subagent:`, `> workflow:`, and/or `> use:`
+  `> settings:`, `> requires:`, `> budget:`, `> mcp:`, `> output:`, `> subagent:`,
+  `> workflow:`, and/or `> use:`
   members. A profile that delegates may also set `> max_agents: N`.
 - Profile docstrings: if the first statement inside a profile body is a block
   comment, its body becomes profile documentation and is shown in editor hovers.
@@ -1672,12 +1820,35 @@ enable scoped skill discovery.
   `> agent:` and `> adapter:` because those select different adapter classes.
   Use `> agent:` only for `agent-harness` adapters and `> adapter:` only for
   `agent-framework` adapters.
-- Editor diagnostics use adapter capability metadata. If the selected adapter
+- Editor diagnostics use adapter capability metadata. An explicit
+  `> requires:` mismatch is an error. If the selected adapter
   does not currently support structured template outputs, the LSP reports an
   error on the relevant output field and the adapter raises when that template
   runs. `> use:` tool registration and `> mcp:` servers remain capability
   warnings: when an adapter later advertises support for that feature, the same
   Kedi code stops warning without syntax changes.
+
+### Run budgets
+
+```kedi
+> budget:
+    request_limit: 10
+    tool_attempt_limit: 20
+```
+
+Each field is optional, but at least one is required. Values are nonnegative
+integers; `0` prohibits new operations of that kind. A request is counted at
+each actual model generation, including tool-loop and output-repair turns.
+An attempt is counted when a Kedi-managed tool body starts; each body retry
+counts again. Argument validation and approval denial do not consume attempts.
+Nested procedure and subagent budgets add ceilings without resetting or
+relaxing ancestor ceilings. Budgets do not intercept arbitrary provider calls
+made directly from embedded Python or unobservable remote tool executions.
+Fallback model generations are charged separately. With a finite request limit,
+provider SDK retries must be disabled (`max_retries=0`); an enabled or opaque
+provider retry policy is rejected before generation rather than undercounted.
+CodeMode control calls do not count as application tool attempts; each nested
+application body and each of its retries counts once on both framework adapters.
 
 ### Subagents
 
@@ -1720,6 +1891,110 @@ and procedure signatures, including generic and custom types. When
 profile output type to JSON Schema and returns the validated value in
 `final_result`. An explicit `final_schema` takes precedence. If neither is
 present, the child keeps the text-only `task_summary` behavior.
+
+#### Native task and await
+
+`> task` admits a direct child immediately, without a coordinator model call.
+Its body is exactly one ordinary `>>` template block; same-indent continuation
+rows belong to that block. A second `>>` is an error. Explicit `<inputs>` are
+rendered once when the task starts; parent variables and conversation history
+are not implicitly sent to the child.
+
+```kedi
+> profile: reviewer:
+    > adapter: pydantic
+    > system: Review only the supplied change.
+
+> profile: summarizer:
+    > adapter: pydantic
+
+> profile: coordinator:
+    > adapter: pydantic
+    > subagent: reviewer
+    > subagent: summarizer
+    > max_agents: 2
+
+> use: coordinator
+
+[change] = Add an export endpoint with unit tests but no integration coverage.
+
+> task [review_job]: reviewer:
+    >> The main issue in <change> is [issue: str].
+    The recommended fix is [recommendation: str].
+
+> task [summary_job]: summarizer:
+    >> Summarize <change>.
+
+> await [review]: review_job
+> await [summary]: summary_job
+= <`review.output.recommendation`>
+```
+
+Both children may run before the first await. `> await [result]: job` blocks at
+that statement and binds a `SubagentResult`. `> await: job` also blocks and
+propagates errors but creates no binding. Repeated awaits return the same
+result without starting another child. `SubagentResult` exposes `output`,
+`task_summary`, `run_id`, and `subagent` as attributes. Task captures define
+a validated result model with attribute-accessible fields; they do not bind
+names in the parent. Do not combine task captures with the child's `> output:`
+declaration. Without task
+captures, the child's `> output:` applies; without either schema, `output` is
+`None` and the response is in `task_summary`.
+
+Task handles belong to one invocation. Unawaited work is cancelled and the
+invocation fails closed; a child failure, timeout, or schema error raises at
+await, including binderless await. Pydantic AI, LangChain, Claude, Codex, and
+A2A adapters support background tasks; DSPy's synchronous bridge does not.
+Python callers can use the same coordinator without model-generated delegation:
+
+```python
+async with runtime.subagents(parent="coordinator") as agents:
+    job = await agents.start("reviewer", task=change)
+    result = await job.wait()
+    print(result.output)
+```
+
+#### Concurrent Result Processing
+
+`> task_group:` registers all of its awaits before waiting. Each optional
+`> process:` belongs to the immediately preceding await and runs when that
+child is ready and the execution engine has capacity:
+
+```kedi
+> task_group:
+    > await [review]: review_job
+    > process:
+        >> The action for <`review.output.recommendation`> is [action: str].
+        > show: <action>
+    > await [summary]: summary_job
+    > process:
+        > show: <`summary.task_summary`>
+```
+
+The second process may start before the first child finishes. Waiters use
+completion notifications rather than occupying engine workers. Processing
+concurrency is bounded by the existing engine; a sequential engine admits one
+ready body at a time. Nested groups also work with one engine worker.
+
+Each arm has a private lexical scope. Its result binder, local values, types,
+and procedures do not escape or become visible in sibling arms. Processing
+inherits the parent's active agent configuration and budget lineage, not the
+child's profile. Explicit mutation of shared Python objects or outer bindings
+is not transactional; synchronize shared mutations when necessary.
+
+The group joins all children, process bodies, scheduled model work, and owned
+descendants before the following statement executes. A failure cancels queued
+work and owned children and drains running work before propagating the original
+error. Synchronous Python already running cannot be forcibly interrupted or
+rolled back. Descendants started inside a process must be awaited there.
+
+Direct `=` returns in a process, including its nested control-flow blocks,
+are parse errors. Procedures declared or called inside it retain their own
+normal return semantics. A group never chooses the enclosing return value.
+Use `> show:` for display. Bare awaits without a process are valid; an orphan
+or duplicate process clause is not.
+
+#### Dynamic Workflows
 
 Subagent orchestration has two profile-level modes. Omitting `> workflow:` is
 equivalent to `> workflow: delegate` and preserves the delegation and lifecycle
@@ -1875,6 +2150,44 @@ DSPy currently uses the stdio MCP path through `dspy.Tool.from_mcp_tool` and
 `ReAct.acall`.
 
 ### `> use:` semantics
+
+Procedures may declare model-facing tool metadata before executable body
+statements. A leading procedure docstring may appear before this declaration:
+
+```kedi
+@read_release(version: str) -> str:
+    ###
+    Read one release from the local index.
+    ###
+    > tool:
+        name: lookup_release
+        description: Read notes for one exact release version.
+        risk: read_only
+        retries: 2
+        retry_on:
+            TimeoutError
+            ConnectionError
+    = `release_index[version]`
+
+> use: read_release
+```
+
+`name` changes only the exposed tool name; the source procedure remains
+`read_release`. `description` overrides the model-facing description while the
+procedure docstring remains available to introspection. `risk` is one of
+`read_only`, `mutating`, or `sensitive` and defaults to `mutating`. `retries`
+is a nonnegative integer and means that at most `retries + 1` body attempts are
+made. `retry_on` is an indented list of visible `Exception` class names; when
+omitted, ordinary `Exception` failures are eligible.
+Exception classes are resolved when the procedure is defined. Rebinding an
+exception name later cannot change that procedure's retry policy.
+
+Retries cover only failures raised while the procedure body executes. Argument
+validation, approval, hooks, result validation, cancellation,
+`KeyboardInterrupt`, and `SystemExit` are never retried. Each native retry
+receives a fresh copy of the validated arguments, so mutations from a failed
+attempt do not leak into the next one. Only one `> tool:` declaration is
+allowed per procedure.
 
 Single-line form:
 
@@ -2319,8 +2632,8 @@ until their underlying protocol gains tool support.
 ### Tool approval and sensitive files
 
 Kedi classifies tool calls as `read_only`, `mutating`, or `sensitive`. Custom
-Python tools default to `mutating`; choose a different classification with the
-Python API when appropriate:
+tools default to `mutating`; choose a different classification with `> tool:`
+for a Kedi procedure or the Python API for a Python callable:
 
 ```python
 @kedi.tool(risk="read_only")
@@ -2361,7 +2674,11 @@ class Review:
     summary: str
 
 
-@kedi.query(cache=True, settings={"temperature": 0.2})
+@kedi.query(
+    cache=True,
+    settings={"temperature": 0.2},
+    requires=("structured_output",),
+)
 def review_snippet(language: str, code: str) -> Review:
     """kedi
     >> Review this <language> snippet.
@@ -2383,7 +2700,10 @@ Rules:
   env. Parse caching is always keyed by the exact source hash.
 - `model=`, `adapter=`, and `agent=` override the configured backend only for
   that callable. Use `adapter=` for frameworks (`pydantic`, `dspy`,
-  `langchain`) and `agent=` for harnesses (`claude`, `codex`, `acp`).
+  `langchain`) and `agent=` for harnesses (`claude`, `codex`, `acp`, `a2a`).
+- `requires=` on `query` and `bind` accepts canonical adapter capability names.
+  Unknown names are rejected when the decorator is configured; unsupported
+  capabilities fail before that callable performs model I/O.
 - `approval=` accepts `"allow"`, `"deny"`, an `ApprovalPolicy`, or a callable.
   `query` and `bind` apply it only to that callable's registered tools.
 - `skills=True` on `kedi.configure`, `kedi.context`, `@kedi.query`, or
@@ -3117,13 +3437,12 @@ with kedi.interactive() as session:
     = `base + 2`
 """.strip()
     )
-    assert session.execute("= `add_two()`") == 42
+    session.execute("> show: `add_two()`")  # displays 42
 ```
 
-`execute()` returns the same native-value boundary as `run_main()`: an `int`
-remains an `int`, and an explicit Kedi string-rendering expression remains the
-way to request rendered text. A fragment without a top-level return produces
-`None`.
+`execute()` returns `None`; interactive root returns are forbidden. Use
+`> show:` for output and bindings for persistent values. Procedure returns
+retain their native type; display does not replace their return contract.
 
 Every fragment receives a distinct traceback identity such as
 `<interactive:1>`. Pass `source_name=` when an editor or notebook has a better
@@ -3134,7 +3453,7 @@ directory by default):
 ```python
 with kedi.interactive(cwd="examples/cells") as session:
     session.execute(
-        "> import: helpers\n= `answer`",
+        "> import: helpers\n> show: `answer`",
         source_name="answer.kedi",
     )
 ```
@@ -3168,6 +3487,14 @@ existing process variables. Configure `KEDI_ADAPTER_MODEL` there or select a
 model with `> model:` in an earlier Kedi cell. Calling `load_dotenv()` inside a
 host Python cell changes only its isolated worker process, not the server that
 owns agent adapters; browser Python cannot read the host project's `.env`.
+
+Missing native Pydantic AI provider SDKs are installed on demand in the notebook
+server environment, using only the provider group requested by Pydantic AI.
+Other provider groups are not installed. Existing package versions are preserved,
+and earlier cell statements are never replayed after installation. First use
+requires package-index access; installation failures or dependency conflicts
+surface as cell errors. This behavior is notebook-specific and does not change
+ordinary CLI or Python API model construction.
 
 Use **Secret Manager** in the notebook top bar to configure model names,
 provider credentials, and other environment values without placing them in a
@@ -3207,6 +3534,8 @@ browser mode embedded Python operations are bridged to one persistent Pyodide
 worker. In host mode they are bridged to one persistent worker launched by the
 managed environment's executable, so Python objects remain available to later
 cells without modifying the selected base interpreter.
+The bundled `filesystem` module uses Pyodide's temporary virtual filesystem in
+browser mode and the notebook working directory on disk in host mode.
 
 The browser runtime begins loading when the page opens rather than when the
 first cell is run. Its worker and installed packages remain available for the
@@ -3303,7 +3632,7 @@ with kedi.interactive() as session:
     kedi.dump_session(session, snapshot)
 
 with kedi.load_session(snapshot) as session:
-    assert session.execute("= `add_two()`") == 42
+    session.execute("> show: `add_two()`")  # displays 42
 ```
 
 Snapshots are strict and all-or-nothing. Before touching the destination,
@@ -3409,11 +3738,10 @@ server, and falls back to plain input for unusually large fragments so typing
 remains responsive. Highlighted, multiline, and ordinary input share the same
 REPL history.
 
-`:show <expression>` is a terminal-only meta command, not Kedi syntax. It
-evaluates any expression accepted on the right-hand side of a Kedi return and
-prints its value. For example, `:show <name>` renders a substitution, while
-``:show `value` `` inspects a native Python/Kedi value. This keeps forbidden
-top-level substitutions out of normal `.kedi` files.
+`:show <expression>` is an IDLE alias for native `> show:`. It displays once
+and continues without returning or introducing output captures. For example,
+`:show <name>` renders a substitution, while ``:show `value` `` displays a
+Python/Kedi value. Saved fragment sources use the native form.
 
 `:dump` atomically saves the current interactive session. The first dump uses
 an automatically generated path under `~/.kedi/sessions`; later dumps in the
@@ -3515,7 +3843,12 @@ class InternalPayload(BaseModel):
 signature and docstring are used for schema and description metadata.
 
 ```python
-@kedi.tool(name="search_docs", description="Search local project notes.", retries=1)
+@kedi.tool(
+    name="search_docs",
+    description="Search local project notes.",
+    retries=1,
+    retry_on=(TimeoutError,),
+)
 def search_docs(query: str) -> str:
     return "..."
 ```
@@ -3524,6 +3857,10 @@ Register tools through `kedi.configure(tools=[...])`, `kedi.context(tools=[...])
 or per-callable `@kedi.query(tools=[...])` / `@kedi.bind(tools=[...])`. A Kedi
 program still uses `> use: search_docs` to expose that registered callable to
 the active prompt.
+
+`retry_on` accepts `Exception` classes rather than names in the Python API.
+Passing an empty tuple disables retries even when `retries` is positive. As on
+the native surface, only callable-body failures are retried.
 
 ### Cache Helpers
 

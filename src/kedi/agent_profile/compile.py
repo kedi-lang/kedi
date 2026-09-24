@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from ..errors import KediExecutionError
 from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileBudgetMember,
     ProfileArtifactsMember,
     ProfileCodeModeMember,
     ProfileDefinition,
@@ -17,6 +18,7 @@ from .definitions import (
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
+    ProfileRequiresMember,
     ProfileSettingsMember,
     ProfileSkillsMember,
     ProfileSubagentMember,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
         ProfileAdapterEntry,
         ProfileAgentEntry,
         ProfileApprovalEntry,
+        ProfileBudgetEntry,
         ProfileArtifactsEntry,
         ProfileCodeModeEntry,
         ProfileDefStmt,
@@ -41,6 +44,7 @@ if TYPE_CHECKING:
         ProfileMcpEntry,
         ProfileModelEntry,
         ProfileOutputEntry,
+        ProfileRequiresEntry,
         ProfileSettingsEntry,
         ProfileSkillsEntry,
         ProfileSystemEntry,
@@ -59,6 +63,8 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
+        | ProfileRequiresMember
+        | ProfileBudgetMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember
@@ -89,6 +95,10 @@ def profile_stmt_to_definition(stmt: ProfileDefStmt) -> ProfileDefinition:
         members.append(_skills_entry_to_member(entry))
     for entry in stmt.codemode_members:
         members.append(_codemode_entry_to_member(entry))
+    for entry in stmt.requires_members:
+        members.append(_requires_entry_to_member(entry))
+    for entry in stmt.budget_members:
+        members.append(_budget_entry_to_member(entry))
     for entry in stmt.system_members:
         members.append(_system_entry_to_member(entry))
     for entry in stmt.mcp_members:
@@ -171,6 +181,20 @@ def _skills_entry_to_member(entry: ProfileSkillsEntry) -> ProfileSkillsMember:
 
 def _codemode_entry_to_member(entry: ProfileCodeModeEntry) -> ProfileCodeModeMember:
     return ProfileCodeModeMember(enabled=entry.enabled, fields=tuple(entry.fields))
+
+
+def _requires_entry_to_member(entry: ProfileRequiresEntry) -> ProfileRequiresMember:
+    return ProfileRequiresMember(
+        requirements=tuple(entry.requirements),
+        requirement_locs=dict(entry.requirement_locs),
+    )
+
+
+def _budget_entry_to_member(entry: ProfileBudgetEntry) -> ProfileBudgetMember:
+    return ProfileBudgetMember(
+        request_limit=entry.request_limit,
+        tool_attempt_limit=entry.tool_attempt_limit,
+    )
 
 
 def _system_entry_to_member(entry: ProfileSystemEntry) -> ProfileSystemMember:
@@ -272,7 +296,7 @@ def build_capture_env(rt: KediRuntime) -> dict[str, Any]:
     return env
 
 
-def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
+def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Callable[..., Any]]:
     from kedi.lang.ast import (
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
@@ -285,6 +309,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         McpDirectiveStmt,
         ModelDirectiveStmt,
         ProcedureDef,
+        RequiresDirectiveStmt,
+        BudgetDirectiveStmt,
         SettingsDirectiveStmt,
         SkillsDirectiveStmt,
         SystemDirectiveStmt,
@@ -302,6 +328,8 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         eval_hooks_directive,
         eval_mcp_directive,
         eval_model_directive,
+        eval_requires_directive,
+        eval_budget_directive,
         eval_settings_directive,
         eval_skills_directive,
         eval_system_directive,
@@ -309,7 +337,17 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
     from .use_resolution import eval_use_directive
 
     if not any(isinstance(item, ProcedureDef) for item in prog.ordered_toplevel):
-        return
+        return {}
+
+    # Profile capture precedes compilation. These references are filled with the
+    # exact compiled definitions, never resolved through a caller's shadowed name.
+    bindings: dict[int, Callable[..., Any]] = {}
+
+    def reference(definition: ProcedureDef) -> Callable[..., Any]:
+        def invoke(*args: Any) -> Any:
+            return rt._invoke_procedure(bindings[id(definition)], list(args))
+
+        return invoke
 
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
@@ -340,6 +378,10 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
             active = active.merge(eval_skills_directive(rt, item, env))
         elif isinstance(item, CodeModeDirectiveStmt):
             active = active.merge(eval_codemode_directive(rt, item, env))
+        elif isinstance(item, RequiresDirectiveStmt):
+            active = active.merge(eval_requires_directive(rt, item, env))
+        elif isinstance(item, BudgetDirectiveStmt):
+            active = active.merge(eval_budget_directive(rt, item, env))
         elif isinstance(item, SystemDirectiveStmt):
             active = active.merge(eval_system_directive(rt, item, env))
         elif isinstance(item, McpDirectiveStmt):
@@ -361,6 +403,10 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> None:
         elif isinstance(item, ProcedureDef):
             item.captured_agent_profile = active.frozen_copy()
             defined_procedures.add(item.name)
+            if not item.auto_spec and not item.ai_prompt:
+                env[item.name] = reference(item)
+
+    return bindings
 
 
 def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:

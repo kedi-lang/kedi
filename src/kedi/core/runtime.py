@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from concurrent.futures import CancelledError
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -27,10 +26,12 @@ from kedi.core import model_calls as _model_calls
 from kedi.core import tool_binding as _tool_binding
 from kedi.core import tracing as _tracing
 from kedi.core.engines import _default_engine
+from kedi.core.scopes import ProcessingScope
 from kedi.core.expressions import CallExpr, Expression, InputExpr, OutputExpr, ValueEnv, c, i, o
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.executors.base import DefaultExecutor, Executor
 from kedi.promise import KediPromise, force
+from kedi.run_budget import RunBudget
 
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
@@ -68,11 +69,13 @@ class KediRuntime:
         subagent_state_path: str | Path | None = None,
         conversation_state: "ConversationState | None" = None,
         loop_iteration_limit: int = DEFAULT_LOOP_ITERATION_LIMIT,
+        run_budget: RunBudget | None = None,
     ) -> None:
         from kedi.agent_profile import AgentProfile
         from kedi.artifacts import ArtifactManager
 
         self.adapter = adapter
+        self.run_budget = run_budget
         self.executor = executor or DefaultExecutor()
         self._engine = engine if engine is not None else _default_engine()
         self._selected_adapters: dict[tuple[str, str | None], AgentAdapter[Any]] = {}
@@ -84,7 +87,10 @@ class KediRuntime:
         self._conversation_state_lock = Lock()
         self._lifecycle_lock = Lock()
         self._closed = False
-        self._procedures: Dict[str, Callable[..., Any]] = {}
+        self._processing_scope: ContextVar[ProcessingScope | None] = ContextVar(
+            "kedi_processing_scope", default=None
+        )
+        self._root_procedures: Dict[str, Callable[..., Any]] = {}
         self._main: Optional[Callable[..., Any]] = None
         self._import_env: ValueEnv = {}
         self._current_env: ContextVar[Optional[ValueEnv]] = ContextVar(
@@ -107,6 +113,9 @@ class KediRuntime:
             "kedi_invocation_id",
             default=None,
         )
+        self._native_subagent_owner: ContextVar[Any | None] = ContextVar(
+            "kedi_native_subagent_owner", default=None
+        )
         from kedi.agent_adapter.request_budget import ModelRequestBudget
 
         self._request_budget: ContextVar[ModelRequestBudget | None] = ContextVar(
@@ -121,7 +130,7 @@ class KediRuntime:
         self._program: Any | None = None
         self._source_map: Any | None = None
         self._source_text: str | None = None
-        self._type_env_stack: list[dict[str, Any]] = []
+        self._root_type_env_stack: list[dict[str, Any]] = []
         self._profile_registry: dict[str, Any] = {}
         self.default_agent_profile = (
             default_agent_profile
@@ -462,8 +471,21 @@ class KediRuntime:
         """
         from kedi.agent_adapter.hooks import HOOK_EVENT_NAMES
         from kedi.agent_adapter.meta import AdapterCapabilities, SupportsProfileOverride
+        from kedi.agent_adapter.requirements import validate_adapter_requirements
         from kedi.agent_profile import AgentProfileOverrideUnsupported
         from kedi.agent_profile.compaction import CompactionSettingsError
+
+        validate_adapter_requirements(
+            adapter=adapter,
+            requirements=profile.requirements,
+            origins=dict(profile.requirement_origins),
+        )
+
+        if profile.history_processing is not None and (
+            profile.history_processing.processor is not None
+            or profile.history_processing.condition is not None
+        ):
+            validate_adapter_requirements(adapter=adapter, requirements=("history_processing",))
 
         if profile.settings.get("tool_reason") is True:
             capabilities = getattr(adapter, "capabilities", None)
@@ -611,6 +633,8 @@ class KediRuntime:
         parent_budget: "DelegationBudget",
         parent_concurrency: "DelegationConcurrency",
         subagent_definitions: Mapping[str, Any] | None = None,
+        evaluated_profile: Any | None = None,
+        retain_for_native_owner: bool = False,
     ) -> Any:
         return self._subagent_coordinator.start(
             allowed_subagents=allowed_subagents,
@@ -621,6 +645,8 @@ class KediRuntime:
             parent_budget=parent_budget,
             parent_concurrency=parent_concurrency,
             subagent_definitions=subagent_definitions,
+            evaluated_profile=evaluated_profile,
+            retain_for_native_owner=retain_for_native_owner,
         )
 
     async def _continue_subagent(
@@ -686,6 +712,12 @@ class KediRuntime:
     def _new_subagent_concurrency(self) -> "DelegationConcurrency":
         return self._subagent_coordinator.new_concurrency()
 
+    def subagents(self, *, parent: str) -> Any:
+        """Open a program-controlled subagent scope for an async Python caller."""
+        from kedi.agent_adapter.subagents.native import SubagentScope
+
+        return SubagentScope(self, parent)
+
     def _evaluate_profile_definition(self, definition: Any) -> Any:
         from kedi.agent_profile.compile import build_capture_env
         from kedi.agent_profile.evaluation import eval_profile_definition
@@ -723,15 +755,47 @@ class KediRuntime:
         return _tool_binding._artifact_contract_needed(self, profile, adapter, has_tools=has_tools)
 
     def _register_outstanding(self, future: Any) -> None:
+        from kedi.agent_adapter.subagents.groups import register_process_future
+
+        register_process_future(future)
         owner = self._outstanding_owner()
         with self._outstanding_lock:
             self._outstanding.setdefault(owner, []).append(future)
 
     def _outstanding_owner(self) -> object:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            return scope.work_owner
         invocation_id = self._invocation_id.get()
         if invocation_id is not None:
             return invocation_id
         return ("unscoped", id(self), get_ident())
+
+    @property
+    def _procedures(self) -> dict[str, Callable[..., Any]]:
+        scope = self._processing_scope.get()
+        return scope.procedures if scope is not None else self._root_procedures
+
+    @_procedures.setter
+    def _procedures(self, value: dict[str, Callable[..., Any]]) -> None:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            scope.procedures = value
+        else:
+            self._root_procedures = value
+
+    @property
+    def _type_env_stack(self) -> list[dict[str, Any]]:
+        scope = self._processing_scope.get()
+        return scope.types if scope is not None else self._root_type_env_stack
+
+    @_type_env_stack.setter
+    def _type_env_stack(self, value: list[dict[str, Any]]) -> None:
+        scope = self._processing_scope.get()
+        if scope is not None:
+            scope.types = value
+        else:
+            self._root_type_env_stack = value
 
     def drain(self) -> None:
         """Await every scheduled produce Future (parallel mode) at end of run.
@@ -753,9 +817,10 @@ class KediRuntime:
                 break
             for fut in pending:
                 try:
-                    exc = fut.exception()  # blocks until the Future completes
-                except CancelledError as cancelled:
-                    exc = cancelled  # a cancelled job surfaces as an error, not a hang
+                    self._engine.wait(fut)
+                    exc = None
+                except BaseException as failure:
+                    exc = failure
                 if exc is not None:
                     if first_exc is None:
                         first_exc = exc

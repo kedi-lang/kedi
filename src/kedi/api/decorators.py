@@ -41,6 +41,7 @@ from kedi.api.configuration import (
     _execution_engine,
     _resolve_selection,
 )
+from kedi.agent_adapter import AdapterCapability
 from kedi.api.registration import _auto_type_env, _callable_name, _is_async_callable
 from kedi.api.state import _UNSET, AdapterLike, AgentName, FrameworkAdapterName, P, R, _config_var
 from kedi.artifacts import ArtifactPolicyInput
@@ -116,6 +117,17 @@ def _decorate_kedi_program(
     cache: bool,
     conversation_override: ConversationState | None | object,
 ) -> Callable[P, R]:
+    from kedi.explain import _InspectionSource
+
+    inspection_source = _InspectionSource(
+        program=program,
+        kind=kind,
+        reload_program=reload_program,
+        profile=profile_override,
+        adapter_shortname=profile_override.adapter_shortname,
+        tools=dict(tool_map),
+    )
+
     def _run(*args: P.args, **kwargs: P.kwargs) -> R:
         config = _config_var.get()
         active_program = program
@@ -249,12 +261,14 @@ def _decorate_kedi_program(
             # active kedi config/profile contextvars still reach run().
             return await asyncio.to_thread(run, *args, **kwargs)
 
+        setattr(async_wrapper, "__kedi_inspection_source__", inspection_source)
         return cast(Callable[P, R], async_wrapper)
 
     @functools.wraps(inner)
     def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         return run(*args, **kwargs)
 
+    setattr(sync_wrapper, "__kedi_inspection_source__", inspection_source)
     return sync_wrapper
 
 
@@ -271,6 +285,7 @@ def query(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -292,6 +307,7 @@ def query(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -313,6 +329,7 @@ def query(
         system=system,
         effort=effort,
         settings=settings,
+        requires=requires,
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,
@@ -355,6 +372,7 @@ def bind(
     system: str | None = None,
     effort: EffortValue | None = None,
     settings: Mapping[str, Any] | None = None,
+    requires: Sequence[AdapterCapability] = (),
     tools: Sequence[Callable[..., Any]] = (),
     env: Mapping[str, Any] | None = None,
     mcp_servers: Sequence[McpServerSpec] = (),
@@ -377,6 +395,7 @@ def bind(
         system=system,
         effort=effort,
         settings=settings,
+        requires=requires,
         tools=tools,
         mcp_servers=mcp_servers,
         approval_policy=approval,

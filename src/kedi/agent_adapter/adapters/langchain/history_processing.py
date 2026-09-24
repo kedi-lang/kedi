@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from copy import deepcopy
-from typing import Any
-
-from langchain_core.messages import BaseMessage
+from typing import TYPE_CHECKING, Any
 
 from kedi.agent_adapter.compaction.langchain_codec import LangChainHistoryCodec
+
+if TYPE_CHECKING:
+    from langchain_core.messages import BaseMessage
 
 
 class LangChainHistoryMessageCodec:
@@ -17,6 +18,8 @@ class LangChainHistoryMessageCodec:
         self._codec = LangChainHistoryCodec()
 
     def clone(self, messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+        from langchain_core.messages import BaseMessage
+
         if not all(isinstance(message, BaseMessage) for message in messages):
             raise TypeError("all values must be LangChain BaseMessage instances")
         return deepcopy(list(messages))

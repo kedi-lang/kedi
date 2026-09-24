@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Any, Final, Mapping, TypedDict
 
 CODEMODE_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
@@ -18,7 +19,10 @@ CODEMODE_LIMIT_FIELDS: Final[frozenset[str]] = frozenset(
         "request_timeout",
     }
 )
-CODEMODE_SETTING_FIELDS: Final[frozenset[str]] = CODEMODE_LIMIT_FIELDS | {"enabled"}
+CODEMODE_SETTING_FIELDS: Final[frozenset[str]] = CODEMODE_LIMIT_FIELDS | {
+    "enabled",
+    "preload_tools",
+}
 
 
 class CodeModeLimitValues(TypedDict):
@@ -40,6 +44,7 @@ class CodeModeSettings:
     """Kedi-owned CodeMode activation and execution limits."""
 
     enabled: bool = True
+    preload_tools: tuple[str, ...] = ()
     default_search_limit: int = 10
     max_search_limit: int = 50
     max_hydrated_tools: int = 64
@@ -55,6 +60,7 @@ class CodeModeSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.enabled, bool):
             raise TypeError("codemode enabled must be a boolean")
+        object.__setattr__(self, "preload_tools", _normalize_preload_tools(self.preload_tools))
         integer_fields = {
             name: getattr(self, name) for name in CODEMODE_LIMIT_FIELDS if name != "request_timeout"
         }
@@ -112,6 +118,23 @@ def normalize_codemode_settings(
     values = dict(value)
     values.setdefault("enabled", enabled)
     return CodeModeSettings(**values)
+
+
+def _normalize_preload_tools(value: str | Sequence[str]) -> tuple[str, ...]:
+    values: Sequence[str] = (value,) if isinstance(value, str) else value
+    if not isinstance(values, Sequence) or isinstance(values, (bytes, bytearray)):
+        raise TypeError("codemode preload_tools must be a tool name or a sequence of tool names")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for name in values:
+        if not isinstance(name, str):
+            raise TypeError("codemode preload_tools entries must be strings")
+        if not name:
+            raise ValueError("codemode preload_tools entries cannot be empty")
+        if name not in seen:
+            normalized.append(name)
+            seen.add(name)
+    return tuple(normalized)
 
 
 __all__ = [

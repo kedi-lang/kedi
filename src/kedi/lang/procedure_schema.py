@@ -5,10 +5,11 @@ from __future__ import annotations
 import copy
 from typing import Any, Iterable
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from ..core import KediRuntime
 from ..dynamic_models import build_dynamic_model
+from ..resolved_types import annotated_field_metadata
 from .ast import ProcDefStmt, ProcedureDef, Program, ProgramWithValidation
 from .compiler.environment import build_type_env
 from .compiler.type_system import KediType
@@ -29,12 +30,21 @@ def procedure_json_schema(
 
     for param_name in proc.params:
         param_type = _resolve_param_type(rt, proc, param_name, local_env)
+        annotation, description = annotated_field_metadata(param_type)
         default_expr = (proc.param_defaults or {}).get(param_name)
         if default_expr is None:
-            field_defs[param_name] = (param_type, ...)
+            field_defs[param_name] = (
+                annotation,
+                Field(description=description) if description is not None else ...,
+            )
             continue
         default_value = rt.executor.evaluate_type_expression(rt, default_expr, default_env)
-        field_defs[param_name] = (param_type, copy.deepcopy(default_value))
+        field_defs[param_name] = (
+            annotation,
+            Field(default=copy.deepcopy(default_value), description=description)
+            if description is not None
+            else copy.deepcopy(default_value),
+        )
 
     model = build_dynamic_model(
         f"_{proc.name}Parameters",
@@ -69,7 +79,10 @@ def procedure_return_json_schema(
     resolved = kedi_type.resolve(rt, local_env)
     if resolved is None:
         raise TypeError(f"Unknown return type annotation in procedure {proc.name!r}")
-    schema = _strip_introspection_descriptions(TypeAdapter(resolved).json_schema())
+    annotation, description = annotated_field_metadata(resolved)
+    schema = _strip_introspection_descriptions(TypeAdapter(annotation).json_schema())
+    if description is not None:
+        schema["description"] = description
     if parsed_docstring.return_description:
         schema["description"] = parsed_docstring.return_description
     return schema

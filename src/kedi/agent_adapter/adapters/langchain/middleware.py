@@ -20,16 +20,19 @@ from kedi.agent_adapter.hooks import (
     ToolOrigin,
     dispatch_post_tool_use,
     dispatch_post_tool_use_failure,
+    dispatch_post_tool_result_failure,
     dispatch_pre_tool_use,
     is_tool_execution_interrupted,
     new_tool_call_id,
 )
+from kedi.agent_adapter.hooks.tool_wrapper import note_result_observer_failure
 from kedi.agent_adapter.prefix_cache import langchain_provider_cache_policy
 from kedi.agent_adapter.tools.execution import (
     admit_current_artifact_result,
     resolve_tool_arguments_async,
 )
 from kedi.agent_adapter.tools.specs import ToolSpec, tool_has_artifact_boundary
+from kedi.agent_adapter.tools.records import attach_tool_call, track_tool_call
 from kedi.agent_profile import AgentProfile
 
 
@@ -119,59 +122,128 @@ def _langchain_approval_middleware(
                 }
             )
             started = monotonic()
-            try:
-                result = await handler(final_request)
-            except BaseException as exc:
-                await dispatch_post_tool_use_failure(
-                    tool,
-                    final_arguments,
-                    exc,
-                    adapter_shortname="langchain",
-                    tool_call_id=call_id,
-                    origin=origin,
-                    native_tool_name=tool_name,
-                    duration_seconds=monotonic() - started,
-                    interrupted=is_tool_execution_interrupted(exc),
-                )
-                raise
-            result_message = _langchain_tool_message_for_call(result, call_id)
-            if result_message is not None and getattr(result_message, "status", None) == "error":
-                error = RuntimeError(
-                    str(getattr(result_message, "content", "Tool execution failed"))
-                )
-                await dispatch_post_tool_use_failure(
-                    tool,
-                    final_arguments,
-                    error,
-                    adapter_shortname="langchain",
-                    tool_call_id=call_id,
-                    origin=origin,
-                    native_tool_name=tool_name,
-                    duration_seconds=monotonic() - started,
-                )
+            with track_tool_call(call_id) as tracker:
+                try:
+                    result = await handler(final_request)
+                except BaseException as exc:
+                    record = tracker.latest
+                    if record is not None and record.execution_state == "returned":
+                        record = tracker.result_failed(
+                            getattr(exc, "kedi_result_failure_stage", "result_validation")
+                        )
+                        assert record is not None
+                        attach_tool_call(exc, record)
+                        await _observe_langchain_result_failure(
+                            tool, final_arguments, exc, record, call_id, origin, tool_name
+                        )
+                    else:
+                        if record is not None:
+                            attach_tool_call(exc, record)
+                        await dispatch_post_tool_use_failure(
+                            tool,
+                            final_arguments,
+                            exc,
+                            adapter_shortname="langchain",
+                            tool_call_id=call_id,
+                            origin=origin,
+                            native_tool_name=tool_name,
+                            duration_seconds=monotonic() - started,
+                            interrupted=is_tool_execution_interrupted(exc),
+                        )
+                    raise
+                result_message = _langchain_tool_message_for_call(result, call_id)
+                if (
+                    result_message is not None
+                    and getattr(result_message, "status", None) == "error"
+                ):
+                    error = RuntimeError(
+                        str(getattr(result_message, "content", "Tool execution failed"))
+                    )
+                    record = tracker.latest
+                    if record is not None and record.execution_state == "returned":
+                        record = tracker.result_failed("serialization")
+                        assert record is not None
+                        attach_tool_call(error, record)
+                        await _observe_langchain_result_failure(
+                            tool, final_arguments, error, record, call_id, origin, tool_name
+                        )
+                        raise error
+                    else:
+                        await dispatch_post_tool_use_failure(
+                            tool,
+                            final_arguments,
+                            error,
+                            adapter_shortname="langchain",
+                            tool_call_id=call_id,
+                            origin=origin,
+                            native_tool_name=tool_name,
+                            duration_seconds=monotonic() - started,
+                        )
+                    return result
+                try:
+                    if (
+                        tool.artifact_result != "never"
+                        and not tool_has_artifact_boundary(tool)
+                        and (tool.metadata or {}).get("kedi_codemode_control") is not True
+                    ):
+                        result = await _langchain_admit_native_tool_result(
+                            result,
+                            tool_name=tool_name,
+                            call_id=call_id,
+                        )
+                    tracker.ready()
+                    await dispatch_post_tool_use(
+                        tool,
+                        final_arguments,
+                        result,
+                        adapter_shortname="langchain",
+                        tool_call_id=call_id,
+                        origin=origin,
+                        native_tool_name=tool_name,
+                    )
+                except BaseException as exc:
+                    stage = (
+                        "post_hook"
+                        if tracker.latest and tracker.latest.result_state == "ready"
+                        else "artifact"
+                    )
+                    record = tracker.result_failed(stage)
+                    if record is not None:
+                        attach_tool_call(exc, record)
+                        await _observe_langchain_result_failure(
+                            tool, final_arguments, exc, record, call_id, origin, tool_name
+                        )
+                    raise
+                if tracker.latest is not None:
+                    tracker.update(destination="framework")
+                tracker.handed_off()
                 return result
-            if (
-                tool.artifact_result != "never"
-                and not tool_has_artifact_boundary(tool)
-                and (tool.metadata or {}).get("kedi_codemode_control") is not True
-            ):
-                result = await _langchain_admit_native_tool_result(
-                    result,
-                    tool_name=tool_name,
-                    call_id=call_id,
-                )
-            await dispatch_post_tool_use(
-                tool,
-                final_arguments,
-                result,
-                adapter_shortname="langchain",
-                tool_call_id=call_id,
-                origin=origin,
-                native_tool_name=tool_name,
-            )
-            return result
 
     return KediToolLifecycleMiddleware()
+
+
+async def _observe_langchain_result_failure(
+    tool: ToolSpec,
+    arguments: Mapping[str, Any],
+    error: BaseException,
+    record: Any,
+    call_id: str,
+    origin: ToolOrigin,
+    native_tool_name: str,
+) -> None:
+    try:
+        await dispatch_post_tool_result_failure(
+            tool,
+            arguments,
+            error,
+            record,
+            adapter_shortname="langchain",
+            tool_call_id=call_id,
+            origin=origin,
+            native_tool_name=native_tool_name,
+        )
+    except BaseException as observer_error:
+        note_result_observer_failure(error, observer_error)
 
 
 async def _langchain_admit_native_tool_result(

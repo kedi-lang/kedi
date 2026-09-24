@@ -66,7 +66,10 @@ def _langchain_without_cache_control(message: Any) -> Any:
 
 def _raise_langchain_codemode_error(exc: CodeModeError) -> NoReturn:
     from langchain_core.tools import ToolException
+    from kedi.agent_adapter.codemode.errors import CodeModeResultError
 
+    if isinstance(exc, CodeModeResultError):
+        raise exc
     raise ToolException(str(exc)) from exc
 
 

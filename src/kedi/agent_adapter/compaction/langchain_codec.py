@@ -15,6 +15,7 @@ from .codecs import (
 from .models import (
     CompactionCheckpoint,
     HistoryEntryKind,
+    HistoryOrigin,
     HistoryRange,
     HistorySnapshot,
     HistoryStorageFormat,
@@ -158,6 +159,24 @@ class LangChainHistoryCodec:
             unknown=unknown,
             provider_required=_langchain_has_signed_reasoning(message),
             searchable_text=encoded.decode("utf-8", errors="replace"),
+            origins=(
+                tuple(
+                    HistoryOrigin(
+                        kind="tool-call", tool_name=call["name"], tool_call_id=call.get("id")
+                    )
+                    for call in message.tool_calls
+                )
+                if isinstance(message, AIMessage)
+                else (
+                    HistoryOrigin(
+                        kind="tool-result",
+                        tool_name=message.name,
+                        tool_call_id=message.tool_call_id,
+                    ),
+                )
+                if isinstance(message, ToolMessage)
+                else ()
+            ),
         )
 
     @staticmethod

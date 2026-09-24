@@ -31,6 +31,7 @@ from .definitions import (
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
+    ProfileRequiresMember,
     ProfileSettingsMember,
     ProfileSkillsMember,
     ProfileSubagentMember,
@@ -49,6 +50,7 @@ from .directives import (
     eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_requires_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -60,6 +62,7 @@ from .errors import (
 )
 from .evaluation import eval_use_profile
 from .hooks import HookInput, HookSettings, normalize_hook_settings
+from .history import HistoryProcessingSettings
 from .mcp import McpServerSpec, McpTransport
 from .profile import AgentProfile, WorkflowMode
 from .scope import block_agent_profile_scope, current_block_agent_profile
@@ -98,6 +101,7 @@ __all__ = [
     "CodeModeSettings",
     "HookInput",
     "HookSettings",
+    "HistoryProcessingSettings",
     "ProfileApprovalMember",
     "ProfileCodeModeMember",
     "ProfileHistoryMember",
@@ -117,6 +121,7 @@ __all__ = [
     "ProfileMaxAgentsMember",
     "ProfileModelMember",
     "ProfileOutputMember",
+    "ProfileRequiresMember",
     "ProfileSettingsMember",
     "ProfileSystemMember",
     "ProfileSubagentMember",
@@ -143,6 +148,7 @@ __all__ = [
     "eval_skills_directive",
     "eval_mcp_directive",
     "eval_model_directive",
+    "eval_requires_directive",
     "eval_settings_directive",
     "eval_system_directive",
     "normalize_hook_settings",

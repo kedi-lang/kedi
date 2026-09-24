@@ -11,7 +11,7 @@ from typing import (
 from pydantic import BaseModel, TypeAdapter
 
 from kedi.core import KediRuntime
-from kedi.lang.ast import ProcedureDef
+from kedi.lang.ast import ProcedureDef, TypeRef
 from kedi.lang.compiler.type_system import KediType, coerce_model_value
 
 
@@ -78,8 +78,6 @@ def _coerce_tool_arguments(
     proc: ProcedureDef,
     kwargs: dict[str, Any],
 ) -> None:
-    if not (proc.param_type_annotations or proc.param_type_exprs):
-        return
     param_exprs = proc.param_type_exprs or {}
     param_strs = proc.param_type_annotations or {}
 
@@ -92,7 +90,7 @@ def _coerce_tool_arguments(
             param_strs.get(param_name),
         )
         if kedi_type.is_none():
-            continue
+            kedi_type = KediType(TypeRef(name="str"))
 
         provided = kwargs[param_name]
         resolved = kedi_type.resolve(rt, None)

@@ -105,6 +105,7 @@ class CodexAdapter(HookRegistrationMixin):
         supports_artifacts=True,
         supports_native_artifacts=False,
         supports_stateful_history=True,
+        supports_history_processing=False,
         supports_history_replay=False,
         supports_native_compaction=True,
         supports_stream_events=True,
@@ -451,10 +452,6 @@ class CodexAdapter(HookRegistrationMixin):
         }
         model = profile.model or self._model
         codemode_settings = self._codemode_settings()
-        system = append_codemode_instructions(
-            instructions if instructions is not None else profile.system,
-            enabled=codemode_settings is not None,
-        )
         policies = self._approval_policies(profile.approval)
         codemode_bridge = None
         if codemode_settings is not None:
@@ -466,6 +463,7 @@ class CodexAdapter(HookRegistrationMixin):
                     self._approval_ceiling_var.get(),
                 ),
                 adapter_shortname=self.shortname,
+                preload_tools=codemode_settings.preload_tools,
             )
             projected_tools = codemode_bridge.control_tools
         else:
@@ -473,6 +471,13 @@ class CodexAdapter(HookRegistrationMixin):
                 _tool_with_approval_policies(tool, policies, self.shortname)
                 for tool in self.scoped_tools
             )
+        system = append_codemode_instructions(
+            instructions if instructions is not None else profile.system,
+            enabled=codemode_settings is not None,
+            preloaded_tools=(
+                codemode_bridge.preloaded_tools if codemode_bridge is not None else ()
+            ),
+        )
         dispatcher = current_hook_dispatcher()
         if dispatcher is not None and any(
             dispatcher.handlers_for(event)

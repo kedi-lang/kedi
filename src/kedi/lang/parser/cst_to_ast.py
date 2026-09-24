@@ -42,6 +42,7 @@ from kedi.lang.ast import (
     AssignmentStmt,
     AutoSpec,
     BacktickLineStmt,
+    BudgetDirectiveStmt,
     CallArg,
     CallSegment,
     CodeModeDirectiveStmt,
@@ -68,6 +69,7 @@ from kedi.lang.ast import (
     ProgramWithValidation,
     PythonBlock,
     RawInvokeStmt,
+    RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
     Segment,
@@ -81,6 +83,7 @@ from kedi.lang.ast import (
     TemplateLine,
     TestCase,
     TestSuite,
+    ToolDeclaration,
     TypeDef,
     TypeExpr,
     UseDirectiveStmt,
@@ -218,8 +221,19 @@ class _Walker:
     def _walk_block_into(self, block_node: Node, proc: ProcedureDef) -> None:
         return _statement_conversion._walk_block_into(self, block_node, proc)
 
-    def _walk_block_statements(self, block_node: Node, proc: Optional[ProcedureDef]) -> List[Stmt]:
-        return _statement_conversion._walk_block_statements(self, block_node, proc)
+    def _walk_block_statements(
+        self,
+        block_node: Node,
+        proc: Optional[ProcedureDef],
+        *,
+        procedure_header: bool = False,
+    ) -> List[Stmt]:
+        return _statement_conversion._walk_block_statements(
+            self,
+            block_node,
+            proc,
+            procedure_header=procedure_header,
+        )
 
     # =================================================================
     # Statements
@@ -444,6 +458,15 @@ class _Walker:
 
     def _walk_auto_directive(self, node: Node) -> AutoSpec:
         return _directive_conversion._walk_auto_directive(self, node)
+
+    def _walk_tool_directive(self, node: Node) -> ToolDeclaration:
+        return _directive_conversion._walk_tool_directive(self, node)
+
+    def _walk_requires_directive(self, node: Node) -> RequiresDirectiveStmt:
+        return _directive_conversion._walk_requires_directive(self, node)
+
+    def _walk_budget_directive(self, node: Node) -> BudgetDirectiveStmt:
+        return _directive_conversion._walk_budget_directive(self, node)
 
     def _walk_model_directive(self, node: Node) -> ModelDirectiveStmt:
         return _directive_conversion._walk_model_directive(self, node)

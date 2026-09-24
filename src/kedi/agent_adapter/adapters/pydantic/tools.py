@@ -50,6 +50,7 @@ from kedi.agent_adapter.tools.execution import (
 from kedi.agent_adapter.tools.scope import (
     current_required_tool_calls,
 )
+from kedi.agent_adapter.tools.retry import tool_body
 from kedi.agent_adapter.tools.specs import ToolSpec
 from kedi.agent_profile import AgentProfile
 
@@ -153,6 +154,7 @@ def _preserve_tool_introspection(wrapper: Any, function: Callable[..., Any]) -> 
     if signature.return_annotation is not inspect.Signature.empty:
         annotations.setdefault("return", signature.return_annotation)
     wrapper.__annotations__ = annotations
+    wrapper.__wrapped__ = tool_body(function)
     return wrapper
 
 

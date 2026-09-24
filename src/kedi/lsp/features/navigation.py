@@ -9,6 +9,7 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     CallArg,
     CallSegment,
     ConditionalLoopStmt,
@@ -20,6 +21,8 @@ from kedi.lang.ast import (
     Program,
     ProgramWithValidation,
     Span,
+    TaskStmt,
+    TaskGroupStmt,
     TypeApply,
     TypeDef,
     TypeExpr,
@@ -52,6 +55,7 @@ from kedi.lsp.features.symbols import (
     _location_for_span,
     _profile_use_entry_spans,
     _use_single_target_span,
+    _use_tool_entry_spans,
     _validation_procedure_span,
     _validation_suites,
 )
@@ -114,9 +118,11 @@ def _find_all_references(
                     procedure_candidates.append(suite_span)
         for p in _all_procedures(prog):
             for stmt in _iter_control_statements(p.body):
+                _collect_use_refs(prog, stmt, sym.name, procedure_candidates)
                 for seg in _segments_of(stmt):
                     _collect_call_refs(seg, sym.name, procedure_candidates)
-        for stmt in _iter_control_statements(prog.toplevel_body):
+        for stmt in _iter_control_statements(prog.ordered_toplevel or prog.toplevel_body):
+            _collect_use_refs(prog, stmt, sym.name, procedure_candidates)
             for seg in _segments_of(stmt):
                 _collect_call_refs(seg, sym.name, procedure_candidates)
         if prog.toplevel_return is not None:
@@ -162,6 +168,15 @@ def _find_all_references(
                 target_span = _use_single_target_span(prog, stmt)
                 if target_span is not None:
                     out.append(target_span)
+        for stmt in _iter_control_statements(prog.toplevel_body):
+            if isinstance(stmt, TaskStmt) and stmt.subagent == sym.name:
+                if stmt.subagent_loc is not None:
+                    out.append(stmt.subagent_loc)
+        for procedure in _all_procedures(prog):
+            for stmt in _iter_control_statements(procedure.body):
+                if isinstance(stmt, TaskStmt) and stmt.subagent == sym.name:
+                    if stmt.subagent_loc is not None:
+                        out.append(stmt.subagent_loc)
     elif sym.kind in {
         "parameter",
         "param_decl",
@@ -239,6 +254,19 @@ def _reference_resolves_to(
     return same_kind and resolved.declaration_span == target.declaration_span
 
 
+def _collect_use_refs(
+    prog: Program | ProgramWithValidation, stmt: object, name: str, out: list[Span]
+) -> None:
+    if not isinstance(stmt, UseDirectiveStmt):
+        return
+    if stmt.tool_names:
+        out.extend(span for target, span in _use_tool_entry_spans(prog, stmt) if target == name)
+    elif stmt.name == name:
+        span = _use_single_target_span(prog, stmt)
+        if span is not None:
+            out.append(span)
+
+
 def _collect_literal_arg_refs(arg: CallArg, name: str, out: List[Span], collector) -> None:
     for nested in iter_call_arg_nested(arg):
         collector(nested, name, out)
@@ -267,6 +295,9 @@ def _collect_value_reference_candidates(
     out: List[Span],
 ) -> None:
     for stmt in _iter_control_statements(statements):
+        if isinstance(stmt, AwaitStmt) and stmt.handle == name:
+            if stmt.handle_loc is not None:
+                out.append(stmt.handle_loc)
         if isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)) and stmt.name == name:
             target_span = binding_name_span(stmt)
             if target_span is not None:
@@ -327,6 +358,9 @@ def _collect_loop_binder_refs(
                 visit(stmt.else_body or [], active)
             elif isinstance(stmt, ConditionalLoopStmt):
                 visit(stmt.body, active)
+            elif isinstance(stmt, TaskGroupStmt):
+                for arm in stmt.arms:
+                    visit(arm.body or [], active and arm.wait.binder != target.name)
 
     visit(prog.toplevel_body)
     for proc in _all_procedures(prog):

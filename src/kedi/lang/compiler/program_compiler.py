@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from kedi.agent_profile import AgentProfile, block_agent_profile_scope
+from kedi.agent_profile import AgentProfile
+from kedi.run_budget import RunBudget
 from kedi.agent_profile.compile import (
     build_profile_registry,
     capture_procedure_profiles,
@@ -16,8 +17,7 @@ from kedi.agent_profile.definitions import ProfileDefinition
 from kedi.core import KediRuntime
 from kedi.errors import KediTraceFrame
 from kedi.executors.base import SupportsIncrementalPrelude
-from kedi.lang.ast import ModuleImport, Program, ProgramWithValidation, ReturnStmt, TemplateLine
-from kedi.lang.compiler.evaluation import evaluate_python_inline, execute_python_block
+from kedi.lang.ast import ModuleImport, Program, ProgramWithValidation, TemplateLine
 from kedi.lang.compiler.procedure_compiler import ProcedureCompiler
 from kedi.lang.compiler.statement_compiler import StatementCompiler, StatementExecutor
 from kedi.lang.compiler.type_system import register_type
@@ -67,6 +67,7 @@ def compile_program(
     subagent_state_path: str | Path | None = None,
     conversation_state: ConversationState | None = None,
     loop_iteration_limit: int = 10_000,
+    run_budget: RunBudget | None = None,
 ) -> KediRuntime:
     """Compile a Kedi program to an executable runtime.
 
@@ -107,6 +108,7 @@ def compile_program(
         subagent_state_path=subagent_state_path,
         conversation_state=conversation_state,
         loop_iteration_limit=loop_iteration_limit,
+        run_budget=run_budget,
     )
     with runtime_span(
         f"compile {display_name}",
@@ -141,6 +143,7 @@ class ProgramCompiler:
         subagent_state_path: str | Path | None = None,
         conversation_state: ConversationState | None = None,
         loop_iteration_limit: int = 10_000,
+        run_budget: RunBudget | None = None,
     ):
         self.adapter = adapter
         self.module_stack = module_stack
@@ -166,6 +169,7 @@ class ProgramCompiler:
             subagent_state_path=subagent_state_path,
             conversation_state=conversation_state,
             loop_iteration_limit=loop_iteration_limit,
+            run_budget=run_budget,
         )
         if runtime_globals:
             self.rt.set_initial_globals(runtime_globals)
@@ -175,6 +179,9 @@ class ProgramCompiler:
 
     def compile(self, prog: Program) -> KediRuntime:
         """Compile program and return configured runtime."""
+        from ..parser.control_flow_validation import validate_control_flow
+
+        validate_control_flow(prog)
         # Initialize type environment
         self.rt._type_env_stack = [{}]
         self.rt._program = prog
@@ -212,6 +219,9 @@ class ProgramCompiler:
         import_source_path: Path,
     ) -> _PreparedProgram:
         """Prepare one incremental fragment without resetting existing runtime state."""
+        from ..parser.control_flow_validation import validate_control_flow
+
+        validate_control_flow(prog, interactive=True)
         if prog.package is not None:
             raise ValueError("package metadata is not supported in interactive fragments")
         if prog.exports:
@@ -289,7 +299,7 @@ class ProgramCompiler:
         local_profiles = build_profile_registry(prog)
         self.rt._profile_registry.update(local_profiles)
         validate_subagent_graph(self.rt._profile_registry)
-        capture_procedure_profiles(self.rt, prog)
+        procedure_bindings = capture_procedure_profiles(self.rt, prog)
 
         type_env = self.rt._type_env_stack[0]
         for typedef in prog.type_defs:
@@ -298,11 +308,18 @@ class ProgramCompiler:
         for proc in prog.procedures:
             if proc.auto_spec or proc.ai_prompt:
                 continue
-            self.rt.procedure(self.proc_compiler.compile_procedure(proc))
+            compiled = self.proc_compiler.compile_procedure(proc)
+            procedure_bindings[id(proc)] = compiled
+            self.rt.procedure(compiled)
 
+        sequence = list(prog.ordered_toplevel or prog.toplevel_body)
+        if prog.toplevel_return is not None and not any(
+            item is prog.toplevel_return for item in sequence
+        ):
+            sequence.append(prog.toplevel_return)
         return _PreparedProgram(
             program=prog,
-            sequence=tuple(prog.ordered_toplevel or prog.toplevel_body),
+            sequence=tuple(sequence),
             toplevel_return=prog.toplevel_return,
             local_profiles=local_profiles,
             import_source_path=import_source_path,
@@ -573,26 +590,7 @@ class ProgramCompiler:
                 prepared.sequence,
             )
 
-            if prepared.toplevel_return is None:
-                return None if block_result is _NO_TOP_LEVEL_RESULT else block_result
-
-            with block_agent_profile_scope(state.active_profile):
-                if isinstance(prepared.toplevel_return, ReturnStmt):
-                    return self.stmt_compiler.compile_return(prepared.toplevel_return)(**env)
-                code = prepared.toplevel_return.code
-                if "\n" in code or code.strip().startswith("return"):
-                    return execute_python_block(
-                        code,
-                        self.rt,
-                        env,
-                        span=prepared.toplevel_return.loc,
-                    )
-                return evaluate_python_inline(
-                    self.rt,
-                    code,
-                    env,
-                    span=prepared.toplevel_return.loc,
-                )
+            return None if block_result is _NO_TOP_LEVEL_RESULT else block_result
 
     def _execute_top_level_sequence(
         self,

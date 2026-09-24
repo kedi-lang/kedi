@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from lsprotocol import types as lsp
 
 import kedi.lang.ast as kedi_ast
@@ -61,6 +62,96 @@ def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
         )
     }
     assert "int" in invalid_labels
+
+
+def test_completion_exposes_codemode_settings_inside_expanded_block() -> None:
+    source = "> codemode:\n    pre"
+    items = lsp_completion_module.compute_completion(
+        source,
+        "/tmp/x.kedi",
+        lsp.Position(line=1, character=len("    pre")),
+    )
+    labels = {item.label for item in items}
+    assert {"preload_tools", "max_hydrated_tools", "enabled"} <= labels
+
+    nested = "> codemode:\n    preload_tools:\n        lookup"
+    nested_items = lsp_completion_module.compute_completion(
+        nested,
+        "/tmp/x.kedi",
+        lsp.Position(line=2, character=len("        lookup")),
+    )
+    assert "preload_tools" not in {item.label for item in nested_items}
+
+
+def test_completion_exposes_requirements_and_tool_metadata_fields() -> None:
+    directive_items = lsp_completion_module.compute_completion(
+        "> req",
+        "/tmp/x.kedi",
+        lsp.Position(line=0, character=len("> req")),
+    )
+    top_level_labels = {item.label for item in directive_items}
+    assert "requires" in top_level_labels
+    assert "tool" not in top_level_labels
+
+    procedure_directives = lsp_completion_module.compute_completion(
+        "@lookup() -> str:\n    > to",
+        "/tmp/x.kedi",
+        lsp.Position(line=1, character=len("    > to")),
+    )
+    assert "tool" in {item.label for item in procedure_directives}
+
+    profile_directives = lsp_completion_module.compute_completion(
+        "> profile: helper:\n    > to",
+        "/tmp/x.kedi",
+        lsp.Position(line=1, character=len("    > to")),
+    )
+    assert "tool" not in {item.label for item in profile_directives}
+
+    source = "@lookup() -> str:\n    > tool:\n        ret"
+    field_items = lsp_completion_module.compute_completion(
+        source,
+        "/tmp/x.kedi",
+        lsp.Position(line=2, character=len("        ret")),
+    )
+    assert {"name", "description", "risk", "retries", "retry_on"} <= {
+        item.label for item in field_items
+    }
+
+    nested = source + "ry_on:\n            Timeout"
+    nested_items = lsp_completion_module.compute_completion(
+        nested,
+        "/tmp/x.kedi",
+        lsp.Position(line=3, character=len("            Timeout")),
+    )
+    assert "retry_on" not in {item.label for item in nested_items}
+
+
+def test_completion_enclosing_header_handles_incomplete_editor_sources() -> None:
+    position = lsp.Position(line=1, character=len("    > to"))
+
+    assert lsp_completion_module._enclosing_header("", position) is None
+    assert (
+        lsp_completion_module._enclosing_header(
+            "> profile: helper:\n> to",
+            lsp.Position(line=1, character=len("> to")),
+        )
+        is None
+    )
+    assert lsp_completion_module._enclosing_header("\n    > to", position) is None
+    assert (
+        lsp_completion_module._enclosing_header(
+            "@lookup() -> str:\n    > to",
+            position,
+        )
+        == "@lookup() -> str:"
+    )
+    assert (
+        lsp_completion_module._enclosing_header(
+            "@lookup() -> str:\n    # metadata follows\n    > to",
+            lsp.Position(line=2, character=len("    > to")),
+        )
+        == "@lookup() -> str:"
+    )
 
 
 def test_completion_exposes_top_level_control_flow_and_imported_symbols(tmp_path: Path) -> None:
@@ -191,6 +282,23 @@ def test_template_condition_diagnostic_and_control_hover() -> None:
     assert model_loop_hover is not None
     assert "Model-classified loop" in model_loop_hover.contents.value
     assert city_hover is not None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "> if: `is_ready`\n  > show: unreachable\n",
+        "> if: Work remains while `pending`\n  > show: unreachable\n",
+        "> loop: `is_ready`\n  > show: unreachable\n",
+        "> loop: Work remains while `pending`\n  > show: unreachable\n",
+    ],
+)
+def test_template_condition_bare_python_reports_wrapped_syntax(source: str) -> None:
+    diagnostics = lsp_diagnostics_module.compute_diagnostics(source, "/tmp/control.kedi")
+
+    assert diagnostics
+    assert diagnostics[0].code == "K-PARSE"
+    assert "must be wrapped as <`...`>" in diagnostics[0].message
 
 
 def test_loop_binder_definition_and_references_respect_nested_shadowing() -> None:

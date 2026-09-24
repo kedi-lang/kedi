@@ -167,11 +167,26 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
             )
             for spec in specs
         ]
+    _validate_unique_tool_names(specs)
     from kedi.agent_adapter.tools.execution import with_required_before_output, with_tool_telemetry
 
     specs = [with_required_before_output(spec) for spec in specs]
     specs = [with_tool_telemetry(spec, adapter_shortname=adapter_name) for spec in specs]
     return tuple(specs)
+
+
+def _validate_unique_tool_names(specs: list[Any]) -> None:
+    owners: dict[str, str] = {}
+    for spec in specs:
+        name = spec.name
+        proc = getattr(spec, "proc", None)
+        source_name = getattr(proc, "name", name)
+        previous = owners.get(name)
+        if previous is not None:
+            raise KediExecutionError(
+                f"Tool name collision for exposed name {name!r}: {previous!r} and {source_name!r}"
+            )
+        owners[name] = source_name
 
 
 def _adapter_uses_native_approvals(adapter: Any) -> bool:

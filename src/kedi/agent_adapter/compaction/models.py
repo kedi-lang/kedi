@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Mapping, TypeAlias
+
+if TYPE_CHECKING:
+    from kedi.lang.ast import Span
 
 CompactionBackendKind: TypeAlias = Literal["native", "kedi", "disabled"]
 CompactionMode: TypeAlias = Literal["auto", "native", "kedi", "disabled"]
@@ -113,6 +116,17 @@ class CompactionOutcome:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class HistoryOrigin:
+    """Known lineage, kept outside model-visible native message content."""
+
+    kind: HistoryEntryKind
+    run_id: str | None = None
+    source_location: Span | None = field(default=None, hash=False)
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class NativeHistoryEntryRef:
     """Stable metadata for one untouched adapter-native history entry."""
 
@@ -130,6 +144,7 @@ class NativeHistoryEntryRef:
     unknown: bool = False
     provider_required: bool = False
     searchable_text: str = field(default="", repr=False, compare=False)
+    origins: tuple[HistoryOrigin, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -149,6 +164,7 @@ class HistoryUnit:
     checkpoint: bool = False
     unknown: bool = False
     provider_required: bool = False
+    origins: tuple[HistoryOrigin, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -164,6 +180,7 @@ class HistoryUnitGroup:
     lifecycle_ids: tuple[str, ...] = ()
     artifact_refs: tuple[str, ...] = ()
     protected_reasons: tuple[str, ...] = ()
+    origins: tuple[HistoryOrigin, ...] = field(default=(), compare=False)
 
     @property
     def protected(self) -> bool:

@@ -158,6 +158,7 @@ class SubagentCoordinator:
         )
         self.events = SubagentEventLog(max_events=max_retained_runs * 2)
         self._tasks: dict[str, _OwnedSubagentTask] = {}
+        self._retained_native_runs: set[str] = set()
         self._timeout_handles: dict[str, asyncio.TimerHandle] = {}
         self._cancel_requested: set[str] = set()
         self._results: dict[str, DelegationResult] = {}
@@ -211,6 +212,8 @@ class SubagentCoordinator:
         previous_run_id: str | None = None,
         conversation_id: str | None = None,
         root_run_id_override: str | None = None,
+        evaluated_profile: Any | None = None,
+        retain_for_native_owner: bool = False,
     ) -> SubagentHandle:
         with self._coordination_lock:
             if self._closed:
@@ -278,6 +281,9 @@ class SubagentCoordinator:
             bind_current_delegation_run(run_id)
             started = self.runs.transition(run_id, "running")
             self.events.append(SubagentStarted(started))
+            if retain_for_native_owner:
+                with self._task_lock:
+                    self._retained_native_runs.add(run_id)
         except BaseException:
             self._deactivate_conversation(conversation_id, run_id)
             self._release_slot(concurrency)
@@ -289,6 +295,7 @@ class SubagentCoordinator:
                 parent_run_id=parent_run_id,
                 child_depth=child_depth,
                 definition=definition,
+                evaluated_profile=evaluated_profile,
                 subagent=subagent,
                 task=task,
                 final_schema=final_schema,
@@ -307,6 +314,8 @@ class SubagentCoordinator:
             )
             owner_loop = task_handle.get_loop()
         except BaseException as exc:
+            with self._task_lock:
+                self._retained_native_runs.discard(run_id)
             failed = self.runs.transition(run_id, "failed", error=exc)
             self.events.append(SubagentFailed(failed))
             self._deactivate_conversation(conversation_id, run_id)
@@ -491,19 +500,33 @@ class SubagentCoordinator:
         if not task.cancelled():
             task.exception()
 
-        discarded: list[str] = []
         with self._task_lock:
             timeout_handle = self._timeout_handles.pop(run_id, None)
             if timeout_handle is not None:
                 timeout_handle.cancel()
             if self._tasks.get(run_id) is None or self._tasks[run_id].task is not task:
                 return
-            for candidate_id, candidate in tuple(self._tasks.items()):
-                if len(self._tasks) <= self.max_retained_runs:
-                    break
-                if candidate.task.done():
-                    self._tasks.pop(candidate_id)
-                    discarded.append(candidate_id)
+            discarded = self._prune_finished_locked()
+        self._discard_runs(discarded)
+
+    def release_native_runs(self, run_ids: tuple[str, ...]) -> None:
+        """Release terminal-record leases when their native owner closes."""
+        with self._task_lock:
+            self._retained_native_runs.difference_update(run_ids)
+            discarded = self._prune_finished_locked()
+        self._discard_runs(discarded)
+
+    def _prune_finished_locked(self) -> list[str]:
+        discarded: list[str] = []
+        for candidate_id, candidate in tuple(self._tasks.items()):
+            if len(self._tasks) <= self.max_retained_runs:
+                break
+            if candidate_id not in self._retained_native_runs and candidate.task.done():
+                self._tasks.pop(candidate_id)
+                discarded.append(candidate_id)
+        return discarded
+
+    def _discard_runs(self, discarded: list[str]) -> None:
         for candidate_id in discarded:
             conversation_id = self.runs.get(candidate_id).conversation_id
             self.runs.discard(candidate_id)
@@ -595,6 +618,7 @@ class SubagentCoordinator:
         parent_run_id: str | None,
         child_depth: int,
         definition: Any,
+        evaluated_profile: Any | None,
         subagent: str,
         task: str,
         final_schema: dict[str, Any] | None,
@@ -612,6 +636,7 @@ class SubagentCoordinator:
             parent_run_id=parent_run_id,
             child_depth=child_depth,
             definition=definition,
+            evaluated_profile=evaluated_profile,
             subagent=subagent,
             task=task,
             final_schema=final_schema,

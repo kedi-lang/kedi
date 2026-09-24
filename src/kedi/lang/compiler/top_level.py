@@ -17,6 +17,8 @@ from kedi.agent_profile.directives import (
     eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_requires_directive,
+    eval_budget_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -25,6 +27,7 @@ from kedi.agent_profile.use_resolution import eval_use_directive
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
+    AwaitStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
     CodeModeDirectiveStmt,
@@ -42,9 +45,13 @@ from kedi.lang.ast import (
     ProfileDefStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    RequiresDirectiveStmt,
+    BudgetDirectiveStmt,
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     SystemDirectiveStmt,
+    TaskGroupStmt,
+    TaskStmt,
     TemplateLine,
     TypeDef,
     TypeDefStmt,
@@ -63,6 +70,7 @@ from kedi.lang.compiler.control_flow import (
     run_map_continuations,
 )
 from kedi.lang.compiler.type_system import register_type
+from kedi.run_budget import RunBudget, current_run_budget, run_budget_scope
 
 if TYPE_CHECKING:
     from kedi.lang.compiler.program_compiler import ProgramCompiler, _PreparedProgram
@@ -97,7 +105,7 @@ def _execute_top_level_sequence(
                 continue
             branch_state = replace(state)
             with branch_trace(self.rt, item, alternative=not condition):
-                with child_scope(self.rt, env) as branch_env:
+                with child_scope(self.rt, env) as branch_env, run_budget_scope(RunBudget()):
                     result = self._execute_top_level_sequence(
                         prepared,
                         branch_env,
@@ -105,7 +113,7 @@ def _execute_top_level_sequence(
                         body,
                     )
             if result is not _NO_TOP_LEVEL_RESULT:
-                last_result = result
+                return result
             continue
         if isinstance(item, LoopStmt):
             with loop_trace(self.rt, item):
@@ -114,7 +122,10 @@ def _execute_top_level_sequence(
                 with managed_loop_iterator(values):
                     for value in values:
                         iteration_state = replace(state)
-                        with loop_binding(self.rt, env, item.binder, value) as iteration_env:
+                        with (
+                            loop_binding(self.rt, env, item.binder, value) as iteration_env,
+                            run_budget_scope(RunBudget()),
+                        ):
                             result = self._execute_top_level_sequence(
                                 prepared,
                                 iteration_env,
@@ -123,16 +134,17 @@ def _execute_top_level_sequence(
                             )
                             records.append((iteration_env, iteration_state))
                         if result is not _NO_TOP_LEVEL_RESULT:
-                            last_result = result
+                            return result
 
                 if item.map_body is not None:
                     frames = [record[0] for record in records]
+                    results: list[Any] = [_NO_TOP_LEVEL_RESULT] * len(frames)
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_state = records[index]
-                        with active_scope(self.rt, frame):
+                        with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
                             with block_agent_profile_scope(map_state.active_profile):
-                                self._execute_top_level_sequence(
+                                results[index] = self._execute_top_level_sequence(
                                     prepared,
                                     frame,
                                     map_state,
@@ -140,6 +152,9 @@ def _execute_top_level_sequence(
                                 )
 
                     run_map_continuations(self.rt, item, frames, run_map)
+                    for result in results:
+                        if result is not _NO_TOP_LEVEL_RESULT:
+                            return result
             continue
         if isinstance(item, ConditionalLoopStmt):
             completed_iterations = 0
@@ -151,7 +166,7 @@ def _execute_top_level_sequence(
                         break
                     assert_conditional_loop_capacity(self.rt, completed_iterations)
                     iteration_state = replace(state)
-                    with child_scope(self.rt, env) as iteration_env:
+                    with child_scope(self.rt, env) as iteration_env, run_budget_scope(RunBudget()):
                         result = self._execute_top_level_sequence(
                             prepared,
                             iteration_env,
@@ -160,7 +175,7 @@ def _execute_top_level_sequence(
                         )
                     completed_iterations += 1
                     if result is not _NO_TOP_LEVEL_RESULT:
-                        last_result = result
+                        return result
             continue
         if isinstance(item, ProcedureDef):
             if not item.auto_spec and not item.ai_prompt:
@@ -246,6 +261,18 @@ def _execute_top_level_sequence(
                 eval_codemode_directive(self.rt, item, env)
             )
             continue
+        if isinstance(item, RequiresDirectiveStmt):
+            state.active_profile = state.active_profile.merge(
+                eval_requires_directive(self.rt, item, env)
+            )
+            continue
+        if isinstance(item, BudgetDirectiveStmt):
+            patch = eval_budget_directive(self.rt, item, env)
+            state.active_profile = state.active_profile.merge(patch)
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
+            continue
         if isinstance(item, SystemDirectiveStmt):
             state.active_profile = state.active_profile.merge(
                 eval_system_directive(self.rt, item, env)
@@ -267,15 +294,17 @@ def _execute_top_level_sequence(
             )
             continue
         if isinstance(item, UseDirectiveStmt):
-            state.active_profile = state.active_profile.merge(
-                eval_use_directive(
-                    self.rt,
-                    item,
-                    profile_registry,
-                    env,
-                    available_procedures=set(self.rt._procedures.keys()),
-                )
+            patch = eval_use_directive(
+                self.rt,
+                item,
+                profile_registry,
+                env,
+                available_procedures=set(self.rt._procedures.keys()),
             )
+            state.active_profile = state.active_profile.merge(patch)
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
             continue
         if isinstance(item, ProfileDefStmt):
             profile_registry[item.name] = prepared.local_profiles[item.name]
@@ -285,14 +314,26 @@ def _execute_top_level_sequence(
                 "Top-level TemplateLine is not a valid program node; "
                 "use '>>' for a top-level template prompt."
             )
+        if isinstance(item, TaskGroupStmt):
+            from .task_groups import execute_task_group
+
+            with block_agent_profile_scope(state.active_profile):
+                execute_task_group(self.rt, item, env, state.active_profile)
+            continue
+        if isinstance(item, TaskStmt):
+            with block_agent_profile_scope(state.active_profile):
+                self.stmt_compiler.execute_task(item, env, state.active_profile)
+            continue
+        if isinstance(item, AwaitStmt):
+            with block_agent_profile_scope(state.active_profile):
+                self.stmt_compiler.execute_await(item, env)
+            continue
         if isinstance(item, ReturnStmt):
             with block_agent_profile_scope(state.active_profile):
-                last_result = self.stmt_compiler.compile_return(item)(**env)
-            continue
+                return self.stmt_compiler.compile_return(item)(**env)
         if isinstance(item, ReturnBlockStmt):
             with block_agent_profile_scope(state.active_profile):
-                last_result = self.stmt_compiler.compile_return_block(item, env)
-            continue
+                return self.stmt_compiler.compile_return_block(item, env)
         with block_agent_profile_scope(state.active_profile):
             self.executor.execute_single_statement(item, env, is_toplevel=True)
 

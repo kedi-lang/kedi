@@ -923,6 +923,7 @@ def _make_proc_wrapper(
         return _make_generic_proc_wrapper(rt, proc_name)
     wrapper = namespace[metadata.name]
     wrapper.__doc__ = metadata.docstring
+    setattr(wrapper, "__kedi_procedure_target__", proc_fn)
     setattr(wrapper, "__signature__", metadata.introspection_signature())
     setattr(wrapper, "__kedi_procedure_metadata__", metadata)
     procedure_def = get_procedure_def(proc_fn)

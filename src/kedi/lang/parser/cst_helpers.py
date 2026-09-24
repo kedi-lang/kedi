@@ -287,6 +287,11 @@ def _collect_pre_walk_tree_errors(
 
 def _parse_error_message(self: _Walker, node: Node, fallback: str) -> str:
     raw = _src_text(self.source, node)
+    if _template_condition_has_bare_python(raw):
+        return (
+            "inline Python in a template condition must be wrapped as <`...`>; "
+            "use a trailing ':' for a deterministic condition"
+        )
     if "``" in raw:
         return "inline Python expression cannot be empty"
     invalid_identifier = _hyphenated_identifier_from_error(self.source, node)
@@ -296,3 +301,36 @@ def _parse_error_message(self: _Walker, node: Node, fallback: str) -> str:
             "Kedi identifiers; use '_' instead"
         )
     return fallback
+
+
+def _template_condition_has_bare_python(raw: str) -> bool:
+    """Return whether a recovered claim header contains an unwrapped backtick."""
+    first_line = raw.split("\n", 1)[0]
+    match = re.match(r"^\s*>\s*(?:if|loop)\s*:\s*(.*)$", first_line)
+    if match is None:
+        return False
+
+    claim = match.group(1)
+    angle_depth = 0
+    escaped = False
+    in_wrapped_python = False
+    for char in claim:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if in_wrapped_python:
+            if char == "`":
+                in_wrapped_python = False
+            continue
+        if char == "`":
+            if angle_depth == 0:
+                return True
+            in_wrapped_python = True
+        elif char == "<":
+            angle_depth += 1
+        elif char == ">" and angle_depth:
+            angle_depth -= 1
+    return False

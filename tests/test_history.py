@@ -32,6 +32,7 @@ from pydantic_ai.providers.zai import ZaiProvider
 
 import kedi.agent_adapter.adapters.langchain.messages as langchain_messages_module
 import kedi.agent_adapter.adapters.langchain.middleware as langchain_middleware_module
+import kedi.agent_adapter.adapters.pydantic.messages as pydantic_messages_module
 import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 from kedi.agent_adapter import prefix_cache as prefix_cache_module
 from kedi.agent_adapter.adapters.langchain.adapter import LangChainAdapter
@@ -1186,11 +1187,11 @@ def test_pydantic_compaction_marks_only_a_new_prefix_rewrite() -> None:
             return list(self._new_messages)
 
     replayed = AdapterConversationContext()
-    PydanticAdapter._capture_conversation_messages(replayed, Result([ordinary_response]))
+    pydantic_messages_module._capture_conversation_messages(replayed, Result([ordinary_response]))
     assert replayed.cache_prefix_changed is False
 
     compacted = AdapterConversationContext()
-    PydanticAdapter._capture_conversation_messages(compacted, Result([new_compaction]))
+    pydantic_messages_module._capture_conversation_messages(compacted, Result([new_compaction]))
     assert compacted.cache_prefix_changed is True
     assert compacted.result_state["pydantic_messages"][-1]["parts"][0]["part_kind"] == (
         "compaction"

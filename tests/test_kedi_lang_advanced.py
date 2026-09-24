@@ -97,7 +97,7 @@ ADVANCED_VALID_CASES: List[tuple[str, str]] = [
     ),
     (
         # Multiple returns in a proc: last wins
-        "@many():\n  = first\n  = second\n\n= <many()>\n",
+        "@many():\n  > show: first\n  = second\n\n= <many()>\n",
         "second",
     ),
     (

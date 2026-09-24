@@ -8,6 +8,7 @@ from kedi.lang.ast import (
     ProfileAdapterEntry,
     ProfileAgentEntry,
     ProfileApprovalEntry,
+    ProfileBudgetEntry,
     ProfileArtifactsEntry,
     ProfileCodeModeEntry,
     ProfileDefStmt,
@@ -18,6 +19,7 @@ from kedi.lang.ast import (
     ProfileMcpEntry,
     ProfileModelEntry,
     ProfileOutputEntry,
+    ProfileRequiresEntry,
     ProfileSettingsEntry,
     ProfileSkillsEntry,
     ProfileSubagentEntry,
@@ -52,6 +54,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     history_members: list[ProfileHistoryEntry] = []
     skills_members: list[ProfileSkillsEntry] = []
     codemode_members: list[ProfileCodeModeEntry] = []
+    requires_members: list[ProfileRequiresEntry] = []
+    budget_members: list[ProfileBudgetEntry] = []
     system_members: list[ProfileSystemEntry] = []
     mcp_members: list[ProfileMcpEntry] = []
     settings_members: list[ProfileSettingsEntry] = []
@@ -178,6 +182,24 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
                     ProfileCodeModeEntry(
                         enabled=codemode_stmt.enabled,
                         fields=codemode_stmt.fields,
+                        loc=self._span(child),
+                    )
+                )
+            elif child.type == "requires_directive":
+                requires_stmt = self._walk_requires_directive(child)
+                requires_members.append(
+                    ProfileRequiresEntry(
+                        requirements=requires_stmt.requirements,
+                        requirement_locs=requires_stmt.requirement_locs,
+                        loc=self._span(child),
+                    )
+                )
+            elif child.type == "budget_directive":
+                budget_stmt = self._walk_budget_directive(child)
+                budget_members.append(
+                    ProfileBudgetEntry(
+                        request_limit=budget_stmt.request_limit,
+                        tool_attempt_limit=budget_stmt.tool_attempt_limit,
                         loc=self._span(child),
                     )
                 )
@@ -331,6 +353,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         and not history_members
         and not skills_members
         and not codemode_members
+        and not requires_members
+        and not budget_members
         and not system_members
         and not mcp_members
         and not settings_members
@@ -344,7 +368,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     ):
         self._error(
             node,
-            f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> hooks:', '> history:', '> skills:', '> codemode:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+            f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> hooks:', '> history:', '> skills:', '> codemode:', '> requires:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
             code="K-PROFILE-EMPTY",
         )
     return ProfileDefStmt(
@@ -358,6 +382,8 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
         history_members=history_members,
         skills_members=skills_members,
         codemode_members=codemode_members,
+        requires_members=requires_members,
+        budget_members=budget_members,
         system_members=system_members,
         mcp_members=mcp_members,
         settings_members=settings_members,

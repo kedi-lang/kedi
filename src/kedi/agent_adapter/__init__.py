@@ -22,11 +22,14 @@ from .events import (
     bind_agent_event_dispatcher,
     observe_agent_events,
 )
+from .compaction.models import HistoryOrigin
 from .history_processing import (
     HistoryProcessingError,
     HistoryProcessingValidationError,
     HistoryProcessorCallback,
+    HistoryProcessorCondition,
     HistoryProcessorContext,
+    HistoryProcessorState,
 )
 from .hooks import (
     HOOK_EVENT_NAMES,
@@ -43,6 +46,7 @@ from .hooks import (
     HookTimeoutError,
     PostToolUseEvent,
     PostToolUseFailureEvent,
+    PostToolResultFailureEvent,
     PreToolUseDecision,
     PreToolUseRequest,
     ToolHookContext,
@@ -67,9 +71,18 @@ from .models import (
     CodexResponsesFallback,
     codex_responses_model,
 )
+from .requirements import (
+    MissingAdapterCapabilityError,
+    RequirementCheck,
+    check_adapter_requirements,
+    normalize_adapter_requirements,
+    validate_adapter_requirements,
+)
 from .subagents import SubagentUsageLimits
+from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
 from .tools.specs import SupportsToolRegistration, ToolSpec
+from .tools.records import ToolCallRecord
 
 if TYPE_CHECKING:
     from . import adapters
@@ -168,9 +181,13 @@ __all__ = [
     "HookResult",
     "HookTimeoutError",
     "HistoryProcessingError",
+    "HistoryOrigin",
     "HistoryProcessingValidationError",
     "HistoryProcessorCallback",
+    "HistoryProcessorCondition",
     "HistoryProcessorContext",
+    "HistoryProcessorState",
+    "MissingAdapterCapabilityError",
     "ApprovalCancelled",
     "AsyncAgentEventQueue",
     "bind_agent_event_dispatcher",
@@ -191,8 +208,10 @@ __all__ = [
     "PydanticCodeModeCapability",
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
+    "PostToolResultFailureEvent",
     "PreToolUseDecision",
     "PreToolUseRequest",
+    "RequirementCheck",
     "pydantic_approval_request_from_deferred",
     "pydantic_code_mode_capability",
     "pydantic_deferred_results_from_decisions",
@@ -202,17 +221,24 @@ __all__ = [
     "SupportsConversationState",
     "SubagentExecutionContext",
     "SubagentUsageLimits",
+    "SubagentResult",
+    "SubagentScope",
+    "SubagentTask",
     "T",
     "ToolSpec",
+    "ToolCallRecord",
     "ToolHookContext",
     "ToolOrigin",
     "UserPromptSubmitDecision",
     "UserPromptSubmitRequest",
     "WebGPUAdapter",
     "adapters",
+    "check_adapter_requirements",
     "kedi_procedure_to_pydantic_tool",
     "kedi_program_to_pydantic_tools",
     "observe_agent_events",
     "codex_responses_model",
     "current_subagent_execution",
+    "normalize_adapter_requirements",
+    "validate_adapter_requirements",
 ]

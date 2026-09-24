@@ -99,7 +99,7 @@ def test_python_trace_maps_to_first_snippet_in_same_file(tmp_path: Path) -> None
     # the first embedded snippet raising must map to its own line, not a later snippet's.
     srcp = tmp_path / "two_snippets.kedi"
     srcp.write_text(
-        "@boom() -> str:\n  = <`1 / 0`>\n  = <`2 + 2`>\n\n= <boom()>\n",
+        "@boom() -> str:\n  > show: <`1 / 0`>\n  = <`2 + 2`>\n\n= <boom()>\n",
         encoding="utf-8",
     )
     program = parse_program(srcp.read_text(encoding="utf-8"), source_path=str(srcp))

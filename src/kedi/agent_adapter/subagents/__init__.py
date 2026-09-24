@@ -137,11 +137,15 @@ def subagent_tool_specs(
     allowed = tuple(profile.subagents)
     subagent_definitions = dict(profile.subagent_bindings)
     descriptions = _subagent_descriptions(rt, allowed, subagent_definitions)
-    budget = DelegationBudget.for_profile(
-        profile_name=profile.name,
-        max_agents=profile.max_agents,
+    native_owner = rt._native_subagent_owner.get()
+    budget = (
+        native_owner.budget_for(profile)
+        if native_owner is not None
+        else DelegationBudget.for_profile(profile_name=profile.name, max_agents=profile.max_agents)
     )
-    concurrency = rt._new_subagent_concurrency()
+    concurrency = (
+        native_owner.concurrency if native_owner is not None else rt._new_subagent_concurrency()
+    )
 
     async def delegate_task(
         *,

@@ -13,8 +13,12 @@ from kedi.agent_adapter.meta import (
 from kedi.agent_adapter.registry import adapter_capabilities, adapter_factory
 from kedi.lang.ast import (
     HooksDirectiveStmt,
+    HistoryDirectiveStmt,
     ProfileDefStmt,
     ProfileHooksEntry,
+    ProfileHistoryEntry,
+    ProfileRequiresEntry,
+    RequiresDirectiveStmt,
     SettingsField,
     Span,
 )
@@ -32,8 +36,13 @@ class _AdapterDiagnosticState:
     cleared_hook_events: frozenset[HookCapabilityEvent] = frozenset()
     history_loc: Span | None = None
     history_enabled: bool | None = None
+    history_processor_loc: Span | None = None
+    history_processor_enabled: bool | None = None
+    history_condition_loc: Span | None = None
+    history_condition_enabled: bool | None = None
     codemode_loc: Span | None = None
     codemode_enabled: bool | None = None
+    requirements: tuple[tuple[AdapterCapability, Span | None], ...] = ()
 
 
 def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
@@ -75,17 +84,10 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
     )
     for member in hooks_members:
         state = _with_hooks_state(state, member)
-    history_members = [member for member in profile.history_members if member.loc is not None]
-    if history_members:
-        latest = max(
-            history_members,
-            key=lambda member: member.loc.start_byte if member.loc is not None else -1,
-        )
-        state = replace(
-            state,
-            history_loc=latest.loc,
-            history_enabled=latest.enabled,
-        )
+    for member in sorted(
+        profile.history_members, key=lambda member: member.loc.start_byte if member.loc else -1
+    ):
+        state = _with_history_state(state, member)
     codemode_members = [member for member in profile.codemode_members if member.loc is not None]
     if codemode_members:
         latest = max(
@@ -97,6 +99,8 @@ def _profile_adapter_state(profile: ProfileDefStmt) -> _AdapterDiagnosticState:
             codemode_loc=latest.loc,
             codemode_enabled=latest.enabled,
         )
+    for member in profile.requires_members:
+        state = _with_requirements_state(state, member)
     return state
 
 
@@ -128,6 +132,8 @@ def _merge_adapter_state(
         hook_events = (hook_events - inner.cleared_hook_events) | inner.hook_events
         cleared_hook_events = (cleared_hook_events | inner.cleared_hook_events) - inner.hook_events
     history_owner = inner if inner.history_enabled is not None else outer
+    processor_owner = inner if inner.history_processor_enabled is not None else outer
+    condition_owner = inner if inner.history_condition_enabled is not None else outer
     codemode_owner = inner if inner.codemode_enabled is not None else outer
     return _AdapterDiagnosticState(
         shortname=selected.shortname,
@@ -140,8 +146,67 @@ def _merge_adapter_state(
         cleared_hook_events=cleared_hook_events,
         history_loc=history_owner.history_loc,
         history_enabled=history_owner.history_enabled,
+        history_processor_enabled=processor_owner.history_processor_enabled,
+        history_processor_loc=processor_owner.history_processor_loc,
+        history_condition_enabled=condition_owner.history_condition_enabled,
+        history_condition_loc=condition_owner.history_condition_loc,
         codemode_loc=codemode_owner.codemode_loc,
         codemode_enabled=codemode_owner.codemode_enabled,
+        requirements=_merge_requirement_entries(outer.requirements, inner.requirements),
+    )
+
+
+def _with_history_state(
+    state: _AdapterDiagnosticState,
+    directive: HistoryDirectiveStmt | ProfileHistoryEntry,
+) -> _AdapterDiagnosticState:
+    state = replace(state, history_loc=directive.loc, history_enabled=directive.enabled)
+    processor = next((field for field in directive.fields if field.name == "processor"), None)
+    if processor is not None:
+        state = replace(
+            state,
+            history_processor_loc=processor.loc,
+            history_processor_enabled=(
+                processor.backtick_code or processor.plain_value or ""
+            ).strip()
+            != "None",
+            history_condition_loc=None,
+            history_condition_enabled=False,
+        )
+    condition = next(
+        (field for field in directive.fields if field.name == "processor_condition"), None
+    )
+    if condition is not None:
+        state = replace(
+            state,
+            history_condition_loc=condition.loc,
+            history_condition_enabled=(condition.backtick_code or "").strip() != "None",
+        )
+    return state
+
+
+def _merge_requirement_entries(
+    left: tuple[tuple[AdapterCapability, Span | None], ...],
+    right: tuple[tuple[AdapterCapability, Span | None], ...],
+) -> tuple[tuple[AdapterCapability, Span | None], ...]:
+    merged = list(left)
+    for entry in right:
+        if entry not in merged:
+            merged.append(entry)
+    return tuple(merged)
+
+
+def _with_requirements_state(
+    state: _AdapterDiagnosticState,
+    directive: RequiresDirectiveStmt | ProfileRequiresEntry,
+) -> _AdapterDiagnosticState:
+    entries = tuple(
+        (cast(AdapterCapability, requirement), directive.requirement_locs.get(requirement))
+        for requirement in directive.requirements
+    )
+    return replace(
+        state,
+        requirements=_merge_requirement_entries(state.requirements, entries),
     )
 
 
@@ -158,6 +223,19 @@ def _adapter_supports(
     return capabilities.supports(feature)
 
 
+def _adapter_capability_status(
+    state: _AdapterDiagnosticState,
+    feature: AdapterCapability,
+) -> bool | None:
+    if state.shortname is None:
+        return None
+    try:
+        capabilities = adapter_capabilities(state.shortname)
+    except Exception:  # pragma: no cover - keep LSP diagnostics resilient
+        return None
+    return capabilities.capability_status(feature)
+
+
 def _hook_event_changes(
     fields: Sequence[SettingsField],
 ) -> tuple[frozenset[HookCapabilityEvent], frozenset[HookCapabilityEvent]]:
@@ -169,6 +247,7 @@ def _hook_event_changes(
             "pre_tool_use",
             "post_tool_use",
             "post_tool_use_failure",
+            "post_tool_result_failure",
         }:
             continue
         event = cast(HookCapabilityEvent, field.name)

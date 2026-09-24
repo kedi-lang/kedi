@@ -49,6 +49,7 @@ from kedi.lang.ast import (
     ProfileMcpEntry,
     ProfileModelEntry,
     ProfileOutputEntry,
+    ProfileRequiresEntry,
     ProfileSettingsEntry,
     ProfileSkillsEntry,
     ProfileSystemEntry,
@@ -58,18 +59,22 @@ from kedi.lang.ast import (
     PythonBlock,
     PythonExprSegment,
     RawInvokeStmt,
+    RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
     Span,
     SystemDirectiveStmt,
+    TaskGroupStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
     TestSuite,
     TextSegment,
+    ToolDeclaration,
     TypeDef,
     TypeField,
     UseDirectiveStmt,
@@ -111,6 +116,7 @@ from kedi.lsp.features.directive_help import (
     _profile_hooks_entry_markdown,
     _profile_mcp_entry_markdown,
     _profile_model_entry_markdown,
+    _requires_directive_markdown,
     _profile_settings_entry_markdown,
     _profile_signature_markdown,
     _profile_skills_entry_markdown,
@@ -120,6 +126,7 @@ from kedi.lsp.features.directive_help import (
     _settings_field_markdown,
     _skills_directive_markdown,
     _system_directive_markdown,
+    _tool_declaration_markdown,
     _type_expr_to_str,
     _type_field_annotation,
     _type_signature_markdown,
@@ -395,6 +402,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         best = node
         # Procedure → body + optimize spans + auto spec
         if isinstance(node, ProcedureDef):
+            if node.tool is not None:
+                visit(node.tool)
             for stmt in node.body:
                 visit(stmt)
             if node.auto_spec is not None:
@@ -420,6 +429,8 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for member in node.skills_members:
                 visit(member)
             for member in node.codemode_members:
+                visit(member)
+            for member in node.requires_members:
                 visit(member)
             for member in node.system_members:
                 visit(member)
@@ -513,6 +524,12 @@ def _smallest_enclosing(prog, pos: lsp.Position):
         if isinstance(node, ProcDefStmt) and node.proc is not None:
             visit(node.proc)
             return
+        if isinstance(node, TaskGroupStmt):
+            for arm in node.arms:
+                visit(arm.wait)
+                for stmt in arm.body or []:
+                    visit(stmt)
+            return
         if isinstance(node, IfStmt):
             for segment in node.condition_segments or []:
                 visit(segment)
@@ -546,7 +563,7 @@ def _smallest_enclosing(prog, pos: lsp.Position):
             for seg in node.segments:
                 visit(seg)
             return
-        if isinstance(node, ReturnStmt):
+        if isinstance(node, (ReturnStmt, ShowStmt)):
             for seg in node.segments:
                 visit(seg)
             return
@@ -599,7 +616,9 @@ def _smallest_enclosing(prog, pos: lsp.Position):
     if package is not None:
         visit(package)
     toplevel_return = prog.toplevel_return if hasattr(prog, "toplevel_return") else None
-    if toplevel_return is not None:
+    if toplevel_return is not None and not any(
+        item is toplevel_return for item in ordered_toplevel
+    ):
         visit(toplevel_return)
     if isinstance(prog, ProgramWithValidation):
         for s in prog.tests or []:
@@ -664,18 +683,27 @@ def _describe_ast_node(node) -> Optional[str]:
             "The Python block result updates the nearest visible Kedi binding."
         )
     if isinstance(node, ReturnStmt):
-        return "**Return**\n\nFinal value emitted by this procedure or top-level program."
+        return "**Return**\n\nEnds this procedure or regular program invocation immediately."
+    if isinstance(node, ShowStmt):
+        return "**Display** `> show:`\n\nDisplays a value once and continues execution without returning."
     if isinstance(node, ReturnBlockStmt):
         return (
             "**Python return**\n\n"
             "The Python value becomes the procedure or program result without string rendering."
+        )
+    if isinstance(node, TaskGroupStmt):
+        return (
+            "**Task group** `> task_group:`\n\n"
+            "Processes ready subagent results in isolated lexical scopes and joins all work. "
+            "A process cannot return from the enclosing procedure."
         )
     if isinstance(node, IfStmt):
         if node.condition_segments is not None:
             return (
                 "**Model-classified condition** `> if: claim`\n\n"
                 "Renders the claim through Kedi template substitutions and continues only when "
-                "the active adapter establishes it as true."
+                "the active adapter establishes it as true. Python values must use "
+                "``<`expression`>``; bare backticks are reserved for deterministic conditions."
             )
         return (
             "**Conditional branch** ``> if: `condition`:``\n\n"
@@ -699,7 +727,8 @@ def _describe_ast_node(node) -> Optional[str]:
             return (
                 "**Model-classified loop** `> loop: claim`\n\n"
                 "Re-renders and classifies the claim before every iteration. The loop stops when "
-                "the claim cannot be established as true."
+                "the claim cannot be established as true. Python values must use "
+                "``<`expression`>``; bare backticks are reserved for deterministic loops."
             )
         return (
             "**Conditional loop** ``> loop: `condition`:``\n\n"
@@ -733,6 +762,10 @@ def _describe_ast_node(node) -> Optional[str]:
         return _skills_directive_markdown(node)
     if isinstance(node, CodeModeDirectiveStmt):
         return _codemode_directive_markdown(node)
+    if isinstance(node, (RequiresDirectiveStmt, ProfileRequiresEntry)):
+        return _requires_directive_markdown(node)
+    if isinstance(node, ToolDeclaration):
+        return _tool_declaration_markdown(node)
     if isinstance(node, SystemDirectiveStmt):
         return _system_directive_markdown(node)
     if isinstance(node, McpDirectiveStmt):

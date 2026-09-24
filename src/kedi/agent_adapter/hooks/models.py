@@ -7,12 +7,14 @@ from types import MappingProxyType
 from typing import Any, Literal, TypeAlias, cast
 
 from ...errors import KediExecutionError
+from ..tools.records import ToolCallRecord
 
 HookEventName: TypeAlias = Literal[
     "user_prompt_submit",
     "pre_tool_use",
     "post_tool_use",
     "post_tool_use_failure",
+    "post_tool_result_failure",
 ]
 ToolOrigin: TypeAlias = Literal["kedi", "mcp", "adapter_native", "provider_builtin"]
 HookDecisionKind: TypeAlias = Literal["continue", "deny", "edit"]
@@ -22,6 +24,7 @@ HOOK_EVENT_NAMES: tuple[HookEventName, ...] = (
     "pre_tool_use",
     "post_tool_use",
     "post_tool_use_failure",
+    "post_tool_result_failure",
 )
 
 
@@ -109,6 +112,21 @@ class PostToolUseFailureEvent(ToolHookContext):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class PostToolResultFailureEvent(ToolHookContext):
+    event: Literal["post_tool_result_failure"] = field(
+        default="post_tool_result_failure", init=False
+    )
+    record: ToolCallRecord = field(repr=False)
+    error_type: str
+    error_message: str = field(repr=False)
+    error: BaseException | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def tool_call(self) -> ToolCallRecord:
+        return self.record
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class UserPromptSubmitDecision:
     decision: HookDecisionKind = "continue"
     reason: str | None = None
@@ -191,7 +209,11 @@ def _validate_decision(
 
 
 HookEvent: TypeAlias = (
-    UserPromptSubmitRequest | PreToolUseRequest | PostToolUseEvent | PostToolUseFailureEvent
+    UserPromptSubmitRequest
+    | PreToolUseRequest
+    | PostToolUseEvent
+    | PostToolUseFailureEvent
+    | PostToolResultFailureEvent
 )
 HookResult: TypeAlias = UserPromptSubmitDecision | PreToolUseDecision | None
 HookHandler: TypeAlias = Callable[[HookEvent], HookResult | Awaitable[HookResult]]
@@ -251,6 +273,7 @@ __all__ = [
     "HookTimeoutError",
     "PostToolUseEvent",
     "PostToolUseFailureEvent",
+    "PostToolResultFailureEvent",
     "PreToolUseDecision",
     "PreToolUseRequest",
     "ToolHookContext",

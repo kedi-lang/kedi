@@ -85,6 +85,20 @@ class ProfileCodeModeMember:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ProfileRequiresMember:
+    kind: Literal["requires"] = "requires"
+    requirements: tuple[str, ...] = ()
+    requirement_locs: Mapping[str, "Span"] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProfileBudgetMember:
+    kind: Literal["budget"] = "budget"
+    request_limit: int | None = None
+    tool_attempt_limit: int | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProfileSystemMember:
     kind: Literal["system"] = "system"
     plain_value: str | None = None
@@ -167,6 +181,8 @@ class ProfileDefinition:
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
+        | ProfileRequiresMember
+        | ProfileBudgetMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileUseMember

@@ -8,6 +8,7 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    CodeModeDirectiveStmt,
     OutputSegment,
     ProcedureDef,
     Program,
@@ -50,15 +51,31 @@ from .capability_state import _AdapterDiagnosticState, _profile_adapter_state
 
 
 @with_source_coordinates(1)
-def compute_diagnostics(source: str, source_path: Optional[str]) -> List[lsp.Diagnostic]:
+def compute_diagnostics(
+    source: str,
+    source_path: Optional[str],
+    *,
+    codemode_preload_warning_threshold: int = 5,
+    interactive: bool = False,
+) -> List[lsp.Diagnostic]:
     """Parse ``source`` and surface every ``KediDiagnostic`` as LSP."""
     try:
         prog = parse_program(source, source_path=source_path)
+        if interactive:
+            from kedi.lang.parser.control_flow_validation import validate_control_flow
+
+            validate_control_flow(prog, interactive=True)
         out = _missing_import_diagnostics(prog)
         out.extend(_subagent_profile_diagnostics(prog))
         out.extend(_adapter_capability_diagnostics(prog))
         out.extend(_annotated_type_diagnostics(prog))
         out.extend(_assignment_diagnostics(prog))
+        out.extend(
+            _codemode_preload_diagnostics(
+                prog,
+                threshold=codemode_preload_warning_threshold,
+            )
+        )
         for warning in prog.parser_warnings:
             out.append(_diag_to_lsp(warning))
         return out
@@ -77,6 +94,66 @@ def _diag_to_lsp(d: KediDiagnostic) -> lsp.Diagnostic:
         source="kedi",
         message=d.message,
     )
+
+
+def _codemode_preload_diagnostics(
+    prog: Program | ProgramWithValidation,
+    *,
+    threshold: int,
+) -> list[lsp.Diagnostic]:
+    directives: list[CodeModeDirectiveStmt | object] = [
+        item
+        for item in _iter_control_statements(prog.ordered_toplevel or prog.toplevel_body)
+        if isinstance(item, CodeModeDirectiveStmt)
+    ]
+    for procedure in _all_procedures(prog):
+        directives.extend(
+            statement
+            for statement in _iter_control_statements(procedure.body)
+            if isinstance(statement, CodeModeDirectiveStmt)
+        )
+    directives.extend(
+        member for profile in prog.profile_defs.values() for member in profile.codemode_members
+    )
+
+    diagnostics: list[lsp.Diagnostic] = []
+    seen_locations: set[tuple[str | None, int, int]] = set()
+    for directive in directives:
+        fields = getattr(directive, "fields", ())
+        preload_field = next(
+            (field for field in fields if field.name == "preload_tools"),
+            None,
+        )
+        if preload_field is None or preload_field.backtick_code is not None:
+            continue
+        names = (
+            preload_field.plain_values
+            if preload_field.plain_values is not None
+            else [preload_field.plain_value]
+            if preload_field.plain_value
+            else []
+        )
+        unique_count = len(dict.fromkeys(names))
+        if unique_count <= threshold or preload_field.loc is None:
+            continue
+        location = (
+            preload_field.loc.source_path,
+            preload_field.loc.start_byte,
+            preload_field.loc.end_byte,
+        )
+        if location in seen_locations:
+            continue
+        seen_locations.add(location)
+        diagnostics.append(
+            _warning(
+                preload_field.loc,
+                "kedi.codemode.excessive_preload",
+                "Many tools are preloaded. Unused or rarely used schemas can enlarge context, "
+                "increase cost, and obscure relevant information. Consider preloading only "
+                "tools required at the start of the run.",
+            )
+        )
+    return diagnostics
 
 
 def _annotated_type_diagnostics(

@@ -5,6 +5,7 @@ from typing import Any, Iterable, Optional
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -24,8 +25,11 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     Span,
     Stmt,
+    TaskGroupStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TestCase,
@@ -156,7 +160,19 @@ def _emit_statements(
     header_ranges: dict[str, dict[int, list[dict[str, Any]]]],
 ) -> None:
     for stmt in statements:
-        if isinstance(stmt, IfStmt):
+        if isinstance(stmt, TaskGroupStmt):
+            for index, arm in enumerate(stmt.arms):
+                suffix = f"{stmt.loc.start_byte if stmt.loc else 0}_{index}"
+                builder.add(f"{indent}def __kedi_process_{suffix}() -> None:")
+                _emit_statements(
+                    builder,
+                    cursor,
+                    [arm.wait, *(arm.body or [])],
+                    dict(scope),
+                    indent + "    ",
+                    header_ranges,
+                )
+        elif isinstance(stmt, IfStmt):
             _emit_if_stmt(builder, cursor, stmt, scope, indent, header_ranges)
         elif isinstance(stmt, LoopStmt):
             _emit_loop_stmt(builder, cursor, stmt, scope, indent, header_ranges)
@@ -176,6 +192,37 @@ def _emit_statements(
             _emit_assignment_stmt(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, RawInvokeStmt):
             _emit_raw_invoke_stmt(builder, stmt, scope, indent)
+        elif isinstance(stmt, TaskStmt):
+            _emit_segments(builder, cursor, stmt, scope, indent, emit_outputs=False)
+            line = builder.add(
+                f"{indent}{stmt.binder}: SubagentTask = cast(SubagentTask, _kedi_placeholder())"
+            )
+            source_range = _span_range(stmt.binder_loc) if stmt.binder_loc else None
+            builder.add_symbol(
+                kind="local",
+                name=stmt.binder,
+                source_range=source_range,
+                virtual_range=_line_range(line, len(indent), stmt.binder),
+            )
+            scope[stmt.binder] = ScopeName(typ="SubagentTask", source_range=source_range)
+        elif isinstance(stmt, AwaitStmt):
+            prefix = f"{indent}{stmt.binder}: SubagentResult = " if stmt.binder else indent
+            line = builder.add(f"{prefix}__kedi_await({stmt.handle})")
+            builder.add_symbol(
+                kind="reference",
+                name=stmt.handle,
+                source_range=_span_range(stmt.handle_loc) if stmt.handle_loc else None,
+                virtual_range=_line_range(line, len(prefix) + len("__kedi_await("), stmt.handle),
+            )
+            if stmt.binder:
+                source_range = _span_range(stmt.binder_loc) if stmt.binder_loc else None
+                builder.add_symbol(
+                    kind="local",
+                    name=stmt.binder,
+                    source_range=source_range,
+                    virtual_range=_line_range(line, len(indent), stmt.binder),
+                )
+                scope[stmt.binder] = ScopeName(typ="SubagentResult", source_range=source_range)
         elif isinstance(stmt, PythonBlock):
             region = cursor.next("fenced", stmt.loc)
             if region is not None:
@@ -188,6 +235,8 @@ def _emit_statements(
             for line in stmt.lines:
                 _emit_segments(builder, cursor, line, scope, indent)
         elif isinstance(stmt, TemplateLine):
+            _emit_segments(builder, cursor, stmt, scope, indent)
+        elif isinstance(stmt, ShowStmt):
             _emit_segments(builder, cursor, stmt, scope, indent)
         elif isinstance(stmt, ReturnStmt):
             _emit_return(builder, cursor, stmt, scope, indent)
@@ -500,9 +549,12 @@ def _emit_return(
             if region.kind == "fenced":
                 builder.add_mapped_region(region, indent)
             else:
-                _emit_inline_expression_stub(builder, region, indent)
+                builder.add(f"{indent}return (")
+                builder.add_mapped_region(region, indent + "    ")
+                builder.add(f"{indent})")
         return
     _emit_segments(builder, cursor, stmt, scope, indent)
+    builder.add(f"{indent}return cast(Any, _kedi_placeholder())")
 
 
 def _emit_segments(
@@ -511,9 +563,13 @@ def _emit_segments(
     stmt: Any,
     scope: dict[str, ScopeName],
     indent: str,
+    *,
+    emit_outputs: bool = True,
 ) -> None:
     for segment in _stmt_segments(stmt):
         if isinstance(segment, OutputSegment):
+            if not emit_outputs:
+                continue
             typ = _type_to_python(segment.type_expr, segment.type_annotation)
             line = builder.add(f"{indent}{segment.name}: {typ} = cast({typ}, _kedi_placeholder())")
             source_range = _output_name_range(segment)

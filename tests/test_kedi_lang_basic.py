@@ -154,7 +154,7 @@ CASES: List[tuple[str, str]] = [
         "@e(s):\n  = <s>\n\n= <e(alice\\, bob\\, and charlie)>\n",
         "alice, bob, and charlie",
     ),
-    ("@g():\n  = one\n  = two\n\n= <g()>\n", "two"),
+    ("@g():\n  > show: one\n  = two\n\n= <g()>\n", "two"),
     ("@h():\n  >> set [a]\n  set [b]\n  = <b>\n\n= <h()>\n", "b-value"),
     ("@s(x):\n  >> override [x]\n  = <x>\n\n= <s(orig)>\n", "x-value"),
     (

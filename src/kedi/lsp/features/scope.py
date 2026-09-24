@@ -9,6 +9,7 @@ from lsprotocol import types as lsp
 
 from kedi.lang.ast import (
     AssignmentStmt,
+    AwaitStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -20,7 +21,10 @@ from kedi.lang.ast import (
     PythonBlock,
     RawInvokeStmt,
     ReturnStmt,
+    ShowStmt,
     Span,
+    TaskGroupStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     TypeDef,
@@ -49,11 +53,13 @@ def _segments_of(stmt) -> list:
         for line in stmt.lines:
             segs.extend(line.segments)
         return segs
+    if isinstance(stmt, TaskStmt):
+        return _segments_of(stmt.template)
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)
     if isinstance(stmt, RawInvokeStmt):
         return list(stmt.segments)
-    if isinstance(stmt, ReturnStmt):
+    if isinstance(stmt, (ReturnStmt, ShowStmt)):
         return list(stmt.segments)
     if isinstance(stmt, (VariableInitStmt, AssignmentStmt)):
         return list(stmt.expr)
@@ -63,6 +69,8 @@ def _segments_of(stmt) -> list:
 
 
 def _control_body_statements(stmt) -> list:
+    if isinstance(stmt, TaskGroupStmt):
+        return [child for arm in stmt.arms for child in [arm.wait, *(arm.body or [])]]
     if isinstance(stmt, IfStmt):
         return [*stmt.body, *(stmt.else_body or [])]
     if isinstance(stmt, LoopStmt):
@@ -76,6 +84,18 @@ def _iter_control_statements(statements):
     for stmt in statements:
         yield stmt
         yield from _iter_control_statements(_control_body_statements(stmt))
+
+
+def _visible_control_statements(statements, pos):
+    """Walk control flow without exposing sibling or expired processing scopes."""
+    for statement in statements:
+        yield statement
+        if isinstance(statement, TaskGroupStmt):
+            for arm in statement.arms:
+                if arm.loc is not None and _position_inside(pos, arm.loc):
+                    yield from _visible_control_statements([arm.wait, *(arm.body or [])], pos)
+        else:
+            yield from _visible_control_statements(_control_body_statements(statement), pos)
 
 
 def _exported_name_at_position(
@@ -214,8 +234,23 @@ def _direct_statement_declarations(
                     scope_proc=proc,
                 )
             )
+    if isinstance(stmt, (TaskStmt, AwaitStmt)) and stmt.binder == name:
+        span = stmt.binder_loc
+        if span is not None:
+            declarations.append(
+                _ValueDeclaration(
+                    kind="local" if proc is not None else "module_value",
+                    name=name,
+                    declaration_span=span,
+                    scope_proc=proc,
+                )
+            )
     for segment in _segments_of(stmt):
-        if isinstance(segment, OutputSegment) and segment.name == name:
+        if (
+            not isinstance(stmt, TaskStmt)
+            and isinstance(segment, OutputSegment)
+            and segment.name == name
+        ):
             span = _output_name_span(segment)
             if span is not None:
                 declarations.append(
@@ -258,6 +293,19 @@ def _declaration_in_scope_path(
         if loc.start_byte >= reference_byte:
             break
         if loc.start_byte <= reference_byte < loc.end_byte:
+            if isinstance(stmt, TaskGroupStmt):
+                for arm in stmt.arms:
+                    if (
+                        arm.loc is not None
+                        and arm.loc.start_byte <= reference_byte < arm.loc.end_byte
+                    ):
+                        return (
+                            _declaration_in_scope_path(
+                                [arm.wait, *(arm.body or [])], name, reference_byte, proc
+                            )
+                            or latest
+                        )
+                return latest
             if isinstance(stmt, IfStmt):
                 for branch in (stmt.body, stmt.else_body or []):
                     if _statements_contain_byte(branch, reference_byte):
@@ -380,33 +428,52 @@ def _find_local_declaration(proc: Optional[ProcedureDef], name: str) -> Optional
     return None
 
 
-def _nested_procedures(proc: ProcedureDef) -> list[ProcedureDef]:
-
+def _nested_procedures(proc: ProcedureDef, pos: lsp.Position | None = None) -> list[ProcedureDef]:
+    statements = (
+        _iter_control_statements(proc.body)
+        if pos is None
+        else _visible_control_statements(proc.body, pos)
+    )
     return [
-        stmt.proc
-        for stmt in _iter_control_statements(proc.body)
-        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
+        stmt.proc for stmt in statements if isinstance(stmt, ProcDefStmt) and stmt.proc is not None
     ]
 
 
-def _direct_type_defs(proc: ProcedureDef) -> list[TypeDef]:
+def _direct_type_defs(proc: ProcedureDef, pos: lsp.Position | None = None) -> list[TypeDef]:
+    statements = (
+        _iter_control_statements(proc.body)
+        if pos is None
+        else _visible_control_statements(proc.body, pos)
+    )
     return [
         stmt.typedef
-        for stmt in _iter_control_statements(proc.body)
+        for stmt in statements
         if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None
     ]
 
 
-def _all_type_defs(prog: Program | ProgramWithValidation) -> list[TypeDef]:
+def _all_type_defs(
+    prog: Program | ProgramWithValidation, pos: lsp.Position | None = None
+) -> list[TypeDef]:
     type_defs = list(prog.type_defs)
 
     def visit(proc: ProcedureDef) -> None:
-        type_defs.extend(_direct_type_defs(proc))
-        for child in _nested_procedures(proc):
+        type_defs.extend(_direct_type_defs(proc, pos))
+        for child in _nested_procedures(proc, pos):
             visit(child)
 
     for proc in prog.procedures:
         visit(proc)
+    statements = (
+        _iter_control_statements(prog.toplevel_body)
+        if pos is None
+        else _visible_control_statements(prog.toplevel_body, pos)
+    )
+    for stmt in statements:
+        if isinstance(stmt, TypeDefStmt) and stmt.typedef is not None:
+            type_defs.append(stmt.typedef)
+        elif isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            visit(stmt.proc)
     return type_defs
 
 
@@ -434,16 +501,26 @@ def _procedure_for_declaration(
     )
 
 
-def _all_procedures(prog: Union[Program, ProgramWithValidation]) -> list[ProcedureDef]:
+def _all_procedures(
+    prog: Union[Program, ProgramWithValidation], pos: lsp.Position | None = None
+) -> list[ProcedureDef]:
     out: list[ProcedureDef] = []
 
     def visit(proc: ProcedureDef) -> None:
         out.append(proc)
-        for child in _nested_procedures(proc):
+        for child in _nested_procedures(proc, pos):
             visit(child)
 
     for proc in prog.procedures:
         visit(proc)
+    statements = (
+        _iter_control_statements(prog.toplevel_body)
+        if pos is None
+        else _visible_control_statements(prog.toplevel_body, pos)
+    )
+    for stmt in statements:
+        if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
+            visit(stmt.proc)
     return out
 
 

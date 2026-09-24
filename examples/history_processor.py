@@ -22,15 +22,7 @@ MessageT = TypeVar("MessageT")
 
 
 def keep_recent_cycles(ctx: HistoryProcessorContext[MessageT]) -> list[MessageT]:
-    editable = [group for group in ctx.groups if group.closed and not group.protected]
-    retained = {group.group_id for group in editable[-2:]}
-    retained.update(group.group_id for group in ctx.groups if group.protected)
-    return [
-        message
-        for group in ctx.groups
-        if group.group_id in retained
-        for message in ctx.messages[group.entry_start : group.entry_end]
-    ]
+    return ctx.keep_recent_groups(2)
 
 
 async def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, get_args
 
 from typing_extensions import runtime_checkable
 
@@ -32,6 +32,7 @@ HookCapabilityEvent = Literal[
     "pre_tool_use",
     "post_tool_use",
     "post_tool_use_failure",
+    "post_tool_result_failure",
 ]
 AdapterCapability = Literal[
     "structured_output",
@@ -50,10 +51,19 @@ AdapterCapability = Literal[
     "native_artifacts",
     "stateful_history",
     "history_replay",
+    "history_processing",
     "native_compaction",
     "stream_events",
+    "request_budget",
+    "tool_attempt_budget",
     "hooks",
 ]
+
+
+def adapter_capability_names() -> frozenset[str]:
+    """Return the public requirement vocabulary from the canonical capability type."""
+
+    return frozenset(get_args(AdapterCapability))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -69,6 +79,7 @@ class HookCapabilities:
     pre_tool_use: HookEventCapability | None = None
     post_tool_use: HookEventCapability | None = None
     post_tool_use_failure: HookEventCapability | None = None
+    post_tool_result_failure: HookEventCapability | None = None
 
     @classmethod
     def full(
@@ -94,6 +105,10 @@ class HookCapabilities:
             post_tool_use_failure=HookEventCapability(
                 bridge=tool_bridge,
                 origins=tool_origins,
+            ),
+            post_tool_result_failure=HookEventCapability(
+                bridge=tool_bridge,
+                origins=tool_origins & {"kedi"},
             ),
         )
 
@@ -134,11 +149,16 @@ class AdapterCapabilities:
     supports_native_artifacts: bool | None = None
     supports_stateful_history: bool | None = None
     supports_history_replay: bool | None = None
+    supports_history_processing: bool | None = None
     supports_native_compaction: bool | None = None
     supports_stream_events: bool | None = None
+    supports_request_budget: bool | None = None
+    supports_tool_attempt_budget: bool | None = None
     hooks: HookCapabilities | None = None
     supported_json_schema_formats: frozenset[str] | None = None
     settings: frozenset[str] = field(default_factory=frozenset)
+    # These unknown capabilities are checked by the adapter before starting remote work.
+    negotiated_capabilities: frozenset[AdapterCapability] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if self.supports_artifacts and not (
@@ -150,7 +170,7 @@ class AdapterCapabilities:
         if self.supports_native_artifacts and not self.supports_artifacts:
             raise ValueError("Native artifact support requires artifact support")
 
-    def supports(self, feature: AdapterCapability) -> bool:
+    def capability_status(self, feature: AdapterCapability) -> bool | None:
         values = {
             "structured_output": self.supports_structured_output,
             "tool_registration": self.supports_tool_registration,
@@ -168,11 +188,17 @@ class AdapterCapabilities:
             "native_artifacts": self.supports_native_artifacts,
             "stateful_history": self.supports_stateful_history,
             "history_replay": self.supports_history_replay,
+            "history_processing": self.supports_history_processing,
             "native_compaction": self.supports_native_compaction,
             "stream_events": self.supports_stream_events,
+            "request_budget": self.supports_request_budget,
+            "tool_attempt_budget": self.supports_tool_attempt_budget,
             "hooks": self.hooks is not None,
         }
-        return bool(values[feature])
+        return values[feature]
+
+    def supports(self, feature: AdapterCapability) -> bool:
+        return self.capability_status(feature) is True
 
 
 @dataclass(frozen=True, slots=True)

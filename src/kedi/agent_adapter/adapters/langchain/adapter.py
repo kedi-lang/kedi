@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import AbstractContextManager, asynccontextmanager, contextmanager, nullcontext
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import (
     Any,
@@ -51,7 +51,9 @@ from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import agent_event_run
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
+    HistoryProcessorCondition,
     HistoryProcessorRunner,
+    warn_history_processor_cache,
 )
 from kedi.agent_adapter.hooks import (
     HookHandler,
@@ -59,6 +61,7 @@ from kedi.agent_adapter.hooks import (
     current_hook_dispatcher,
     hooked_agent_run,
 )
+from kedi.run_budget import assert_run_budget_supported, current_run_budget
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.models import (
@@ -109,8 +112,11 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_native_artifacts=True,
         supports_stateful_history=True,
         supports_history_replay=True,
+        supports_history_processing=True,
         supports_native_compaction=True,
         supports_stream_events=True,
+        supports_request_budget=True,
+        supports_tool_attempt_budget=True,
         hooks=HookCapabilities.full(
             tool_bridge="native",
             tool_origins=frozenset({"kedi", "mcp", "adapter_native"}),
@@ -138,6 +144,7 @@ class LangChainAdapter(HookRegistrationMixin):
         default_usage_limits: UsageLimits | None = None,
         history_archive: HistoryArchiveSettings | None = None,
         history_processor: HistoryProcessorCallback[Any] | None = None,
+        history_processor_condition: HistoryProcessorCondition | None = None,
         tool_retries: int = 3,
         **kwargs: Any,
     ) -> None:
@@ -152,16 +159,19 @@ class LangChainAdapter(HookRegistrationMixin):
             raise ValueError("tool_retries must be a non-negative integer")
         self._default_usage_limits = default_usage_limits
         self._history_archive = history_archive
-        self._history_processor_runner: HistoryProcessorRunner[Any] | None = None
-        if history_processor is not None:
-            from kedi.agent_adapter.adapters.langchain.history_processing import (
-                LangChainHistoryMessageCodec,
-            )
+        from kedi.agent_adapter.adapters.langchain.history_processing import (
+            LangChainHistoryMessageCodec,
+        )
 
-            self._history_processor_runner = HistoryProcessorRunner(
-                history_processor,
-                LangChainHistoryMessageCodec(),
-            )
+        self._default_history_processor = history_processor
+        self._default_history_processor_condition = history_processor_condition
+        self._history_processor_runner = HistoryProcessorRunner(
+            history_processor,
+            LangChainHistoryMessageCodec(),
+            history_processor_condition,
+        )
+        if history_processor is not None:
+            warn_history_processor_cache()
         self._tool_retries = tool_retries
         if subagent_failure_policy not in {"recover", "fail_closed"}:
             raise ValueError(f"Unknown subagent failure policy: {subagent_failure_policy!r}")
@@ -218,6 +228,24 @@ class LangChainAdapter(HookRegistrationMixin):
         return stack[-1] if stack else AgentProfile.empty()
 
     @property
+    def active_history_processor(self) -> HistoryProcessorCallback[Any] | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[0]
+            if policy is not None
+            else self._default_history_processor
+        )
+
+    @property
+    def active_history_processor_condition(self) -> HistoryProcessorCondition | None:
+        policy = self.active_profile.history_processing
+        return (
+            policy.resolve(self._default_history_processor)[1]
+            if policy is not None
+            else self._default_history_processor_condition
+        )
+
+    @property
     def active_tool_reason(self) -> bool:
         return tool_reason_enabled(self.active_profile.settings, default=self.tool_reason)
 
@@ -246,7 +274,11 @@ class LangChainAdapter(HookRegistrationMixin):
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
-                append_codemode_instructions(instructions, enabled=projection.enabled),
+                append_codemode_instructions(
+                    instructions,
+                    enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
+                ),
                 model=model,
             )
             tools = _langchain_projection_tools(projection)
@@ -287,7 +319,11 @@ class LangChainAdapter(HookRegistrationMixin):
         model = self._chat_model_for_run()
         async with self._projected_tools_for_run() as projection:
             system_prompt = self._cache_aware_system_prompt(
-                append_codemode_instructions(instructions, enabled=projection.enabled),
+                append_codemode_instructions(
+                    instructions,
+                    enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
+                ),
                 model=model,
             )
             tools = _langchain_projection_tools(projection)
@@ -320,6 +356,7 @@ class LangChainAdapter(HookRegistrationMixin):
                 append_codemode_instructions(
                     instructions if instructions is not None else self.active_profile.system,
                     enabled=projection.enabled,
+                    preloaded_tools=projection.preloaded_tools,
                 ),
                 model=model,
             )
@@ -465,10 +502,10 @@ class LangChainAdapter(HookRegistrationMixin):
             if request_limit is not None:
                 config["recursion_limit"] = request_limit * 3 + 5
         with (
-            (
-                self._history_processor_runner.run_scope(self._conversation_var.get())
-                if self._history_processor_runner is not None
-                else nullcontext()
+            self._history_processor_runner.run_scope(
+                self._conversation_var.get(),
+                processor=self.active_history_processor,
+                condition=self.active_history_processor_condition,
             ),
             langchain_run_scope(limits) as run_state,
             delegation_scope(self._subagent_failure_policy),
@@ -653,6 +690,9 @@ class LangChainAdapter(HookRegistrationMixin):
             conversation.result_state["langchain_messages"] = [
                 message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
+            self._history_processor_runner.capture(
+                messages, conversation.result_state["langchain_messages"]
+            )
             conversation.mark_completed()
 
     def _create_agent(
@@ -695,14 +735,24 @@ class LangChainAdapter(HookRegistrationMixin):
     ) -> list[Any]:
         if not tools:
             return []
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         dispatcher = current_hook_dispatcher()
         has_tool_hooks = dispatcher is not None and any(
             dispatcher.handlers_for(event)
-            for event in ("pre_tool_use", "post_tool_use", "post_tool_use_failure")
+            for event in (
+                "pre_tool_use",
+                "post_tool_use",
+                "post_tool_use_failure",
+                "post_tool_result_failure",
+            )
         )
-        if not approval_enabled and not has_tool_hooks and current_artifact_admission() is None:
+        if (
+            not approval_enabled
+            and not has_tool_hooks
+            and current_artifact_admission() is None
+            and current_run_budget() is None
+        ):
             return []
-        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         tool_specs = list(known_specs.values())
         for tool in tools:
             name = getattr(tool, "name", None)
@@ -747,15 +797,22 @@ class LangChainAdapter(HookRegistrationMixin):
     @asynccontextmanager
     async def _projected_tools_for_run(self) -> AsyncIterator[CodeModeProjection]:
         native_tools = await self._tools_for_run()
+        known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
+        # Validate application tools before replacing them with CodeMode controls.
+        assert_run_budget_supported(
+            self,
+            opaque_tools=bool(self.active_profile.mcp_servers)
+            or any(
+                not isinstance(name := getattr(tool, "name", None), str)
+                or name not in known_specs
+                or (known_specs[name].metadata or {}).get("source") == "external"
+                for tool in native_tools
+            ),
+        )
         settings = normalize_codemode_settings(
             self.active_profile.codemode or getattr(self, "codemode", None)
         )
-        limits = (
-            CodeModeLimits(**settings.limit_values())
-            if settings is not None and settings.enabled
-            else None
-        )
-        if limits is None:
+        if settings is None or not settings.enabled:
             if self.active_tool_reason:
                 from .reason import tools_with_reason
 
@@ -763,6 +820,7 @@ class LangChainAdapter(HookRegistrationMixin):
             yield CodeModeProjection(tools=tuple(native_tools))
             return
 
+        limits = CodeModeLimits(**settings.limit_values())
         known_specs = {tool.name: tool for tool in self.scoped_tool_specs}
         specs = tuple(
             known_specs.get(tool.name) or _langchain_tool_spec_from_native(tool)
@@ -777,6 +835,7 @@ class LangChainAdapter(HookRegistrationMixin):
             ),
             adapter_shortname=self.shortname,
             tool_reason=self.active_tool_reason,
+            preload_tools=settings.preload_tools,
         )
         try:
             yield projection

@@ -61,7 +61,7 @@ from kedi.agent_adapter.adapters import (
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.adapters.dspy_tools import dspy_sync_tool_function
 from kedi.agent_adapter.approvals.policy import ApprovalDecision, ApprovalPolicy
-from kedi.agent_adapter.codemode import CodeModeExecutionError
+from kedi.agent_adapter.codemode import CodeModeExecutionError, CodeModeHydrationError
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.events import (
     AgentMessageEvent,
@@ -82,7 +82,7 @@ from kedi.agent_adapter.tools.execution import (
 )
 from kedi.agent_adapter.tools.scope import ToolScope, artifact_admission_scope
 from kedi.agent_adapter.tools.specs import SupportsToolRegistration, ToolSpec
-from kedi.agent_profile import AgentProfile
+from kedi.agent_profile import AgentProfile, CodeModeSettings
 from kedi.agent_profile.compaction import CompactionSettings, CompactionSettingsError
 from kedi.agent_profile.mcp import McpServerSpec
 from kedi.artifacts import ArtifactManager, ArtifactPolicy
@@ -511,6 +511,8 @@ def test_pydantic_adapter_isolates_nested_template_runs_inside_kedi_tools(
     monkeypatch.setattr("kedi.agent_adapter.adapters.pydantic.run_config.Agent", FreshAgent)
 
     assert tool.fn(country="Turkey") == "Konya"
+    capabilities = created_agents[0]["kwargs"].pop("capabilities")
+    assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]
@@ -717,8 +719,13 @@ def test_langchain_codemode_projects_and_executes_tools(
         )
     )
 
+    profile = AgentProfile(
+        approval=ApprovalPolicy.allow(),
+        codemode=CodeModeSettings(preload_tools=("double",)),
+    )
+
     async def exercise_projection() -> None:
-        with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+        with adapter.profile_override(profile):
             async with adapter._projected_tools_for_run() as projection:
                 tools = {
                     tool.name: tool
@@ -726,21 +733,102 @@ def test_langchain_codemode_projects_and_executes_tools(
                 }
                 assert set(tools) == {"search_tools", "get_tool_schema", "execute_code"}
                 assert tools["search_tools"].func()["tool_names"] == ["double"]
-                tools["get_tool_schema"].func(tool_names=["double"])
+                assert calls == []
+                assert projection.preloaded_tools[0]["name"] == "double"
                 result = await tools["execute_code"].coroutine(code="await double(value=4)")
                 assert result == 8
 
     asyncio.run(exercise_projection())
     assert calls == [4]
 
-    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+    with adapter.profile_override(profile):
         assert adapter.invoke_sync(prompt="Use CodeMode.") == "plain langchain text"
     exposed = {tool.name for tool in events["agents"][-1]["tools"]}
     assert exposed == {"search_tools", "get_tool_schema", "execute_code"}
     assert "CodeMode" in events["agents"][-1]["system_prompt"]
+    assert '"name":"double"' in events["agents"][-1]["system_prompt"]
+    assert '"value":{"type":"integer"}' in events["agents"][-1]["system_prompt"]
     assert [type(item).__name__ for item in events["agents"][-1]["middleware"]] == [
         "LangChainRunMiddleware"
     ]
+
+
+def test_langchain_native_alias_preload_and_selective_retry_compose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_langchain_modules(monkeypatch)
+
+    class ReleaseClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch(self, version: str) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("temporary release index failure")
+            return f"release:{version}"
+
+    client = ReleaseClient()
+    program = parse_program(
+        """
+@read_release(version: str) -> str:
+    > tool:
+        name: lookup_release
+        description: Read one exact release version.
+        risk: read_only
+        retries: 1
+        retry_on:
+            TimeoutError
+    = `release_client.fetch(version)`
+"""
+    )
+    adapter = LangChainAdapter(model={"fake": "model"}, codemode=True)
+    runtime = compile_program(
+        program,
+        adapter=adapter,
+        runtime_globals={"release_client": client},
+    )
+    adapter.register_tool(kedi_procedure_tool_spec(runtime, program.procedures[0]))
+    profile = AgentProfile(
+        approval=ApprovalPolicy.allow(),
+        codemode=CodeModeSettings(preload_tools=("lookup_release",)),
+        requirements=("tool_registration", "codemode"),
+    )
+    runtime._assert_profile_override_supported(profile, adapter)
+
+    async def exercise_projection() -> None:
+        with adapter.profile_override(profile):
+            async with adapter._projected_tools_for_run() as projection:
+                assert client.calls == 0
+                assert projection.preloaded_tools[0]["name"] == "lookup_release"
+                tools = {
+                    tool.name: tool
+                    for tool in langchain_tools_module._langchain_projection_tools(projection)
+                }
+                result = await tools["execute_code"].coroutine(
+                    code='await lookup_release(version="v1")'
+                )
+                assert result == "release:v1"
+
+    asyncio.run(exercise_projection())
+    assert client.calls == 2
+
+
+def test_langchain_codemode_rejects_unknown_preload_before_model_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_langchain_modules(monkeypatch)
+    adapter = LangChainAdapter(model={"fake": "model"}, codemode=True)
+
+    with (
+        adapter.profile_override(
+            AgentProfile(codemode=CodeModeSettings(preload_tools=("missing",)))
+        ),
+        pytest.raises(CodeModeHydrationError, match="Unknown"),
+    ):
+        adapter.invoke_sync(prompt="Do not reach the model.")
+
+    assert events["agents"] == []
 
 
 def test_langchain_codemode_materializes_profile_mcp_tools(
@@ -2477,8 +2565,9 @@ def test_claude_codemode_projects_sdk_controls_and_executes_nested_tool(
         events["prompts"].append({"prompt": prompt, "options": options})
         server = options.kwargs["mcp_servers"]["kedi"]
         tools = {tool.name: tool for tool in server["tools"]}
-        await tools["search_tools"]({})
-        await tools["get_tool_schema"]({"tool_names": ["double"]})
+        assert calls == []
+        assert '"name":"double"' in options.kwargs["system_prompt"]["append"]
+        assert '"value":{"type":"integer"}' in options.kwargs["system_prompt"]["append"]
         events["codemode_result"] = await tools["execute_code"]({"code": "await double(value=6)"})
         yield sdk.ResultMessage(result="done")
 
@@ -2496,7 +2585,12 @@ def test_claude_codemode_projects_sdk_controls_and_executes_nested_tool(
         )
     )
 
-    with adapter.profile_override(AgentProfile(approval=ApprovalPolicy.allow())):
+    with adapter.profile_override(
+        AgentProfile(
+            approval=ApprovalPolicy.allow(),
+            codemode=CodeModeSettings(preload_tools=("double",)),
+        )
+    ):
         assert adapter.invoke_sync(prompt="Use CodeMode.") == "done"
 
     assert calls == [6]
@@ -2523,6 +2617,23 @@ def test_claude_codemode_projects_sdk_controls_and_executes_nested_tool(
         )
     )
     assert allowed["hookSpecificOutput"]["permissionDecision"] == "allow"
+
+
+def test_claude_codemode_rejects_unknown_preload_before_model_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = _install_fake_claude_sdk(monkeypatch)
+    adapter = ClaudeAdapter(model="claude", codemode=True)
+
+    with (
+        adapter.profile_override(
+            AgentProfile(codemode=CodeModeSettings(preload_tools=("missing",)))
+        ),
+        pytest.raises(CodeModeHydrationError, match="Unknown"),
+    ):
+        adapter.invoke_sync(prompt="Do not reach the model.")
+
+    assert events["prompts"] == []
 
 
 def test_claude_codemode_routes_profile_mcp_through_local_catalog(
@@ -3472,6 +3583,8 @@ def test_pydantic_adapter_invoke_uses_fresh_agent_inside_kedi_tool_call(
         with kedi_tool_call_context():
             assert adapter.invoke_sync(prompt="raw") == "fresh raw"
 
+    capabilities = created_agents[0]["kwargs"].pop("capabilities")
+    assert [type(item).__name__ for item in capabilities] == ["PydanticHistoryProcessingCapability"]
     assert created_agents == [
         {"model": "openai-chat:gpt-4o-mini", "kwargs": {"retries": {"tools": 3}}}
     ]
@@ -4262,6 +4375,7 @@ def test_pydantic_external_tool_approval_elevates_secret_paths(
 
 def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_toolsets() -> None:
     adapter = object.__new__(PydanticAdapter)
+    adapter._default_history_processor = None
     adapter._tool_scope = ToolScope()
     _set_profile_stack(adapter)
     adapter.register_tool(ToolSpec(fn=lambda: "ok", name="read_status", risk="read_only"))
@@ -4269,8 +4383,8 @@ def test_pydantic_adapter_registers_deferred_approval_capability_for_approval_to
     run_kwargs = adapter._run_kwargs({}, tool_specs=adapter.scoped_tool_specs)
 
     assert isinstance(run_kwargs["toolsets"][0], ApprovalRequiredToolset)
-    assert len(run_kwargs["capabilities"]) == 1
-    assert isinstance(run_kwargs["capabilities"][0], HandleDeferredToolCalls)
+    assert len(run_kwargs["capabilities"]) == 2
+    assert isinstance(run_kwargs["capabilities"][1], HandleDeferredToolCalls)
     assert PydanticAdapter.capabilities.supports("native_approvals")
     assert PydanticAdapter.capabilities.supports("native_approval_handler")
 

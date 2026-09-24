@@ -32,6 +32,8 @@ from ..parser.escapes import preserve_escaped_whitespace
 from .environment import lookup_value, model_lookup_value, model_text
 from .type_system import KediType
 
+NO_NATIVE_VALUE = object()
+
 
 def evaluate_call(
     rt: KediRuntime,
@@ -210,8 +212,8 @@ def render_expression(
 
 def evaluate_binding_rhs(
     rt: KediRuntime, segments: list[Segment], kwargs: dict[str, Any]
-) -> tuple[Any | None, str]:
-    """Evaluate a binding RHS, returning its native value when it is pure."""
+) -> tuple[Any, str]:
+    """Return a native value (including None), or NO_NATIVE_VALUE with rendered text."""
     non_ws = [s for s in segments if not (isinstance(s, TextSegment) and s.text.strip() == "")]
 
     # Single native expression or call
@@ -225,7 +227,7 @@ def evaluate_binding_rhs(
             return value, str(value)
 
     # Fallback to rendered string
-    return None, render_expression(rt, segments, kwargs, context="assign")
+    return NO_NATIVE_VALUE, render_expression(rt, segments, kwargs, context="assign")
 
 
 # Private helpers
@@ -295,13 +297,13 @@ def _stringify_segments(
         elif isinstance(seg, InputSegment):
             value = (
                 model_lookup_value(rt, seg.name, kwargs)
-                if context == "system"
+                if context in {"system", "task"}
                 else lookup_value(rt, seg.name, kwargs)
             )
-            parts.append(model_text(value) if context == "system" else str(value))
+            parts.append(model_text(value) if context in {"system", "task"} else str(value))
         elif isinstance(seg, CallSegment):
             value = force(evaluate_call(rt, seg, kwargs, cache=call_cache))
-            parts.append(str(value))
+            parts.append(model_text(value) if context == "task" else str(value))
         elif isinstance(seg, OutputSegment):
             if seg.name in kwargs:
                 parts.append(str(force(kwargs[seg.name])))
@@ -313,6 +315,6 @@ def _stringify_segments(
                     parts.append("")
         elif isinstance(seg, (PythonExprSegment, PythonExprNativeSegment)):
             value = force(evaluate_python_inline(rt, seg.code, kwargs, span=seg.loc))
-            parts.append(str(value))
+            parts.append(model_text(value) if context == "task" else str(value))
 
     return "".join(parts)

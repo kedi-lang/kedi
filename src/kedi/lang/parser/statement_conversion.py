@@ -9,6 +9,7 @@ from tree_sitter import Node
 from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -29,10 +30,14 @@ from kedi.lang.ast import (
     RawInvokeStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     Segment,
     Span,
     Stmt,
     TemplateLine,
+    TaskStmt,
+    TaskGroupArm,
+    TaskGroupStmt,
     TestSuite,
     TypeDefStmt,
     TypeExpr,
@@ -47,6 +52,7 @@ from kedi.lang.parser.cst_helpers import (
     _src_text,
 )
 from kedi.lang.parser.diagnostics import KediDiagnostic, KediParseError
+from kedi.lang.parser.control_flow_validation import contains_output_captures
 
 if TYPE_CHECKING:
     from kedi.lang.parser.cst_to_ast import _Walker
@@ -169,6 +175,14 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             stmt = self._walk_codemode_directive(child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
+        elif t == "requires_directive":
+            stmt = self._walk_requires_directive(child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t == "budget_directive":
+            stmt = self._walk_budget_directive(child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
         elif t == "system_directive":
             stmt = self._walk_system_directive(child)
             prog.toplevel_body.append(stmt)
@@ -270,8 +284,22 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.ordered_toplevel.append(stmt)
         elif t == "return_stmt":
             prog.toplevel_return = self._walk_return_stmt(child)
+            prog.ordered_toplevel.append(prog.toplevel_return)
         elif t == "return_block_stmt":
             prog.toplevel_return = self._walk_return_block_stmt(child)
+            prog.ordered_toplevel.append(prog.toplevel_return)
+        elif t == "show_stmt":
+            stmt = _walk_show_stmt(self, child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t in ("task_stmt", "await_stmt"):
+            stmt = _walk_task_or_await(self, child)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
+        elif t == "task_group_stmt":
+            stmt = _walk_task_group(self, child, None)
+            prog.toplevel_body.append(stmt)
+            prog.ordered_toplevel.append(stmt)
         elif t == "backtick_line_stmt":
             stmt = self._walk_backtick_line_stmt(child)
             prog.toplevel_body.append(stmt)
@@ -285,7 +313,11 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
         elif t == "ERROR" or child.is_error:
-            self._error(child, self._parse_error_message(child, "unexpected source at top level"))
+            self._error(
+                child,
+                self._parse_error_message(child, "unexpected source at top level"),
+                code="K-PARSE",
+            )
         else:
             self._error(child, f"unexpected top-level node {t!r}")
 
@@ -423,17 +455,45 @@ def _walk_procedure_def(self: _Walker, node: Node) -> ProcedureDef:
 
 
 def _walk_block_into(self: _Walker, block_node: Node, proc: ProcedureDef) -> None:
-    proc.body.extend(self._walk_block_statements(block_node, proc))
+    proc.body.extend(self._walk_block_statements(block_node, proc, procedure_header=True))
 
 
 def _walk_block_statements(
-    self: _Walker, block_node: Node, proc: Optional[ProcedureDef]
+    self: _Walker,
+    block_node: Node,
+    proc: Optional[ProcedureDef],
+    *,
+    procedure_header: bool = False,
 ) -> List[Stmt]:
     statements: List[Stmt] = []
     pending_else_owner: Optional[IfStmt] = None
+    header_closed = False
     for child in _named_children(block_node):
         if child.type in ("block_comment", "line_comment"):
             continue
+        if child.type == "tool_directive":
+            if proc is None or not procedure_header:
+                self._error(
+                    child,
+                    "'> tool:' is only valid in a procedure metadata header",
+                    code="K-TOOL-SCOPE",
+                )
+            elif proc.tool is not None:
+                self._error(
+                    child,
+                    "a procedure can define only one '> tool:' block",
+                    code="K-TOOL-DUP",
+                )
+            elif header_closed:
+                self._error(
+                    child,
+                    "'> tool:' must appear before executable procedure statements",
+                    code="K-TOOL-PLACEMENT",
+                )
+            else:
+                proc.tool = self._walk_tool_directive(child)
+            continue
+        header_closed = True
         if child.type == "else_clause":
             owners: List[Any] = [pending_else_owner] if pending_else_owner is not None else []
             self._attach_else_clause(owners, child, proc)
@@ -499,6 +559,10 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_skills_directive(node)
     if t == "codemode_directive":
         return self._walk_codemode_directive(node)
+    if t == "requires_directive":
+        return self._walk_requires_directive(node)
+    if t == "budget_directive":
+        return self._walk_budget_directive(node)
     if t == "system_directive":
         return self._walk_system_directive(node)
     if t == "mcp_directive":
@@ -530,6 +594,12 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_raw_invoke_stmt(node)
     if t == "return_stmt":
         return self._walk_return_stmt(node)
+    if t == "show_stmt":
+        return _walk_show_stmt(self, node)
+    if t in ("task_stmt", "await_stmt"):
+        return _walk_task_or_await(self, node)
+    if t == "task_group_stmt":
+        return _walk_task_group(self, node, proc)
     if t == "return_block_stmt":
         return self._walk_return_block_stmt(node)
     if t == "python_block":
@@ -559,7 +629,11 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
                 code="K-OPT-EMPTY",
             )
         else:
-            self._error(node, self._parse_error_message(node, f"unexpected statement node {t!r}"))
+            self._error(
+                node,
+                self._parse_error_message(node, f"unexpected statement node {t!r}"),
+                code="K-PARSE",
+            )
         return None
     # Anything else is an unexpected node — surface a diagnostic
     # but keep parsing the rest of the body.
@@ -860,6 +934,82 @@ def _walk_raw_invoke_stmt(self: _Walker, node: Node) -> RawInvokeStmt:
         type_expr=type_expr,
         loc=self._span(node),
     )
+
+
+def _walk_task_group(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> TaskGroupStmt:
+    body = _field(node, "body")
+    assert body is not None
+    arms: list[TaskGroupArm] = []
+    for child in _named_children(body):
+        if child.type != "task_group_arm":
+            continue
+        wait_node = _field(child, "wait")
+        assert wait_node is not None
+        wait = _walk_task_or_await(self, wait_node)
+        assert isinstance(wait, AwaitStmt)
+        arm = TaskGroupArm(wait=wait, loc=self._span(child))
+        process = _field(child, "process")
+        if process is not None:
+            process_body = _field(process, "body")
+            assert process_body is not None
+            arm.body = self._walk_block_statements(process_body, proc)
+            arm.process_loc = self._span(process)
+        arms.append(arm)
+    return TaskGroupStmt(arms=arms, loc=self._span(node))
+
+
+def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:
+    if node.type == "await_stmt":
+        handle = _field(node, "handle")
+        binder = _field(node, "binder")
+        assert handle is not None
+        return AwaitStmt(
+            handle=_identifier_name(self.source, handle),
+            handle_loc=self._span(handle),
+            binder=_identifier_name(self.source, binder) if binder is not None else None,
+            binder_loc=self._span(binder) if binder is not None else None,
+            loc=self._span(node),
+        )
+
+    binder = _field(node, "binder")
+    subagent = _field(node, "subagent")
+    body = _field(node, "body")
+    assert binder is not None and subagent is not None and body is not None
+    template_node = _field(body, "template")
+    assert template_node is not None
+    if _field(body, "extra_template") is not None:
+        self._error(
+            body,
+            "A subagent task accepts exactly one >> template block",
+            code="kedi.task_template_count",
+        )
+    template = self._walk_template_block_stmt(template_node)
+    self._validate_template_block_scope(template.lines)
+    return TaskStmt(
+        binder=_identifier_name(self.source, binder),
+        binder_loc=self._span(binder),
+        subagent=_identifier_name(self.source, subagent),
+        subagent_loc=self._span(subagent),
+        template=template,
+        loc=self._span(node),
+    )
+
+
+def _walk_show_stmt(self: _Walker, node: Node) -> ShowStmt:
+    value_node = _field(node, "value")
+    native_expr = self._sole_inline_python_expr(value_node)
+    segments: list[Segment]
+    if native_expr is not None:
+        segments = [
+            PythonExprNativeSegment(
+                code=self._walk_inline_python_expr(native_expr), loc=self._span(native_expr)
+            )
+        ]
+    else:
+        segments = self._walk_template_expr(value_node) if value_node is not None else []
+    if contains_output_captures(segments):
+        self._error(node, "Show cannot declare output captures", code="kedi.show_capture")
+    return ShowStmt(segments=segments, loc=self._span(node))
 
 
 def _walk_return_stmt(self: _Walker, node: Node) -> Union[ReturnStmt, ReturnBlockStmt]:

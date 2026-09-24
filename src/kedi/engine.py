@@ -21,6 +21,7 @@ result Future is fulfilled. The promise/dataflow layer (``promise.py``) decides 
 from __future__ import annotations
 
 import contextvars
+from collections import deque
 import random
 import threading
 import time
@@ -53,6 +54,14 @@ class Engine:
 
     def shutdown(self) -> None:  # pragma: no cover - iface
         pass
+
+    def schedule_control(self, job: Job, deps: Sequence[Future] = ()) -> Future:
+        """Run orchestration once, without applying model retry policies to its side effects."""
+        return self.schedule(deps, job)
+
+    def wait(self, future: Future) -> Any:
+        """Join a control dependency; parallel engines may advance ready work."""
+        return future.result()
 
 
 class SequentialEngine(Engine):
@@ -94,11 +103,50 @@ class ThreadEngine(Engine):
             max_workers=max(1, max_workers), thread_name_prefix="kedi-llm"
         )
         self._local = threading.local()
+        self._ready_work: deque[Callable[[], None]] = deque()
+        self._work_condition = threading.Condition()
 
     def _on_worker(self) -> bool:
         return getattr(self._local, "on_worker", False)
 
+    def _run_ready_work(self) -> None:
+        with self._work_condition:
+            if not self._ready_work:
+                return
+            run = self._ready_work.popleft()
+        run()
+
+    def wait(self, future: Future) -> Any:
+        if not self._on_worker():
+            return super().wait(future)
+
+        def wake(_future: Future) -> None:
+            with self._work_condition:
+                self._work_condition.notify_all()
+
+        future.add_done_callback(wake)
+        while True:
+            with self._work_condition:
+                if future.done():
+                    break
+                if not self._ready_work:
+                    self._work_condition.wait()
+                    continue
+                run = self._ready_work.popleft()
+            # A child tool may submit back to this saturated engine from another
+            # thread. Advance its ready work while retaining this bounded worker.
+            run()
+        return future.result()
+
     def schedule(self, deps: Sequence[Future], job: Job) -> Future:
+        return self._schedule(deps, job, inline=True)
+
+    def schedule_control(self, job: Job, deps: Sequence[Future] = ()) -> Future:
+        # A group dispatcher must register siblings before executing any arm,
+        # including when the dispatcher is already running on this engine.
+        return self._schedule(deps, job, inline=False)
+
+    def _schedule(self, deps: Sequence[Future], job: Job, *, inline: bool) -> Future:
         dep_list = list(deps)
         result: Future = Future()
         ctx = contextvars.copy_context()
@@ -119,7 +167,10 @@ class ThreadEngine(Engine):
             if result.cancelled():
                 return
             try:
-                self._pool.submit(_run)
+                with self._work_condition:
+                    self._pool.submit(self._run_ready_work)
+                    self._ready_work.append(_run)
+                    self._work_condition.notify_all()
             except BaseException as exc:  # noqa: BLE001 - a shut-down pool surfaces, never hangs
                 if not result.done():
                     result.set_exception(exc)
@@ -127,7 +178,7 @@ class ThreadEngine(Engine):
         # Re-entrant (a tool on a worker issued this template). Run inline ONLY when every dep is
         # already resolved; otherwise schedule it as a continuation so we neither run before deps
         # are ready nor execute on the foreign thread that completed the final dependency.
-        if self._on_worker():
+        if inline and self._on_worker():
             if all(d.done() for d in dep_list):
                 _run()
             else:

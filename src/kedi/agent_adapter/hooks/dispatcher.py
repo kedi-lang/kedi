@@ -19,6 +19,7 @@ from .models import (
     HookHandler,
     HookResult,
     HookTimeoutError,
+    PostToolResultFailureEvent,
     PostToolUseEvent,
     PostToolUseFailureEvent,
     PreToolUseDecision,
@@ -260,7 +261,9 @@ def _apply_result(
             assert result.edit_arguments is not None
             return replace(event, arguments=result.edit_arguments), result, True
         return event, result, False
-    if not isinstance(event, (PostToolUseEvent, PostToolUseFailureEvent)):
+    if not isinstance(
+        event, (PostToolUseEvent, PostToolUseFailureEvent, PostToolResultFailureEvent)
+    ):
         raise TypeError(f"Unsupported Kedi hook event object {type(event).__name__}")
     if result is not None:
         raise TypeError(f"{event.event} handlers must return None")

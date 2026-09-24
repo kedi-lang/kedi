@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
+from typing import cast
 
 from lsprotocol import types as lsp
 
 from kedi.agent_adapter.meta import AdapterCapability, AgentAdapterKind
+from kedi.agent_adapter.history_processing import HISTORY_PROCESSOR_CACHE_WARNING
 from kedi.agent_adapter.registry import (
     adapter_capabilities,
     adapter_factory,
@@ -16,6 +18,7 @@ from kedi.lang.ast import (
     AgentDirectiveStmt,
     ApprovalDirectiveStmt,
     ArtifactsDirectiveStmt,
+    BudgetDirectiveStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
     HistoryDirectiveStmt,
@@ -27,12 +30,16 @@ from kedi.lang.ast import (
     ProcDefStmt,
     ProcedureDef,
     ProfileDefStmt,
+    ProfileBudgetEntry,
+    RequiresDirectiveStmt,
     Program,
     ProgramWithValidation,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
     Span,
+    TaskStmt,
+    TaskGroupStmt,
     TemplateBlock,
     TemplateLine,
     TypeApply,
@@ -47,11 +54,14 @@ from kedi.lang.ast import (
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_JSON_SCHEMA_FORMATS
 from kedi.lsp.coordinates import span_to_range as _span_to_range
 from kedi.lsp.features.capability_state import (
+    _adapter_capability_status,
     _adapter_state_from_plain_value,
     _adapter_supports,
     _AdapterDiagnosticState,
     _merge_adapter_state,
     _with_hooks_state,
+    _with_history_state,
+    _with_requirements_state,
 )
 from kedi.lsp.features.symbols import (
     _approval_value_span,
@@ -105,6 +115,8 @@ def _profile_capability_diagnostics(
                 "model-facing artifact tools",
             )
         )
+    for member in profile.budget_members:
+        diagnostics.extend(_budget_capability_diagnostics(state, member))
     for member in profile.codemode_members:
         if member.enabled:
             diagnostics.extend(
@@ -117,10 +129,12 @@ def _profile_capability_diagnostics(
                     code="K-ADAPTER-CODEMODE",
                 )
             )
+    diagnostics.extend(_explicit_requirement_diagnostics(state))
     diagnostics.extend(_hooks_capability_diagnostics(state))
     diagnostics.extend(_history_capability_diagnostics(state))
     for member in profile.history_members:
         diagnostics.extend(_compaction_capability_diagnostics(state, member.fields))
+        diagnostics.extend(_history_prefix_cache_warning(member.fields))
     diagnostics.extend(
         _unsupported_capability_diagnostics(
             state,
@@ -150,14 +164,17 @@ def _scan_capability_scope(
     proc_names: set[str],
     type_defs: dict[str, TypeDef],
     warned_approval_spans: set[tuple[str | None, int, int]] | None = None,
+    active_profile_name: str | None = None,
 ) -> list[lsp.Diagnostic]:
     diagnostics: list[lsp.Diagnostic] = []
     active = state
+    selected_profile = active_profile_name
     if warned_approval_spans is None:
         warned_approval_spans = set()
 
     for stmt in statements:
         if isinstance(stmt, AgentDirectiveStmt):
+            before_selection = active
             diagnostics.extend(
                 _adapter_selection_diagnostics(
                     prog,
@@ -170,6 +187,9 @@ def _scan_capability_scope(
             if selected is not None:
                 active = _merge_adapter_state(active, selected)
                 diagnostics.extend(
+                    _newly_unsupported_requirement_diagnostics(before_selection, active)
+                )
+                diagnostics.extend(
                     _native_approval_capability_diagnostics(
                         prog,
                         active,
@@ -181,6 +201,7 @@ def _scan_capability_scope(
                 diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, AdapterDirectiveStmt):
+            before_selection = active
             diagnostics.extend(
                 _adapter_selection_diagnostics(
                     prog,
@@ -192,6 +213,9 @@ def _scan_capability_scope(
             selected = _adapter_state_from_plain_value(stmt.plain_value, "agent-framework")
             if selected is not None:
                 active = _merge_adapter_state(active, selected)
+                diagnostics.extend(
+                    _newly_unsupported_requirement_diagnostics(before_selection, active)
+                )
                 diagnostics.extend(
                     _native_approval_capability_diagnostics(
                         prog,
@@ -222,13 +246,10 @@ def _scan_capability_scope(
             diagnostics.extend(_hooks_capability_diagnostics(active))
             continue
         if isinstance(stmt, HistoryDirectiveStmt):
-            active = replace(
-                active,
-                history_loc=stmt.loc,
-                history_enabled=stmt.enabled,
-            )
+            active = _with_history_state(active, stmt)
             diagnostics.extend(_history_capability_diagnostics(active))
             diagnostics.extend(_compaction_capability_diagnostics(active, stmt.fields))
+            diagnostics.extend(_history_prefix_cache_warning(stmt.fields))
             continue
         if isinstance(stmt, SkillsDirectiveStmt):
             if stmt.enabled:
@@ -248,6 +269,20 @@ def _scan_capability_scope(
                 codemode_enabled=stmt.enabled,
             )
             diagnostics.extend(_codemode_capability_diagnostics(active))
+            continue
+        if isinstance(stmt, RequiresDirectiveStmt):
+            active = _with_requirements_state(active, stmt)
+            entries = tuple(
+                (
+                    cast(AdapterCapability, requirement),
+                    stmt.requirement_locs.get(requirement),
+                )
+                for requirement in stmt.requirements
+            )
+            diagnostics.extend(_explicit_requirement_diagnostics(active, entries=entries))
+            continue
+        if isinstance(stmt, BudgetDirectiveStmt):
+            diagnostics.extend(_budget_capability_diagnostics(active, stmt))
             continue
         if isinstance(stmt, McpDirectiveStmt):
             diagnostics.extend(
@@ -283,6 +318,7 @@ def _scan_capability_scope(
                 )
             )
             if stmt.name and not stmt.tool_names and stmt.name in profile_defs:
+                selected_profile = stmt.name
                 active = _merge_adapter_state(
                     active,
                     profile_states.get(stmt.name, _AdapterDiagnosticState()),
@@ -299,8 +335,63 @@ def _scan_capability_scope(
         if isinstance(stmt, TemplateBlock):
             diagnostics.extend(_template_capability_diagnostics(active, stmt, type_defs))
             continue
+        if isinstance(stmt, TaskStmt):
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    active,
+                    "background_subagents",
+                    [stmt.subagent_loc],
+                    "background subagents",
+                    severity=lsp.DiagnosticSeverity.Error,
+                )
+            )
+            if stmt.subagent not in profile_defs and stmt.subagent_loc is not None:
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(stmt.subagent_loc),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-TASK-SUBAGENT",
+                        source="kedi",
+                        message=f"Unknown subagent profile {stmt.subagent!r}.",
+                    )
+                )
+            elif (
+                stmt.subagent_loc is not None
+                and selected_profile in profile_defs
+                and stmt.subagent
+                not in {member.name for member in profile_defs[selected_profile].subagent_members}
+            ):
+                diagnostics.append(
+                    lsp.Diagnostic(
+                        range=_span_to_range(stmt.subagent_loc),
+                        severity=lsp.DiagnosticSeverity.Error,
+                        code="K-TASK-NOT-CHILD",
+                        source="kedi",
+                        message=(
+                            f"Profile {stmt.subagent!r} is not a direct child "
+                            f"of {selected_profile!r}."
+                        ),
+                    )
+                )
+            continue
         if isinstance(stmt, TemplateLine):
             diagnostics.extend(_template_line_capability_diagnostics(active, stmt, type_defs))
+            continue
+        if isinstance(stmt, TaskGroupStmt):
+            for arm in stmt.arms:
+                diagnostics.extend(
+                    _scan_capability_scope(
+                        prog,
+                        arm.body or [],
+                        active,
+                        profile_defs,
+                        profile_states,
+                        proc_names,
+                        type_defs,
+                        warned_approval_spans,
+                        selected_profile,
+                    )
+                )
             continue
         if isinstance(stmt, IfStmt):
             diagnostics.extend(
@@ -313,6 +404,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             if stmt.else_body is not None:
@@ -326,6 +418,7 @@ def _scan_capability_scope(
                         proc_names,
                         type_defs,
                         warned_approval_spans,
+                        selected_profile,
                     )
                 )
             continue
@@ -343,6 +436,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -357,6 +451,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -371,6 +466,7 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
@@ -385,9 +481,36 @@ def _scan_capability_scope(
                     proc_names,
                     type_defs,
                     warned_approval_spans,
+                    selected_profile,
                 )
             )
             continue
+    return diagnostics
+
+
+def _budget_capability_diagnostics(
+    state: _AdapterDiagnosticState,
+    directive: BudgetDirectiveStmt | ProfileBudgetEntry,
+) -> list[lsp.Diagnostic]:
+    loc = directive.loc
+    if loc is None:
+        return []
+    diagnostics: list[lsp.Diagnostic] = []
+    for field, capability in (
+        ("request_limit", "request_budget"),
+        ("tool_attempt_limit", "tool_attempt_budget"),
+    ):
+        if getattr(directive, field) is not None:
+            diagnostics.extend(
+                _unsupported_capability_diagnostics(
+                    state,
+                    cast(AdapterCapability, capability),
+                    [loc],
+                    f"{field} run budget",
+                    severity=lsp.DiagnosticSeverity.Error,
+                    code="K-ADAPTER-BUDGET",
+                )
+            )
     return diagnostics
 
 
@@ -420,16 +543,54 @@ def _compaction_capability_diagnostics(
 def _history_capability_diagnostics(
     state: _AdapterDiagnosticState,
 ) -> list[lsp.Diagnostic]:
-    if state.history_enabled is not True or state.history_loc is None:
-        return []
-    return _unsupported_capability_diagnostics(
-        state,
-        "stateful_history",
-        [state.history_loc],
-        "stateful conversation history",
-        severity=lsp.DiagnosticSeverity.Error,
-        code="K-ADAPTER-HISTORY",
+    diagnostics: list[lsp.Diagnostic] = []
+    if state.history_enabled is True and state.history_loc is not None:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "stateful_history",
+                [state.history_loc],
+                "stateful conversation history",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-HISTORY",
+            )
+        )
+    processing_loc = (
+        state.history_processor_loc
+        if state.history_processor_enabled is True
+        else state.history_condition_loc
+        if state.history_condition_enabled is True
+        else None
     )
+    if processing_loc is not None:
+        diagnostics.extend(
+            _unsupported_capability_diagnostics(
+                state,
+                "history_processing",
+                [processing_loc],
+                "native history processing",
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-HISTORY-PROCESSOR",
+            )
+        )
+    return diagnostics
+
+
+def _history_prefix_cache_warning(fields: Sequence[SettingsField]) -> list[lsp.Diagnostic]:
+    processor = next((field for field in fields if field.name == "processor"), None)
+    if processor is None or processor.loc is None:
+        return []
+    if (processor.backtick_code or processor.plain_value or "").strip() == "None":
+        return []
+    return [
+        lsp.Diagnostic(
+            range=_span_to_range(processor.loc),
+            severity=lsp.DiagnosticSeverity.Warning,
+            code="K-HISTORY-PREFIX-CACHE",
+            source="kedi",
+            message=HISTORY_PROCESSOR_CACHE_WARNING,
+        )
+    ]
 
 
 def _codemode_capability_diagnostics(
@@ -591,6 +752,13 @@ def _use_capability_diagnostics(
         proc_names=proc_names,
     )
     diagnostics: list[lsp.Diagnostic] = []
+    diagnostics.extend(
+        _newly_unsupported_requirement_diagnostics(
+            state,
+            merged,
+            span_override=target_span,
+        )
+    )
     if "tool_registration" in capabilities:
         diagnostics.extend(
             _unsupported_capability_diagnostics(
@@ -828,6 +996,56 @@ def _unsupported_capability_diagnostics(
         for span in spans
         if span is not None
     ]
+
+
+def _explicit_requirement_diagnostics(
+    state: _AdapterDiagnosticState,
+    *,
+    entries: Sequence[tuple[AdapterCapability, Span | None]] | None = None,
+    span_override: Span | None = None,
+) -> list[lsp.Diagnostic]:
+    if state.shortname is None:
+        return []
+    diagnostics: list[lsp.Diagnostic] = []
+    selected_entries = state.requirements if entries is None else entries
+    for requirement, source_span in selected_entries:
+        if _adapter_capability_status(state, requirement) is not False:
+            continue
+        span = span_override or source_span
+        if span is None:
+            continue
+        diagnostics.append(
+            lsp.Diagnostic(
+                range=_span_to_range(span),
+                severity=lsp.DiagnosticSeverity.Error,
+                code="K-ADAPTER-REQUIREMENT",
+                source="kedi",
+                message=(
+                    f"Adapter '{state.shortname}' does not satisfy required capability "
+                    f"'{requirement}'."
+                ),
+            )
+        )
+    return diagnostics
+
+
+def _newly_unsupported_requirement_diagnostics(
+    before: _AdapterDiagnosticState,
+    after: _AdapterDiagnosticState,
+    *,
+    span_override: Span | None = None,
+) -> list[lsp.Diagnostic]:
+    entries = tuple(
+        entry
+        for entry in after.requirements
+        if entry not in before.requirements
+        or _adapter_capability_status(before, entry[0]) is not False
+    )
+    return _explicit_requirement_diagnostics(
+        after,
+        entries=entries,
+        span_override=span_override,
+    )
 
 
 def _native_approval_capability_diagnostics(

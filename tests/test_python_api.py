@@ -29,7 +29,11 @@ from kedi import (
     tool,
 )
 from kedi import type as kedi_type
-from kedi.agent_adapter import AgentAdapter
+from kedi.agent_adapter import (
+    AdapterCapability,
+    AgentAdapter,
+    MissingAdapterCapabilityError,
+)
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
@@ -903,6 +907,24 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
     assert current_block_agent_profile() == AgentProfile.empty()
 
 
+def test_query_requirements_are_frozen_and_not_forwarded_as_model_settings(
+    adapter: ApiAdapter,
+) -> None:
+    requirements: list[AdapterCapability] = ["structured_output"]
+
+    @query(requires=requirements)
+    def answer() -> str:
+        """kedi
+        >> Return [answer].
+        = <answer>
+        """
+
+    requirements[0] = "stream_events"
+
+    assert answer() == "ok"
+    assert adapter.settings == [{}]
+
+
 def test_tool_decorator_sets_name_description_and_retries(adapter: ApiAdapter) -> None:
     calls = 0
 
@@ -1135,6 +1157,22 @@ def test_bind_file_profile_arguments_apply_for_one_call(
             "run_artifact_code",
         )
     ]
+
+
+def test_bind_requirements_fail_before_model_io(
+    adapter: ApiAdapter,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "answer.kedi"
+    source.write_text(">> Return [answer].\n= <answer>\n", encoding="utf-8")
+
+    @bind(file=source, requires=["stream_events"])
+    def answer() -> str: ...
+
+    with pytest.raises(MissingAdapterCapabilityError, match="stream_events"):
+        answer()
+
+    assert adapter.templates == []
 
 
 def test_bind_file_env_overrides_call_arguments(adapter: ApiAdapter, tmp_path: Path) -> None:

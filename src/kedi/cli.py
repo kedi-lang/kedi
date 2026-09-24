@@ -370,6 +370,10 @@ def main(
             click.echo(_skills_command_help())
         elif source in _PACKAGE_COMMANDS and command_source is None:
             click.echo(_package_command_help(source))
+        elif source == "explain" and command_source is None:
+            click.echo(
+                "Usage: kedi explain SOURCE\n\nInspect model calls without running the program."
+            )
         else:
             click.echo(ctx.get_help())
         return 0
@@ -406,6 +410,19 @@ def main(
         return _run_notebook_command(list(ctx.args))
     if source in _PACKAGE_COMMANDS and command_source is None:
         return _run_package_command(source, list(ctx.args))
+    if source == "explain" and command_source is None:
+        if len(ctx.args) != 1:
+            raise click.UsageError("Usage: kedi explain SOURCE")
+        from kedi.explain import explain_file, render_explain
+
+        try:
+            report = explain_file(ctx.args[0], adapter=adapter, model=adapter_model)
+        except (OSError, ValueError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        click.echo(render_explain(report))
+        if report.diagnostics:
+            ctx.exit(1)
+        return 0
     if source == "parse":
         if command_source is not None:
             parse_only = True

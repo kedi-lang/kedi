@@ -26,6 +26,7 @@ from kedi.lang.ast import (
     Span,
     TemplateLine,
     TextSegment,
+    SettingsField,
     TypeRef,
     UseDirectiveStmt,
 )
@@ -296,6 +297,12 @@ def test_hover_on_backtick_setting_and_settings_helpers() -> None:
     assert '`["END"]`' in hover_text_at(src, "profile.kedi", "stop_sequences")
     assert "no adapter; valid keys are" in lsp_directive_help_module._setting_adapter_label(
         "imaginary"
+    )
+    assert (
+        lsp_directive_help_module._settings_field_value_preview(
+            SettingsField(name="preload_tools", plain_values=["search", "fetch"])
+        )
+        == "`[search, fetch]`"
     )
     cwd_hover = lsp_directive_help_module._setting_adapter_label("cwd")
     assert "Claude Agent SDK settings" in cwd_hover

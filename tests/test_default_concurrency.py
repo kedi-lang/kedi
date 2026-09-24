@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 
 import kedi
+from kedi.promise import force
+from tests.interactive_helpers import inspect_fragment
 import kedi.api.configuration as api_configuration_module
 import kedi.api.state as api_state_module
 from kedi.core.engines import shared_thread_engine
@@ -124,7 +126,10 @@ def test_python_api_engine_precedence(
         )
         with kedi.interactive(adapter=MockAdapter()) as session:
             assert session._compiler.rt._engine.parallel is expected
-            assert session.execute(">> Value [answer].\n= <answer>") == "answer-value"
+            assert (
+                inspect_fragment(session, ">> Value [answer].\n[inspection_value: Any] = <answer>")
+                == "answer-value"
+            )
 
 
 def test_worker_count_and_context_restoration() -> None:
@@ -162,5 +167,6 @@ def test_interactive_conversation_order_is_preserved_with_default_concurrency() 
     adapter = OrderedAdapter()
     with kedi.interactive(adapter=adapter) as session:
         assert session._compiler.rt._engine.parallel is True
-        assert session.execute(SOURCE) == "joined-value"
+        session.execute(SOURCE.replace("= <joined>", "> show: <joined>"))
+        assert force(session._env["joined"]) == "joined-value"
     assert adapter.fields == ["first", "second", "joined"]

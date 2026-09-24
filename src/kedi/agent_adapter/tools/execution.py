@@ -397,13 +397,17 @@ def with_artifact_result(
     metadata["kedi_artifact_wrapped"] = True
 
     async def admit_result(result: Any, tool_name: str) -> Any:
-        return await admit_artifact_result_async(
-            result,
-            manager=manager,
-            policy=policy,
-            tool_name=tool_name,
-            call_id=f"call_{secrets.token_urlsafe(10)}",
-        )
+        try:
+            return await admit_artifact_result_async(
+                result,
+                manager=manager,
+                policy=policy,
+                tool_name=tool_name,
+                call_id=f"call_{secrets.token_urlsafe(10)}",
+            )
+        except BaseException as exc:
+            setattr(exc, "kedi_result_failure_stage", "artifact")
+            raise
 
     setattr(admit_result, "_kedi_artifact_boundary_key", (id(manager), id(policy)))
 
@@ -416,13 +420,17 @@ def with_artifact_result(
             result = await tool.fn(*args, **kwargs)
             if _defer_artifact_admission.get():
                 return result
-            return await admit_artifact_result_async(
-                result,
-                manager=manager,
-                policy=policy,
-                tool_name=tool.name,
-                call_id=call_id,
-            )
+            try:
+                return await admit_artifact_result_async(
+                    result,
+                    manager=manager,
+                    policy=policy,
+                    tool_name=tool.name,
+                    call_id=call_id,
+                )
+            except BaseException as exc:
+                setattr(exc, "kedi_result_failure_stage", "artifact")
+                raise
 
         return replace(
             tool,
@@ -441,13 +449,17 @@ def with_artifact_result(
                 resolved = await result
                 if _defer_artifact_admission.get():
                     return resolved
-                return await admit_artifact_result_async(
-                    resolved,
-                    manager=manager,
-                    policy=policy,
-                    tool_name=tool.name,
-                    call_id=call_id,
-                )
+                try:
+                    return await admit_artifact_result_async(
+                        resolved,
+                        manager=manager,
+                        policy=policy,
+                        tool_name=tool.name,
+                        call_id=call_id,
+                    )
+                except BaseException as exc:
+                    setattr(exc, "kedi_result_failure_stage", "artifact")
+                    raise
 
             return await_and_compact()
         if _defer_artifact_admission.get():
@@ -457,22 +469,30 @@ def with_artifact_result(
         if isinstance(result, ArtifactStream) and result.is_async:
 
             async def compact_async_stream() -> Any:
-                return await admit_artifact_result_async(
-                    result,
-                    manager=manager,
-                    policy=policy,
-                    tool_name=tool.name,
-                    call_id=call_id,
-                )
+                try:
+                    return await admit_artifact_result_async(
+                        result,
+                        manager=manager,
+                        policy=policy,
+                        tool_name=tool.name,
+                        call_id=call_id,
+                    )
+                except BaseException as exc:
+                    setattr(exc, "kedi_result_failure_stage", "artifact")
+                    raise
 
             return compact_async_stream()
-        return admit_artifact_result(
-            result,
-            manager=manager,
-            policy=policy,
-            tool_name=tool.name,
-            call_id=call_id,
-        )
+        try:
+            return admit_artifact_result(
+                result,
+                manager=manager,
+                policy=policy,
+                tool_name=tool.name,
+                call_id=call_id,
+            )
+        except BaseException as exc:
+            setattr(exc, "kedi_result_failure_stage", "artifact")
+            raise
 
     return replace(
         tool,

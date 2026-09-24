@@ -268,7 +268,7 @@ def test_nested_tool_override_and_scope_restore() -> None:
     > use: bar
     >> inner [x]
 
-= <foo()>
+> show: <foo()>
 >> outer [y]
 """
     adapter = _adapter()

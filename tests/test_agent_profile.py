@@ -352,6 +352,34 @@ def test_codemode_profile_and_lexical_procedure_execution() -> None:
     assert profile.codemode == CodeModeSettings(enabled=False, max_nested_calls=3)
 
 
+def test_codemode_preload_tools_parse_single_and_block_forms() -> None:
+    source = """
+> profile: release:
+    > codemode:
+        preload_tools:
+            lookup_release
+            list-versions
+            lookup_release
+> use: release
+
+@local() -> int:
+    > codemode:
+        preload_tools: lookup_release
+    = `1`
+
+= `local()`
+"""
+    rt = compile_program(parse_program(source), adapter=_adapter())
+
+    assert rt.run_main() == 1
+    release_profile = rt._evaluate_profile_definition(rt._profile_registry["release"])
+    assert release_profile.codemode == CodeModeSettings(
+        preload_tools=("lookup_release", "list-versions")
+    )
+    profile = _procedure_def(rt._procedures["local"]).captured_agent_profile
+    assert profile.codemode == CodeModeSettings(preload_tools=("lookup_release", "list-versions"))
+
+
 @pytest.mark.parametrize(
     ("source", "message"),
     [
@@ -389,6 +417,13 @@ def test_codemode_settings_validate_activation_and_limits() -> None:
     assert normalize_codemode_settings({"max_nested_calls": 2}) == CodeModeSettings(
         max_nested_calls=2
     )
+    assert normalize_codemode_settings({"preload_tools": "lookup"}) == CodeModeSettings(
+        preload_tools=("lookup",)
+    )
+    assert CodeModeSettings(preload_tools=["lookup", "list", "lookup"]).preload_tools == (
+        "lookup",
+        "list",
+    )
     assert configured.limit_values() == {
         "default_search_limit": 2,
         "max_search_limit": 4,
@@ -417,6 +452,12 @@ def test_codemode_settings_validate_activation_and_limits() -> None:
         CodeModeSettings(default_search_limit=2, max_search_limit=1)
     with pytest.raises(ValueError, match="unknown codemode settings"):
         normalize_codemode_settings({"unknown": 1})
+    with pytest.raises(TypeError, match="sequence of tool names"):
+        CodeModeSettings(preload_tools=42)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="entries must be strings"):
+        CodeModeSettings(preload_tools=["lookup", 1])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="cannot be empty"):
+        CodeModeSettings(preload_tools=[""])
 
 
 def test_runtime_rejects_enabled_codemode_on_unsupported_adapter() -> None:

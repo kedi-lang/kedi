@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 from ...agent_profile import AgentProfile, block_agent_profile_scope
@@ -16,6 +17,8 @@ from ...agent_profile.directives import (
     eval_hooks_directive,
     eval_mcp_directive,
     eval_model_directive,
+    eval_requires_directive,
+    eval_budget_directive,
     eval_settings_directive,
     eval_skills_directive,
     eval_system_directive,
@@ -30,6 +33,7 @@ from ..ast import (
     ArtifactsDirectiveStmt,
     AssignmentBlockStmt,
     AssignmentStmt,
+    AwaitStmt,
     BacktickLineStmt,
     CodeModeDirectiveStmt,
     ConditionalLoopStmt,
@@ -44,12 +48,17 @@ from ..ast import (
     ProcedureDef,
     PythonBlock,
     RawInvokeStmt,
+    RequiresDirectiveStmt,
+    BudgetDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    ShowStmt,
     SettingsDirectiveStmt,
     SkillsDirectiveStmt,
     Stmt,
     SystemDirectiveStmt,
+    TaskGroupStmt,
+    TaskStmt,
     TemplateBlock,
     TemplateLine,
     UseDirectiveStmt,
@@ -70,6 +79,7 @@ from .control_flow import (
     run_map_continuations,
 )
 from .evaluation import (
+    NO_NATIVE_VALUE,
     evaluate_binding_rhs,
     evaluate_python_inline,
     execute_inline_side_effects,
@@ -180,6 +190,47 @@ class StatementCompiler:
 
         return _fn
 
+    def execute_show(self, stmt: ShowStmt, env: dict[str, Any]) -> None:
+        """Render once and use the executor's existing output destination."""
+        with self.rt.trace_frame(KediTraceFrame(kind="show", label="show", span=stmt.loc)):
+            text = render_expression(self.rt, stmt.segments, env, context="show")
+            self.rt.executor.evaluate_inline(
+                self.rt, "print(__kedi_display_text)", {"__kedi_display_text": text}
+            )
+
+    def execute_task(self, stmt: TaskStmt, env: dict[str, Any], active: AgentProfile) -> None:
+        from kedi.agent_adapter.subagents.native import NativeSubagentOwner
+        from .subagent_tasks import prepare_subagent_task
+
+        with self.rt.trace_frame(KediTraceFrame(kind="task", label=stmt.subagent, span=stmt.loc)):
+            owner: NativeSubagentOwner | None = self.rt._native_subagent_owner.get()
+            if owner is None:
+                raise RuntimeError("Subagent tasks require an active Kedi invocation")
+            prompt, schema, output_adapter = prepare_subagent_task(self.rt, stmt, env)
+            job = owner.start_sync(
+                stmt.subagent,
+                task=prompt,
+                parent_profile=active,
+                final_schema=schema,
+                output_adapter=output_adapter,
+            )
+            self._declare_value(stmt.binder, job, env, source=stmt.loc)
+
+    def execute_await(self, stmt: AwaitStmt, env: dict[str, Any]) -> None:
+        from kedi.agent_adapter.subagents.native import SubagentTask
+        from .evaluation import lookup_value
+
+        with self.rt.trace_frame(KediTraceFrame(kind="await", label=stmt.handle, span=stmt.loc)):
+            job = lookup_value(self.rt, stmt.handle, env)
+            if not isinstance(job, SubagentTask):
+                raise TypeError(f"> await expects a subagent task, got {type(job).__name__}")
+            owner = self.rt._native_subagent_owner.get()
+            if owner is None:
+                raise RuntimeError("Subagent await requires an active Kedi invocation")
+            result = owner.wait_sync(job)
+            if stmt.binder is not None:
+                self._declare_value(stmt.binder, result, env, source=stmt.loc)
+
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
         code = stmt.code
@@ -251,7 +302,7 @@ class StatementCompiler:
         ):
             kedi_type = self._assignment_type(stmt.name, closure_env)
             native, rendered = evaluate_binding_rhs(self.rt, stmt.expr, closure_env)
-            value = native if native is not None else rendered
+            value = native if native is not NO_NATIVE_VALUE else rendered
             if kedi_type is not None and not kedi_type.is_none():
                 try:
                     value = kedi_type.validate(self.rt, closure_env, value)
@@ -291,7 +342,7 @@ class StatementCompiler:
     ) -> Any:
         native, rendered = evaluate_binding_rhs(self.rt, segments, closure_env)
         is_backtick, is_angle, is_call = detect_rhs_kind(segments)
-        if native is not None:
+        if native is not NO_NATIVE_VALUE:
             if is_backtick:
                 return initialize_value_from_native(
                     native, kedi_type, self.rt, closure_env, strict_native=True
@@ -385,7 +436,7 @@ class StatementExecutor:
         self.compiler = StatementCompiler(rt)
 
     def execute(self, proc: ProcedureDef, closure_env: dict[str, Any]) -> Any:
-        """Execute procedure body statements and return the last return value."""
+        """Execute procedure statements until the first evaluated return."""
         from .type_system import pop_type_env, push_type_env
 
         last_return: Any = None
@@ -448,6 +499,9 @@ class StatementExecutor:
         """Execute one ordered block while keeping directive state block-local."""
         last_return: Any = _NO_RETURN
         for stmt in statements:
+            from kedi.agent_adapter.subagents.groups import check_process_cancelled
+
+            check_process_cancelled()
             updated = self._apply_profile_directive(
                 stmt,
                 active,
@@ -472,7 +526,7 @@ class StatementExecutor:
                     profile_registry,
                 )
             if result is not _NO_RETURN:
-                last_return = result
+                return result, active, adapter_selection_kind
 
         return last_return, active, adapter_selection_kind
 
@@ -532,6 +586,19 @@ class StatementExecutor:
                 active.merge(eval_codemode_directive(self.rt, stmt, closure_env)),
                 adapter_selection_kind,
             )
+        if isinstance(stmt, RequiresDirectiveStmt):
+            return (
+                active.merge(eval_requires_directive(self.rt, stmt, closure_env)),
+                adapter_selection_kind,
+            )
+        if isinstance(stmt, BudgetDirectiveStmt):
+            from kedi.run_budget import current_run_budget
+
+            patch = eval_budget_directive(self.rt, stmt, closure_env)
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
+            return active.merge(patch), adapter_selection_kind
         if isinstance(stmt, SystemDirectiveStmt):
             return active.merge(
                 eval_system_directive(self.rt, stmt, closure_env)
@@ -551,16 +618,20 @@ class StatementExecutor:
                 adapter_selection_kind,
             )
         if isinstance(stmt, UseDirectiveStmt):
+            from kedi.run_budget import current_run_budget
+
+            patch = eval_use_directive(
+                self.rt,
+                stmt,
+                profile_registry,
+                closure_env,
+                available_procedures=set(self.rt._procedures.keys()),
+            )
+            ledger = current_run_budget()
+            if ledger is not None and patch.run_budget is not None:
+                ledger.set_budget(patch.run_budget)
             return (
-                active.merge(
-                    eval_use_directive(
-                        self.rt,
-                        stmt,
-                        profile_registry,
-                        closure_env,
-                        available_procedures=set(self.rt._procedures.keys()),
-                    )
-                ),
+                active.merge(patch),
                 adapter_selection_kind,
             )
         return None
@@ -580,6 +651,7 @@ class StatementExecutor:
         from ..ast import ProcDefStmt, TypeDefStmt
         from .procedure_compiler import ProcedureCompiler
         from .type_system import register_type
+        from kedi.run_budget import RunBudget, run_budget_scope
 
         if profile_registry is None:
             profile_registry = self.rt._profile_registry
@@ -590,7 +662,7 @@ class StatementExecutor:
             if body is None:
                 return _NO_RETURN
             with branch_trace(self.rt, stmt, alternative=not condition):
-                with child_scope(self.rt, closure_env) as branch_env:
+                with child_scope(self.rt, closure_env) as branch_env, run_budget_scope(RunBudget()):
                     result, _, _ = self._execute_block(
                         body,
                         proc,
@@ -611,9 +683,10 @@ class StatementExecutor:
                 values = evaluate_iterable(self.rt, stmt, closure_env)
                 with managed_loop_iterator(values):
                     for value in values:
-                        with loop_binding(
-                            self.rt, closure_env, stmt.binder, value
-                        ) as iteration_env:
+                        with (
+                            loop_binding(self.rt, closure_env, stmt.binder, value) as iteration_env,
+                            run_budget_scope(RunBudget()),
+                        ):
                             result, iteration_active, iteration_adapter_kind = self._execute_block(
                                 stmt.body,
                                 proc,
@@ -629,16 +702,17 @@ class StatementExecutor:
                                 (iteration_env, iteration_active, iteration_adapter_kind)
                             )
                         if result is not _NO_RETURN:
-                            last_return = result
+                            return result
 
                 if stmt.map_body is not None:
                     frames = [record[0] for record in records]
+                    results: list[Any] = [_NO_RETURN] * len(frames)
 
                     def run_map(index: int, frame: Any) -> None:
                         _, map_active, map_adapter_kind = records[index]
-                        with active_scope(self.rt, frame):
+                        with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
                             with block_agent_profile_scope(map_active):
-                                self._execute_block(
+                                results[index], _, _ = self._execute_block(
                                     stmt.map_body or [],
                                     proc,
                                     frame,
@@ -651,6 +725,9 @@ class StatementExecutor:
                                 )
 
                     run_map_continuations(self.rt, stmt, frames, run_map)
+                    for result in results:
+                        if result is not _NO_RETURN:
+                            return result
             return last_return
 
         if isinstance(stmt, ConditionalLoopStmt):
@@ -659,7 +736,10 @@ class StatementExecutor:
             with loop_trace(self.rt, stmt):
                 while evaluate_condition(self.rt, stmt, closure_env):
                     assert_conditional_loop_capacity(self.rt, completed_iterations)
-                    with child_scope(self.rt, closure_env) as iteration_env:
+                    with (
+                        child_scope(self.rt, closure_env) as iteration_env,
+                        run_budget_scope(RunBudget()),
+                    ):
                         result, _, _ = self._execute_block(
                             stmt.body,
                             proc,
@@ -673,8 +753,26 @@ class StatementExecutor:
                         )
                     completed_iterations += 1
                     if result is not _NO_RETURN:
-                        conditional_last_return = result
+                        return result
             return conditional_last_return
+
+        if isinstance(stmt, ShowStmt):
+            self.compiler.execute_show(stmt, closure_env)
+            return _NO_RETURN
+
+        if isinstance(stmt, TaskGroupStmt):
+            from .task_groups import execute_task_group
+
+            execute_task_group(self.rt, stmt, closure_env, active)
+            return _NO_RETURN
+
+        if isinstance(stmt, TaskStmt):
+            self.compiler.execute_task(stmt, closure_env, active)
+            return _NO_RETURN
+
+        if isinstance(stmt, AwaitStmt):
+            self.compiler.execute_await(stmt, closure_env)
+            return _NO_RETURN
 
         if isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**closure_env)
@@ -697,9 +795,9 @@ class StatementExecutor:
             return _NO_RETURN
 
         if isinstance(stmt, ProcDefStmt) and stmt.proc is not None:
-            child = stmt.proc
-            child.captured_agent_profile = active.frozen_copy()
-            child.lexical_env = closure_env
+            child = replace(
+                stmt.proc, captured_agent_profile=active.frozen_copy(), lexical_env=closure_env
+            )
             proc_compiler = ProcedureCompiler(self.rt)
             fn_nested = proc_compiler._make_procedure_impl(child, child.lexical_env)
 
@@ -743,7 +841,11 @@ class StatementExecutor:
             )
             if not return_kedi_type.is_none():
                 native, rendered = evaluate_binding_rhs(self.rt, stmt.segments, closure_env)
-                return native if native is not None else preserve_escaped_whitespace(rendered)
+                return (
+                    native
+                    if native is not NO_NATIVE_VALUE
+                    else preserve_escaped_whitespace(rendered)
+                )
             return self.compiler.compile_return(stmt)(**closure_env)
 
         if isinstance(stmt, ReturnBlockStmt):
@@ -757,7 +859,10 @@ class StatementExecutor:
         """Execute a single statement (for top-level execution)."""
         from ..ast import ProcDefStmt
 
-        if isinstance(stmt, TemplateBlock):
+        if isinstance(stmt, ShowStmt):
+            self.compiler.execute_show(stmt, env)
+
+        elif isinstance(stmt, TemplateBlock):
             self.compiler.compile_template_block(stmt)(**env)
             self._sync_env(env)
 

@@ -6,16 +6,19 @@ from typing import TYPE_CHECKING, Any
 from ..agent_adapter.approvals.policy import ApprovalPolicy
 from ..agent_adapter.meta import AgentAdapterKind
 from ..agent_adapter.registry import validate_adapter_kind
+from ..agent_adapter.requirements import normalize_adapter_requirements
 from ..artifacts import ArtifactPolicy, normalize_artifact_policy
 from ..effort import EffortValue, validate_effort
 from ..errors import KediExecutionError
+from ..run_budget import RunBudget
 from .codemode import normalize_codemode_settings
-from .compaction import CompactionSettings, normalize_compaction_settings
+from .compaction import normalize_compaction_settings
 from .connection import A2AAuthConfig, A2AConnection
 from .definitions import (
     ProfileAdapterMember,
     ProfileAgentMember,
     ProfileApprovalMember,
+    ProfileBudgetMember,
     ProfileArtifactsMember,
     ProfileCodeModeMember,
     ProfileEffortMember,
@@ -25,6 +28,7 @@ from .definitions import (
     ProfileMcpMember,
     ProfileModelMember,
     ProfileOutputMember,
+    ProfileRequiresMember,
     ProfileSettingsMember,
     ProfileSkillsMember,
     ProfileSubagentMember,
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
         AdapterDirectiveStmt,
         AgentDirectiveStmt,
         ApprovalDirectiveStmt,
+        BudgetDirectiveStmt,
         ArtifactsDirectiveStmt,
         ArtifactsField,
         CodeModeDirectiveStmt,
@@ -52,6 +57,7 @@ if TYPE_CHECKING:
         McpDirectiveStmt,
         McpField,
         ModelDirectiveStmt,
+        RequiresDirectiveStmt,
         SettingsDirectiveStmt,
         SettingsField,
         SkillsDirectiveStmt,
@@ -492,6 +498,8 @@ def eval_mcp_directive(
 def eval_settings_field_value(rt: KediRuntime, field: SettingsField, env: dict[str, Any]) -> Any:
     if field.backtick_code is not None:
         return rt.executor.evaluate_inline(rt, field.backtick_code, env)
+    if field.plain_values is not None:
+        return tuple(field.plain_values)
     if field.plain_value is not None:
         if field.name == "tool_reason":
             if field.plain_value not in {"enabled", "disabled"}:
@@ -557,7 +565,9 @@ def _eval_history_fields(
     enabled: bool,
     fields: list[SettingsField] | tuple[SettingsField, ...],
     env: dict[str, Any],
-) -> CompactionSettings | None:
+) -> AgentProfile:
+    from .history import HistoryProcessingSettings, bind_history_processor
+
     values = eval_settings_fields(rt, fields, env)
     compaction_values = {
         name.removeprefix("compaction_"): value
@@ -567,7 +577,27 @@ def _eval_history_fields(
     compaction = normalize_compaction_settings(compaction_values or None)
     if not enabled and compaction is not None and compaction.mode == "native":
         raise KediExecutionError("native compaction requires history to be enabled")
-    return compaction
+    return AgentProfile(
+        history=enabled,
+        compaction=compaction,
+        history_processing=(
+            HistoryProcessingSettings(
+                processor=(
+                    bind_history_processor(rt, values["processor"])
+                    if "processor" in values
+                    else None
+                ),
+                condition=(
+                    bind_history_processor(rt, values["processor_condition"])
+                    if "processor_condition" in values
+                    else None
+                ),
+                inherit_processor="processor" not in values,
+            )
+            if "processor" in values or "processor_condition" in values
+            else None
+        ),
+    )
 
 
 def eval_history_directive(
@@ -575,14 +605,11 @@ def eval_history_directive(
     stmt: HistoryDirectiveStmt,
     env: dict[str, Any],
 ) -> AgentProfile:
-    return AgentProfile(
-        history=stmt.enabled,
-        compaction=_eval_history_fields(
-            rt,
-            enabled=stmt.enabled,
-            fields=stmt.fields,
-            env=env,
-        ),
+    return _eval_history_fields(
+        rt,
+        enabled=stmt.enabled,
+        fields=stmt.fields,
+        env=env,
     )
 
 
@@ -609,6 +636,37 @@ def eval_codemode_directive(
     return AgentProfile(codemode=normalize_codemode_settings(values))
 
 
+def eval_requires_directive(
+    rt: KediRuntime,
+    stmt: RequiresDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    del rt, env
+    requirements = normalize_adapter_requirements(stmt.requirements)
+    return AgentProfile(
+        requirements=requirements,
+        requirement_origins={
+            requirement: (stmt.requirement_locs[requirement],)
+            for requirement in requirements
+            if requirement in stmt.requirement_locs
+        },
+    )
+
+
+def eval_budget_directive(
+    rt: KediRuntime,
+    stmt: BudgetDirectiveStmt,
+    env: dict[str, Any],
+) -> AgentProfile:
+    del rt, env
+    return AgentProfile(
+        run_budget=RunBudget(
+            request_limit=stmt.request_limit,
+            tool_attempt_limit=stmt.tool_attempt_limit,
+        )
+    )
+
+
 def _member_to_patch(
     rt: KediRuntime,
     member: (
@@ -621,6 +679,8 @@ def _member_to_patch(
         | ProfileHistoryMember
         | ProfileSkillsMember
         | ProfileCodeModeMember
+        | ProfileRequiresMember
+        | ProfileBudgetMember
         | ProfileSystemMember
         | ProfileToolMember
         | ProfileMcpMember
@@ -693,14 +753,11 @@ def _member_to_patch(
             env=env,
         )
     if member.kind == "history":
-        return AgentProfile(
-            history=member.enabled,
-            compaction=_eval_history_fields(
-                rt,
-                enabled=member.enabled,
-                fields=member.fields,
-                env=env,
-            ),
+        return _eval_history_fields(
+            rt,
+            enabled=member.enabled,
+            fields=member.fields,
+            env=env,
         )
     if member.kind == "skills":
         from .skills import normalize_skills_settings
@@ -713,6 +770,23 @@ def _member_to_patch(
         values = eval_settings_fields(rt, member.fields, env)
         values["enabled"] = member.enabled
         return AgentProfile(codemode=normalize_codemode_settings(values))
+    if member.kind == "requires":
+        requirements = normalize_adapter_requirements(list(member.requirements))
+        return AgentProfile(
+            requirements=requirements,
+            requirement_origins={
+                requirement: (member.requirement_locs[requirement],)
+                for requirement in requirements
+                if requirement in member.requirement_locs
+            },
+        )
+    if member.kind == "budget":
+        return AgentProfile(
+            run_budget=RunBudget(
+                request_limit=member.request_limit,
+                tool_attempt_limit=member.tool_attempt_limit,
+            )
+        )
     if member.kind == "system":
         system = eval_system_value(
             rt,

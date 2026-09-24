@@ -167,6 +167,7 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
         get_procedure_def,
         get_procedure_metadata,
     )
+    from kedi.run_budget import RunBudget, run_budget_scope
 
     sig = inspect.signature(fn)
     bound = sig.bind_partial(*args)
@@ -174,6 +175,11 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
     local_env: ValueEnv = {name: bound.arguments[name] for name in bound.arguments}
     metadata = get_procedure_metadata(fn)
     procedure_def = get_procedure_def(fn)
+    procedure_budget = (
+        getattr(procedure_def.captured_agent_profile, "run_budget", None)
+        if procedure_def is not None and procedure_def.captured_agent_profile is not None
+        else None
+    )
     proc_span = procedure_def.loc if procedure_def is not None else None
     proc_name = metadata.name if metadata is not None else callable_display_name(fn)
     should_trace_procedure = not (fn is self._main and metadata is None)
@@ -195,20 +201,32 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
 
     from kedi.telemetry import runtime_span
 
-    with runtime_span(
-        f"call {telemetry_name}",
-        "call_procedure",
-        attributes=attributes,
-        metric_attributes={"procedure_kind": procedure_kind},
-    ) as active:
+    with (
+        run_budget_scope(self.run_budget if depth == 0 else None),
+        run_budget_scope(procedure_budget or RunBudget()),
+        runtime_span(
+            f"call {telemetry_name}",
+            "call_procedure",
+            attributes=attributes,
+            metric_attributes={"procedure_kind": procedure_kind},
+        ) as active,
+    ):
         depth_token = self._invoke_depth.set(depth + 1)
         request_budget_token = None
         invocation_token = None
+        native_owner_token = None
+        native_owner = None
         if depth == 0:
             from kedi.agent_adapter.request_budget import ModelRequestBudget
+            from kedi.agent_adapter.subagents.native import NativeSubagentOwner
 
-            request_budget_token = self._request_budget.set(ModelRequestBudget())
-            invocation_token = self._invocation_id.set(object())
+            if self._request_budget.get() is None:
+                request_budget_token = self._request_budget.set(ModelRequestBudget())
+            if self._invocation_id.get() is None:
+                invocation_token = self._invocation_id.set(object())
+            if self._native_subagent_owner.get() is None:
+                native_owner = NativeSubagentOwner(self)
+                native_owner_token = self._native_subagent_owner.set(native_owner)
         token = self._current_env.set(local_env)
         primary_exc: BaseException | None = None
         try:
@@ -245,15 +263,26 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
             self._invoke_depth.reset(depth_token)
             # The outermost invocation owns every deferred template spawned by its body.
             if depth == 0:
+                cleanup_error: BaseException | None = None
                 try:
                     self._drain_outermost(primary_exc)
                 except BaseException as exc:
-                    active.set_attribute("error.type", type(exc).__name__)
-                    raise
+                    cleanup_error = exc
+                try:
+                    if native_owner is not None:
+                        native_owner.close_sync(primary_exc or cleanup_error)
+                except BaseException as exc:
+                    if primary_exc is None and cleanup_error is None:
+                        cleanup_error = exc
                 finally:
-                    assert request_budget_token is not None
-                    self._request_budget.reset(request_budget_token)
-                    assert invocation_token is not None
-                    self._invocation_id.reset(invocation_token)
+                    if native_owner_token is not None:
+                        self._native_subagent_owner.reset(native_owner_token)
+                    if request_budget_token is not None:
+                        self._request_budget.reset(request_budget_token)
+                    if invocation_token is not None:
+                        self._invocation_id.reset(invocation_token)
+                if primary_exc is None and cleanup_error is not None:
+                    active.set_attribute("error.type", type(cleanup_error).__name__)
+                    raise cleanup_error
 
         return final

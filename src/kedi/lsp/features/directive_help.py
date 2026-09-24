@@ -36,9 +36,11 @@ from kedi.lang.ast import (
     ProfileHooksEntry,
     ProfileMcpEntry,
     ProfileModelEntry,
+    ProfileRequiresEntry,
     ProfileSettingsEntry,
     ProfileSkillsEntry,
     ProfileSystemEntry,
+    RequiresDirectiveStmt,
     SettingsDirectiveStmt,
     SettingsField,
     SkillsDirectiveStmt,
@@ -50,6 +52,7 @@ from kedi.lang.ast import (
     TypeField,
     TypeRef,
     TypeUnion,
+    ToolDeclaration,
     UseDirectiveStmt,
 )
 
@@ -72,6 +75,37 @@ def _use_directive_markdown(stmt: UseDirectiveStmt) -> str:
         f"`> use: {stmt.name}`\n\n"
         "Configures the current scope for subsequent agent calls. A procedure target is "
         "registered as an agent tool; a profile target applies its agent configuration."
+    )
+
+
+def _requires_directive_markdown(
+    stmt: RequiresDirectiveStmt | ProfileRequiresEntry,
+) -> str:
+    requirements = ", ".join(f"`{name}`" for name in stmt.requirements)
+    scope = (
+        "stored in this profile and checked when the profile is applied"
+        if isinstance(stmt, ProfileRequiresEntry)
+        else "required by subsequent agent calls in this lexical scope"
+    )
+    return (
+        f"`> requires:` {requirements}\n\n"
+        "Declares adapter capabilities that must be available before a model request starts. "
+        f"These capabilities are {scope}; unsupported adapters fail before transport."
+    )
+
+
+def _tool_declaration_markdown(tool: ToolDeclaration) -> str:
+    exposed = f"`{tool.name}`" if tool.name is not None else "the procedure name"
+    retry_filter = (
+        "all ordinary exceptions"
+        if tool.retry_on is None
+        else ", ".join(f"`{name}`" for name in tool.retry_on) or "no exceptions"
+    )
+    return (
+        "**Procedure tool metadata** `> tool:`\n\n"
+        f"Exposed name: {exposed}. Risk: `{tool.risk}`. Body retries: `{tool.retries}` "
+        f"for {retry_filter}. Retries cover only tool-body failures; argument and return "
+        "validation are never repeated."
     )
 
 
@@ -161,6 +195,8 @@ def _history_directive_markdown(stmt: HistoryDirectiveStmt) -> str:
         if compaction is not None
         else ""
     )
+    if any(field.name == "processor" for field in stmt.fields):
+        configured += " A scoped native history processor runs before each model request."
     return (
         f"`> history: {value}`\n\n"
         "Controls conversation continuity through stateful history for subsequent model calls "
@@ -247,6 +283,7 @@ def _settings_field_markdown(field: SettingsField) -> str:
         "pre_tool_use": "Runs before approval and tool execution; it may edit or deny canonical arguments.",
         "post_tool_use": "Observes the final model-visible result after successful tool execution.",
         "post_tool_use_failure": "Observes execution failures, excluding hook and approval denials.",
+        "post_tool_result_failure": "Observes failures after a tool body returned, without retrying that body.",
     }
     if field.name in hook_descriptions:
         return f"`{field.name}` = {value}\n\n{hook_descriptions[field.name]}"
@@ -270,6 +307,10 @@ def _settings_field_markdown(field: SettingsField) -> str:
         "max_total_tool_result_bytes": "Maximum aggregate nested tool-result size per execution.",
         "max_print_bytes": "Maximum captured standard output from one Monty execution.",
         "request_timeout": "Timeout in seconds for one nested host tool call.",
+        "preload_tools": (
+            "Exact exposed tool names whose schemas and sandbox callable names are included "
+            "in the first CodeMode request. Preloading hydrates tools but does not call them."
+        ),
     }
     if field.name in codemode_descriptions:
         return f"`{field.name}` = {value}\n\n{codemode_descriptions[field.name]}"
@@ -278,6 +319,23 @@ def _settings_field_markdown(field: SettingsField) -> str:
             f'`compaction_mode: Literal["native", "disabled"]` = {value}\n\n'
             "Select provider-native conversation compaction or disable the inherited "
             "compaction policy while retaining stateful history."
+        )
+    if field.name == "processor":
+        return (
+            f"`processor: Callable[[HistoryProcessorContext], Sequence[native message]] | None` = {value}\n\n"
+            "Process detached native history before each model request. Sync and async callbacks "
+            "are supported by Pydantic and LangChain. Use `ctx.keep_recent_groups(n)` for "
+            "lifecycle-safe retention and `group.origins` for known lineage. `None` clears an "
+            "inherited callback. Rewriting earlier history may reduce prefix-cache reuse."
+        )
+    if field.name == "processor_condition":
+        return (
+            f"`processor_condition: Callable[[HistoryProcessorState], bool] | None` = {value}\n\n"
+            "Evaluate before each logical model request. Exact `True` runs the history "
+            "processor; `False` skips its detached snapshot and rewrite validation. "
+            "The state provides an estimated history token count, request index, cache epoch, "
+            "model ID, and opaque history version. Omission keeps processing unconditional; "
+            "a condition alone can inherit a processor. It does not guarantee a cache hit."
         )
     if field.name == "compaction_threshold":
         return (
@@ -420,7 +478,9 @@ def _profile_hooks_entry_markdown(entry: ProfileHooksEntry) -> str:
 
 def _profile_history_entry_markdown(entry: ProfileHistoryEntry) -> str:
     value = "enabled" if entry.enabled else "disabled"
-    configured = " Includes a compaction policy." if entry.fields else ""
+    configured = (
+        " Includes native history processing or compaction settings." if entry.fields else ""
+    )
     return (
         f"`> history: {value}`\n\n"
         "Conversation continuity policy stored in this profile. Applied when the profile is used."
@@ -541,6 +601,8 @@ def _mcp_field_value_preview(field: McpField) -> str:
 def _settings_field_value_preview(field: SettingsField) -> str:
     if field.backtick_code is not None:
         return f"`{field.backtick_code}`"
+    if field.plain_values is not None:
+        return "`[" + ", ".join(field.plain_values) + "]`"
     return f"`{field.plain_value or ''}`"
 
 

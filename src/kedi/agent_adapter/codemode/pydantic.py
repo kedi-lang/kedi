@@ -17,8 +17,8 @@ from typing_extensions import NotRequired, Self, TypedDict
 from ..adapters.pydantic.compat import build_nested_tool_manager
 from ..tools.scope import defer_artifact_admission
 from ..tools.specs import ToolResultAdmitter, ToolSpec
-from .core import CODEMODE_INSTRUCTIONS, CodeModeLimits, CodeModeSession, CodeModeTool
-from .errors import CodeModeCatalogError, CodeModeError
+from .core import CodeModeLimits, CodeModeSession, CodeModeTool, codemode_instructions
+from .errors import CodeModeError, CodeModeResultError
 
 
 class _SearchToolsArguments(TypedDict):
@@ -86,6 +86,7 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
     """Project an assembled Pydantic toolset through Kedi's CodeMode controls."""
 
     limits: CodeModeLimits = field(default_factory=CodeModeLimits)
+    preload_tools: tuple[str, ...] = ()
     _session: CodeModeSession = field(default_factory=CodeModeSession, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -93,7 +94,11 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
 
     async def for_run(self, ctx: RunContext[Any]) -> AbstractToolset[Any]:
         wrapped = await self.wrapped.for_run(ctx)
-        return type(self)(wrapped=wrapped, limits=self.limits)
+        return type(self)(
+            wrapped=wrapped,
+            limits=self.limits,
+            preload_tools=self.preload_tools,
+        )
 
     async def for_run_step(self, ctx: RunContext[Any]) -> AbstractToolset[Any]:
         wrapped = await self.wrapped.for_run_step(ctx)
@@ -117,43 +122,22 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
         self,
         ctx: RunContext[Any],
     ) -> str | InstructionPart | Sequence[str | InstructionPart] | None:
+        _, _, preloaded_tools = await self._prepare_catalog(ctx)
+        instructions = codemode_instructions(preloaded_tools)
         upstream = await self.wrapped.get_instructions(ctx)
         if upstream is None:
-            return CODEMODE_INSTRUCTIONS
+            return instructions
         if isinstance(upstream, (str, InstructionPart)):
-            return [upstream, CODEMODE_INSTRUCTIONS]
-        return [*upstream, CODEMODE_INSTRUCTIONS]
+            return [upstream, instructions]
+        return [*upstream, instructions]
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
-        wrapped_tools = await self.wrapped.get_tools(ctx)
-        conflicts = sorted(set(wrapped_tools) & {"search_tools", "get_tool_schema", "execute_code"})
-        if conflicts:
-            rendered = ", ".join(repr(name) for name in conflicts)
-            raise UserError(f"CodeMode reserves these tool names: {rendered}")
-
+        wrapped_tools, result_admitter, _ = await self._prepare_catalog(ctx)
         native_tools: dict[str, ToolsetTool[Any]] = {}
-        catalog_tools: list[CodeModeTool] = []
         for name, tool in wrapped_tools.items():
             definition = tool.tool_def
             if definition.tool_kind is not None:
                 native_tools[name] = tool
-                continue
-            catalog_tools.append(
-                CodeModeTool(
-                    name=name,
-                    description=definition.description,
-                    parameters_json_schema=definition.parameters_json_schema,
-                    return_schema=definition.return_schema,
-                    metadata=definition.metadata,
-                    sequential=definition.sequential,
-                )
-            )
-
-        try:
-            self._session.update_tools(catalog_tools)
-        except CodeModeCatalogError as exc:
-            raise UserError(str(exc)) from exc
-        result_admitter = _shared_result_admitter(wrapped_tools)
 
         result = dict(native_tools)
         result["search_tools"] = self._control_tool(
@@ -193,6 +177,42 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
         )
         return result
 
+    async def _prepare_catalog(
+        self,
+        ctx: RunContext[Any],
+    ) -> tuple[
+        dict[str, ToolsetTool[Any]],
+        ToolResultAdmitter | None,
+        tuple[dict[str, Any], ...],
+    ]:
+        wrapped_tools = await self.wrapped.get_tools(ctx)
+        conflicts = sorted(set(wrapped_tools) & {"search_tools", "get_tool_schema", "execute_code"})
+        if conflicts:
+            rendered = ", ".join(repr(name) for name in conflicts)
+            raise UserError(f"CodeMode reserves these tool names: {rendered}")
+        catalog_tools = [
+            CodeModeTool(
+                name=name,
+                description=tool.tool_def.description,
+                parameters_json_schema=tool.tool_def.parameters_json_schema,
+                return_schema=tool.tool_def.return_schema,
+                metadata=tool.tool_def.metadata,
+                sequential=tool.tool_def.sequential,
+            )
+            for name, tool in wrapped_tools.items()
+            if tool.tool_def.tool_kind is None
+        ]
+        try:
+            self._session.update_tools(catalog_tools)
+            preloaded = self._session.preload_tools(tool_names=self.preload_tools)
+        except CodeModeError as exc:
+            raise UserError(str(exc)) from exc
+        return (
+            wrapped_tools,
+            _shared_result_admitter(wrapped_tools),
+            tuple(preloaded["tools"]),
+        )
+
     async def call_tool(
         self,
         name: str,
@@ -214,6 +234,8 @@ class PydanticCodeModeToolset(WrapperToolset[Any]):
                 return self._session.get_tool_schema(tool_names=tool_args["tool_names"])
             return await self._execute_code(tool_args, ctx, tool)
         except CodeModeError as exc:
+            if isinstance(exc, CodeModeResultError):
+                raise
             raise ModelRetry(str(exc)) from exc
 
     def _control_tool(
@@ -329,12 +351,17 @@ class PydanticCodeModeCapability(AbstractCapability[Any]):
     """Pydantic projection of Kedi's adapter-neutral CodeMode core."""
 
     limits: CodeModeLimits = field(default_factory=CodeModeLimits)
+    preload_tools: tuple[str, ...] = ()
 
     def get_wrapper_toolset(
         self,
         toolset: AbstractToolset[Any],
     ) -> AbstractToolset[Any] | None:
-        return PydanticCodeModeToolset(wrapped=toolset, limits=self.limits)
+        return PydanticCodeModeToolset(
+            wrapped=toolset,
+            limits=self.limits,
+            preload_tools=self.preload_tools,
+        )
 
     async def before_model_request(
         self,
@@ -383,8 +410,12 @@ def _shared_result_admitter(
 def pydantic_code_mode_capability(
     *,
     limits: CodeModeLimits | None = None,
+    preload_tools: Sequence[str] = (),
 ) -> PydanticCodeModeCapability:
-    return PydanticCodeModeCapability(limits=limits or CodeModeLimits())
+    return PydanticCodeModeCapability(
+        limits=limits or CodeModeLimits(),
+        preload_tools=tuple(preload_tools),
+    )
 
 
 __all__ = [

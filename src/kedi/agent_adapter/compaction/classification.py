@@ -29,6 +29,7 @@ def _unit_for_entry(entry: NativeHistoryEntryRef) -> HistoryUnit:
         checkpoint=entry.checkpoint,
         unknown=entry.unknown,
         provider_required=entry.provider_required,
+        origins=entry.origins,
     )
 
 
@@ -95,4 +96,5 @@ def _build_group(index: int, units: tuple[HistoryUnit, ...]) -> HistoryUnitGroup
         lifecycle_ids=tuple(sorted(set((*opened.keys(), *closed.keys())))),
         artifact_refs=tuple(sorted({ref_id for unit in units for ref_id in unit.artifact_refs})),
         protected_reasons=tuple(reasons),
+        origins=tuple(dict.fromkeys(origin for unit in units for origin in unit.origins)),
     )
