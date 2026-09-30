@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import secrets
 import time
+import json
+from dataclasses import fields
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from hashlib import sha256
 from threading import RLock
 from typing import Any, Iterator, Literal
 
@@ -48,9 +51,11 @@ class ArtifactManager:
         history: ArtifactHistory | None = None,
         monotonic: Any = time.monotonic,
         wall_clock: Any = lambda: datetime.now(timezone.utc),
+        durable_root: Path | None = None,
     ) -> None:
         self.session_id = session_id or f"session_{secrets.token_urlsafe(18)}"
         self.history = history or ArtifactHistory()
+        self._durable_root = durable_root.expanduser().resolve() if durable_root else None
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._memory_store = InMemoryArtifactStore()
@@ -285,6 +290,19 @@ class ArtifactManager:
                 "provenance": dict(record.provenance) if record.provenance is not None else None,
             }
 
+    def derivation_depth(self, source_refs: tuple[str, ...]) -> int:
+        """Compute a child depth from retained metadata, including released parents."""
+        with self._lock:
+            self._ensure_open()
+            depths = [0]
+            for ref_id in source_refs:
+                record = self._record(ref_id, allow_inactive=True)
+                depth = (record.provenance or {}).get("derivation_depth", 0)
+                if type(depth) is not int or depth < 0:
+                    raise ArtifactInputError("artifact provenance derivation_depth is invalid")
+                depths.append(depth)
+            return max(depths) + 1
+
     def find(
         self,
         ref_id: str,
@@ -337,7 +355,7 @@ class ArtifactManager:
                     cursor = index + max(1, len(pattern))
                 if complete or next_offset is None:
                     break
-                overlap = window[-max(0, len(pattern) - 1) :]
+                overlap = window[-(len(pattern) - 1) :] if len(pattern) > 1 else ""
                 offset = next_offset
             return results
 
@@ -643,6 +661,187 @@ class ArtifactManager:
             "expired_artifacts": sum(record.status is ArtifactStatus.EXPIRED for record in records),
         }
 
+    def lifecycle_snapshot(self) -> tuple[frozenset[str], frozenset[str]]:
+        """Return live and known refs without depending on recent diagnostic events."""
+        with self._lock:
+            self._ensure_open()
+            records = self._all_records()
+            now = self._monotonic()
+            return (
+                frozenset(
+                    record.ref_id
+                    for record in records
+                    if record.status is ArtifactStatus.ACTIVE and not _is_expired(record, now=now)
+                ),
+                frozenset(record.ref_id for record in records),
+            )
+
+    def export_checkpoint(self) -> dict[str, Any]:
+        if self._durable_root is None:
+            raise RuntimeError("artifact checkpoint requires a durable store")
+        with self._lock:
+            self._ensure_open()
+            records = []
+            monotonic_now = self._monotonic()
+            wall_now = self._wall_clock()
+            for record in self._all_records():
+                policy = self._ref_policies[record.ref_id]
+                records.append(
+                    {
+                        "ref_id": record.ref_id,
+                        "status": record.status.value,
+                        "digest": record.digest,
+                        "idle_expires_at": (
+                            (
+                                wall_now
+                                + timedelta(
+                                    seconds=record.last_accessed_monotonic
+                                    + record.idle_ttl_seconds
+                                    - monotonic_now
+                                )
+                            ).isoformat()
+                            if record.idle_ttl_seconds is not None
+                            else None
+                        ),
+                        "policy": {
+                            item.name: (str(value) if isinstance(value, Path) else value)
+                            for item in fields(policy)
+                            if not item.name.startswith("_")
+                            for value in (getattr(policy, item.name),)
+                        },
+                    }
+                )
+            checkpoint = {
+                "session_id": self.session_id,
+                "records": records,
+                "history": self.history.export_checkpoint(),
+            }
+            json.dumps(checkpoint, allow_nan=False)
+            return checkpoint
+
+    def prune_inactive_payloads(self, checkpoint: dict[str, Any]) -> int:
+        if self._durable_root is None:
+            return 0
+        if checkpoint.get("session_id") != self.session_id:
+            raise ValueError("artifact checkpoint belongs to another session")
+        committed_inactive = {
+            value["ref_id"]
+            for value in checkpoint["records"]
+            if value["status"]
+            in {
+                ArtifactStatus.RELEASED.value,
+                ArtifactStatus.EXPIRED.value,
+                ArtifactStatus.PENDING_RELEASE.value,
+            }
+        }
+        with self._lock:
+            self._ensure_open()
+            pruned = 0
+            for record in self._all_records():
+                if record.ref_id not in committed_inactive or record.active_readers:
+                    continue
+                if record.status not in {ArtifactStatus.RELEASED, ArtifactStatus.EXPIRED}:
+                    continue
+                store = self._ref_stores[record.ref_id]
+                if not isinstance(store, FileArtifactStore):
+                    raise RuntimeError("durable artifact is not file-backed")
+                store.prune_inactive_payload(self.session_id, record.ref_id)
+                pruned += 1
+            return pruned
+
+    @classmethod
+    def from_checkpoint(cls, data: dict[str, Any], *, durable_root: Path) -> ArtifactManager:
+        if not isinstance(data, dict):
+            raise ValueError("artifact checkpoint must be an object")
+        session_id = data.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("artifact checkpoint session ID is invalid")
+        history = ArtifactHistory.from_checkpoint(data.get("history"))
+        values = data.get("records")
+        if not isinstance(values, list):
+            raise ValueError("artifact checkpoint records must be a list")
+        root = durable_root.expanduser().resolve()
+        manager = cls(
+            session_id=session_id,
+            history=history,
+            durable_root=root,
+        )
+        expected: set[str] = set()
+        try:
+            store = FileArtifactStore(root)
+            manager._file_stores[root] = store
+            monotonic_now = manager._monotonic()
+            wall_now = manager._wall_clock()
+            restored = {
+                record.ref_id: record
+                for record in store.restore_session(
+                    session_id,
+                    monotonic_now=monotonic_now,
+                    wall_now=wall_now,
+                )
+            }
+            for value in values:
+                if not isinstance(value, dict) or not isinstance(value.get("ref_id"), str):
+                    raise ValueError("artifact checkpoint reference is invalid")
+                ref_id = value["ref_id"]
+                if ref_id in expected or ref_id not in restored:
+                    raise ValueError(
+                        f"artifact checkpoint reference {ref_id!r} is missing or repeated"
+                    )
+                expected.add(ref_id)
+                record = restored[ref_id]
+                if value.get("digest") != record.digest or record.payload is None:
+                    raise ValueError(
+                        f"artifact checkpoint reference {ref_id!r} has invalid metadata"
+                    )
+                policy = ArtifactPolicy.patch(value["policy"]).resolved()
+                saved_status = ArtifactStatus(value["status"])
+                if saved_status is ArtifactStatus.PENDING_RELEASE:
+                    saved_status = ArtifactStatus.RELEASED
+                if policy.idle_ttl_seconds is not None:
+                    idle_deadline = value.get("idle_expires_at")
+                    if not isinstance(idle_deadline, str):
+                        raise ValueError("artifact checkpoint idle deadline is invalid")
+                    deadline = datetime.fromisoformat(idle_deadline)
+                    if deadline.tzinfo is None:
+                        raise ValueError("artifact checkpoint idle deadline needs a timezone")
+                    remaining = (deadline - wall_now).total_seconds()
+                    record.idle_ttl_seconds = policy.idle_ttl_seconds
+                    record.last_accessed_monotonic = (
+                        monotonic_now + remaining - policy.idle_ttl_seconds
+                    )
+                    if remaining <= 0 and saved_status is ArtifactStatus.ACTIVE:
+                        saved_status = ArtifactStatus.EXPIRED
+                if (
+                    record.status is ArtifactStatus.EXPIRED
+                    and saved_status is ArtifactStatus.ACTIVE
+                ):
+                    saved_status = ArtifactStatus.EXPIRED
+                if saved_status is ArtifactStatus.ACTIVE:
+                    digest = sha256()
+                    with record.payload.open("rb") as payload:
+                        for chunk in iter(lambda: payload.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    if digest.hexdigest() != record.digest:
+                        raise ValueError(f"artifact checkpoint reference {ref_id!r} is corrupt")
+                record.status = saved_status
+                manager._ref_stores[ref_id] = store
+                manager._ref_policies[ref_id] = policy
+                if saved_status is ArtifactStatus.ACTIVE:
+                    manager._metered_active_refs[ref_id] = record.ref.size_bytes
+                    telemetry.record_active(size_bytes=record.ref.size_bytes)
+                kind, separator, counter = ref_id.rpartition("_")
+                if separator and counter.isdecimal():
+                    manager._ref_counters[kind] = max(manager._ref_counters[kind], int(counter))
+            for ref_id in restored.keys() - expected:
+                store.discard(session_id, ref_id)
+            if manager._metered_active_refs:
+                cleanup_service.register(manager)
+        except BaseException:
+            manager.close()
+            raise
+        return manager
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
@@ -704,9 +903,9 @@ class ArtifactManager:
         return record
 
     def _store_for_policy(self, policy: ArtifactPolicy) -> ArtifactStore:
-        if policy.store == "memory":
+        if policy.store == "memory" and self._durable_root is None:
             return self._memory_store
-        path = policy.path.expanduser().resolve()
+        path = self._durable_root or policy.path.expanduser().resolve()
         store = self._file_stores.get(path)
         if store is None:
             store = FileArtifactStore(path)
@@ -724,7 +923,7 @@ class ArtifactManager:
                 }:
                     self._metered_active_refs[record.ref_id] = record.ref.size_bytes
                     telemetry.record_active(size_bytes=record.ref.size_bytes)
-                else:
+                elif self._durable_root is None:
                     self._delete_payload(record)
         return store
 
@@ -854,7 +1053,8 @@ class ArtifactManager:
 
     def _delete_payload(self, record: ArtifactRecord) -> None:
         store = self._ref_stores[record.ref_id]
-        store.delete_payload(self.session_id, record.ref_id)
+        if self._durable_root is None:
+            store.delete_payload(self.session_id, record.ref_id)
         size_bytes = self._metered_active_refs.pop(record.ref_id, None)
         if size_bytes is not None:
             telemetry.record_payload_removed(size_bytes=size_bytes)

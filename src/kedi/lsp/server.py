@@ -121,7 +121,7 @@ def make_server() -> LanguageServer:
 
     @server.feature(
         lsp.TEXT_DOCUMENT_COMPLETION,
-        lsp.CompletionOptions(trigger_characters=[">", "<", "[", ":"]),
+        lsp.CompletionOptions(trigger_characters=[">", "<", "["]),
     )
     def _completion(params: lsp.CompletionParams) -> List[lsp.CompletionItem]:
         doc = server.workspace.get_text_document(params.text_document.uri)
@@ -321,6 +321,24 @@ def make_server() -> LanguageServer:
         )
         return {"uri": uri, **result}
 
+    @server.feature("kedi/pythonCompletions")
+    def _python_completions(params: Any) -> list[dict[str, Any]]:
+        from kedi.lsp.python_virtual.completion import map_python_completions
+
+        uri = _text_document_uri(params)
+        if uri is None:
+            return []
+        get = (
+            params.get
+            if isinstance(params, dict)
+            else lambda key, default: getattr(params, key, default)
+        )
+        return map_python_completions(
+            _request_source(server, uri, params),
+            _protocol_data(get("virtual", {})),
+            _protocol_data(get("items", [])),
+        )
+
     # ----- Custom: embedded Kedi-in-Python-docstring interop -----
 
     @server.feature("kedi/kediDocstringRanges")
@@ -420,6 +438,17 @@ def _text_document_uri(params: Any) -> Optional[str]:
     if td is not None:
         return getattr(td, "uri", None)
     return None
+
+
+def _protocol_data(value: Any) -> Any:
+    """Unwrap pygls' named-tuple Objects without losing protocol field names."""
+    if hasattr(value, "_asdict"):
+        value = value._asdict()
+    if isinstance(value, dict):
+        return {key: _protocol_data(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_protocol_data(item) for item in value]
+    return value
 
 
 def _request_source(server: LanguageServer, uri: str, params: Any) -> str:

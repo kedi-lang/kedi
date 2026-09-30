@@ -12,7 +12,7 @@ instead of ad hoc `pip`, `poetry`, or one-off local flows.
 ## Clone And Install
 
 ```bash
-git clone https://github.com/kedi-lang/kedi
+git clone --recurse-submodules https://github.com/kedi-lang/kedi
 cd kedi
 uv sync --locked --dev
 ```
@@ -28,6 +28,10 @@ uv sync --locked --extra claude
 
 You usually do not need to activate `.venv` manually because the commands below use
 `uv run` through the `Makefile`.
+
+For an existing checkout, run `git submodule update --init --recursive` before
+testing. The optional debugger is maintained in `kedi-lang/kedi-debugger` and
+pinned at `debugger/`; its runtime integration tests remain in this repository.
 
 ## Pre-commit
 
@@ -112,7 +116,6 @@ Change the relevant manifest first, then refresh only its owning lockfile. For e
 uv lock
 uv lock --project notebook
 uv lock --project kedi-otel
-uv lock --project playground
 uv lock --project tree-sitter-kedi
 npm install --package-lock-only --ignore-scripts --prefix kedi-vscode
 npm install --package-lock-only --ignore-scripts --prefix tree-sitter-kedi

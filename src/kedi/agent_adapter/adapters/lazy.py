@@ -46,6 +46,7 @@ class LazyAdapter(HookRegistrationMixin):
         *,
         kind: AgentAdapterKind = "agent-framework",
         shortname: str = "lazy",
+        model: str | None = None,
         capabilities: AdapterCapabilities | None = None,
         hook_handler: HookHandler | None = None,
     ) -> None:
@@ -53,6 +54,7 @@ class LazyAdapter(HookRegistrationMixin):
         self._factory = factory
         self.kind = kind
         self.shortname = shortname
+        self._configured_model = model
         self.capabilities = capabilities or AdapterCapabilities()
         self._real: Any = None
         self._lock = Lock()
@@ -131,6 +133,15 @@ class LazyAdapter(HookRegistrationMixin):
         adapter = self._ensure()
         if isinstance(adapter, _SupportsDefaultModel):
             return adapter.default_model()
+        return None
+
+    @property
+    def configured_model(self) -> str | None:
+        """Return a portable model ID without initializing an unused backend."""
+        if self._configured_model is not None:
+            return self._configured_model
+        if isinstance(self._real, _SupportsDefaultModel):
+            return self._real.default_model()
         return None
 
     def telemetry_model_name(self) -> str | None:

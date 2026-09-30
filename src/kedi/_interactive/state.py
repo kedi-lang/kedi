@@ -231,7 +231,6 @@ def _build_snapshot_payload(session: InteractiveSession) -> dict[str, Any]:
         "decision_records": decision_records,
         "default_profile": default_profile,
         "active_profile": active_profile,
-        "adapter_selection_kind": session._top_level_state.adapter_selection_kind,
         "conversation_session_id": (
             None if session._conversation_state is None else session._conversation_state.session_id
         ),
@@ -450,7 +449,6 @@ def _restore_payload(session: InteractiveSession, payload: dict[str, Any]) -> No
         if active_data is None
         else decode_profile(active_data, decoder=decoder, kedi_models=models)
     )
-    session._top_level_state.adapter_selection_kind = payload["adapter_selection_kind"]
     session._cell_number = payload["cell_number"]
     session._source_names = set(payload["source_names"])
     session._fragments = fragments

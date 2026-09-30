@@ -255,6 +255,52 @@ def test_skills_directive_registers_skill_tools_and_instructions(
     assert adapter.instruction_calls[0] is not None
     assert "Be concise." in adapter.instruction_calls[0]
     assert "<SKILL_INSTRUCTIONS>" in adapter.instruction_calls[0]
+    assert "research" in adapter.instruction_calls[0]
+    assert "Use concise steps." not in adapter.instruction_calls[0]
+    assert "rather than substituting a familiar answer" in adapter.instruction_calls[0]
+
+
+def test_skill_inventory_is_sorted_bounded_and_does_not_read_hidden_roots(tmp_path: Path):
+    from kedi.agent_adapter.skills import skill_instructions
+
+    _write_skill(tmp_path, "zeta", "SECRET_CONTENT_SENTINEL")
+    _write_skill(tmp_path, "alpha", "SECRET_CONTENT_SENTINEL")
+    text = skill_instructions(store=SkillStore(tmp_path, max_skills=1))
+    assert "alpha" in text
+    assert "zeta" not in text
+    assert "SECRET_CONTENT_SENTINEL" not in text
+    assert text == skill_instructions(store=SkillStore(tmp_path, max_skills=1))
+
+
+def test_grounding_instruction_is_only_attached_to_evidence_enabled_profiles():
+    from kedi.agent_adapter.tools.specs import ToolSpec
+
+    runtime = KediRuntime(adapter=MockAdapter())
+    assert "grounding.instructions" not in {
+        p.identity for p in runtime._agent_instruction_parts(AgentProfile(), runtime.adapter)
+    }
+    tool = ToolSpec(fn=lambda: "answer", name="lookup", risk="read_only")
+    profile = AgentProfile(tools=("lookup",), tool_bindings={"lookup": tool})
+    parts = runtime._agent_instruction_parts(profile, runtime.adapter)
+    assert sum(p.identity == "grounding.instructions" for p in parts) == 1
+    assert "Stable general knowledge" in next(
+        p.content for p in parts if p.identity == "grounding.instructions"
+    )
+
+
+def test_skill_tool_without_artifact_boundary_returns_serializable_text(tmp_path: Path):
+    from pydantic import TypeAdapter
+
+    _write_skill(tmp_path / ".agents" / "skills", "example", "Use verified evidence.")
+    profile = AgentProfile(
+        skills=SkillsSettings(enabled=True, cwd=tmp_path, include_registry=False)
+    )
+    runtime = KediRuntime(adapter=MockAdapter())
+    tools = runtime._resolve_agent_tool_specs(profile, object.__new__(PydanticAdapter))
+    read = next(tool for tool in tools if tool.name == "read_skill")
+    value = read.fn(skill_name="example")
+    assert value == "Use verified evidence."
+    assert TypeAdapter(str).dump_json(value) == b'"Use verified evidence."'
 
 
 def test_skills_disabled_removes_an_inherited_skill_policy(tmp_path: Path) -> None:
@@ -674,3 +720,11 @@ def test_legacy_use_skills_is_not_a_compatibility_alias() -> None:
 
     with pytest.raises(KediExecutionError, match="Unknown use target: 'skills'"):
         runtime.run_main()
+
+
+def test_skill_instructions_without_store_do_not_claim_an_inventory() -> None:
+    from kedi.agent_adapter.skills import skill_instructions
+
+    instructions = skill_instructions()
+    assert "Use list_skills when a task may benefit" in instructions
+    assert "available_skills" not in instructions

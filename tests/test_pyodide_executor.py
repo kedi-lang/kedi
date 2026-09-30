@@ -234,6 +234,29 @@ def test_builtin_module_stdout_is_collected_during_compile() -> None:
     assert executor.drain_stdout() == "The Zen of Python\n"
 
 
+def test_show_uses_worker_builtin_print_without_serializing_a_host_callable():
+    import builtins
+    import contextlib
+    import io
+
+    class DisplayBridge:
+        def request(self, payload: Mapping[str, Any], *, timeout: float) -> Mapping[str, Any]:
+            assert payload["action"] == "evaluate_inline"
+            assert payload["env"] == {"print": 42, "__kedi_display_text": "ready"}
+            env = {"__builtins__": builtins.__dict__, **payload["env"]}
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = eval(payload["code"], env)
+            return {"ok": True, "result": result, "env": {}, "stdout": output.getvalue()}
+
+    executor = PyodideExecutor(DisplayBridge())
+    runtime = compile_program(
+        parse_program("> show: ready\n"), executor=executor, runtime_globals={"print": 42}
+    )
+    assert runtime.run_main() is None
+    assert executor.drain_stdout() == "ready\n"
+
+
 def test_pyodide_prelude_exports_keep_browser_owned_objects_opaque() -> None:
     bridge = QueueBridge(
         {

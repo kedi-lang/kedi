@@ -26,6 +26,7 @@ from ...agent_profile.directives import (
 from ...agent_profile.use_resolution import eval_use_directive
 from ...core import KediRuntime
 from ...errors import KediTraceFrame
+from ...debugging import checkpoint
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -91,11 +92,6 @@ from .evaluation import (
 from .type_system import KediType, detect_rhs_kind, initialize_value_from_native
 
 _NO_RETURN = object()
-
-
-def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
-    if current is not None and current != incoming:
-        raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")
 
 
 class StatementCompiler:
@@ -195,7 +191,9 @@ class StatementCompiler:
         with self.rt.trace_frame(KediTraceFrame(kind="show", label="show", span=stmt.loc)):
             text = render_expression(self.rt, stmt.segments, env, context="show")
             self.rt.executor.evaluate_inline(
-                self.rt, "print(__kedi_display_text)", {"__kedi_display_text": text}
+                self.rt,
+                "__builtins__['print'](__kedi_display_text)",
+                {"__kedi_display_text": text},
             )
 
     def execute_task(self, stmt: TaskStmt, env: dict[str, Any], active: AgentProfile) -> None:
@@ -455,11 +453,10 @@ class StatementExecutor:
 
         captured = proc.captured_agent_profile
         active = captured if isinstance(captured, AgentProfile) else self.rt.default_agent_profile
-        adapter_selection_kind: str | None = None
         profile_registry = self.rt._profile_registry
 
         try:
-            block_result, _, _ = self._execute_block(
+            block_result, _ = self._execute_block(
                 proc.body,
                 proc,
                 closure_env,
@@ -467,7 +464,6 @@ class StatementExecutor:
                 saved_procs,
                 new_proc_names,
                 active,
-                adapter_selection_kind,
                 profile_registry,
             )
             if block_result is not _NO_RETURN:
@@ -495,24 +491,23 @@ class StatementExecutor:
         saved_procs: dict[str, Any],
         new_proc_names: list[str],
         active: AgentProfile,
-        adapter_selection_kind: str | None,
         profile_registry: dict[str, Any],
-    ) -> tuple[Any, AgentProfile, str | None]:
+    ) -> tuple[Any, AgentProfile]:
         """Execute one ordered block while keeping directive state block-local."""
         last_return: Any = _NO_RETURN
         for stmt in statements:
             from kedi.agent_adapter.subagents.groups import check_process_cancelled
 
             check_process_cancelled()
+            checkpoint(self.rt, "statement", env=closure_env, span=stmt.loc)
             updated = self._apply_profile_directive(
                 stmt,
                 active,
-                adapter_selection_kind,
                 closure_env,
                 profile_registry,
             )
             if updated is not None:
-                active, adapter_selection_kind = updated
+                active = updated
                 continue
 
             with block_agent_profile_scope(active):
@@ -524,75 +519,45 @@ class StatementExecutor:
                     saved_procs,
                     new_proc_names,
                     active,
-                    adapter_selection_kind,
                     profile_registry,
                 )
             if result is not _NO_RETURN:
-                return result, active, adapter_selection_kind
+                return result, active
 
-        return last_return, active, adapter_selection_kind
+        return last_return, active
 
     def _apply_profile_directive(
         self,
         stmt: Stmt,
         active: AgentProfile,
-        adapter_selection_kind: str | None,
         closure_env: dict[str, Any],
         profile_registry: dict[str, Any],
-    ) -> tuple[AgentProfile, str | None] | None:
+    ) -> AgentProfile | None:
         if isinstance(stmt, AgentDirectiveStmt):
-            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-harness")
-            return (
-                active.merge(eval_agent_directive(self.rt, stmt, closure_env)),
-                "agent-harness",
-            )
+            return active.merge(eval_agent_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, AdapterDirectiveStmt):
-            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent-framework")
-            return (
-                active.merge(eval_adapter_directive(self.rt, stmt, closure_env)),
-                "agent-framework",
-            )
+            return active.merge(eval_adapter_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, ModelDirectiveStmt):
-            return active.merge(
-                eval_model_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_model_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, EffortDirectiveStmt):
-            return active.merge(
-                eval_effort_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_effort_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, ApprovalDirectiveStmt):
-            return (
-                active.merge(eval_approval_directive(self.rt, stmt, closure_env)),
-                adapter_selection_kind,
-            )
+            return active.merge(eval_approval_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, HooksDirectiveStmt):
             hook_patch = eval_hooks_directive(
                 self.rt,
                 stmt,
                 closure_env,
             ).with_hook_enforcement()
-            return (
-                active.merge(hook_patch),
-                adapter_selection_kind,
-            )
+            return active.merge(hook_patch)
         if isinstance(stmt, HistoryDirectiveStmt):
-            return active.merge(
-                eval_history_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_history_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, SkillsDirectiveStmt):
-            return active.merge(
-                eval_skills_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_skills_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, CodeModeDirectiveStmt):
-            return (
-                active.merge(eval_codemode_directive(self.rt, stmt, closure_env)),
-                adapter_selection_kind,
-            )
+            return active.merge(eval_codemode_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, RequiresDirectiveStmt):
-            return (
-                active.merge(eval_requires_directive(self.rt, stmt, closure_env)),
-                adapter_selection_kind,
-            )
+            return active.merge(eval_requires_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, BudgetDirectiveStmt):
             from kedi.run_budget import current_run_budget
 
@@ -600,25 +565,15 @@ class StatementExecutor:
             ledger = current_run_budget()
             if ledger is not None and patch.run_budget is not None:
                 ledger.set_budget(patch.run_budget)
-            return active.merge(patch), adapter_selection_kind
+            return active.merge(patch)
         if isinstance(stmt, SystemDirectiveStmt):
-            return active.merge(
-                eval_system_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_system_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, McpDirectiveStmt):
-            return active.merge(
-                eval_mcp_directive(self.rt, stmt, closure_env)
-            ), adapter_selection_kind
+            return active.merge(eval_mcp_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, SettingsDirectiveStmt):
-            return (
-                active.merge(eval_settings_directive(self.rt, stmt, closure_env)),
-                adapter_selection_kind,
-            )
+            return active.merge(eval_settings_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, ArtifactsDirectiveStmt):
-            return (
-                active.merge(eval_artifacts_directive(self.rt, stmt, closure_env)),
-                adapter_selection_kind,
-            )
+            return active.merge(eval_artifacts_directive(self.rt, stmt, closure_env))
         if isinstance(stmt, UseDirectiveStmt):
             from kedi.run_budget import current_run_budget
 
@@ -632,10 +587,7 @@ class StatementExecutor:
             ledger = current_run_budget()
             if ledger is not None and patch.run_budget is not None:
                 ledger.set_budget(patch.run_budget)
-            return (
-                active.merge(patch),
-                adapter_selection_kind,
-            )
+            return active.merge(patch)
         return None
 
     def _execute_body_statement(
@@ -647,7 +599,6 @@ class StatementExecutor:
         saved_procs: dict[str, Any],
         new_proc_names: list[str],
         active: AgentProfile,
-        adapter_selection_kind: str | None = None,
         profile_registry: dict[str, Any] | None = None,
     ) -> Any:
         from kedi.run_budget import RunBudget, run_budget_scope
@@ -666,7 +617,7 @@ class StatementExecutor:
                 return _NO_RETURN
             with branch_trace(self.rt, stmt, alternative=not condition):
                 with child_scope(self.rt, closure_env) as branch_env, run_budget_scope(RunBudget()):
-                    result, _, _ = self._execute_block(
+                    result, _ = self._execute_block(
                         body,
                         proc,
                         branch_env,
@@ -674,7 +625,6 @@ class StatementExecutor:
                         saved_procs,
                         new_proc_names,
                         active,
-                        adapter_selection_kind,
                         profile_registry,
                     )
             return result
@@ -682,7 +632,7 @@ class StatementExecutor:
         if isinstance(stmt, LoopStmt):
             last_return: Any = _NO_RETURN
             with loop_trace(self.rt, stmt):
-                records: list[tuple[Any, AgentProfile, str | None]] = []
+                records: list[tuple[Any, AgentProfile]] = []
                 values = evaluate_iterable(self.rt, stmt, closure_env)
                 with managed_loop_iterator(values):
                     for value in values:
@@ -690,7 +640,7 @@ class StatementExecutor:
                             loop_binding(self.rt, closure_env, stmt.binder, value) as iteration_env,
                             run_budget_scope(RunBudget()),
                         ):
-                            result, iteration_active, iteration_adapter_kind = self._execute_block(
+                            result, iteration_active = self._execute_block(
                                 stmt.body,
                                 proc,
                                 iteration_env,
@@ -698,12 +648,9 @@ class StatementExecutor:
                                 saved_procs,
                                 new_proc_names,
                                 active,
-                                adapter_selection_kind,
                                 profile_registry,
                             )
-                            records.append(
-                                (iteration_env, iteration_active, iteration_adapter_kind)
-                            )
+                            records.append((iteration_env, iteration_active))
                         if result is not _NO_RETURN:
                             return result
 
@@ -712,10 +659,10 @@ class StatementExecutor:
                     results: list[Any] = [_NO_RETURN] * len(frames)
 
                     def run_map(index: int, frame: Any) -> None:
-                        _, map_active, map_adapter_kind = records[index]
+                        _, map_active = records[index]
                         with active_scope(self.rt, frame), run_budget_scope(RunBudget()):
                             with block_agent_profile_scope(map_active):
-                                results[index], _, _ = self._execute_block(
+                                results[index], _ = self._execute_block(
                                     stmt.map_body or [],
                                     proc,
                                     frame,
@@ -723,7 +670,6 @@ class StatementExecutor:
                                     saved_procs,
                                     new_proc_names,
                                     map_active,
-                                    map_adapter_kind,
                                     profile_registry,
                                 )
 
@@ -743,7 +689,7 @@ class StatementExecutor:
                         child_scope(self.rt, closure_env) as iteration_env,
                         run_budget_scope(RunBudget()),
                     ):
-                        result, _, _ = self._execute_block(
+                        result, _ = self._execute_block(
                             stmt.body,
                             proc,
                             iteration_env,
@@ -751,7 +697,6 @@ class StatementExecutor:
                             saved_procs,
                             new_proc_names,
                             active,
-                            adapter_selection_kind,
                             profile_registry,
                         )
                     completed_iterations += 1

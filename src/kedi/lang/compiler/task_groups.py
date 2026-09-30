@@ -197,7 +197,6 @@ def _execute_process(
                         {},
                         [],
                         profile,
-                        None,
                         rt._profile_registry,
                     )
                 except BaseException as exc:

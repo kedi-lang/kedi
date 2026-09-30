@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import ipaddress
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from functools import partial
 from threading import RLock
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -39,6 +41,7 @@ def create_a2a_app(
     allow_unauthenticated_loopback: bool = False,
     max_request_bytes: int = DEFAULT_A2A_MAX_REQUEST_BYTES,
     max_tasks_per_principal: int = DEFAULT_A2A_MAX_TASKS_PER_PRINCIPAL,
+    state_dir: Path | None = None,
 ) -> Any:
     """Build a Starlette A2A v1 application around one exported Kedi profile."""
 
@@ -69,12 +72,47 @@ def create_a2a_app(
         )
 
     card = _agent_card(program, endpoint=endpoint, rpc_path=rpc_path, auth=auth)
-    executor = _KediAgentExecutor(program)
+    state = None
+    if state_dir is not None:
+        if not program.source_fingerprint or not program.model_identity:
+            raise ValueError("Durable A2A serving requires a source fingerprint and model identity")
+        try:
+            from .persistence import A2APersistence
+        except ImportError as exc:
+            raise RuntimeError(
+                "A2A persistence support is not installed. Install kedi[a2a-persistence]"
+            ) from exc
+
+        identity = hashlib.sha256(
+            "\0".join(
+                (
+                    program.entry,
+                    program.source_fingerprint,
+                    program.adapter.shortname,
+                    program.model_identity,
+                    str(program.profile.history),
+                )
+            ).encode("utf-8")
+        ).hexdigest()
+        state = A2APersistence(
+            state_dir,
+            identity=identity,
+            max_tasks_per_principal=max_tasks_per_principal,
+            max_sessions=program.max_sessions,
+            adapter_shortname=program.adapter.shortname,
+            history_enabled=program.profile.history is True,
+        )
+        program.configure_persistence(state)
+    executor = _KediAgentExecutor(program, state=state)
     handler = DefaultRequestHandler(
         agent_executor=executor,
-        task_store=_BoundedTaskStore(
-            InMemoryTaskStore(),
-            max_tasks_per_principal=max_tasks_per_principal,
+        task_store=(
+            state
+            if state is not None
+            else _BoundedTaskStore(
+                InMemoryTaskStore(),
+                max_tasks_per_principal=max_tasks_per_principal,
+            )
         ),
         agent_card=card,
     )
@@ -97,19 +135,26 @@ def create_a2a_app(
     @asynccontextmanager
     async def lifespan(_app: Any):
         try:
+            if state is not None:
+                await state.open()
             yield
         finally:
             try:
                 await handler.aclose()
             finally:
-                await program.aclose()
+                try:
+                    await program.aclose()
+                finally:
+                    if state is not None:
+                        await state.close()
 
     return Starlette(routes=routes, middleware=middleware, lifespan=lifespan)
 
 
 class _KediAgentExecutor:
-    def __init__(self, program: A2AServedProgram) -> None:
+    def __init__(self, program: A2AServedProgram, *, state: Any = None) -> None:
         self._program = program
+        self._state = state
 
     async def execute(self, context: Any, event_queue: Any) -> None:
         from a2a.server.tasks import TaskUpdater
@@ -118,40 +163,83 @@ class _KediAgentExecutor:
         if context.task_id is None or context.context_id is None:
             raise RuntimeError("A2A SDK did not assign task and context identifiers")
         updater = TaskUpdater(event_queue, context.task_id, context.context_id)
-        if context.current_task is None:
-            await event_queue.enqueue_event(
-                Task(
-                    id=context.task_id,
-                    context_id=context.context_id,
-                    status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
-                    history=[context.message] if context.message is not None else [],
-                )
-            )
-        await updater.start_work()
+        admission = (
+            self._state.expect_admission(context.task_id) if self._state is not None else None
+        )
         try:
-            schema = _requested_output_schema(context)
-            result = await self._program.invoke(
-                principal=context.call_context.user.user_name,
-                context_id=context.context_id,
-                prompt=context.get_user_input(),
-                output_schema=schema,
-            )
-            if schema is None:
-                await updater.add_artifact(
-                    [Part(text=str(result))],
-                    name=KEDI_TEXT_ARTIFACT_NAME,
-                    last_chunk=True,
+            if context.current_task is None:
+                await event_queue.enqueue_event(
+                    Task(
+                        id=context.task_id,
+                        context_id=context.context_id,
+                        status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
+                        history=[context.message] if context.message is not None else [],
+                    )
                 )
             else:
-                value = getattr(struct_pb2, "Value")()
-                ParseDict(result, value)
-                await updater.add_artifact(
-                    [Part(data=value, media_type="application/json")],
-                    name=KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME,
-                    last_chunk=True,
-                    extensions=[KEDI_STRUCTURED_OUTPUT_EXTENSION_URI],
+                await updater.start_work()
+            if admission is not None:
+                await admission
+            if context.current_task is None:
+                await updater.start_work()
+        except BaseException:
+            if self._state is not None:
+                self._state.abort_admission(context.task_id)
+            raise
+        try:
+            schema = _requested_output_schema(context)
+
+            async def publish_result(result: Any) -> None:
+                if schema is None:
+                    await updater.add_artifact(
+                        [Part(text=str(result))],
+                        name=KEDI_TEXT_ARTIFACT_NAME,
+                        last_chunk=True,
+                    )
+                else:
+                    value = getattr(struct_pb2, "Value")()
+                    ParseDict(result, value)
+                    await updater.add_artifact(
+                        [Part(data=value, media_type="application/json")],
+                        name=KEDI_STRUCTURED_OUTPUT_ARTIFACT_NAME,
+                        last_chunk=True,
+                        extensions=[KEDI_STRUCTURED_OUTPUT_EXTENSION_URI],
+                    )
+                await updater.complete()
+
+            if self._state is None:
+                result = await self._program.invoke(
+                    principal=context.call_context.user.user_name,
+                    context_id=context.context_id,
+                    prompt=context.get_user_input(),
+                    output_schema=schema,
                 )
-            await updater.complete()
+                await publish_result(result)
+            else:
+
+                async def commit(result: Any, checkpoint: dict[str, Any]) -> None:
+                    future = self._state.stage_completion(
+                        task_id=context.task_id,
+                        owner=context.call_context.user.user_name,
+                        context_id=context.context_id,
+                        checkpoint=checkpoint,
+                    )
+                    try:
+                        await publish_result(result)
+                        await asyncio.shield(future)
+                    except BaseException:
+                        await self._state.abort_completion(context.task_id)
+                        if future.done() and not future.cancelled():
+                            future.exception()
+                        raise
+
+                await self._program.invoke(
+                    principal=context.call_context.user.user_name,
+                    context_id=context.context_id,
+                    prompt=context.get_user_input(),
+                    output_schema=schema,
+                    on_complete=commit,
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:

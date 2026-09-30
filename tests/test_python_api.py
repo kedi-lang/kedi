@@ -36,6 +36,7 @@ from kedi.agent_adapter import (
 )
 from kedi.agent_adapter.adapters import dspy as dspy_adapter_module
 from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
 from kedi.agent_profile import AgentProfile, current_block_agent_profile
 from kedi.artifacts import artifact_instructions
 from kedi.errors import KediExecutionError
@@ -893,7 +894,9 @@ def test_query_profile_arguments_apply_for_one_call(adapter: ApiAdapter) -> None
 
     assert current_block_agent_profile() == AgentProfile.empty()
     assert answer() == "ok"
-    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
+    assert adapter.instructions == [
+        f"Use terse prose.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+    ]
     assert adapter.settings == [{"temperature": 0.2}]
     assert adapter.tools == [
         (
@@ -1146,7 +1149,9 @@ def test_bind_file_profile_arguments_apply_for_one_call(
     def answer() -> str: ...
 
     assert answer() == "ok"
-    assert adapter.instructions == [f"Use terse prose.\n\n{artifact_instructions()}"]
+    assert adapter.instructions == [
+        f"Use terse prose.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+    ]
     assert adapter.settings == [{"temperature": 0.2}]
     assert adapter.tools == [
         (

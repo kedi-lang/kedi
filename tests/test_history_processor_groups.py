@@ -6,9 +6,11 @@ from dataclasses import FrozenInstanceError, replace
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
 
 from kedi.agent_adapter import HistoryOrigin
 from kedi.agent_adapter.adapters.langchain.history_processing import LangChainHistoryMessageCodec
+from kedi.agent_adapter.adapters.pydantic.history_processing import PydanticHistoryMessageCodec
 from kedi.agent_adapter.compaction.classification import classify_snapshot
 from kedi.agent_adapter.conversation import AdapterConversationContext
 from kedi.agent_adapter.history_processing import HistoryProcessorRunner
@@ -57,6 +59,56 @@ def test_keep_recent_groups_preserves_protected_and_current(count, expected):
     if count >= 2:
         assert outcome.messages is messages
         assert not outcome.changed
+
+
+@pytest.mark.parametrize("adapter", ["pydantic", "langchain"])
+@pytest.mark.parametrize("count", [0, 1])
+def test_protected_recent_cycle_does_not_consume_unprotected_group_count(adapter, count):
+    if adapter == "pydantic":
+        codec = PydanticHistoryMessageCodec()
+        messages = [
+            ModelRequest(parts=[UserPromptPart("obsolete")]),
+            ModelResponse(parts=[TextPart("acknowledged")]),
+            ModelRequest(parts=[UserPromptPart("required context")]),
+            ModelResponse(
+                parts=[
+                    ThinkingPart("opaque reasoning", signature="signed-replay-data"),
+                    TextPart("ready"),
+                ]
+            ),
+            ModelRequest(parts=[UserPromptPart("current")]),
+        ]
+    else:
+        codec = LangChainHistoryMessageCodec()
+        messages = [
+            HumanMessage(content="obsolete"),
+            AIMessage(content="acknowledged"),
+            HumanMessage(content="required context"),
+            AIMessage(
+                content=[
+                    {
+                        "type": "reasoning",
+                        "reasoning": "opaque reasoning",
+                        "signature": "signed-replay-data",
+                    },
+                    {"type": "text", "text": "ready"},
+                ]
+            ),
+            HumanMessage(content="current"),
+        ]
+    contexts = []
+    runner = HistoryProcessorRunner(
+        lambda ctx: contexts.append(ctx) or ctx.keep_recent_groups(count), codec
+    )
+
+    async def run():
+        with runner.run_scope(None):
+            return await runner.process(messages, model_id=None)
+
+    outcome = asyncio.run(run())
+    assert contexts[0].groups[1].protected_reasons == ("provider-required",)
+    assert outcome.messages == (messages if count == 1 else messages[2:])
+    assert outcome.changed == (count == 0)
 
 
 @pytest.mark.parametrize(

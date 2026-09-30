@@ -54,6 +54,12 @@ def _a2a_group() -> None:
     help="Allow an unauthenticated loopback-only development server",
 )
 @click.option("--model", envvar="KEDI_A2A_MODEL")
+@click.option(
+    "--state-dir",
+    envvar="KEDI_A2A_STATE_DIR",
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Persist A2A tasks and sessions across server restarts",
+)
 @click.option("--max-concurrency", type=click.IntRange(min=1), default=4, show_default=True)
 @click.option(
     "--max-pending-tasks",
@@ -107,6 +113,7 @@ def _serve(
     api_key_header: str,
     allow_unauthenticated: bool,
     model: str | None,
+    state_dir: Path | None,
     max_concurrency: int,
     max_pending_tasks: int,
     max_sessions: int,
@@ -162,6 +169,7 @@ def _serve(
             allow_unauthenticated_loopback=allow_unauthenticated,
             max_request_bytes=max_request_bytes,
             max_tasks_per_principal=max_tasks_per_principal,
+            state_dir=state_dir,
         )
     except ImportError as exc:
         if served is not None:

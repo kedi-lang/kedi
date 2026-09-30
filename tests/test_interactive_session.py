@@ -330,7 +330,7 @@ def test_interactive_session_dump_load_restores_values_types_and_procedures_with
     marker = tmp_path / "marker.txt"
     snapshot = tmp_path / "session.kedi-state"
     source = f"""
-`open({str(marker)!r}, "a").write("executed\\n")`
+`with open({str(marker)!r}, "a") as stream: stream.write("executed\\n"); del stream`
 ~Person(name: str, age: int)
 
 @double(value: int) -> int:

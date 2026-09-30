@@ -71,6 +71,7 @@ from kedi.lang.compiler.control_flow import (
 )
 from kedi.lang.compiler.type_system import register_type
 from kedi.run_budget import RunBudget, current_run_budget, run_budget_scope
+from kedi.debugging import checkpoint
 
 if TYPE_CHECKING:
     from kedi.lang.compiler.program_compiler import ProgramCompiler, _PreparedProgram
@@ -81,7 +82,6 @@ class _TopLevelExecutionState:
     """Directive state that advances as top-level statements execute."""
 
     active_profile: AgentProfile
-    adapter_selection_kind: str | None
 
 
 def _execute_top_level_sequence(
@@ -97,6 +97,7 @@ def _execute_top_level_sequence(
     last_result: Any = _NO_TOP_LEVEL_RESULT
 
     for item in sequence:
+        checkpoint(self.rt, "statement", env=env, span=item.loc)
         if isinstance(item, IfStmt):
             with block_agent_profile_scope(state.active_profile):
                 condition = evaluate_condition(self.rt, item, env)
@@ -214,15 +215,11 @@ def _execute_top_level_sequence(
             )
             continue
         if isinstance(item, AgentDirectiveStmt):
-            _assert_adapter_selection_not_mixed(state.adapter_selection_kind, "agent-harness")
-            state.adapter_selection_kind = "agent-harness"
             state.active_profile = state.active_profile.merge(
                 eval_agent_directive(self.rt, item, env)
             )
             continue
         if isinstance(item, AdapterDirectiveStmt):
-            _assert_adapter_selection_not_mixed(state.adapter_selection_kind, "agent-framework")
-            state.adapter_selection_kind = "agent-framework"
             state.active_profile = state.active_profile.merge(
                 eval_adapter_directive(self.rt, item, env)
             )
@@ -341,8 +338,3 @@ def _execute_top_level_sequence(
 
 
 _NO_TOP_LEVEL_RESULT = object()
-
-
-def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
-    if current is not None and current != incoming:
-        raise RuntimeError("Cannot mix '> agent:' and '> adapter:' in the same scope")

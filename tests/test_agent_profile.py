@@ -809,18 +809,9 @@ def test_profile_agent_and_adapter_members_select_adapters(
     [
         ("> agent: pydantic\n>> value [x]\n", "cannot select 'pydantic'"),
         ("> adapter: codex\n>> value [x]\n", "cannot select 'codex'"),
-        ("> agent: codex\n> adapter: pydantic\n>> value [x]\n", "Cannot mix"),
         (
             "> profile: mixed:\n    > agent: codex\n    > adapter: pydantic\n> use: mixed\n>> value [x]\n",
             "cannot contain both",
-        ),
-        (
-            "@foo():\n    > agent: harness\n    > adapter: secondary\n    >> value [x]\n",
-            "Cannot mix",
-        ),
-        (
-            "> agent: harness\n> adapter: secondary\n@foo():\n    >> value [x]\n",
-            "Cannot mix",
         ),
     ],
 )

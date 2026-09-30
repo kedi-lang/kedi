@@ -143,6 +143,62 @@ def test_artifact_code_failure_does_not_poison_reused_pool() -> None:
         manager.close()
 
 
+@pytest.mark.parametrize("operation", ["eval", "exec"])
+def test_unsupported_dynamic_code_has_bounded_actionable_recovery(operation: str) -> None:
+    manager = ArtifactManager()
+    runtime = ArtifactCodeRuntime()
+    try:
+        with pytest.raises(ArtifactCodeError) as error:
+            runtime.execute(manager=manager, artifact_refs=[], code=f"{operation}('1 + 1')")
+        diagnostic = str(error.value)
+        assert f"name '{operation}' is not defined" in diagnostic
+        assert "direct expressions, loops, or comprehensions" in diagnostic
+        assert "final expression" in diagnostic
+        assert len(diagnostic) < 800
+        assert error.value.__cause__ is not None
+        assert runtime.execute(manager=manager, artifact_refs=[], code="1 + 1").result == 2
+        spec = next(s for s in artifact_tool_specs(manager) if s.name == "run_artifact_code")
+        assert codemode_module.ARTIFACT_COMPUTE_GUIDANCE in spec.description
+    finally:
+        runtime.close()
+        manager.close()
+
+
+def test_compute_provenance_tracks_transitive_depth_and_retains_released_parents() -> None:
+    manager = ArtifactManager()
+    source = _artifact(manager, "original")
+    run = next(s for s in artifact_tool_specs(manager, _policy()) if s.name == "run_artifact_code")
+    try:
+        parent = source.ref.ref_id
+        for depth in (1, 2, 3):
+            result = run.fn(code=f"get_artifact({parent!r}) + '!'", artifact_refs=[parent])
+            derived = result["result"]["ref_id"]
+            metadata = manager.metadata(derived)
+            assert metadata["provenance"]["derivation_depth"] == depth
+            assert metadata["provenance"]["source_refs"] == [parent]
+            manager.release(parent)
+            assert manager.derivation_depth((parent,)) == depth
+            assert manager.get_value(derived) == "original" + "!" * depth
+            parent = derived
+        assert manager.derivation_depth((source.ref.ref_id, parent)) == 4
+        assert manager.derivation_depth(()) == 1
+    finally:
+        manager.close()
+
+
+@pytest.mark.parametrize("depth", [-1, True, "2"])
+def test_compute_rejects_invalid_parent_provenance_depth(depth: object) -> None:
+    manager = ArtifactManager()
+    try:
+        source = manager.artifactize(
+            "payload", policy=_policy(), provenance={"derivation_depth": depth}
+        )
+        with pytest.raises(ValueError, match="derivation_depth"):
+            manager.derivation_depth((source.ref.ref_id,))
+    finally:
+        manager.close()
+
+
 @pytest.mark.parametrize("code", ["open('secret')", "import os\nos.getcwd()"])
 def test_artifact_code_has_no_host_filesystem_or_imports(code: str) -> None:
     manager = ArtifactManager(session_id="code-isolation")

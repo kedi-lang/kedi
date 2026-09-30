@@ -171,6 +171,7 @@ def _lazy_adapter(
         factory,
         kind=metadata.kind,
         shortname=metadata.shortname,
+        model=model,
         capabilities=adapter_capabilities(shortname),
     )
 

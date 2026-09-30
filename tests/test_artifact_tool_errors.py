@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -204,6 +205,84 @@ def test_langchain_native_tool_returns_error_then_accepts_correction(
         )
         assert success.status == "success"
         assert success.tool_call_id == "fixed"
+
+    asyncio.run(run())
+
+
+def test_pydantic_compute_error_guides_one_successful_correction(
+    artifact_tools: tuple[ArtifactManager, dict[str, ToolSpec], str],
+) -> None:
+    _, tools, ref_id = artifact_tools
+    calls = 0
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            code = "eval('1 + 1')"
+        elif calls == 2:
+            retries = [
+                part for msg in messages for part in msg.parts if isinstance(part, RetryPromptPart)
+            ]
+            assert len(retries) == 1
+            assert "direct expressions, loops, or comprehensions" in str(retries[0].content)
+            code = f"sum(get_artifact({ref_id!r})['items'])"
+        else:
+            assert calls == 3
+            results = [
+                part for msg in messages for part in msg.parts if isinstance(part, ToolReturnPart)
+            ]
+            assert results[-1].content["result"] == 3
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "run_artifact_code",
+                    {"code": code, "artifact_refs": [ref_id]},
+                    tool_call_id=f"compute-{calls}",
+                )
+            ]
+        )
+
+    adapter = PydanticAdapter(FunctionModel(respond))
+    adapter.register_tool(tools["run_artifact_code"])
+    assert asyncio.run(adapter.invoke(prompt="Sum the stored items.")) == "done"
+    assert calls == 3
+
+
+def test_langchain_compute_error_preserves_guidance_and_accepts_correction(
+    artifact_tools: tuple[ArtifactManager, dict[str, ToolSpec], str],
+) -> None:
+    pytest.importorskip("langchain_core.tools")
+    _, tools, ref_id = artifact_tools
+    spec = tools["run_artifact_code"]
+    native = _langchain_tool_from_spec(spec)
+
+    async def run() -> None:
+        error = await native.ainvoke(
+            {
+                "name": spec.name,
+                "type": "tool_call",
+                "id": "bad-compute",
+                "args": {"code": "exec('x = 1')", "artifact_refs": [ref_id]},
+            }
+        )
+        assert error.status == "error"
+        assert "direct expressions, loops, or comprehensions" in error.content
+        success = await native.ainvoke(
+            {
+                "name": spec.name,
+                "type": "tool_call",
+                "id": "fixed-compute",
+                "args": {
+                    "code": f"sum(get_artifact({ref_id!r})['items'])",
+                    "artifact_refs": [ref_id],
+                },
+            }
+        )
+        assert success.status == "success"
+        assert success.tool_call_id == "fixed-compute"
+        assert json.loads(success.content)["result"] == 3
 
     asyncio.run(run())
 

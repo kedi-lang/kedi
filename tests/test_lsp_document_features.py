@@ -29,7 +29,11 @@ def test_completion_exposes_directives_types_and_lexical_symbols() -> None:
         "/tmp/x.kedi",
         lsp.Position(line=0, character=4),
     )
-    assert any(item.label == "model" and item.insert_text == "model: " for item in directive_items)
+    assert any(
+        item.label == "model" and item.text_edit.new_text == "> model: "
+        for item in directive_items
+        if isinstance(item.text_edit, lsp.TextEdit)
+    )
 
     source = (
         "~Person(name: str)\n\n"

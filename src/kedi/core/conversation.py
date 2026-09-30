@@ -13,6 +13,8 @@ from typing import (
 from kedi.core.expressions import _type_display_name
 from kedi.core.model_calls import _tool_request_context
 from kedi.telemetry import capture_enabled
+from kedi.debugging import checkpoint, execution_frame, execution_observed, observation_only
+from kedi.errors import KediExecutionError
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.conversation import ConversationState, ConversationTurnTicket
@@ -28,6 +30,33 @@ if TYPE_CHECKING:
 
 
 def _run_conversation_call(
+    self: KediRuntime,
+    adapter: Any,
+    prompt: PromptDraft,
+    call: Callable[[AgentRunRequest], Any],
+    **kwargs: Any,
+) -> Any:
+    """Model-lane safe points surround the entire conversation transaction."""
+    env = self._current_env.get()
+    if env is None:
+        env = {}
+    with execution_frame(self, "<model>", env):
+        if execution_observed():
+            checkpoint(self, "model_input", payload={"rendered_input": prompt.content})
+        try:
+            with observation_only():
+                result = _execute_conversation_call(self, adapter, prompt, call, **kwargs)
+        except KediExecutionError as exc:
+            # Nested tool failures were observed inside the transaction. Stop
+            # only after its lock and other request-owned resources are released.
+            checkpoint(self, "exception", payload=exc.original if exc.original is not None else exc)
+            raise
+        if execution_observed():
+            checkpoint(self, "model_result", payload={"result": result})
+        return result
+
+
+def _execute_conversation_call(
     self: KediRuntime,
     adapter: Any,
     prompt: PromptDraft,
@@ -111,6 +140,19 @@ def _run_conversation_call(
     ) -> Any:
         from kedi.run_budget import assert_run_budget_supported
 
+        if execution_observed():
+            checkpoint(
+                self,
+                "request",
+                safe=False,
+                payload={
+                    "prompt": request.prompt.content,
+                    "instructions": request.instruction_text,
+                    "model": configured_model,
+                    "tools": [tool.name for tool in tools],
+                },
+            )
+
         assert_run_budget_supported(
             adapter,
             opaque_tools=bool(profile.mcp_servers)
@@ -177,6 +219,19 @@ def _run_conversation_call(
                         reservation.observe(usage)
                         agent_telemetry.observe(usage)
                         model_telemetry.observe(usage)
+                        if execution_observed():
+                            checkpoint(
+                                self,
+                                "usage",
+                                safe=False,
+                                payload={
+                                    "requests": usage.requests,
+                                    "tool_calls": usage.tool_calls,
+                                    "input_tokens": usage.input_tokens,
+                                    "cache_read_tokens": usage.cache_read_tokens,
+                                    "output_tokens": usage.output_tokens,
+                                },
+                            )
 
                     with observe_invocations(observe):
                         result = call(request)

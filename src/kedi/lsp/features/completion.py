@@ -10,69 +10,77 @@ from kedi.lang.ast import (
     AwaitStmt,
     LoopStmt,
     OutputSegment,
+    ProcDefStmt,
     ProcedureDef,
+    PythonBlock,
+    RawInvokeStmt,
     TaskStmt,
+    TypeDefStmt,
     UseDirectiveStmt,
     VariableInitBlockStmt,
     VariableInitStmt,
 )
 from kedi.lang.compiler.environment import KEDI_RUNTIME_TYPE_ORIGINS, KEDI_TYPING_TYPE_NAMES
 from kedi.lang.parser import KediParseError, parse_program
+from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.coordinates import position_inside as _position_inside
-from kedi.lsp.coordinates import with_source_coordinates
-from kedi.lsp.features.python_regions import _position_in_python_hover_region
+from kedi.lsp.coordinates import utf16_length, utf16_to_index, with_source_coordinates
+from kedi.lsp.features.python_regions import compute_python_ranges
 from kedi.lsp.features.scope import (
     _all_procedures,
-    _all_type_defs,
+    _direct_type_defs,
     _iter_control_statements,
+    _nested_procedures,
+    _prelude_defined_names,
+    _procedure_scope_entries,
     _segments_of,
     _visible_control_statements,
 )
 from kedi.lsp.features.symbols import _merged_profile_defs
 from kedi.lsp.module_surface import imported_surface_for_program
 
-_DIRECTIVE_COMPLETIONS = (
-    "adapter",
-    "agent",
-    "await",
-    "approval",
-    "artifacts",
-    "auto",
-    "budget",
-    "case",
-    "codemode",
-    "data",
-    "effort",
-    "else",
-    "export",
-    "history",
-    "hooks",
-    "if",
-    "import",
-    "loop",
-    "map",
-    "max_agents",
-    "mcp",
-    "metric",
-    "model",
-    "optimize",
-    "output",
-    "package",
-    "profile",
-    "process",
-    "requires",
-    "show",
-    "settings",
-    "skills",
-    "subagent",
-    "system",
-    "task",
-    "task_group",
-    "test_data",
-    "tool",
-    "use",
-    "workflow",
-)
+_DIRECTIVE_COMPLETIONS = {
+    "adapter": "Select the model integration for this scope",
+    "agent": "Select an agent harness or remote agent",
+    "await": "Wait for a subagent task and bind its result",
+    "approval": "Control permission for tool execution",
+    "artifacts": "Keep large tool results outside model context",
+    "auto": "Generate a procedure implementation from its specification",
+    "budget": "Limit model requests and tool attempts",
+    "case": "Define an evaluation case",
+    "codemode": "Let the agent call tools through Python code",
+    "data": "Supply evaluation or optimization data",
+    "effort": "Set the model reasoning effort",
+    "else": "Run the alternative branch of a condition",
+    "export": "Expose module definitions to importers",
+    "history": "Configure conversation history and processing",
+    "hooks": "Attach callbacks to agent lifecycle events",
+    "if": "Run a block when a condition holds",
+    "import": "Import a Kedi module or package",
+    "loop": "Repeat a block over values or a condition",
+    "map": "Process each result of the preceding iterable loop",
+    "max_agents": "Limit concurrent subagent execution",
+    "mcp": "Connect tools from an MCP server",
+    "metric": "Define how evaluation results are scored",
+    "model": "Select the model for this lexical scope",
+    "optimize": "Optimize a prompt against evaluation data",
+    "output": "Declare the default structured result type of a subagent",
+    "package": "Declare package metadata and dependencies",
+    "profile": "Define a reusable agent configuration",
+    "process": "Run independent program branches concurrently",
+    "requires": "Require adapter capabilities before invocation",
+    "show": "Display a value without returning from the program",
+    "settings": "Set model and runtime options for this scope",
+    "skills": "Configure discovery of agent skill documents",
+    "subagent": "Make a child agent available for delegation",
+    "system": "Set the agent's system instructions",
+    "task": "Start a subagent task and bind its handle",
+    "task_group": "Group subagent tasks for structured execution",
+    "test_data": "Supply held-out evaluation data",
+    "tool": "Describe a procedure's tool metadata and retry policy",
+    "use": "Apply an agent profile or expose procedures as tools",
+    "workflow": "Select direct delegation or code-based subagent orchestration",
+}
 
 _TOOL_SETTING_FIELDS = ("description", "name", "retries", "retry_on", "risk")
 
@@ -99,12 +107,30 @@ def compute_completion(
     pos: lsp.Position,
 ) -> List[lsp.CompletionItem]:
     """Return syntax and in-scope symbol completions for Kedi source."""
-    if _position_in_python_hover_region(source, pos):
-        return []
+    for region in compute_python_ranges(source):
+        start, end = region["range"]["start"], region["range"]["end"]
+        if (
+            (start["line"], start["character"])
+            <= (pos.line, pos.character)
+            <= (end["line"], end["character"])
+        ):
+            return []
 
     line = source.splitlines()[pos.line] if pos.line < len(source.splitlines()) else ""
-    before_cursor = line[: pos.character]
-    if _inside_directive_block(source, pos, "history"):
+    before_cursor = line[: utf16_to_index(line, pos.character)]
+    # Delimiters are syntax, not completion prefixes. In particular, an empty
+    # directive value must not reopen the menu and consume the next Enter.
+    if before_cursor.rstrip().endswith("`") or before_cursor.lstrip().startswith("#"):
+        return []
+    if before_cursor.rstrip().endswith(":") and not re.search(r"\[[^\]]*$", before_cursor):
+        return []
+    field_prefix = re.fullmatch(r"\s*[A-Za-z_]*", before_cursor) is not None
+    if not field_prefix and any(
+        _inside_directive_block(source, pos, name)
+        for name in ("history", "codemode", "budget", "tool")
+    ):
+        return []
+    if field_prefix and _inside_directive_block(source, pos, "history"):
         return [
             lsp.CompletionItem(
                 label=name,
@@ -121,7 +147,7 @@ def compute_completion(
                 "compaction_threshold",
             )
         ]
-    if _inside_directive_block(source, pos, "codemode"):
+    if field_prefix and _inside_directive_block(source, pos, "codemode"):
         return [
             lsp.CompletionItem(
                 label=name,
@@ -132,7 +158,7 @@ def compute_completion(
             )
             for name in sorted(CODEMODE_SETTING_FIELDS)
         ]
-    if _inside_directive_block(source, pos, "budget"):
+    if field_prefix and _inside_directive_block(source, pos, "budget"):
         return [
             lsp.CompletionItem(
                 label=name,
@@ -143,7 +169,7 @@ def compute_completion(
             )
             for name in ("request_limit", "tool_attempt_limit")
         ]
-    if _inside_directive_block(source, pos, "tool"):
+    if field_prefix and _inside_directive_block(source, pos, "tool"):
         return [
             lsp.CompletionItem(
                 label=name,
@@ -154,29 +180,40 @@ def compute_completion(
             )
             for name in _TOOL_SETTING_FIELDS
         ]
-    if re.fullmatch(r"\s*>\s*task\s+\[\w+\]\s*:\s*\w*", before_cursor):
+    if re.fullmatch(r"\s*>\s*task\s+\[\w+\]\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=True)
-    if re.fullmatch(r"\s*>\s*await(?:\s+\[\w+\])?\s*:\s*\w*", before_cursor):
+    if re.fullmatch(r"\s*>\s*await(?:\s+\[\w+\])?\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=False)
-    if before_cursor.lstrip().startswith(">") and not before_cursor.lstrip().startswith("> show:"):
+    directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
+    if directive_prefix:
         in_procedure_header = _inside_direct_procedure_body(source, pos)
+        start = len(before_cursor) - len(before_cursor.lstrip())
+        suffix = re.match(r"[A-Za-z_]*", line[len(before_cursor) :])
+        end = len(before_cursor) + (suffix.end() if suffix else 0)
+        existing_colon = re.match(r"\s*:\s*", line[end:])
+        if existing_colon:
+            end += existing_colon.end()
+        edit_range = lsp.Range(
+            start=lsp.Position(line=pos.line, character=utf16_length(line[:start])),
+            end=lsp.Position(line=pos.line, character=utf16_length(line[:end])),
+        )
         return [
             lsp.CompletionItem(
                 label=name,
                 kind=lsp.CompletionItemKind.Keyword,
-                insert_text=(
-                    "task [job]: "
-                    if name == "task"
-                    else "await: "
-                    if name == "await"
-                    else f"{name}: "
+                text_edit=lsp.TextEdit(
+                    range=edit_range,
+                    new_text="> task [job]: " if name == "task" else f"> {name}: ",
                 ),
-                detail="Kedi directive",
+                detail=description,
+                filter_text=f"{directive_prefix[1]}{name}",
                 sort_text=f"0-{name}",
             )
-            for name in _DIRECTIVE_COMPLETIONS
+            for name, description in _DIRECTIVE_COMPLETIONS.items()
             if name != "tool" or in_procedure_header
         ]
+    if before_cursor.lstrip().startswith(">") and not re.search(r"[<\[][^>\]]*$", before_cursor):
+        return []
 
     items: dict[str, lsp.CompletionItem] = {}
 
@@ -203,30 +240,17 @@ def compute_completion(
         add(name, lsp.CompletionItemKind.Class, "Kedi type")
 
     try:
-        prog = parse_program(source, source_path=source_path)
+        prog = parse_completion_source(source, source_path, pos.line)
     except KediParseError:
         return list(items.values())
 
-    imported_surface = imported_surface_for_program(prog)
-    for typedef in [*_all_type_defs(prog, pos), *imported_surface.types.values()]:
-        add(typedef.name, lsp.CompletionItemKind.Class, "Kedi type")
-    for procedure in [*_all_procedures(prog, pos), *imported_surface.procedures.values()]:
-        parameters = ", ".join(procedure.params)
-        add(
-            procedure.name,
-            lsp.CompletionItemKind.Function,
-            f"Kedi procedure ({parameters})",
-            insert_text=procedure.name,
-        )
-    for name in _merged_profile_defs(prog, imported_surface):
-        add(name, lsp.CompletionItemKind.Struct, "agent profile")
-    for name in imported_surface.values:
-        add(name, lsp.CompletionItemKind.Variable, "imported value")
-
+    # The cursor follows the typed prefix; its final character can coincide
+    # with an end-exclusive scope span at EOF.
+    scope_pos = lsp.Position(line=pos.line, character=max(0, pos.character - 1))
     containing_procedures = [
         procedure
         for procedure in _all_procedures(prog)
-        if procedure.loc is not None and _position_inside(pos, procedure.loc)
+        if procedure.loc is not None and _position_inside(scope_pos, procedure.loc)
     ]
 
     def procedure_span_size(procedure: ProcedureDef) -> int:
@@ -238,14 +262,42 @@ def compute_completion(
         key=procedure_span_size,
         default=None,
     )
-    if current_procedure is not None:
-        for parameter in current_procedure.params:
+    parents = next(
+        (
+            ancestors
+            for proc, ancestors in _procedure_scope_entries(prog)
+            if proc is current_procedure
+        ),
+        (),
+    )
+    scopes = [*parents, *([current_procedure] if current_procedure is not None else [])]
+    imported_surface = imported_surface_for_program(prog)
+    types = [*prog.type_defs, *imported_surface.types.values()]
+    procedures = [*prog.procedures, *imported_surface.procedures.values()]
+    for scope in scopes:
+        types.extend(_direct_type_defs(scope, scope_pos))
+        procedures.extend(_nested_procedures(scope, scope_pos))
+        for parameter in scope.params:
             add(parameter, lsp.CompletionItemKind.Variable, "procedure parameter")
-        statements = current_procedure.body
-    else:
-        statements = prog.toplevel_body
+    for typedef in types:
+        add(typedef.name, lsp.CompletionItemKind.Class, "Kedi type")
+    for procedure in procedures:
+        parameters = ", ".join(procedure.params)
+        add(
+            procedure.name,
+            lsp.CompletionItemKind.Function,
+            f"Kedi procedure ({parameters})",
+            insert_text=procedure.name,
+        )
+    for name in _merged_profile_defs(prog, imported_surface):
+        add(name, lsp.CompletionItemKind.Struct, "agent profile")
+    for name in imported_surface.values:
+        add(name, lsp.CompletionItemKind.Variable, "imported value")
+    for name in sorted(_prelude_defined_names(prog.prelude)):
+        add(name, lsp.CompletionItemKind.Variable, "Python binding")
 
-    for statement in _visible_control_statements(statements, pos):
+    statements = [*prog.toplevel_body, *(stmt for scope in scopes for stmt in scope.body)]
+    for statement in _visible_control_statements(statements, scope_pos):
         loc = getattr(statement, "loc", None)
         if loc is not None and (loc.start_line - 1, loc.start_col - 1) > (
             pos.line,
@@ -254,6 +306,15 @@ def compute_completion(
             continue
         if isinstance(statement, (VariableInitStmt, VariableInitBlockStmt)):
             add(statement.name, lsp.CompletionItemKind.Variable, "Kedi value")
+        if isinstance(statement, RawInvokeStmt):
+            add(statement.name, lsp.CompletionItemKind.Variable, "model output")
+        if isinstance(statement, ProcDefStmt) and statement.proc is not None:
+            add(statement.proc.name, lsp.CompletionItemKind.Function, "Kedi procedure")
+        if isinstance(statement, TypeDefStmt) and statement.typedef is not None:
+            add(statement.typedef.name, lsp.CompletionItemKind.Class, "Kedi type")
+        if isinstance(statement, PythonBlock):
+            for name in sorted(_prelude_defined_names(statement.code)):
+                add(name, lsp.CompletionItemKind.Variable, "Python binding")
         if isinstance(statement, LoopStmt) and statement.binder:
             add(statement.binder, lsp.CompletionItemKind.Variable, "loop value")
         if isinstance(statement, TaskStmt):

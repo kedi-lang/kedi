@@ -239,6 +239,7 @@ def skill_tool_specs(
     root: Path | None = None,
     *,
     store: SkillStore | None = None,
+    stream_results: bool = True,
 ) -> tuple[ToolSpec, ToolSpec]:
     """Build the two read-only tool specs for one agent call scope."""
     active_store = store or (
@@ -248,8 +249,10 @@ def skill_tool_specs(
     def list_skills(*, all: bool = False, limit: int = 20) -> list[str]:
         return active_store.list_skills(all=all, limit=limit)
 
-    def read_skill(*, skill_name: str) -> ArtifactStream[str]:
-        return active_store.stream_skill(skill_name=skill_name)
+    def read_skill(*, skill_name: str) -> str | ArtifactStream[str]:
+        if stream_results:
+            return active_store.stream_skill(skill_name=skill_name)
+        return active_store.read_skill(skill_name=skill_name)
 
     metadata: dict[str, Any] = {"kedi_tool_kind": "skill"}
     return (
@@ -285,17 +288,28 @@ def skill_tool_specs(
     )
 
 
-def skill_instructions() -> str:
+def skill_instructions(*, store: SkillStore | None = None) -> str:
     """Return the compact system instruction accompanying the skill tools."""
+    names = store.list_skills(limit=MAX_SKILL_LIST_LIMIT) if store is not None else None
+    instructions: dict[str, Any] = {
+        "availability": "Skills are focused task instructions available on demand.",
+        "discovery": (
+            "The available names below are an inventory, not the skill instructions. "
+            "Read a relevant skill before answering a project-specific task it covers. "
+            "Use list_skills only to refresh discovery; no listing or reading is needed "
+            "for an unrelated task."
+            if names is not None
+            else "Use list_skills when a task may benefit from a reusable procedure."
+        ),
+        "reading": ("Use read_skill with a listed skill name before following that skill."),
+        "scope": (
+            "A skill applies only to the current task. Do not claim to have read one unless "
+            "read_skill returned its contents."
+        ),
+    }
+    if names is not None:
+        instructions["available_skills"] = names
     return format_as_xml(
-        {
-            "availability": "Skills are focused task instructions available on demand.",
-            "discovery": ("Use list_skills when a task may benefit from a reusable procedure."),
-            "reading": ("Use read_skill with a listed skill name before following that skill."),
-            "scope": (
-                "A skill applies only to the current task. Do not claim to have read one unless "
-                "read_skill returned its contents."
-            ),
-        },
+        instructions,
         root_tag="SKILL_INSTRUCTIONS",
     )

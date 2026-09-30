@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from kedi.lang.ast import Span
+from kedi.lsp.coordinates import utf16_length, utf16_to_index
 
 Position = dict[str, int]
 
@@ -101,7 +102,7 @@ class VirtualBuilder:
                 continue
             line_text = self.source_lines[source_line]
             start_char = src_start["character"] if source_line == start_line else 0
-            end_char = src_end["character"] if source_line == end_line else len(line_text)
+            end_char = src_end["character"] if source_line == end_line else utf16_length(line_text)
             if source_line == end_line and end_char == 0:
                 continue
             if dedent:
@@ -109,7 +110,9 @@ class VirtualBuilder:
             if end_char < start_char:
                 continue
 
-            body = line_text[start_char:end_char]
+            body = line_text[
+                utf16_to_index(line_text, start_char) : utf16_to_index(line_text, end_char)
+            ]
             if _has_python_substance(body):
                 emitted_substantive_line = True
             virtual_line = self.line

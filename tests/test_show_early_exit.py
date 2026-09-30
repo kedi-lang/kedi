@@ -52,6 +52,22 @@ def test_show_once_and_continue(capsys):
     assert capsys.readouterr().out == "The selected city is Ankara.\n1\ncity\n"
 
 
+@pytest.mark.parametrize("interactive", [False, True])
+def test_show_is_not_shadowed_by_a_print_procedure(interactive, capsys):
+    source = "@print():\n  = done\n> if: `True`:\n  > show: <print()>\n"
+    if interactive:
+        with kedi.interactive() as session:
+            session.execute(source)
+    else:
+        run(source)
+    assert capsys.readouterr().out == "done\n"
+
+
+def test_show_is_not_shadowed_by_a_python_print_binding(capsys):
+    run("```\nprint = 42\n```\n> show: ready\n")
+    assert capsys.readouterr().out == "ready\n"
+
+
 @pytest.mark.parametrize(
     "expression",
     [

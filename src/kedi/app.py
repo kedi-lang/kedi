@@ -23,6 +23,13 @@ from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
 
+_DEFAULT_ADAPTER_MODELS = {
+    "pydantic": "groq:qwen/qwen3-32b",
+    "langchain": "groq:qwen/qwen3-32b",
+    "dspy": "groq/qwen/qwen3-32b",
+}
+
+
 def _build_runtime_adapter(
     adapter: str,
     model: str | None,
@@ -30,14 +37,15 @@ def _build_runtime_adapter(
     acp_command: str | None = None,
 ) -> AgentAdapter[Any]:
     """Create the adapter instance used for eval/test/program execution."""
+    model = model or _DEFAULT_ADAPTER_MODELS.get(adapter)
     if adapter == "pydantic":
-        return PydanticAdapter(model=model or "groq:qwen/qwen3-32b")
+        return PydanticAdapter(model=model)
     if adapter == "dspy":
         from .agent_adapter.adapters import DSPyAdapter
 
-        return DSPyAdapter(model=model or "groq/qwen/qwen3-32b")
+        return DSPyAdapter(model=model or _DEFAULT_ADAPTER_MODELS["dspy"])
     if adapter == "langchain":
-        return LangChainAdapter(model=model or "groq:qwen/qwen3-32b")
+        return LangChainAdapter(model=model)
     if adapter == "acp":
         return ACPAdapter(model=model, command=acp_command)
     return build_adapter(adapter, model)
@@ -50,6 +58,7 @@ def _build_lazy_runtime_adapter(adapter: str, model: str | None) -> LazyAdapter:
         lambda: _build_runtime_adapter(adapter, model),
         kind=metadata.kind,
         shortname=metadata.shortname,
+        model=model or _DEFAULT_ADAPTER_MODELS.get(adapter),
         capabilities=adapter_capabilities(adapter),
     )
 

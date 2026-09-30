@@ -506,6 +506,7 @@ class SubagentCoordinator:
                 timeout_handle.cancel()
             if self._tasks.get(run_id) is None or self._tasks[run_id].task is not task:
                 return
+            self._cancel_requested.discard(run_id)
             discarded = self._prune_finished_locked()
         self._discard_runs(discarded)
 
@@ -523,6 +524,7 @@ class SubagentCoordinator:
                 break
             if candidate_id not in self._retained_native_runs and candidate.task.done():
                 self._tasks.pop(candidate_id)
+                self._cancel_requested.discard(candidate_id)
                 discarded.append(candidate_id)
         return discarded
 

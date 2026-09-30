@@ -351,7 +351,12 @@ def main(
     show_help: bool = False,
 ):
     if show_help:
-        if source == "a2a" and command_source is None:
+        if source == "debug" and command_source is None:
+            click.echo(
+                "Usage: kedi debug --stdio\n\n"
+                "Start the optional Kedi Debug Adapter Protocol backend for an editor."
+            )
+        elif source == "a2a" and command_source is None:
             from kedi.a2a.cli import run_a2a_cli
 
             model_source = ctx.get_parameter_source("adapter_model")
@@ -394,6 +399,21 @@ def main(
             raise click.ClickException(str(exc)) from exc
     if record_idle or load_session_path is not None or highlight_idle:
         raise click.UsageError("--record, --load, and --highlight require --idle.")
+    if source == "debug" and command_source is None:
+        if list(ctx.args) != ["--stdio"]:
+            raise click.UsageError("Usage: kedi debug --stdio (launch a program from your editor)")
+        try:
+            from importlib import import_module
+
+            debugger_main = import_module("kedi_debugger.__main__").main
+        except ModuleNotFoundError as exc:
+            if exc.name not in {"kedi_debugger", "kedi_debugger.__main__"}:
+                raise
+            raise click.ClickException(
+                "The selected Python needs kedi-debugger. For a source checkout, run "
+                "'python -m pip install -e /path/to/kedi/debugger' in this environment."
+            ) from exc
+        return debugger_main(["--stdio"])
     if source == "skills" and command_source is None:
         return _run_skills_command(list(ctx.args))
     if source == "a2a" and command_source is None:

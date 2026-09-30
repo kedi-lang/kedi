@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import CancelledError, Future
+from contextlib import nullcontext
 from typing import Any, Callable, NoReturn, Sequence
+
+from .debugging import waiting_for_capture
 
 __all__ = [
     "KediPromise",
@@ -69,7 +72,8 @@ class KediPromise:
         with self._lock:
             if self._resolved:  # pragma: no cover - double-checked locking (race-only)
                 return self._value
-            result = self._future.result()  # blocks; re-raises a failed Future's exception
+            with waiting_for_capture(self._key) if not self._future.done() else nullcontext():
+                result = self._future.result()  # blocks; re-raises a failed Future's exception
             value = result[self._key] if self._key is not None else result
             self._value = value
             self._resolved = True

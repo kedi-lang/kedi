@@ -328,6 +328,66 @@ class ConversationState:
                 "artifact_history": self.history.as_jsonable(),
             }
 
+    def export_checkpoint(self, adapter_shortname: str) -> dict[str, Any]:
+        """Export a completed native lane, excluding live transport and cleanup objects."""
+
+        with self._turn_condition:
+            self._ensure_open()
+            if self._active_ticket is not None:
+                raise RuntimeError("cannot checkpoint during an active conversation turn")
+            other_lanes = self._adapter_states.keys() - {adapter_shortname}
+            if other_lanes:
+                raise ValueError("A2A checkpoint cannot contain another adapter lane")
+            state = _checkpoint_lane_state(
+                adapter_shortname, self._adapter_states.get(adapter_shortname, {})
+            )
+            checkpoint = {
+                "session_id": self.session_id,
+                "cache_epoch": self._cache_epoch,
+                "turns": [asdict(turn) for turn in self._turns],
+                "lane_identity": self._adapter_lane_identities.get(
+                    adapter_shortname, adapter_shortname
+                ),
+                "state": state,
+            }
+            json.dumps(checkpoint, allow_nan=False)
+            return checkpoint
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        data: dict[str, Any],
+        *,
+        adapter_shortname: str,
+        artifacts: ArtifactManager,
+    ) -> ConversationState:
+        if not isinstance(data, dict) or data.get("session_id") != artifacts.session_id:
+            raise ValueError("conversation checkpoint session ID is invalid")
+        cache_epoch = data.get("cache_epoch")
+        lane_identity = data.get("lane_identity")
+        if type(cache_epoch) is not int or cache_epoch < 0:
+            raise ValueError("conversation checkpoint cache epoch is invalid")
+        if not isinstance(lane_identity, str) or not lane_identity:
+            raise ValueError("conversation checkpoint lane identity is invalid")
+        turns = data.get("turns")
+        if not isinstance(turns, list):
+            raise ValueError("conversation checkpoint turns must be a list")
+        parsed_turns = []
+        for value in turns:
+            if not isinstance(value, dict) or value.get("role") not in {"user", "assistant"}:
+                raise ValueError("conversation checkpoint turn is invalid")
+            if not isinstance(value.get("content"), str):
+                raise ValueError("conversation checkpoint turn content is invalid")
+            parsed_turns.append(ConversationTurn(role=value["role"], content=value["content"]))
+        state = _restore_lane_state(adapter_shortname, data.get("state"))
+        conversation = cls(artifacts=artifacts)
+        conversation._turns = parsed_turns
+        conversation._cache_epoch = cache_epoch
+        if state:
+            conversation._adapter_states[adapter_shortname] = state
+            conversation._adapter_lane_identities[adapter_shortname] = lane_identity
+        return conversation
+
     def close(self) -> None:
         with self._turn_condition:
             if self._closed:
@@ -484,3 +544,60 @@ def _run_cleanups(cleanups: Iterable[Callable[[], None]]) -> None:
         except Exception:
             # Native harness cleanup is best-effort and must not replace a completed model result.
             continue
+
+
+def _lineage_adapter() -> Any:
+    from pydantic import TypeAdapter
+
+    from kedi.agent_adapter.history_provenance import HistoryLineage
+    from kedi.lang.ast import Span
+
+    adapter = TypeAdapter(HistoryLineage)
+    adapter.rebuild(_types_namespace={"Span": Span})
+    return adapter
+
+
+def _checkpoint_lane_state(adapter_shortname: str, state: dict[str, Any]) -> dict[str, Any]:
+    native_key = {
+        "pydantic": "pydantic_messages",
+        "langchain": "langchain_messages",
+    }.get(adapter_shortname)
+    if native_key is None:
+        raise ValueError(f"A2A durable history does not support adapter {adapter_shortname!r}")
+    allowed = {native_key, "history_processor_origins", "history_processor_rewritten"}
+    if state.keys() - allowed:
+        raise ValueError("A2A native history has unsupported continuation fields")
+    result = dict(state)
+    if native_key in result:
+        if adapter_shortname == "pydantic":
+            from pydantic_ai.messages import ModelMessagesTypeAdapter
+
+            messages = ModelMessagesTypeAdapter.validate_python(result[native_key])
+            result[native_key] = ModelMessagesTypeAdapter.dump_python(messages, mode="json")
+        else:
+            from langchain_core.messages import message_to_dict, messages_from_dict
+
+            result[native_key] = [
+                message_to_dict(message) for message in messages_from_dict(result[native_key])
+            ]
+    if "history_processor_origins" in result:
+        result["history_processor_origins"] = _lineage_adapter().dump_python(
+            result["history_processor_origins"], mode="json"
+        )
+    if (
+        "history_processor_rewritten" in result
+        and type(result["history_processor_rewritten"]) is not bool
+    ):
+        raise ValueError("A2A native history rewrite marker is invalid")
+    return result
+
+
+def _restore_lane_state(adapter_shortname: str, state: Any) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        raise ValueError("A2A native history state must be an object")
+    result = _checkpoint_lane_state(adapter_shortname, state)
+    if "history_processor_origins" in result:
+        result["history_processor_origins"] = _lineage_adapter().validate_python(
+            result["history_processor_origins"]
+        )
+    return result

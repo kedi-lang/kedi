@@ -187,6 +187,9 @@ class ProgramCompiler:
         self.rt._program = prog
         self.rt._source_map = prog.source_map
         self.rt._source_text = prog.source_text
+        from kedi.debugging import checkpoint
+
+        checkpoint(self.rt, "source_loaded", safe=False)
         current_path = self._program_path(prog)
         if prog.package is not None and (
             current_path is None or current_path.name != "package.kedi"
@@ -242,7 +245,7 @@ class ProgramCompiler:
     def new_top_level_state(self) -> _TopLevelExecutionState:
         """Create mutable directive state for one top-level execution stream."""
         active = self.rt.default_agent_profile
-        return _TopLevelExecutionState(active, active.adapter_kind)
+        return _TopLevelExecutionState(active)
 
     def initialize_fragments(self) -> dict[str, Any]:
         """Initialize persistent state for a new incremental execution stream."""
@@ -344,7 +347,10 @@ class ProgramCompiler:
         *,
         import_source_path: Path | None = None,
     ) -> None:
+        from kedi.debugging import checkpoint
+
         for module_import in prog.imports:
+            checkpoint(self.rt, "statement", span=module_import.loc)
             with self.rt.trace_frame(
                 KediTraceFrame(
                     kind="module_import",
@@ -544,6 +550,9 @@ class ProgramCompiler:
         incremental: bool = False,
     ) -> None:
         """Execute prelude and store environment."""
+        from kedi.debugging import checkpoint
+
+        checkpoint(self.rt, "statement", span=prelude_loc)
         with self.rt.trace_frame(KediTraceFrame(kind="prelude", label="prelude", span=prelude_loc)):
             executor = self.rt.executor
             if not incremental:
@@ -580,8 +589,13 @@ class ProgramCompiler:
         env: dict[str, Any],
         state: _TopLevelExecutionState,
     ) -> Any:
-        with self.rt.trace_frame(
-            KediTraceFrame(kind="program", label="top-level program", span=None)
+        from kedi.debugging import execution_frame
+
+        with (
+            self.rt.trace_frame(
+                KediTraceFrame(kind="program", label="top-level program", span=None)
+            ),
+            execution_frame(self.rt, "<program>", env),
         ):
             block_result = self._execute_top_level_sequence(
                 prepared,

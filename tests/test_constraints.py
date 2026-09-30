@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import re
 from decimal import Decimal
 from typing import Annotated, Any
@@ -123,3 +124,84 @@ Score = Annotated[float, Constraints(ge=0, le=2)]
 """
     with pytest.raises(RuntimeError, match="ValidationError"):
         run_without_llm(source)
+
+
+@pytest.mark.parametrize("description", ["", '"Confidence of score", '])
+def test_native_annotated_accepts_computed_constraint_metadata(description: str) -> None:
+    source = f"""```
+from kedi import Constraints
+```
+~Probability(
+  score: float,
+  confidence: Annotated[float, {description}`Constraints(ge=0, le=1)`]
+)
+[value: Probability] = `Probability(0.5, 0.9)`
+= `value.model_dump(), Probability.model_json_schema()`
+"""
+    value, schema = run_without_llm(source)
+    assert value == {"score": 0.5, "confidence": 0.9}
+    assert schema["properties"]["confidence"]["minimum"] == 0
+    assert schema["properties"]["confidence"]["maximum"] == 1
+    with pytest.raises(RuntimeError, match="ValidationError"):
+        run_without_llm(source.replace("Probability(0.5, 0.9)", "Probability(0.5, 1.1)"))
+
+
+@pytest.mark.parametrize(
+    "annotation,valid,invalid",
+    [
+        ('list[Annotated[float, "Score", `Constraints(ge=0, le=1)`]]', "[0.5]", "[2.0]"),
+        (
+            'dict[str, Annotated[float, "Score", `Constraints(ge=0, le=1)`]]',
+            "{'x': 0.5}",
+            "{'x': 2.0}",
+        ),
+        ('Optional[Annotated[float, "Score", `Constraints(ge=0, le=1)`]]', "None", "2.0"),
+        ('Annotated[float, "Score", `Constraints(ge=0, le=1)`] | None', "0.5", "2.0"),
+    ],
+)
+def test_computed_constraint_metadata_in_nested_native_types(annotation, valid, invalid):
+    source = "```\nfrom kedi import Constraints\n```\n" + f"~Box(value: {annotation})\n"
+    assert run_without_llm(source + f"= `Box({valid}).value`\n") == ast.literal_eval(valid)
+    with pytest.raises(RuntimeError, match="ValidationError"):
+        run_without_llm(source + f"= `Box({invalid}).value`\n")
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["`Constraints(ge=0)`", "list[`Constraints(ge=0)`]", 'Annotated[`Constraints(ge=0)`, "Score"]'],
+)
+def test_computed_metadata_is_still_rejected_in_type_positions(annotation):
+    source = "```\nfrom kedi import Constraints\n```\n" + f"~Box(value: {annotation})\n"
+    with pytest.raises(TypeError, match="does not evaluate to a valid type"):
+        run_without_llm(source)
+
+
+def test_native_constraints_need_explicit_python_and_import():
+    from kedi.lang.parser import KediParseError, parse_program
+
+    with pytest.raises(KediParseError):
+        parse_program('~Box(value: Annotated[float, "Score", Constraints(ge=0)])\n')
+    with pytest.raises(TypeError, match="Constraints.*not defined"):
+        run_without_llm('~Box(value: Annotated[float, "Score", `Constraints(ge=0)`])\n')
+
+
+def test_native_capture_sends_computed_constraints_to_the_model():
+    from pydantic_ai.models.test import TestModel
+
+    from kedi.agent_adapter.adapters import PydanticAdapter
+    from kedi.lang import compile_program, parse_program
+
+    model = TestModel(call_tools=[], custom_output_args={"confidence": 0.9})
+    source = (
+        "```\nfrom kedi import Constraints\n```\n"
+        '>> The confidence is [confidence: Annotated[float, "Decision confidence", '
+        "`Constraints(ge=0, le=1)`]].\n"
+        "= `confidence`\n"
+    )
+    assert compile_program(parse_program(source), adapter=PydanticAdapter(model)).run_main() == 0.9
+    assert model.last_model_request_parameters is not None
+    tool = model.last_model_request_parameters.output_tools[0]
+    field = tool.parameters_json_schema["properties"]["confidence"]
+    assert field["description"] == "Decision confidence"
+    assert field["minimum"] == 0
+    assert field["maximum"] == 1

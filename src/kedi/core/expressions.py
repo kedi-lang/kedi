@@ -281,6 +281,9 @@ def _invoke_procedure(self: KediRuntime, fn: Callable[..., Any], args: Sequence[
                         self._request_budget.reset(request_budget_token)
                     if invocation_token is not None:
                         self._invocation_id.reset(invocation_token)
+                from kedi.debugging import checkpoint
+
+                checkpoint(self, "execution_complete", env=self._globals_env, safe=False)
                 if primary_exc is None and cleanup_error is not None:
                     active.set_attribute("error.type", type(cleanup_error).__name__)
                     raise cleanup_error

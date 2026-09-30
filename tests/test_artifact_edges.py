@@ -1027,6 +1027,40 @@ def test_manager_find_handles_absent_and_duplicate_overlap_matches(
         manager.close()
 
 
+@pytest.mark.parametrize("pattern", ["z", "xyz"])
+@pytest.mark.parametrize("store_kind", ["memory", "file"])
+def test_find_retains_only_pattern_boundary_between_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str, store_kind: str
+) -> None:
+    manager = ArtifactManager(session_id="bounded-find")
+    artifact = manager.artifactize(
+        "a" * 8192 + "xyz", policy=policy(store=store_kind, path=tmp_path, read_max_chars=64)
+    )
+    assert isinstance(artifact, ArtifactHandle)
+    overlaps: list[int] = []
+
+    class ObservedPage(str):
+        def __radd__(self, previous: str) -> str:
+            overlaps.append(len(previous))
+            return previous + str(self)
+
+    store = manager._ref_stores[artifact.ref.ref_id]
+    read_projection = store.read_projection
+
+    def observed_page(*args: Any, **kwargs: Any) -> tuple[str, int | None, bool]:
+        text, next_offset, complete = read_projection(*args, **kwargs)
+        return ObservedPage(text), next_offset, complete
+
+    try:
+        monkeypatch.setattr(store, "read_projection", observed_page)
+        matches = manager.find(artifact.ref.ref_id, pattern)
+        assert [match["offset"] for match in matches] == [8195 - len(pattern)]
+        assert len(overlaps) > 100
+        assert max(overlaps) <= len(pattern) - 1
+    finally:
+        manager.close()
+
+
 def test_file_store_reads_missing_char_count_and_binary_projection(tmp_path: Path) -> None:
     text_store = FileArtifactStore(tmp_path / "text")
     text_record = _record()

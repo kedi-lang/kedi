@@ -294,6 +294,101 @@ def test_query_runs_through_langchain_tool_boundary(stored):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("adapter", ["pydantic", "langchain"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"ref_id": "ref"},
+        {"query": "needle"},
+        {"ref_id": "ref", "query": "needle", "extra": True},
+    ],
+)
+def test_query_signature_errors_are_model_correctable(stored, adapter, arguments):
+    from pydantic_ai import ModelRetry
+    from langchain_core.tools import ToolException
+    from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
+    from kedi.agent_adapter.adapters.langchain.tools import _langchain_sync_tool_function
+
+    manager, _ = stored
+    spec = next(
+        t for t in artifact_tool_specs(manager, query_artifact=True) if t.name == "query_artifact"
+    )
+    function = (
+        _validated_tool_function(spec)
+        if adapter == "pydantic"
+        else _langchain_sync_tool_function(spec)
+    )
+    error = ModelRetry if adapter == "pydantic" else ToolException
+    with pytest.raises(error, match="Artifact request rejected"):
+        function(**arguments)
+    assert not manager.history.snapshot()
+
+
+def test_pydantic_model_can_repair_missing_query_arguments():
+    from pydantic_ai.messages import RetryPromptPart
+
+    turns = []
+
+    def respond(messages, info):
+        turns.append(messages)
+        if len(turns) == 1:
+            return ModelResponse(parts=[ToolCallPart("query_artifact", {}, tool_call_id="bad")])
+        if len(turns) == 2:
+            assert any(
+                isinstance(p, RetryPromptPart)
+                for m in messages
+                if isinstance(m, ModelRequest)
+                for p in m.parts
+            )
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "query_artifact",
+                        {"ref_id": ref_id, "query": "invoice approval"},
+                        tool_call_id="good",
+                    )
+                ]
+            )
+        assert any(
+            isinstance(p, ToolReturnPart) and "manager approval" in str(p.content)
+            for m in messages
+            if isinstance(m, ModelRequest)
+            for p in m.parts
+        )
+        return ModelResponse(parts=[TextPart("manager")])
+
+    adapter = PydanticAdapter(FunctionModel(respond), query_artifact=True)
+    runtime = KediRuntime(adapter=adapter)
+    manager = runtime.artifacts
+    ref_id = manager.artifactize(
+        "The invoice requires manager approval.", policy=ArtifactPolicy(threshold_bytes=1)
+    ).ref.ref_id
+    try:
+        with runtime.bind_agent(profile=AgentProfile.empty()) as surface:
+            with surface.run_scope():
+                assert adapter.invoke_sync(prompt="Find the invoice approval rule") == "manager"
+        assert len(turns) == 3
+    finally:
+        manager.close()
+
+
+def test_query_validation_does_not_hide_tool_implementation_errors(stored, monkeypatch):
+    from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
+
+    manager, _ = stored
+    spec = next(
+        t for t in artifact_tool_specs(manager, query_artifact=True) if t.name == "query_artifact"
+    )
+
+    def broken(*args, **kwargs):
+        raise TypeError("internal implementation defect")
+
+    monkeypatch.setattr(manager, "query", broken)
+    with pytest.raises(TypeError, match="internal implementation defect"):
+        _validated_tool_function(spec)(ref_id="ref", query="needle")
+
+
 def test_real_kedi_program_retrieves_answer_outside_preview():
     calls = []
 

@@ -31,15 +31,14 @@ def _requirement_is_exact(requirement: str) -> bool:
 def _check_python_metadata(errors: list[str]) -> None:
     project_paths = (
         Path("pyproject.toml"),
+        Path("debugger/pyproject.toml"),
         Path("notebook/pyproject.toml"),
         Path("kedi-otel/pyproject.toml"),
-        Path("playground/pyproject.toml"),
         Path("tree-sitter-kedi/pyproject.toml"),
     )
     exact_dev_paths = {
         Path("pyproject.toml"),
         Path("notebook/pyproject.toml"),
-        Path("playground/pyproject.toml"),
     }
 
     for relative_path in project_paths:
@@ -92,7 +91,6 @@ def _check_actions(errors: list[str]) -> None:
     workflow_roots = (
         ROOT / ".github/workflows",
         ROOT / "kedi-docs/.github/workflows",
-        ROOT / "playground/.github/workflows",
         ROOT / "tree-sitter-kedi/.github/workflows",
     )
     for workflow_root in workflow_roots:
@@ -111,7 +109,6 @@ def _check_lockfiles(errors: list[str]) -> None:
         Path("uv.lock"),
         Path("notebook/uv.lock"),
         Path("kedi-otel/uv.lock"),
-        Path("playground/uv.lock"),
         Path("tree-sitter-kedi/uv.lock"),
         Path("kedi-vscode/package-lock.json"),
         Path("tree-sitter-kedi/package-lock.json"),
@@ -123,14 +120,6 @@ def _check_lockfiles(errors: list[str]) -> None:
 
     if (ROOT / "requirements.txt").exists():
         errors.append("requirements.txt duplicates pyproject.toml and must not be restored")
-
-    playground = _load_toml(ROOT / "playground/pyproject.toml")
-    kedi_source = playground.get("tool", {}).get("uv", {}).get("sources", {}).get("kedi", {})
-    revision = kedi_source.get("rev")
-    if not isinstance(revision, str) or not EXACT_ACTION_REF.fullmatch(revision):
-        errors.append("playground: Kedi source must use an exact 40-character git revision")
-    if "branch" in kedi_source or "tag" in kedi_source:
-        errors.append("playground: Kedi source cannot use a moving branch or tag")
 
 
 def _check_pyodide_assets(errors: list[str]) -> None:

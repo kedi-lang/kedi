@@ -352,17 +352,12 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Call
     registry = effective_profile_registry(rt)
     env = build_capture_env(rt)
     active = rt.default_agent_profile
-    adapter_selection_kind: str | None = None
     defined_procedures: set[str] = set(rt._procedures.keys())
 
     for item in prog.ordered_toplevel:
         if isinstance(item, AgentDirectiveStmt):
-            _assert_adapter_selection_not_mixed(adapter_selection_kind, "agent")
-            adapter_selection_kind = "agent"
             active = active.merge(eval_agent_directive(rt, item, env))
         elif isinstance(item, AdapterDirectiveStmt):
-            _assert_adapter_selection_not_mixed(adapter_selection_kind, "adapter")
-            adapter_selection_kind = "adapter"
             active = active.merge(eval_adapter_directive(rt, item, env))
         elif isinstance(item, ModelDirectiveStmt):
             active = active.merge(eval_model_directive(rt, item, env))
@@ -407,10 +402,3 @@ def capture_procedure_profiles(rt: KediRuntime, prog: Program) -> dict[int, Call
                 env[item.name] = reference(item)
 
     return bindings
-
-
-def _assert_adapter_selection_not_mixed(current: str | None, incoming: str) -> None:
-    if current is not None and current != incoming:
-        from ..errors import KediExecutionError
-
-        raise KediExecutionError("Cannot mix '> agent:' and '> adapter:' in the same scope")

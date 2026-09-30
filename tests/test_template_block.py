@@ -9,6 +9,7 @@ import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 import kedi.lsp.features.symbols as lsp_symbols_module
 import kedi.lsp.python_virtual.scope as virtual_scope_module
 from kedi.artifacts import artifact_instructions
+from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
 from kedi.core.expressions import o
 from kedi.core.runtime import KediRuntime
 from kedi.engine import ThreadEngine
@@ -259,7 +260,9 @@ def test_raw_invoke_uses_profile_tools_system_and_parallel_engine() -> None:
 
     assert rt.run_main() == "response:Hello"
     assert adapter.model_calls == ["raw-model"]
-    assert adapter.instruction_calls == [f"Keep it short.\n\n{artifact_instructions()}"]
+    assert adapter.instruction_calls == [
+        f"Keep it short.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
+    ]
     assert adapter.tool_calls == [
         (
             "lookup",

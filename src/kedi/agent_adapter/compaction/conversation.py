@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from kedi.agent_adapter.conversation import ConversationState
-from kedi.artifacts import ArtifactHistoryEvent
 
 from .codecs import AdapterHistoryCodec
 from .kedi_backend import KediCompactionTransaction, PreparedCompaction
@@ -49,7 +48,7 @@ class ConversationCompactionTransaction:
     ) -> PreparedConversationCompaction:
         lane = conversation.adapter_state_snapshot(self.codec.adapter_shortname)
         snapshot = self.transaction.processor.inspect(lane.state, codec=self.codec)
-        live_refs, known_refs = _artifact_lifecycle(conversation.history.snapshot())
+        live_refs, known_refs = conversation.artifacts.lifecycle_snapshot()
         referenced = {ref_id for entry in snapshot.entries for ref_id in entry.artifact_refs}
         effective_policy = replace(
             policy,
@@ -97,20 +96,3 @@ class ConversationCompactionTransaction:
             lane.result_state.update(result.processed.state)
             lane.cache_prefix_changed = True
         return result
-
-
-def _artifact_lifecycle(
-    events: tuple[ArtifactHistoryEvent, ...],
-) -> tuple[frozenset[str], frozenset[str]]:
-    statuses: dict[str, str] = {}
-    for event in events:
-        if event.ref_id is None:
-            continue
-        if event.kind == "artifact_created":
-            statuses[event.ref_id] = "active"
-        elif event.kind in {"artifact_released", "artifact_expired"}:
-            statuses[event.ref_id] = event.kind
-    return (
-        frozenset(ref_id for ref_id, status in statuses.items() if status == "active"),
-        frozenset(statuses),
-    )

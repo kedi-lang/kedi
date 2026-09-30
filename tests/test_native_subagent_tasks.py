@@ -996,8 +996,13 @@ def test_lsp_tracks_task_handle_without_leaking_capture_into_parent_scope() -> N
 def test_native_task_completions_and_non_child_diagnostic() -> None:
     path = "/tmp/native-completion.kedi"
     directives = compute_completion("> ta", path, position_of("> ta", "ta", offset=2))
-    assert next(item for item in directives if item.label == "task").insert_text == "task [job]: "
-    assert next(item for item in directives if item.label == "await").insert_text == "await: "
+    assert (
+        next(item for item in directives if item.label == "task").text_edit.new_text
+        == "> task [job]: "
+    )
+    assert (
+        next(item for item in directives if item.label == "await").text_edit.new_text == "> await: "
+    )
 
     partial_task = PROFILES + "> task [job]: wo"
     child_items = compute_completion(

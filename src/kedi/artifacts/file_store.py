@@ -219,6 +219,20 @@ class FileArtifactStore:
             self._projection_index_path(session_id, ref_id).unlink(missing_ok=True)
             self._projection_indexes.pop((session_id, ref_id), None)
 
+    def prune_inactive_payload(self, session_id: str, ref_id: str) -> None:
+        with self._lock:
+            self._restore_session(session_id)
+            record = _owned_record(self._records, session_id, ref_id)
+            if record.status not in {ArtifactStatus.RELEASED, ArtifactStatus.EXPIRED}:
+                raise ValueError("cannot prune an active artifact payload")
+            if record.active_readers:
+                raise ValueError("cannot prune an artifact with active readers")
+            payload_path = self._payload_path(session_id, ref_id)
+            if payload_path.stat().st_size:
+                _atomic_write(payload_path, b"", mode=0o600)
+            self._projection_index_path(session_id, ref_id).unlink(missing_ok=True)
+            self._projection_indexes.pop((session_id, ref_id), None)
+
     def discard(self, session_id: str, ref_id: str) -> None:
         with self._lock:
             self._restore_session(session_id)

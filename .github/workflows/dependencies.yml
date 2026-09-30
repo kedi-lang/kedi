@@ -33,7 +33,6 @@ jobs:
           uv lock --check
           uv lock --check --project notebook
           uv lock --check --project kedi-otel
-          uv lock --check --project playground
           uv lock --check --project tree-sitter-kedi
 
       - name: Check JavaScript locks

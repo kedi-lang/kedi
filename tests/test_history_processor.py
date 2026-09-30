@@ -1069,10 +1069,20 @@ def test_conversation_artifact_lifecycle_protects_only_live_references(
     expected_reason: str | None,
 ) -> None:
     history = _pydantic_history()
-    conversation = ConversationState(session_id=f"artifact-{terminal_event}")
-    conversation.history.append("artifact_created", ref_id="tool_call_result_1")
-    if terminal_event is not None:
-        conversation.history.append(terminal_event, ref_id="tool_call_result_1")
+    from kedi.artifacts import ArtifactHistory, ArtifactManager, ArtifactPolicy
+
+    now = 0.0
+    manager = ArtifactManager(history=ArtifactHistory(max_events=1), monotonic=lambda: now)
+    conversation = ConversationState(artifacts=manager)
+    handle = manager.artifactize(
+        "evidence", source="tool:evidence", policy=ArtifactPolicy(threshold_bytes=1, ttl_seconds=10)
+    )
+    assert handle.ref.ref_id == "tool_call_result_1"
+    if terminal_event == "artifact_released":
+        manager.release(handle.ref.ref_id)
+    elif terminal_event == "artifact_expired":
+        now = 11.0
+    conversation.history.append("tool_call")
     _seed_conversation(
         conversation,
         adapter_shortname="pydantic",
@@ -1089,7 +1099,9 @@ def test_conversation_artifact_lifecycle_protects_only_live_references(
 
     assert "tool_call_result_1" in artifact_group.artifact_refs
     assert (expected_reason in artifact_group.protected_reasons) is (expected_reason is not None)
+    assert "missing-artifact" not in artifact_group.protected_reasons
     conversation.close()
+    manager.close()
 
 
 def test_missing_artifact_reference_is_protected_conservatively() -> None:
@@ -1114,10 +1126,14 @@ def test_missing_artifact_reference_is_protected_conservatively() -> None:
 
 
 def test_non_lifecycle_artifact_events_do_not_change_reference_status() -> None:
+    from kedi.artifacts import ArtifactPolicy
+
     history = _pydantic_history()
     conversation = ConversationState(session_id="artifact-non-lifecycle-events")
     conversation.history.append("tool_call")
-    conversation.history.append("artifact_created", ref_id="tool_call_result_1")
+    conversation.artifacts.artifactize(
+        "evidence", source="tool:evidence", policy=ArtifactPolicy(threshold_bytes=1)
+    )
     conversation.history.append("artifact_read", ref_id="tool_call_result_1")
     _seed_conversation(
         conversation,

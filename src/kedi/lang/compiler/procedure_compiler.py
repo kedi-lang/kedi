@@ -8,6 +8,7 @@ from typing import Any, Callable
 from ...agent_adapter.tools.retry import ToolRetryPolicy, resolve_retry_on
 from ...core import KediRuntime
 from ...errors import KediTypeExecutionError
+from ...debugging import execution_frame
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import BindingMetadata, ScopeFrame, build_python_env
@@ -44,7 +45,8 @@ class ProcedureCompiler:
             token = self.rt._current_env.set(closure_env)
             try:
                 # Execute body (nested procedures handled dynamically during execution)
-                last_return = self.executor.execute(proc, closure_env)
+                with execution_frame(self.rt, proc.name, closure_env, proc.loc):
+                    last_return = self.executor.execute(proc, closure_env)
 
                 observer = self.rt._procedure_env_observer.get()
                 if observer is not None:

@@ -20,6 +20,15 @@ def test_server_can_be_constructed():
     assert server.version == kedi.__version__
 
 
+def test_completion_does_not_auto_trigger_on_colons_or_backticks():
+    from kedi.lsp.server import make_server
+
+    server = make_server()
+    options = server.protocol.fm.feature_options[lsp.TEXT_DOCUMENT_COMPLETION]
+    assert isinstance(options, lsp.CompletionOptions)
+    assert options.trigger_characters == [">", "<", "["]
+
+
 def test_server_parses_codemode_preload_warning_threshold() -> None:
     from kedi.lsp.server import _codemode_preload_warning_threshold
 

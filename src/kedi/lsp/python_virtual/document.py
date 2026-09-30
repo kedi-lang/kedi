@@ -15,10 +15,12 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
 from kedi.lang.ast import ProgramWithValidation
-from kedi.lang.parser import KediParseError, parse_program
+from kedi.lang.parser import KediParseError
+from kedi.lsp.completion_source import parse_completion_source
 from kedi.lsp.features import compute_header_python_ranges, compute_python_ranges
 from kedi.lsp.module_surface import imported_surface_for_program
 from kedi.lsp.python_virtual.builder import PythonRegion, RegionCursor, ScopeName, VirtualBuilder
+from kedi.lsp.python_virtual.completion import map_python_completions
 from kedi.lsp.python_virtual.scope import (
     _all_procedures,
     _collect_toplevel_scope,
@@ -55,7 +57,7 @@ def compute_python_virtual_document(
 ) -> dict[str, Any]:
     """Return a virtual Python document plus Kedi/Python source maps."""
     try:
-        program = parse_program(source, source_path=source_path)
+        program = parse_completion_source(source, source_path, focus_line)
     except KediParseError:
         ranges = compute_python_ranges(source)
         return _fallback_virtual_document(source, ranges)
@@ -216,11 +218,14 @@ def main_loop() -> None:
             text = payload.get("text", "")
             source_path = payload.get("sourcePath") or _path_from_uri(payload.get("uri"))
             focus_line = payload.get("focusLine")
-            result = compute_python_virtual_document(
-                text,
-                source_path,
-                focus_line=focus_line,
-            )
+            if payload.get("method") == "completion":
+                result = map_python_completions(text, payload["virtual"], payload["items"])
+            else:
+                result = compute_python_virtual_document(
+                    text,
+                    source_path,
+                    focus_line=focus_line,
+                )
             print(
                 json.dumps({"id": request_id, "ok": True, "result": result}),
                 flush=True,

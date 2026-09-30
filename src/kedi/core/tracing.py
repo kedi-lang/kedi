@@ -9,6 +9,7 @@ from typing import (
 
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.errors import build_execution_error as _build_execution_error
+from kedi.debugging import checkpoint
 
 if TYPE_CHECKING:
     from kedi.core.runtime import KediRuntime
@@ -36,6 +37,7 @@ def current_trace_frames(self: KediRuntime) -> tuple[KediTraceFrame, ...]:
 
 
 def build_execution_error(self: KediRuntime, exc: BaseException) -> KediExecutionError:
+    checkpoint(self, "exception", payload=exc)
     return _build_execution_error(
         exc,
         frames=self.current_trace_frames(),

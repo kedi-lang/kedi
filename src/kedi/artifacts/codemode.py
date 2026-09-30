@@ -19,6 +19,11 @@ if TYPE_CHECKING:
 
 OffsetFrom = Literal["start", "end"]
 
+ARTIFACT_COMPUTE_GUIDANCE = (
+    "Use direct expressions, loops, or comprehensions over artifact helpers, not eval or exec. "
+    "The final expression is the result; host filesystem and network access are unavailable."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class ArtifactCodeLimits:
@@ -286,12 +291,14 @@ class _ArtifactHostBridge:
             raise ArtifactCodeBudgetError("artifact code cumulative read budget exceeded")
 
 
-def artifact_code_provenance(code: str, source_refs: tuple[str, ...]) -> dict[str, Any]:
+def artifact_code_provenance(
+    code: str, source_refs: tuple[str, ...], *, derivation_depth: int = 1
+) -> dict[str, Any]:
     return {
         "operation": "run_artifact_code",
         "source_refs": list(source_refs),
         "code_digest": hashlib.sha256(code.encode("utf-8")).hexdigest(),
-        "derivation_depth": 1,
+        "derivation_depth": derivation_depth,
     }
 
 
@@ -355,7 +362,10 @@ def _json_bytes(value: Any) -> Any:
 def _compact_monty_error(exc: Exception) -> str:
     message = str(exc).strip() or type(exc).__name__
     first_line = message.splitlines()[0]
-    return f"artifact code failed: {first_line[:500]}"
+    diagnostic = f"artifact code failed: {first_line[:500]}"
+    if any(first_line == f"NameError: name '{name}' is not defined" for name in ("eval", "exec")):
+        diagnostic += f". {ARTIFACT_COMPUTE_GUIDANCE}"
+    return diagnostic
 
 
 _default_runtime = ArtifactCodeRuntime()

@@ -84,7 +84,8 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
         from kedi.agent_adapter.tools.execution import with_approval
 
         skill_specs = skill_tool_specs(
-            store=resolve_skill_store(skills, base_dir=self._skill_base_dir())
+            store=resolve_skill_store(skills, base_dir=self._skill_base_dir()),
+            stream_results=profile.artifacts is not None,
         )
         if not self._adapter_uses_native_approvals(adapter):
             skill_specs = tuple(
@@ -228,14 +229,30 @@ def _agent_instruction_parts(self: KediRuntime, profile: Any, adapter: Any) -> t
             )
         )
     skills = self._skills_settings(profile)
+    if (
+        getattr(profile, "tools", ())
+        or getattr(profile, "mcp", ())
+        or (skills is not None and skills.enabled)
+    ):
+        from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
+
+        parts.append(
+            InstructionPart(
+                identity="grounding.instructions",
+                source="runtime",
+                content=GROUNDING_INSTRUCTION,
+            )
+        )
     if skills is not None and skills.enabled:
-        from kedi.agent_adapter.skills import skill_instructions
+        from kedi.agent_adapter.skills import resolve_skill_store, skill_instructions
 
         parts.append(
             InstructionPart(
                 identity="skills.instructions",
                 source="skills",
-                content=skill_instructions(),
+                content=skill_instructions(
+                    store=resolve_skill_store(skills, base_dir=self._skill_base_dir())
+                ),
             )
         )
     if self._artifact_contract_needed(

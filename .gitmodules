@@ -7,9 +7,6 @@
 [submodule "tree-sitter-kedi"]
 	path = tree-sitter-kedi
 	url = https://github.com/kedi-lang/tree-sitter-kedi
-[submodule "playground"]
-	path = playground
-	url = https://github.com/kedi-lang/playground
 [submodule "kedi-otel"]
 	path = kedi-otel
 	url = https://github.com/kedi-lang/kedi-otel.git
@@ -19,3 +16,6 @@
 [submodule "notebook"]
 	path = notebook
 	url = https://github.com/kedi-lang/notebook.git
+[submodule "debugger"]
+	path = debugger
+	url = https://github.com/kedi-lang/kedi-debugger.git

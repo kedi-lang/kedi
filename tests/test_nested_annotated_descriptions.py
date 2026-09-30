@@ -128,6 +128,33 @@ def test_nested_constraint_without_description_is_preserved() -> None:
         model(scores=[-1])
 
 
+@pytest.mark.parametrize(
+    "base,metadata,kind",
+    [
+        ("float", 'Rubric(["Poor", "Good"])', "score"),
+        ("bool", 'BooleanCriteria(true="Supported", false="Unsupported")', "noul"),
+        (
+            '`Literal["keep", "drop"]`',
+            'ChoiceCriteria({"keep": "Retain", "drop": "Discard"})',
+            "choice",
+        ),
+    ],
+)
+def test_native_computed_jev_metadata_reaches_output_schema(base, metadata, kind):
+    source = (
+        "```\nfrom typing import Literal\n"
+        "from kedi.typesafe import Rubric, BooleanCriteria, ChoiceCriteria\n```\n"
+        f'~Review(value: Annotated[{base}, "Review decision", `{metadata}`])\n'
+        "= `Review.model_json_schema()`\n"
+    )
+    schema = run_without_llm(source)
+    field = schema["properties"]["value"]
+    assert field["description"] == "Review decision"
+    assert field["x-typesafe"]["kind"] == kind
+    plan = build_evaluation_plan(schema)
+    assert len(plan.questions) == 1
+
+
 def test_optional_jev_choice_preserves_criteria_and_instructions() -> None:
     # Python 3.10 unions hash their members; ChoiceCriteria contains unhashable metadata.
     # Annotating the nullable type keeps the same schema without hashing that metadata.

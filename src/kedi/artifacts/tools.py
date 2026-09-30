@@ -1,15 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import replace
+from functools import wraps
+from inspect import signature
 from typing import Any, Literal
 
 from kedi.agent_adapter.tools.specs import ToolSpec
 
-from .codemode import artifact_code_provenance
+from .codemode import ARTIFACT_COMPUTE_GUIDANCE, artifact_code_provenance
 from .codemode import run_artifact_code as execute_artifact_code
 from .errors import ArtifactInputError
 from .manager import ArtifactManager
 from .models import ArtifactHandle
 from .policy import ArtifactPolicy
+
+
+def _validated_spec(tool: ToolSpec) -> ToolSpec:
+    parameters = signature(tool.fn)
+
+    @wraps(tool.fn)
+    def invoke(**arguments: Any) -> Any:
+        # Explicit JSON tool schemas do not guarantee native argument validation.
+        try:
+            parameters.bind(**arguments)
+        except TypeError as exc:
+            raise ArtifactInputError(f"{tool.name}: {exc}") from exc
+        return tool.fn(**arguments)
+
+    return replace(tool, fn=invoke)
 
 
 def artifact_tool_specs(
@@ -84,7 +102,11 @@ def artifact_tool_specs(
             execution.result,
             policy=effective_policy,
             source="artifact_code",
-            provenance=artifact_code_provenance(code, execution.source_refs),
+            provenance=artifact_code_provenance(
+                code,
+                execution.source_refs,
+                derivation_depth=manager.derivation_depth(execution.source_refs),
+            ),
         )
         result = (
             stored.as_ref().model_dump(mode="json")
@@ -211,8 +233,8 @@ def artifact_tool_specs(
                 "max_matches=20, context_chars=120) -> match dicts; "
                 "iter_artifact(ref_id, chunk_chars=4000) -> text chunks; and "
                 "get_artifact(ref_id) -> the small native value. Prefer find_artifact for a "
-                "known literal. The sandbox has no imports, filesystem, network, model, or "
-                "subagent access."
+                "known literal. Avoid imports; host Python packages, model calls, and "
+                "subagent calls are unavailable. " + ARTIFACT_COMPUTE_GUIDANCE
             ),
             json_schema={
                 "type": "object",
@@ -240,6 +262,7 @@ def artifact_tool_specs(
             artifact_result="never",
         ),
     )
+    specs = tuple(_validated_spec(tool) for tool in specs)
     if not query_artifact:
         return specs
 
@@ -250,37 +273,39 @@ def artifact_tool_specs(
 
     return (
         *specs,
-        ToolSpec(
-            fn=query_artifact_content,
-            name="query_artifact",
-            description=(
-                "Find relevant passages in one existing artifact by lexical BM25 search. "
-                "Use keywords or identifiers when the location is unknown. "
-                "Returns ranked, verbatim artifact excerpts with zero-based character offsets; "
-                "end_offset is exclusive. If the excerpts answer the question, answer directly; "
-                "do not reread them just to confirm their wording. Use read_artifact for missing "
-                "context, or run_artifact_code for exhaustive filtering or aggregation. "
-                "max_chars caps total excerpt characters subject to read policy. "
-                "Results are not exhaustive; no matches does not prove absence. "
-                "Scores indicate relative relevance, not confidence."
-            ),
-            json_schema={
-                "type": "object",
-                "properties": {
-                    "ref_id": ref_id_schema,
-                    "query": {"type": "string", "minLength": 1, "maxLength": 2048},
-                    "max_chars": {
-                        "type": "integer",
-                        "default": -1,
-                        "description": "Total excerpt characters; -1 uses the read limit.",
+        _validated_spec(
+            ToolSpec(
+                fn=query_artifact_content,
+                name="query_artifact",
+                description=(
+                    "Find relevant passages in one existing artifact by lexical BM25 search. "
+                    "Use keywords or identifiers when the location is unknown. "
+                    "Returns ranked, verbatim artifact excerpts with zero-based character offsets; "
+                    "end_offset is exclusive. If the excerpts answer the question, answer directly; "
+                    "do not reread them just to confirm their wording. Use read_artifact for missing "
+                    "context, or run_artifact_code for exhaustive filtering or aggregation. "
+                    "max_chars caps total excerpt characters subject to read policy. "
+                    "Results are not exhaustive; no matches does not prove absence. "
+                    "Scores indicate relative relevance, not confidence."
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "ref_id": ref_id_schema,
+                        "query": {"type": "string", "minLength": 1, "maxLength": 2048},
+                        "max_chars": {
+                            "type": "integer",
+                            "default": -1,
+                            "description": "Total excerpt characters; -1 uses the read limit.",
+                        },
+                        "top_k": {"type": "integer", "default": 3, "minimum": 1, "maximum": 10},
                     },
-                    "top_k": {"type": "integer", "default": 3, "minimum": 1, "maximum": 10},
+                    "required": ["ref_id", "query"],
+                    "additionalProperties": False,
                 },
-                "required": ["ref_id", "query"],
-                "additionalProperties": False,
-            },
-            metadata=metadata,
-            risk="read_only",
-            artifact_result="never",
+                metadata=metadata,
+                risk="read_only",
+                artifact_result="never",
+            )
         ),
     )

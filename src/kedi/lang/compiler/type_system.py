@@ -72,7 +72,9 @@ def _lookup_name(rt: KediRuntime, name: str, type_env: dict[str, Any]) -> Any:
         return None
 
 
-def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> Optional[Any]:
+def _resolve_expr(
+    rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any], *, metadata: bool = False
+) -> Optional[Any]:
     """Resolve a structured ``TypeExpr`` against a type environment."""
     if isinstance(expr, TypeRef):
         # ``None`` in a type position means ``NoneType`` (e.g. ``Union[str, None]``,
@@ -90,7 +92,10 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
         base = _lookup_name(rt, expr.name, type_env)
         if base is None:
             return None
-        args = tuple(_resolve_expr(rt, a, type_env) for a in expr.args)
+        args = tuple(
+            _resolve_expr(rt, a, type_env, metadata=base is Annotated and index > 0)
+            for index, a in enumerate(expr.args)
+        )
         if any(a is None for a in args):
             return None
         if base is Annotated:
@@ -127,7 +132,9 @@ def _resolve_expr(rt: KediRuntime, expr: TypeExpr, type_env: dict[str, Any]) -> 
             result = rt.executor.evaluate_type_expression(rt, expr.code, type_env)
         except Exception as exc:
             raise TypeError(f"Invalid type expression {expr.code!r}: {exc}") from exc
-        if not _is_valid_type(result):
+        # Annotated's trailing arguments are values (FieldInfo, Jev criteria,
+        # and other validation metadata), not types.
+        if not metadata and not _is_valid_type(result):
             raise TypeError(f"Expression {expr.code!r} does not evaluate to a valid type")
         return result
 

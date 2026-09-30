@@ -570,6 +570,16 @@ class KediRuntime:
             return self.adapter
 
         model = getattr(profile, "model", None)
+        if model is None and getattr(self.adapter, "kind", None) == "agent-framework":
+            from kedi.agent_adapter.adapters.lazy import LazyAdapter
+            from kedi.agent_adapter.meta import SupportsProfileOverride
+            from kedi.agent_adapter.registry import adapter_factory
+
+            if adapter_factory(shortname).kind == "agent-framework":
+                if isinstance(self.adapter, LazyAdapter):
+                    model = self.adapter.configured_model
+                elif isinstance(self.adapter, SupportsProfileOverride):
+                    model = self.adapter.default_model()
         cache_key = (shortname, model)
         selected = self._selected_adapters.get(cache_key)
         if selected is None:

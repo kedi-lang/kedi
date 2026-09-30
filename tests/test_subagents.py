@@ -125,6 +125,7 @@ from kedi.agent_profile import (
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
 from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.artifacts import artifact_instructions
+from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
 from kedi.core.runtime import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program
@@ -1692,7 +1693,7 @@ def test_delegate_task_runs_text_child_in_isolated_profile() -> None:
     assert adapter.invocations == [
         (
             "Inspect the parser",
-            f"Work carefully.\n\n{artifact_instructions()}",
+            f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}",
             (
                 "lookup",
                 "read_artifact",
@@ -1771,7 +1772,7 @@ def test_delegate_task_runs_structured_child_and_validates_result() -> None:
     assert adapter.invocations == [
         (
             "Build a value",
-            f"Work carefully.\n\n{artifact_instructions()}",
+            f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}",
             (
                 "lookup",
                 "read_artifact",
@@ -2298,12 +2299,14 @@ def test_delegate_task_uses_adapter_neutral_child_execution_seam(
         for request in adapter.child_requests
     )
     assert all(
-        request.instructions == f"Work carefully.\n\n{artifact_instructions()}"
+        request.instructions
+        == f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
         for request in adapter.child_requests
     )
     assert adapter.child_calls[0][1]["neutral_request_limit"] is not None
     assert (
-        adapter.child_calls[0][1]["instructions"] == f"Work carefully.\n\n{artifact_instructions()}"
+        adapter.child_calls[0][1]["instructions"]
+        == f"Work carefully.\n\n{GROUNDING_INSTRUCTION}\n\n{artifact_instructions()}"
     )
     structured_schema = adapter.child_calls[1][1]["output_schema"]
     assert structured_schema["required"] == ["task_summary", "final_result"]
@@ -2626,6 +2629,7 @@ def test_background_subagent_cancel_and_timeout_are_fail_closed(
             with pytest.raises(asyncio.CancelledError):
                 await tools["wait_subagent"].fn(run_id=handle["run_id"])
         assert cancelled.snapshot()[0].status == "cancelled"
+        assert not _runtime._subagent_coordinator._cancel_requested
 
         started.clear()
         with delegation_scope("recover") as timed_out:
@@ -2648,6 +2652,7 @@ def test_background_subagent_cancel_and_timeout_are_fail_closed(
             with pytest.raises(asyncio.CancelledError):
                 await tools["wait_subagent"].fn(run_id=handle["run_id"])
         assert timed_out.snapshot()[0].status == "cancelled"
+        assert not _runtime._subagent_coordinator._cancel_requested
 
     asyncio.run(scenario())
 
@@ -2683,6 +2688,7 @@ def test_background_subagent_runtime_timeout_starts_with_the_run(
             with pytest.raises(KediExecutionError, match="timed out after 0.005 seconds"):
                 await tools["wait_subagent"].fn(run_id=handle["run_id"])
         assert timed_out.snapshot()[0].status == "timed_out"
+        assert not runtime._subagent_coordinator._cancel_requested
 
     asyncio.run(scenario())
 
