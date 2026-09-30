@@ -62,10 +62,18 @@ from kedi.agent_adapter.hooks import (
     hooked_agent_run,
 )
 from kedi.agent_adapter.invocation import invocation_observer, report_invocation
-from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from kedi.agent_adapter.meta import (
+    AdapterCapabilities,
+    AgentAdapterKind,
+    HookCapabilities,
+    TemplatePromptMode,
+)
 from kedi.agent_adapter.models import (
     close_typesafe_model_current,
+    is_decision_model_id,
     is_typesafe_model_id,
+    laya_model,
+    model_template_prompt_mode,
     typesafe_langchain_model,
 )
 from kedi.agent_adapter.output_schema import build_output_model
@@ -128,8 +136,13 @@ class LangChainAdapter(HookRegistrationMixin):
         """Return whether the active model can receive artifact management tools."""
 
         if profile.model is not None:
-            return not is_typesafe_model_id(profile.model)
-        return getattr(self._model, "_llm_type", None) != "typesafe-jev"
+            return not is_decision_model_id(profile.model)
+        return model_template_prompt_mode(self._model) != "decision"
+
+    def template_prompt_mode(self, profile: AgentProfile) -> TemplatePromptMode:
+        return model_template_prompt_mode(
+            profile.model if profile.model is not None else self._model
+        )
 
     def __init__(
         self,
@@ -548,11 +561,15 @@ class LangChainAdapter(HookRegistrationMixin):
         return self._model
 
     def _resolve_model(self, model: str) -> str | Any:
-        if not is_typesafe_model_id(model):
+        if not is_decision_model_id(model):
             return normalize_for_langchain(model)
         resolved = self._model_overrides.get(model)
         if resolved is None:
-            resolved = typesafe_langchain_model(model)
+            resolved = (
+                typesafe_langchain_model(model)
+                if is_typesafe_model_id(model)
+                else laya_model(model, "langchain")
+            )
             self._model_overrides[model] = resolved
         return resolved
 

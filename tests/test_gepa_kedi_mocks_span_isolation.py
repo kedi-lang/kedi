@@ -67,7 +67,7 @@ def test_span_inputs_keys_are_span_level(monkeypatch: pytest.MonkeyPatch):
 @proc(a: int, b: int, c: int) -> int:
   [p] = pre-<a>-<b>
   > optimize: only_span:
-    Using <p> produce [y: int]
+    >> Using <p> produce [y: int]
   = `y`
 
 @eval: proc:
@@ -99,7 +99,7 @@ def test_span_input_values_are_computed_correctly(monkeypatch: pytest.MonkeyPatc
 @proc(a: int, b: int, c: int) -> int:
   [p] = pre-<a>-<b>
   > optimize: value_span:
-    Using <p> produce [y: int]
+    >> Using <p> produce [y: int]
   = `y`
 
 @eval: proc:
@@ -134,7 +134,7 @@ def test_span_input_from_template_resolved_under_parallel(
 @proc(a: int, b: int, c: int) -> int:
   >> Using <a> and <b> produce [p]
   > optimize: value_span:
-    Using <p> produce [y: int]
+    >> Using <p> produce [y: int]
   = `y`
 
 @eval: proc:
@@ -167,7 +167,7 @@ def test_all_training_examples_use_span_inputs(monkeypatch: pytest.MonkeyPatch):
 @proc(a: int, b: int) -> int:
   [tag] = val-<a>
   > optimize: tagged:
-    Given <tag> produce [y: int]
+    >> Given <tag> produce [y: int]
   = `y`
 
 @eval: proc:
@@ -209,7 +209,7 @@ def test_span_uses_direct_param_still_isolated(monkeypatch: pytest.MonkeyPatch):
     src = """
 @proc(question: str, context: str, mode: str) -> str:
   > optimize: answer_span:
-    Given the question: <question>
+    >> Given the question: <question>
     The answer is [answer: str]
   = `answer`
 
@@ -245,7 +245,7 @@ def test_span_outputs_listed_in_instructions(monkeypatch: pytest.MonkeyPatch):
     src = """
 @proc(seed: str) -> int:
   > optimize: detailed_span:
-    Produce a value [x: float] and a label [label: str]
+    >> Produce a value [x: float] and a label [label: str]
   [result: int] = `int(x)`
   = `result`
 

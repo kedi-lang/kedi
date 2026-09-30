@@ -67,7 +67,7 @@ def test_optimization_with_typed_int_float_outputs(monkeypatch: pytest.MonkeyPat
     src = """
 @compute(seed: str) -> float:
   > optimize: typed_span:
-    Compute integer [v: int] and decimal [w: float]
+    >> Compute integer [v: int] and decimal [w: float]
   = `float(v) + w`
 
 @eval: compute:
@@ -99,7 +99,7 @@ def test_optimization_with_list_str_output(monkeypatch: pytest.MonkeyPatch):
     src = """
 @tag(seed: str) -> list[str]:
   > optimize: tag_span:
-    Generate tags [tags: list[str]]
+    >> Generate tags [tags: list[str]]
   = `tags`
 
 @eval: tag:
@@ -132,7 +132,7 @@ def test_optimization_with_python_preprocessing(monkeypatch: pytest.MonkeyPatch)
   [word_count: int] = `len(text.split())`
   [prefix] = Words: <`str(word_count)`>
   > optimize: analysis_span:
-    Given <prefix>, compute score [y: int]
+    >> Given <prefix>, compute score [y: int]
   = `y`
 
 @eval: analyze:
@@ -174,7 +174,7 @@ def test_optimization_with_multiline_span(monkeypatch: pytest.MonkeyPatch):
     src = """
 @solve(seed: str) -> int:
   > optimize: detailed:
-    Think about the problem carefully.
+    >> Think about the problem carefully.
     Consider the input: <seed>
     The answer is [y: int]
   = `y`
@@ -210,7 +210,7 @@ def test_optimization_preserves_non_optimized_lines(monkeypatch: pytest.MonkeyPa
 @proc(seed: str) -> str:
   [prefix] = start-<seed>
   > optimize: opt_span:
-    Compute [y: int] from <prefix>
+    >> Compute [y: int] from <prefix>
   [result] = <prefix>-<`str(y)`>
   = `result`
 
@@ -250,7 +250,7 @@ def test_complex_span_inputs_forwarding(monkeypatch: pytest.MonkeyPatch):
   [upper] = `raw.upper()`
   [tagged] = TAG:<upper>
   > optimize: transform_span:
-    Process <tagged> and produce [y: int]
+    >> Process <tagged> and produce [y: int]
   = `y`
 
 @eval: transform:
@@ -287,7 +287,7 @@ def test_optimization_with_test_data(monkeypatch: pytest.MonkeyPatch):
     src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:

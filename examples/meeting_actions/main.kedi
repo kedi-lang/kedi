@@ -1,0 +1,23 @@
+```
+from pathlib import Path
+from kedi import Constraints
+```
+
+~Action(
+  task: Annotated[
+    str,
+    "A concrete action agreed in the meeting, not a suggestion or completed work",
+    `Constraints(min_length=1)`
+  ],
+  owner: str | None,
+  deadline: str | None
+)
+
+@extract_actions(notes: str) -> list[Action]:
+  >> Extract only agreed, unfinished actions from these meeting notes: <notes>
+  Preserve explicitly stated owners and deadlines; use null when either is absent.
+  Do not turn suggestions into commitments or infer dates from the current date.
+  The agreed actions are [actions: list[Action]].
+  = `actions`
+
+= `extract_actions(Path(__file__).with_name("notes.md").read_text(encoding="utf-8"))`

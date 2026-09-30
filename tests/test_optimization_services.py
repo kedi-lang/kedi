@@ -544,7 +544,7 @@ def test_program_loader_preserves_output_fields_with_optimized_prefix():
             """
 @solve(x: str) -> int:
   > optimize: solver:
-    Input: <x>
+    >> Input: <x>
     Reasoning: [reasoning: str]
     Answer: [answer: int]
   = `answer`
@@ -584,7 +584,7 @@ def test_program_loader_normalizes_polluted_optimized_prompt():
             """
 @solve(x: str) -> int:
   > optimize: solver:
-    Input: <x>
+    >> Input: <x>
     Reasoning: [reasoning: str]
     Answer: [answer: int]
   = `answer`
@@ -617,7 +617,7 @@ def test_program_loader_debug_output_shows_before_and_after_injection() -> None:
             """
 @solve(x: str) -> int:
   > optimize: solver:
-    Input: <x>
+    >> Input: <x>
     Answer: [answer: int]
   = `answer`
 """.strip()
@@ -751,7 +751,7 @@ def test_dspy_module_builder_basic():
     src = """
 @test(x: int) -> int:
   > optimize: compute:
-    Compute the result: <x>
+    >> Compute the result: <x>
     [result: int]
   = `result`
 """
@@ -850,7 +850,7 @@ def test_dspy_prompt_extractor():
     src = """
 @test(x: int) -> int:
   > optimize: compute:
-    Original prompt: <x>
+    >> Original prompt: <x>
     [result: int]
   = `result`
 """
@@ -878,7 +878,7 @@ def test_dspy_prompt_extractor_strips_repeated_seed_suffix():
     src = """
 @test(x: int) -> int:
   > optimize: compute:
-    Original prompt: <x>
+    >> Original prompt: <x>
     [result: int]
   = `result`
 """

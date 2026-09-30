@@ -84,13 +84,21 @@ from kedi.agent_adapter.hooks import (
     native_agent_hook_run,
 )
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
-from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
+from kedi.agent_adapter.meta import (
+    AdapterCapabilities,
+    AgentAdapterKind,
+    HookCapabilities,
+    TemplatePromptMode,
+)
 from kedi.agent_adapter.model_resolution import resolve_pydantic_model
 from kedi.agent_adapter.models import (
     close_typesafe_model_current,
     codex_responses_model,
     is_codex_model_id,
+    is_decision_model_id,
     is_typesafe_model_id,
+    laya_model,
+    model_template_prompt_mode,
     typesafe_pydantic_model,
 )
 from kedi.agent_adapter.output_schema import build_output_model
@@ -169,9 +177,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         """Return whether the active model can receive artifact management tools."""
 
         if profile.model is not None:
-            return not is_typesafe_model_id(profile.model)
+            return not is_decision_model_id(profile.model)
         model = getattr(self, "_agent_model_arg", None)
-        return getattr(model, "system", None) != "typesafe"
+        return model_template_prompt_mode(model) != "decision"
+
+    def template_prompt_mode(self, profile: AgentProfile) -> TemplatePromptMode:
+        from .compat import configured_prompt_model
+
+        return model_template_prompt_mode(configured_prompt_model(self, profile.model))
 
     def __init__(
         self,
@@ -1027,10 +1040,14 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         return override_kwargs
 
     def _resolve_model(self, model: str) -> str | Model:
-        if is_typesafe_model_id(model):
+        if is_decision_model_id(model):
             resolved = self._model_overrides.get(model)
             if resolved is None:
-                resolved = typesafe_pydantic_model(model)
+                resolved = (
+                    typesafe_pydantic_model(model)
+                    if is_typesafe_model_id(model)
+                    else laya_model(model, "pydantic")
+                )
                 self._model_overrides[model] = resolved
             return resolved
         if not is_codex_model_id(model):

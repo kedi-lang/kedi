@@ -35,12 +35,6 @@ def _walk_optimize_directive(self: _Walker, node: Node) -> tuple[OptimizeSpan, T
         if block_node is not None:
             template_lines = self._walk_template_block_stmt(block_node).lines
             self._validate_template_block_scope(template_lines)
-        else:
-            for tline in body_children:
-                if tline.type != "template_line":
-                    continue
-                template_lines.append(self._walk_template_line(tline))
-            self._validate_template_block_scope(template_lines)
     if not template_lines:
         # Legacy invariant — preserve the exact substring so
         # ``pytest.raises(ValueError, match="must have an indented block")``

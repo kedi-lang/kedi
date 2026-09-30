@@ -260,12 +260,12 @@ def _capture_langchain_typesafe_decision_evidence(
         metadata = getattr(message, "response_metadata", None)
         if not isinstance(metadata, Mapping):
             continue
-        typesafe = metadata.get("typesafe")
+        typesafe = metadata.get("decisions", metadata.get("typesafe"))
         if not isinstance(typesafe, Mapping):
             continue
         model = metadata.get("model_name")
         capture_decision_evidence(
-            provider="typesafe",
+            provider=typesafe.get("provider", "typesafe"),
             model=model if isinstance(model, str) else None,
             metadata=typesafe,
         )

@@ -1,0 +1,23 @@
+@release_notes(changes: list[str]) -> list[str]:
+  > system:
+    Classify the meaning of the supplied changelog text.
+    Do not verify whether the product exists or whether the change was deployed.
+  [notes: list[str]] = `[]`
+
+  > loop [change]: `changes`:
+    > if: The text "<change>" describes a user-visible change rather than internal-only maintenance
+      >> Describe this change for a user, not an implementer: <change>
+      Keep exact limits and platform restrictions; do not invent benefits.
+      The one-sentence release note is [note: str].
+
+      [notes] := `notes + [note]`
+
+  = `notes`
+
+= ```
+return release_notes([
+    "CSV exports now preserve non-ASCII customer names instead of replacing them with question marks.",
+    "Renamed an internal test fixture; no runtime or user-visible behavior changed.",
+    "On Linux only, uploads can now be resumed after a lost connection for files up to 100 MB.",
+])
+```

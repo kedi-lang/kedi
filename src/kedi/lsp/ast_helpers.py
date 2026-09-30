@@ -30,7 +30,9 @@ def binding_name_span(
 
 
 def is_public_export_name(name: str) -> bool:
-    return bool(name) and not name.startswith("_")
+    from kedi.lang.compiler.environment import cli_args_identifier
+
+    return bool(name) and not name.startswith("_") and name != cli_args_identifier()
 
 
 def extract_module_docstring(source: str) -> Optional[str]:

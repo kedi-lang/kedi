@@ -1,0 +1,34 @@
+```
+from pathlib import Path
+```
+
+~Reply(message: str, policy_sections: list[str])
+
+@read_delivery_policy() -> str:
+  ###
+  Read the shop's delivery policy, including delayed parcels and refunds.
+  This is policy text, not an order-status lookup or a refund action.
+  ###
+  = `Path(__file__).with_name("delivery_policy.md").read_text(encoding="utf-8")`
+
+> profile: support:
+  > system:
+    Ground policy claims in read_delivery_policy before drafting a reply.
+    You cannot inspect orders, issue refunds, or promise delivery dates.
+    Ask for missing order details and distinguish eligibility from completed actions.
+  > use: read_delivery_policy
+  > approval: allow
+
+@draft_reply(request: str) -> Reply:
+  > use: support
+  >> Write a short customer reply to this request: <request>
+  Cite the headings of the policy sections used, not invented URLs.
+  The proposed reply is [reply: Reply].
+  = `reply`
+
+= ```
+return draft_reply(
+    "My parcel is four business days late. Please refund it now. "
+    "I have not shared an order number."
+)
+```

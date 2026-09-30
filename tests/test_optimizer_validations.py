@@ -13,7 +13,7 @@ def test_one_metric_per_procedure():
     src = """
 @foo(x):
   > optimize: test:
-    [y] from <x>
+    >> [y] from <x>
   = done
 
 @eval: foo:
@@ -34,7 +34,7 @@ def test_one_dataset_per_metric():
     src = """
 @foo(x):
   > optimize: test:
-    [y] from <x>
+    >> [y] from <x>
   = done
 
 @eval: foo:

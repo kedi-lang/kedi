@@ -716,7 +716,7 @@ def test_lsp_features_cover_kedi_nodes_and_python_interop_relations():
         "    = <count>\n"
         "\n"
         "  > optimize: review_prompt:\n"
-        "    Review this <language> snippet with <line_count()> non-empty lines.\n"
+        "    >> Review this <language> snippet with <line_count()> non-empty lines.\n"
         "    Runtime args <args>.\n"
         "    Return [review: Review]\n"
         "\n"

@@ -272,7 +272,7 @@ def test_artifacts_directive_parses_top_level_and_profile_members() -> None:
 
 
 def test_artifact_documentation_example_parses() -> None:
-    source = Path("examples/artifacts.kedi").read_text(encoding="utf-8")
+    source = Path("examples/artifact_investigation/main.kedi").read_text(encoding="utf-8")
 
     parse_program(source)
 

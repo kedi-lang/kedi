@@ -533,11 +533,11 @@ def initialize_value_from_native(
         else:
             if resolved is None:
                 raise KediTypeExecutionError(f"Unknown type annotation {kedi_type!s}")
-        if isinstance(native, str) and resolved is not None and resolved is not str:
-            raise KediTypeExecutionError("Annotation type mismatch: got str value")
         try:
             return kedi_type.validate(rt, env, native)
         except Exception:
+            if isinstance(native, str) and resolved is not None:
+                raise KediTypeExecutionError("Annotation type mismatch: got str value")
             raise KediTypeExecutionError(
                 "Native initialization value does not match annotated type"
             )

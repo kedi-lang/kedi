@@ -93,7 +93,7 @@ terminal-bench = [
     "harbor[daytona]==0.22.0; python_version >= '3.12'",
 ]
 typesafe = [
-    "kedi-typesafe==0.2.1",
+    "kedi-typesafe>=0.2.1,<0.4",
 ]
 a2a = [
     "a2a-sdk[http-server]==1.1.4",
@@ -152,6 +152,8 @@ conflicts = [
 [tool.uv.sources]
 tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 kedi-notebook = { path = "notebook", editable = true }
+kedi-decisions = { git = "https://github.com/kedi-lang/kedi-decisions.git", rev = "1d66d5170986b23c712dd8f490857e93e41c147d" }
+kedi-laya = { git = "https://github.com/kedi-lang/kedi-decisions.git", rev = "1d66d5170986b23c712dd8f490857e93e41c147d", subdirectory = "packages/kedi-laya" }
 
 [tool.ruff]
 line-length = 100
@@ -188,12 +190,14 @@ dev = [
     "coverage==7.14.1",
     "dspy==3.3.1",
     "groq==1.7.0",
+    "kedi-decisions==0.1.0",
+    "kedi-laya[pydantic,langchain]==0.1.0",
     "langchain==1.3.18",
     "langchain-aws==1.7.4",
     "langchain-mcp-adapters==0.3.2",
     "langchain-openai==1.6.0",
     "langchain-openrouter==0.2.8",
-    "kedi-typesafe[all]==0.2.1",
+    "kedi-typesafe[all]>=0.2.1,<0.4",
     "pre-commit==4.6.0",
     "pydantic-ai==2.45.0",
     "pytest==9.0.3",

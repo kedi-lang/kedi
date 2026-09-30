@@ -51,7 +51,7 @@ def test_missing_output_in_span_raises_valueerror(monkeypatch: pytest.MonkeyPatc
     src = """
 @p(x: str):
   > optimize: bad_span:
-    This span defines no outputs at all.
+    >> This span defines no outputs at all.
   = done
 
 @eval: p:
@@ -98,7 +98,7 @@ def test_empty_train_data_raises_valueerror(monkeypatch: pytest.MonkeyPatch):
     src = """
 @p(x: str) -> int:
   > optimize: span1:
-    [y: int]
+    >> [y: int]
   = `y`
 
 @eval: p:
@@ -148,7 +148,7 @@ def test_bad_reflection_nan_range_recovers(monkeypatch: pytest.MonkeyPatch):
     src = """
 @p(x: str) -> int:
   > optimize: s:
-    The answer is [y: int]
+    >> The answer is [y: int]
   = `y`
 
 @eval: p:
@@ -197,7 +197,7 @@ def test_span_without_inputs_still_optimizes(monkeypatch: pytest.MonkeyPatch):
     src = """
 @generate(seed: str) -> int:
   > optimize: bare_span:
-    The magic number is [y: int]
+    >> The magic number is [y: int]
   = `y`
 
 @eval: generate:
@@ -248,7 +248,7 @@ def test_empty_spans_returns_empty(monkeypatch: pytest.MonkeyPatch):
     src = """
 @p(x: str) -> int:
   > optimize: s:
-    [y: int]
+    >> [y: int]
   = `y`
 
 @eval: p:

@@ -33,7 +33,7 @@ def test_gepa_optimizer_interface():
     src = """
 @foo(country):
   > optimize: find_capital:
-    [capital] is the capital of <country>.
+    >> [capital] is the capital of <country>.
 """
     prog = parse_program(src)
     prog.procedures[0]

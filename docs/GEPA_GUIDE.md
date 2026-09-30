@@ -594,7 +594,7 @@ def test_gepa_optimization(monkeypatch):
     src = """
     @proc(seed: str) -> float:
       > optimize: span_name:
-        Generate value: [y: int]
+        >> Generate value: [y: int]
       = `float(y)`
     
     @eval: proc:

@@ -50,7 +50,7 @@ def _prepare(src: str):
 _CONVERGENCE_SRC = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:
@@ -180,7 +180,7 @@ def test_inverted_feedback_hinders_convergence(monkeypatch: pytest.MonkeyPatch):
     inverted_src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:
@@ -232,7 +232,7 @@ def test_inverted_feedback_hinders_convergence(monkeypatch: pytest.MonkeyPatch):
     correct_src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:
@@ -302,7 +302,7 @@ def test_ok_feedback_stabilizes_range(monkeypatch: pytest.MonkeyPatch):
     src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:
@@ -363,7 +363,7 @@ def test_gradual_metric_drives_incremental_improvement(monkeypatch: pytest.Monke
     src = """
 @solve(seed: str) -> int:
   > optimize: produce_value:
-    The result is [y: int]
+    >> The result is [y: int]
   = `y`
 
 @eval: solve:

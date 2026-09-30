@@ -57,7 +57,7 @@ def test_cli_optimize_flag_without_eval(tmp_path: Path) -> None:
     srcp = tmp_path / "test.kedi"
 
     srcp.write_text(
-        "@foo():\n  > optimize: test:\n    [x] from input\n  = done\n", encoding="utf-8"
+        "@foo():\n  > optimize: test:\n    >> [x] from input\n  = done\n", encoding="utf-8"
     )
 
     try:
@@ -75,7 +75,7 @@ def test_cli_optimize_with_missing_eval(tmp_path: Path) -> None:
     srcp.write_text(
         "@solve_math(problem: str) -> int:\n"
         "  > optimize: find_answer:\n"
-        "    Solve: <problem>\n"
+        "    >> Solve: <problem>\n"
         "    Answer: [answer: int]\n"
         "  = `answer`\n\n"
         "= <solve_math('2+2')>\n",
@@ -99,7 +99,7 @@ def test_cli_optimize_with_missing_data(tmp_path: Path) -> None:
     srcp.write_text(
         "@solve(problem: str) -> int:\n"
         "  > optimize: find_answer:\n"
-        "    Solve: <problem>\n"
+        "    >> Solve: <problem>\n"
         "    Answer: [answer: int]\n"
         "  = `answer`\n\n"
         "= <solve('1+1')>\n",

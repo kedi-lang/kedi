@@ -381,7 +381,7 @@ def _kedi_run(
             item.resolve() if isinstance(item, KediPromise) else item for item in input_snapshots
         ]
 
-        from kedi.agent_adapter.meta import SupportsProfileOverride
+        from kedi.agent_adapter.meta import SupportsProfileOverride, SupportsTemplatePromptMode
         from kedi.agent_adapter.request import (
             KediTemplatePromptBuilder,
             SchemaOutput,
@@ -440,6 +440,11 @@ def _kedi_run(
             prompt = KediTemplatePromptBuilder(
                 template="".join(resolved_parts),
                 output_fields=tuple(required),
+                mode=(
+                    adapter.template_prompt_mode(profile)
+                    if isinstance(adapter, SupportsTemplatePromptMode)
+                    else "completion"
+                ),
             ).build()
 
             with override_ctx:

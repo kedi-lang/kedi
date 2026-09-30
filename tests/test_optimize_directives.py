@@ -13,10 +13,10 @@ def test_parse_optimize_directive():
     src = """
 @foo(country):
   > optimize: find_capital:
-    [capital] is the capital of <country>.
+    >> [capital] is the capital of <country>.
   
   > optimize: find_population:
-    <capital> has [population: int] people.
+    >> <capital> has [population: int] people.
   
   = Done
 """
@@ -96,11 +96,11 @@ def test_parse_optimize_mixed_with_other_stmts():
 @foo(x):
   [y] = start
   > optimize: span1:
-    [result] is <y>.
+    >> [result] is <y>.
   
   `print("debug")`
   > optimize: span2:
-    Final result: <result>
+    >> Final result: <result>
   
   = done
 """
@@ -119,7 +119,7 @@ def test_auto_and_optimize_together():
     This procedure needs codegen.
   
   > optimize: prompt1:
-    [output] from <x>.
+    >> [output] from <x>.
   
   = result
 """
@@ -137,7 +137,7 @@ def test_mock_optimizer_interface():
     src = """
 @foo(country):
   > optimize: find_capital:
-    [capital] is the capital of <country>.
+    >> [capital] is the capital of <country>.
 """
     prog = parse_program(src)
     proc = prog.procedures[0]
@@ -177,10 +177,10 @@ def test_mock_optimizer_multi_span():
     src = """
 @foo(country):
   > optimize: find_capital:
-    [capital] is the capital of <country>.
+    >> [capital] is the capital of <country>.
   
   > optimize: find_population:
-    <capital> has [population: int] people.
+    >> <capital> has [population: int] people.
 """
     prog = parse_program(src)
     proc = prog.procedures[0]

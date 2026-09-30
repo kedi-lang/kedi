@@ -378,6 +378,22 @@ def _python_value_infos(
 
 
 def _python_stmt_exports(stmt: py_ast.stmt) -> list[tuple[str, str, int, int]]:
+    if isinstance(stmt, (py_ast.Import, py_ast.ImportFrom)):
+        exports = []
+        for alias in stmt.names:
+            if alias.name == "*":
+                continue
+            name = alias.asname or (
+                alias.name.split(".")[0] if isinstance(stmt, py_ast.Import) else alias.name
+            )
+            if isinstance(stmt, py_ast.Import):
+                stub = py_ast.unparse(py_ast.Import(names=[alias]))
+            else:
+                stub = py_ast.unparse(
+                    py_ast.ImportFrom(module=stmt.module, names=[alias], level=stmt.level)
+                )
+            exports.append((name, stub, alias.lineno, alias.col_offset))
+        return exports
     if isinstance(stmt, py_ast.FunctionDef):
         return [
             (

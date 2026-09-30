@@ -31,7 +31,7 @@ class Result(BaseModel):
 
 @process(person: Person) -> Result:
   > optimize: analyze:
-    Analyze person: <person>
+    >> Analyze person: <person>
     [result: Result]
   = `result`
 """

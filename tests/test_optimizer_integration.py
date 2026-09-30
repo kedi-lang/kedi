@@ -23,7 +23,7 @@ def test_mock_optimizer_end_to_end():
     src = """
 @classify(text: str) -> str:
   > optimize: sentiment:
-    Classify sentiment: <text>
+    >> Classify sentiment: <text>
     [sentiment: str]
   = `sentiment.lower()`
 

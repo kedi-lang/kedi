@@ -2381,6 +2381,8 @@ dev = [
     { name = "coverage" },
     { name = "dspy" },
     { name = "groq" },
+    { name = "kedi-decisions" },
+    { name = "kedi-laya", extra = ["langchain", "pydantic"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "kedi-typesafe", extra = ["all"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
     { name = "langchain" },
     { name = "langchain-aws" },
@@ -2414,7 +2416,7 @@ requires-dist = [
     { name = "harbor", extras = ["daytona"], marker = "python_full_version >= '3.12' and extra == 'terminal-bench'", specifier = "==0.22.0" },
     { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "kedi-notebook", marker = "extra == 'notebook'", editable = "notebook" },
-    { name = "kedi-typesafe", marker = "extra == 'typesafe'", specifier = "==0.2.1" },
+    { name = "kedi-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.2.1,<0.4" },
     { name = "langchain", marker = "extra == 'langchain'", specifier = "==1.3.18" },
     { name = "langchain", marker = "extra == 'langchain-aws'", specifier = "==1.3.18" },
     { name = "langchain-aws", marker = "extra == 'langchain-aws'", specifier = "==1.7.4" },
@@ -2449,7 +2451,9 @@ dev = [
     { name = "coverage", specifier = "==7.14.1" },
     { name = "dspy", specifier = "==3.3.1" },
     { name = "groq", specifier = "==1.7.0" },
-    { name = "kedi-typesafe", extras = ["all"], specifier = "==0.2.1" },
+    { name = "kedi-decisions", git = "https://github.com/kedi-lang/kedi-decisions.git?rev=1d66d5170986b23c712dd8f490857e93e41c147d" },
+    { name = "kedi-laya", extras = ["pydantic", "langchain"], git = "https://github.com/kedi-lang/kedi-decisions.git?subdirectory=packages%2Fkedi-laya&rev=1d66d5170986b23c712dd8f490857e93e41c147d" },
+    { name = "kedi-typesafe", extras = ["all"], specifier = ">=0.2.1,<0.4" },
     { name = "langchain", specifier = "==1.3.18" },
     { name = "langchain-aws", specifier = "==1.7.4" },
     { name = "langchain-mcp-adapters", specifier = "==0.3.2" },
@@ -2463,6 +2467,39 @@ dev = [
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = "==2.4.1" },
     { name = "ty", specifier = "==0.0.44" },
     { name = "uvicorn", specifier = "==0.47.0" },
+]
+
+[[package]]
+name = "kedi-decisions"
+version = "0.1.0"
+source = { git = "https://github.com/kedi-lang/kedi-decisions.git?rev=1d66d5170986b23c712dd8f490857e93e41c147d#1d66d5170986b23c712dd8f490857e93e41c147d" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "pydantic" },
+]
+
+[package.optional-dependencies]
+langchain = [
+    { name = "langchain" },
+]
+pydantic = [
+    { name = "pydantic-ai-slim", version = "2.45.0", source = { registry = "https://pypi.org/simple" } },
+]
+
+[[package]]
+name = "kedi-laya"
+version = "0.1.0"
+source = { git = "https://github.com/kedi-lang/kedi-decisions.git?subdirectory=packages%2Fkedi-laya&rev=1d66d5170986b23c712dd8f490857e93e41c147d#1d66d5170986b23c712dd8f490857e93e41c147d" }
+dependencies = [
+    { name = "kedi-decisions" },
+]
+
+[package.optional-dependencies]
+langchain = [
+    { name = "kedi-decisions", extra = ["langchain"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
+]
+pydantic = [
+    { name = "kedi-decisions", extra = ["pydantic"], marker = "(extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-terminal-bench') or (extra == 'extra-4-kedi-codex-model' and extra == 'extra-4-kedi-typesafe') or (extra == 'extra-4-kedi-terminal-bench' and extra == 'extra-4-kedi-typesafe') or (extra != 'extra-4-kedi-typesafe' and extra == 'group-4-kedi-dev') or (extra != 'extra-4-kedi-codex-model' and extra != 'extra-4-kedi-terminal-bench' and extra == 'group-4-kedi-dev')" },
 ]
 
 [[package]]

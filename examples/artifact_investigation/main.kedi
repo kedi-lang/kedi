@@ -1,0 +1,29 @@
+```
+from pathlib import Path
+```
+
+~Finding(cause: str, mitigation: str, evidence: list[str])
+
+> artifacts:
+  threshold: 2kb
+  preview_chars: 300
+  read_max_chars: 1800
+  query_artifacts: enabled
+
+@read_incident_log() -> str:
+  ###
+  Read the full deployment and incident log for the checkout service.
+  Entries include timestamps, configuration changes, and measured outcomes.
+  ###
+  = `Path(__file__).with_name("incident.md").read_text(encoding="utf-8")`
+
+> use: read_incident_log
+> approval: allow
+
+>> Investigate the checkout timeout incident using read_incident_log.
+Locate evidence with query_artifact; read neighboring text only when the timeline needs clarification.
+Distinguish a change merely preceding the incident from one supported by measurements.
+Give the cause, the mitigation that actually restored service, and timestamped evidence.
+The evidence-backed finding is [finding: Finding].
+
+= `finding`

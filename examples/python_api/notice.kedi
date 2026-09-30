@@ -1,0 +1,4 @@
+>> Write a customer-facing status update using only these facts: <incident>
+Keep it to two sentences. Do not invent a recovery time or describe a planned fix as complete.
+The notice is [notice: str].
+= `notice`

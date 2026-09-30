@@ -25,6 +25,16 @@ class SupportsProfileOverride(Protocol):
 
 T = TypeVar("T", covariant=True)
 AgentAdapterKind = Literal["agent-framework", "agent-harness"]
+TemplatePromptMode = Literal["completion", "decision"]
+
+
+@runtime_checkable
+class SupportsTemplatePromptMode(Protocol):
+    def template_prompt_mode(self, profile: AgentProfile) -> TemplatePromptMode:
+        """Choose template instructions for the model bound to this lexical profile."""
+        ...
+
+
 HookBridge = Literal["native", "kedi"]
 HookToolOrigin = Literal["kedi", "mcp", "adapter_native", "provider_builtin"]
 HookCapabilityEvent = Literal[

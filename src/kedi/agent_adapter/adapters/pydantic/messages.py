@@ -55,7 +55,7 @@ def _apply_conversation_history(
 
 
 def _capture_typesafe_decision_evidence(result: Any) -> None:
-    """Publish metadata from the final TypeSafe model response for this run only."""
+    """Publish metadata from the final decision response for this run only."""
     new_messages = getattr(result, "new_messages", None)
     if not callable(new_messages):
         return
@@ -66,12 +66,12 @@ def _capture_typesafe_decision_evidence(result: Any) -> None:
             details = getattr(message, "metadata", None)
         if not isinstance(details, dict):
             continue
-        metadata = details.get("typesafe")
+        metadata = details.get("decisions", details.get("typesafe"))
         if not isinstance(metadata, dict):
             continue
         model = getattr(message, "model_name", None)
         capture_decision_evidence(
-            provider="typesafe",
+            provider=metadata.get("provider", "typesafe"),
             model=model if isinstance(model, str) else None,
             metadata=metadata,
         )

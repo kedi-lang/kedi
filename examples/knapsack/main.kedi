@@ -1,0 +1,55 @@
+@solve_knapsack(items: `dict[str, tuple[int, int]]`, capacity: int) -> list[str]:
+  > optimize: selection:
+    >> Pack a 0/1 knapsack from <items>, where each item maps to (weight, value).
+    Choose each item at most once and keep total weight within <capacity>.
+    Maximize total value; any optimal selection is acceptable.
+    Use one exact item name per list entry.
+    The selected item names are [selected: list[str]].
+
+  = `selected`
+
+@eval: solve_knapsack:
+  > data: problems:
+    = ```
+    return [
+        (({"A": (2, 3), "B": (3, 4), "C": (4, 5), "D": (5, 7)}, 10), {"value": 14}),
+        (({"X": (1, 1), "Y": (2, 3), "Z": (3, 5)}, 5), {"value": 8}),
+        (({"P": (3, 4), "Q": (4, 5), "R": (2, 3)}, 6), {"value": 8}),
+        (({"M": (1, 2), "N": (2, 3), "O": (3, 4), "S": (4, 6)}, 5), {"value": 8}),
+    ]
+    ```
+
+  > test_data: problems:
+    = ```
+    return [
+        (({"G": (5, 10), "H": (4, 7), "I": (3, 5)}, 8), {"value": 15}),
+        (({"A": (1, 1), "B": (1, 1), "C": (1, 1)}, 2), {"value": 2}),
+    ]
+    ```
+
+  > metric: optimality(problems):
+    = ```
+    items, capacity = problems
+    selected = solve_knapsack(items, capacity)
+    if len(selected) != len(set(selected)):
+        return 0.0, f"Repeated item in {selected}; each item may be selected at most once."
+    if any(name not in items for name in selected):
+        return 0.0, f"Unknown item in {selected}. Only these items are available: {list(items)}."
+
+    weight = sum(items[name][0] for name in selected)
+    if weight > capacity:
+        return 0.0, f"Selected weight {weight} exceeds capacity {capacity}."
+
+    value = sum(items[name][1] for name in selected)
+    return float(value == expected["value"]), (
+        f"Selected {selected}: weight {weight}/{capacity}, "
+        f"value {value}; optimal value {expected['value']}."
+    )
+    ```
+
+= ```
+return solve_knapsack(
+    {"A": (2, 3), "B": (3, 4), "C": (4, 8), "D": (5, 10)},
+    10,
+)
+```

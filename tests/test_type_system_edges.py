@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, Optional
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from kedi.core import KediRuntime
 from kedi.lang.ast import (
@@ -46,6 +46,41 @@ class OtherModel(BaseModel):
 
 class UnknownTypeExpr(TypeExpr):
     pass
+
+
+@pytest.mark.parametrize(
+    "annotation,value",
+    [
+        (str | None, "observation"),
+        (Optional[str], None),
+        (int | str, "1"),
+        (Literal["flap", "coast"], "flap"),
+        (Annotated[str, Field(min_length=2)], "ok"),
+        (Any, "observation"),
+    ],
+)
+def test_native_string_initialization_validates_composite_annotations(annotation, value):
+    result = initialize_value_from_native(
+        value, KediType("Value"), KediRuntime(), {"Value": annotation}, strict_native=True
+    )
+    assert result == value
+    assert type(result) is type(value)
+
+
+@pytest.mark.parametrize(
+    "annotation,value",
+    [
+        (int, "1"),
+        (int | float, "1"),
+        (Literal["flap", "coast"], "jump"),
+        (Annotated[str, Field(min_length=2)], "x"),
+    ],
+)
+def test_native_string_initialization_remains_strict(annotation, value):
+    with pytest.raises(TypeError, match="Annotation type mismatch"):
+        initialize_value_from_native(
+            value, KediType("Value"), KediRuntime(), {"Value": annotation}, strict_native=True
+        )
 
 
 def test_structured_type_resolution_and_rendering_edges() -> None:

@@ -1,0 +1,13 @@
+diff --git a/app/exports.py b/app/exports.py
+--- a/app/exports.py
++++ b/app/exports.py
+@@ -0,0 +1,9 @@
++@app.get("/exports/{account_id}")
++def export_account(account_id: int, current_user=Depends(authenticate)):
++    connection = database.connect()
++    rows = connection.execute(
++        "SELECT * FROM invoices WHERE account_id = ?", (account_id,)
++    ).fetchall()
++    csv = render_csv(rows)
++    connection.close()
++    return Response(csv, media_type="text/csv")

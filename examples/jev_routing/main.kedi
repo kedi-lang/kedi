@@ -1,0 +1,45 @@
+> import: typesafe:
+  BooleanCriteria
+  ChoiceCriteria
+
+```
+from typing import Annotated, Literal
+from kedi import decision_info
+
+Team = Annotated[
+    Literal["billing", "access", "general"],
+    "Which team owns the customer's primary request?",
+    ChoiceCriteria({
+        "billing": "Charges, payments, or invoices",
+        "access": "Signing in or account access",
+        "general": "Other requests",
+    }),
+]
+Urgent = Annotated[
+    bool,
+    "Does the request need immediate intervention?",
+    BooleanCriteria(
+        true="Active loss of access or ongoing financial harm",
+        false="Past resolved problem, general question, or hypothetical concern",
+    ),
+]
+```
+
+> model: typesafe/jev-latest
+> settings:
+  typesafe_threshold: 0.85
+
+@route_ticket(ticket: str) -> str:
+  >> The support team responsible for <ticket> is [team: Team].
+  Whether the request needs immediate intervention is [urgent: Urgent].
+
+  > show: Immediate intervention required: <urgent>
+  > show: Urgency probability: <`decision_info("urgent").probability`>
+  > show: Decision threshold: <`decision_info("urgent").threshold`>
+
+  > if: `urgent`:
+    = Escalate to <team>.
+  > else:
+    = Queue for <team>.
+
+= <route_ticket(My card is still being charged every hour for the same invoice. Please stop these duplicate payments.)>

@@ -57,9 +57,9 @@ def test_two_spans_in_one_procedure_both_optimized(monkeypatch: pytest.MonkeyPat
     src = """
 @solve(seed: str) -> int:
   > optimize: span_a:
-    First compute [x: int]
+    >> First compute [x: int]
   > optimize: span_b:
-    Then compute [y: int]
+    >> Then compute [y: int]
   = `x + 2*y`
 
 @eval: solve:
@@ -122,12 +122,12 @@ def test_two_procedures_independent_optimization(monkeypatch: pytest.MonkeyPatch
     src = """
 @pa(seed: str) -> int:
   > optimize: span_a:
-    Produce a low value [y: int]
+    >> Produce a low value [y: int]
   = `y`
 
 @pb(seed: str) -> int:
   > optimize: span_b:
-    Produce a high value [y: int]
+    >> Produce a high value [y: int]
   = `y`
 
 @eval: pa:
@@ -244,9 +244,9 @@ def test_spans_produce_distinct_optimized_prompts(monkeypatch: pytest.MonkeyPatc
     src = """
 @proc(seed: str) -> int:
   > optimize: first_step:
-    Compute the initial [x: int]
+    >> Compute the initial [x: int]
   > optimize: second_step:
-    Refine to get [y: int]
+    >> Refine to get [y: int]
   = `x + 2*y`
 
 @eval: proc:

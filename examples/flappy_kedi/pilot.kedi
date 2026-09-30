@@ -1,0 +1,38 @@
+```
+from typing import Annotated, Any, Literal
+from kedi import decision_info
+from kedi_decisions import ChoiceCriteria
+
+Movement = Annotated[
+    Literal["flap", "coast"],
+    "The next movement of the flying cat",
+    ChoiceCriteria({
+        "flap": "Jump upward now to avoid falling below the opening. Do not jump into its upper edge.",
+        "coast": "Do not jump. Let gravity bring the cat toward the opening, or preserve an existing upward flight.",
+    }),
+]
+```
+
+~Decision(action: str, confidence: float | None, accepted: bool)
+
+@decide(state: str) -> Decision:
+  >> Keep the flying cat inside the next opening without touching an obstacle.
+  Screen coordinates increase downward. A negative vertical speed means rising.
+  Compare the two short trajectory forecasts in <state>.
+  Prefer a safe path toward the opening's center. Avoid repeated flaps near its upper edge.
+  The next movement is [movement: Movement].
+  = ```
+  action = movement
+  evidence = decision_info("movement")
+  confidence = evidence.confidence if evidence is not None else None
+  return Decision(action, confidence, confidence is not None and confidence >= 0.60)
+  ```
+
+@play(turns: Any) -> str:
+  > loop: `True`:
+    [state: str | None] = `turns.receive()`
+    > if: `state is None`:
+      = stopped
+    `turns.send(decide(state))`
+
+= <play(`turns`)>

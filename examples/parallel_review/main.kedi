@@ -1,0 +1,40 @@
+```
+from pathlib import Path
+```
+
+~Review(issue: str, recommendation: str)
+~ReleaseReview(security: Review, reliability: Review)
+
+> profile: security:
+  > system: Review only authorization and data exposure in the supplied change.
+
+> profile: reliability:
+  > system: Review failure handling and resource cleanup in the supplied change.
+
+> profile: coordinator:
+  > subagent: security
+  > subagent: reliability
+  > max_agents: 2
+
+@review_change(change: str) -> ReleaseReview:
+  > use: coordinator
+
+  > task [security_job]: security:
+    >> Review this patch: <change>
+    The most important actionable finding is [review: Review].
+
+  > task [reliability_job]: reliability:
+    >> Review this patch: <change>
+    The most important actionable finding is [review: Review].
+
+  > await [security_result]: security_job
+  > await [reliability_result]: reliability_job
+
+  = ```
+  return ReleaseReview(
+      security=security_result.output.review,
+      reliability=reliability_result.output.review,
+  )
+  ```
+
+= `review_change(Path(__file__).with_name("change.diff").read_text(encoding="utf-8"))`

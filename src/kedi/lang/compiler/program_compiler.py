@@ -191,6 +191,10 @@ class ProgramCompiler:
 
         checkpoint(self.rt, "source_loaded", safe=False)
         current_path = self._program_path(prog)
+        if current_path is not None and not current_path.name.startswith("<"):
+            self.rt.set_initial_globals(
+                {**self.rt._initial_globals_env, "__file__": str(current_path)}
+            )
         if prog.package is not None and (
             current_path is None or current_path.name != "package.kedi"
         ):

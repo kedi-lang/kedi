@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..meta import TemplatePromptMode
 from .models import PromptDraft
 
 _TEMPLATE_FILL_INSTRUCTION = (
@@ -13,6 +14,9 @@ _TEMPLATE_FILL_INSTRUCTION = (
     "explicitly requests them. Preserve literal values already present in the template "
     "exactly; do not replace or invent them. The template must remain grammatically "
     "and semantically coherent after substitution."
+)
+_DECISION_INSTRUCTION = (
+    "Evaluate each marked decision field using its question, criteria, and the context below."
 )
 CLAIM_INSTRUCTION = (
     "Determine whether the following claim is true. Consider evidence in this priority order: "
@@ -48,9 +52,20 @@ class RawPromptBuilder:
 class KediTemplatePromptBuilder:
     template: str
     output_fields: tuple[str, ...]
+    mode: TemplatePromptMode = "completion"
 
     def build(self) -> PromptDraft:
         fields = ", ".join(self.output_fields)
+        if self.mode == "decision":
+            return PromptDraft(
+                content=(
+                    f"{_DECISION_INSTRUCTION}\n"
+                    f"Decision fields: ({fields}).\n\nContext:\n{self.template}"
+                ),
+                kind="template",
+            )
+        if self.mode != "completion":
+            raise ValueError("Template prompt mode must be 'completion' or 'decision'")
         content = (
             f"{_TEMPLATE_FILL_INSTRUCTION}\n"
             "Fields to be substituted into the template string for final construction: "

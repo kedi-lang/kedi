@@ -70,7 +70,7 @@ def test_optimize_span_executes_its_lines_as_one_template_block() -> None:
     src = (
         "@summarize(topic: str) -> str:\n"
         "  > optimize: prompt:\n"
-        "    Give a concise summary of <topic>.\n"
+        "    >> Give a concise summary of <topic>.\n"
         "    Return it as [summary].\n"
         "  = <summary>\n"
         "\n"
@@ -114,11 +114,67 @@ def test_optimize_span_accepts_explicit_template_block_syntax() -> None:
     assert len(adapter.instruction_calls) == 1
 
 
+@pytest.mark.parametrize("ending", ["\n", "\r\n"])
+@pytest.mark.parametrize("padding", ["\n", "    \n", "\n\n", "\n  # Next statement\n"])
+def test_optimize_block_allows_layout_whitespace_and_preserves_paragraphs(ending, padding):
+    source = (
+        "@summarize(topic: str) -> str:\n"
+        "  > optimize: prompt:\n"
+        "\n"
+        "    # The prompt begins below.\n"
+        "    >> Give a concise summary of <topic>.\n"
+        "\n"
+        "    The summary is [summary].\n" + padding + "  = <summary>\n"
+        "\n"
+        "= <summarize(Kedi)>\n"
+    ).replace("\n", ending)
+    program = parse_program(source)
+    lines = program.procedures[0].optimize_spans[0].template_lines
+    assert len(lines) == 3
+    assert lines[1].segments == []
+    adapter = MockAdapter()
+    assert compile_program(program, adapter=adapter).run_main() == "summary-value"
+    assert len(adapter.instruction_calls) == 1
+    assert "summary of Kedi.\n\nThe summary is [summary]." in adapter.request_calls[0]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    The result is [answer].\n",
+        "\n    The result is [answer].\n",
+        "    # A comment is not a template marker.\n    The result is [answer].\n",
+        "    Read <topic>.\n    The result is [answer].\n",
+        "    The result is [answer].\n    >> A later marker cannot repair the first line.\n",
+    ],
+)
+def test_optimize_rejects_bare_prompt_in_grammar_and_runtime_parser(body):
+    from tree_sitter import Language, Parser
+    import tree_sitter_kedi
+
+    source = "@summarize(topic):\n  > optimize: prompt:\n" + body + "  = <answer>\n"
+    tree = Parser(Language(tree_sitter_kedi.language())).parse(source.encode())
+    assert tree.root_node.has_error
+    with pytest.raises(KediParseError):
+        parse_program(source)
+
+
+def test_optimize_rejects_multiple_template_blocks_in_one_span():
+    with pytest.raises(KediParseError):
+        parse_program(
+            "@summarize():\n"
+            "  > optimize: prompt:\n"
+            "    >> The first result is [first].\n"
+            "    >> The second result is [second].\n"
+            "  = <second>\n"
+        )
+
+
 def test_optimize_span_cannot_read_its_own_pending_output() -> None:
     src = (
         "@plan() -> str:\n"
         "  > optimize: prompt:\n"
-        "    Pick a European [city].\n"
+        "    >> Pick a European [city].\n"
         "    Describe <city> as [description].\n"
         "  = <description>\n"
     )

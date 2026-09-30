@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
+from .meta import TemplatePromptMode
+
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
     from pydantic_ai.models import Model
@@ -35,6 +37,49 @@ def is_typesafe_model_id(model_id: str) -> bool:
     """Return whether a model id selects the TypeSafe Jev bridge."""
 
     return model_id.startswith(TYPESAFE_MODEL_PREFIX)
+
+
+def is_decision_model_id(model_id: str) -> bool:
+    """Select hosted Jev or an optional local Laya decision model."""
+    return is_typesafe_model_id(model_id) or model_id.startswith(("laya/", "laya-mlx/"))
+
+
+def model_template_prompt_mode(model: object) -> TemplatePromptMode:
+    """Use the model contract, including older registered Jev integrations."""
+    if isinstance(model, str):
+        return "decision" if is_decision_model_id(model) else "completion"
+    # Published Jev integrations predate the optional model-level contract.
+    legacy_decision = (
+        getattr(model, "system", None) == "typesafe"
+        or getattr(model, "_llm_type", None) == "typesafe-jev"
+    )
+    mode = getattr(model, "kedi_prompt_mode", "decision" if legacy_decision else "completion")
+    if mode not in ("completion", "decision"):
+        raise ValueError("Model kedi_prompt_mode must be 'completion' or 'decision'")
+    return mode
+
+
+def laya_model(model_id: str, adapter: Literal["pydantic", "langchain"]) -> Any:
+    """Select Laya independently of its optional local inference backend."""
+    provider, _, checkpoint = model_id.partition("/")
+    if provider not in {"laya", "laya-mlx"} or not checkpoint.strip():
+        raise ValueError("Laya model id must be laya/<checkpoint> or laya-mlx/<checkpoint>")
+    if adapter not in {"pydantic", "langchain"}:
+        raise ValueError("Laya models require the Pydantic or LangChain adapter")
+    try:
+        import kedi_laya
+    except ModuleNotFoundError as exc:
+        if exc.name != "kedi_laya":
+            raise
+        raise ModuleNotFoundError(
+            "Local Laya models require kedi-laya. Install 'kedi-decisions[laya]' "
+            "for PyTorch or 'kedi-decisions[laya-mlx]' for Apple Silicon. "
+            "For LangChain also install 'kedi-decisions[langchain]'."
+        ) from exc
+    backend = "mlx" if provider == "laya-mlx" else "auto"
+    if adapter == "pydantic":
+        return kedi_laya.LayaModel(checkpoint, backend=backend)
+    return kedi_laya.LayaChatModel(checkpoint, backend=backend)
 
 
 def typesafe_pydantic_model(model_id: str) -> Model:
@@ -72,10 +117,7 @@ def typesafe_langchain_model(model_id: str) -> BaseChatModel:
 async def close_typesafe_model_current(model: object) -> None:
     """Close a TypeSafe transport before its current event loop exits."""
 
-    if (
-        getattr(model, "system", None) != "typesafe"
-        and getattr(model, "_llm_type", None) != "typesafe-jev"
-    ):
+    if model_template_prompt_mode(model) != "decision":
         return
     close_current = getattr(model, "aclose_current", None)
     if callable(close_current):

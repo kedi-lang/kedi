@@ -1,15 +1,13 @@
-> import: catalog/products:
-  Product
-  sample_products
+> import: pricing:
+  Item
+  quote
 
-> import: services/pricing:
-  inventory_value
-  checkout_total
-
-> import: reports/formatting
-
-[products: list[Product]] = `sample_products()`
-[subtotal: float] = `inventory_value(products)`
-[total: float] = `checkout_total(products)`
-
-= `render_inventory_report(products, subtotal, total)`
+= ```
+return quote(
+    [
+        Item(name="Keyboard", unit_cents=12000, quantity=2),
+        Item(name="USB-C dock", unit_cents=8500, quantity=3),
+    ],
+    10,
+)
+```

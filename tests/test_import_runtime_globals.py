@@ -3,7 +3,59 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
+
+
+@pytest.mark.parametrize("identifier", ["args", "cli_args"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_star_export_preserves_cli_binding_without_reexporting_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, identifier: str, nested: bool
+) -> None:
+    from kedi.lang.compiler import environment
+
+    monkeypatch.setattr(environment, "CLI_ARGS_IDENTIFIER", identifier)
+    (tmp_path / "lib.kedi").write_text(
+        f"@show_arg() -> str:\n  = <`{identifier}.name`>\n"
+        "[public_value: int] = `7`\n"
+        "[_private: int] = `9`\n"
+        "> export: *\n",
+        encoding="utf-8",
+    )
+    module = "lib"
+    if nested:
+        (tmp_path / "bridge.kedi").write_text("> import: lib\n> export: *\n", encoding="utf-8")
+        module = "bridge"
+    main = tmp_path / "main.kedi"
+    main.write_text(
+        f"> import: {module}\n= <show_arg()>:<`{identifier}.name`>:<public_value>\n",
+        encoding="utf-8",
+    )
+    cli_args = SimpleNamespace(name="reader")
+    runtime = _compile_file(main, runtime_globals={identifier: cli_args})
+    assert runtime.run_main() == "reader:reader:7"
+    assert runtime._initial_globals_env[identifier] is cli_args
+    assert identifier not in runtime._import_env
+    assert "_private" not in runtime._import_env
+    assert runtime._import_env["public_value"] == 7
+
+
+def test_cli_binding_cannot_be_selectively_imported_from_star_export(tmp_path: Path) -> None:
+    (tmp_path / "lib.kedi").write_text("[value: int] = `1`\n> export: *\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: lib:\n  args\n", encoding="utf-8")
+    with pytest.raises(KediExecutionError, match="does not export 'args'"):
+        _compile_file(main, runtime_globals={"args": SimpleNamespace(name="reader")})
+
+
+def test_explicit_cli_binding_export_still_rejects_overwriting_importer(tmp_path: Path) -> None:
+    (tmp_path / "lib.kedi").write_text("> export:\n  args\n", encoding="utf-8")
+    main = tmp_path / "main.kedi"
+    main.write_text("> import: lib\n", encoding="utf-8")
+    with pytest.raises(KediExecutionError, match="Reserved identifier 'args'"):
+        _compile_file(main, runtime_globals={"args": SimpleNamespace(name="reader")})
 
 
 def _compile_file(path: Path, *, runtime_globals=None):

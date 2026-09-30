@@ -98,6 +98,22 @@ def effective_model(
         raise _unsupported_layout(exc) from exc
 
 
+def configured_prompt_model(agent: Agent[Any, Any], model: str | None) -> object:
+    """Inspect static bindings without loading a provider or invoking a dynamic selector."""
+    try:
+        override = agent._override_model.get()
+        if override is not None:
+            return override.value
+        if model is not None:
+            return model
+        contribution = agent._effective_root_capability().get_model()
+        if contribution is not None:
+            return contribution
+        return agent._model
+    except AttributeError as exc:
+        raise _unsupported_layout(exc) from exc
+
+
 def build_nested_tool_manager(
     *,
     ctx: RunContext[Any],

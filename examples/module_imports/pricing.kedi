@@ -1,0 +1,31 @@
+~Item(name: str, unit_cents: int, quantity: int)
+~Quote(subtotal_cents: int, discount_cents: int, total_cents: int)
+
+@quote(items: list[Item], discount_percent: int = `0`) -> Quote:
+  = ```
+  if not 0 <= discount_percent <= 100:
+      raise ValueError("discount_percent must be between 0 and 100")
+  if any(item.unit_cents < 0 or item.quantity < 0 for item in items):
+      raise ValueError("prices and quantities must be non-negative")
+  subtotal = sum(item.unit_cents * item.quantity for item in items)
+  discount = subtotal * discount_percent // 100
+  return Quote(
+      subtotal_cents=subtotal,
+      discount_cents=discount,
+      total_cents=subtotal - discount,
+  )
+  ```
+
+@test: quote:
+  > case: fractional_cent_discount:
+    ```
+    result = quote([Item(name="Cable", unit_cents=999, quantity=3)], 10)
+    assert result == Quote(subtotal_cents=2997, discount_cents=299, total_cents=2698)
+    ```
+  > case: empty_order:
+    `assert quote([]) == Quote(subtotal_cents=0, discount_cents=0, total_cents=0)`
+
+> export:
+  Item
+  Quote
+  quote

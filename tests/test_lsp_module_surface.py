@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,36 @@ import pytest
 from kedi.lang.ast import Program, Span, VariableInitStmt
 from kedi.lang.parser import parse_program
 from kedi.lsp import module_surface
+
+
+@pytest.mark.parametrize("identifier", ["args", "cli_args"])
+def test_runtime_cli_binding_is_not_a_public_export(monkeypatch, identifier):
+    from kedi.lang.compiler import environment
+
+    monkeypatch.setattr(environment, "CLI_ARGS_IDENTIFIER", identifier)
+    assert not module_surface.is_public_export_name(identifier)
+    assert module_surface.is_public_export_name("public")
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("import xml.etree", [("xml", "import xml.etree")]),
+        ("import json as serializer", [("serializer", "import json as serializer")]),
+        (
+            "from kedi.typesafe import Probability, Rubric as Score",
+            [
+                ("Probability", "from kedi.typesafe import Probability"),
+                ("Score", "from kedi.typesafe import Rubric as Score"),
+            ],
+        ),
+        ("from .helpers import Value", [("Value", "from .helpers import Value")]),
+        ("from unknown import *", []),
+    ],
+)
+def test_python_imports_have_static_export_stubs(source, expected):
+    exports = module_surface._python_stmt_exports(ast.parse(source).body[0])
+    assert [(name, stub) for name, stub, _, _ in exports] == expected
 
 
 def test_module_surface_returns_empty_surface_for_invalid_module(tmp_path) -> None:

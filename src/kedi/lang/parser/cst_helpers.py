@@ -280,9 +280,13 @@ def _collect_pre_walk_tree_errors(
         if node.is_missing or parent_type not in contextual_parents:
             self._record_tree_error(node)
         return  # don't recurse into ERROR subtrees
-    for child in node.children:
-        if child.has_error:
-            self._collect_pre_walk_tree_errors(child, node.type)
+    errored_children = [child for child in node.children if child.has_error]
+    # Tree-sitter can insert a hidden _dedent without exposing a missing child.
+    # Such recovery must not silently move statements out of their source scope.
+    if node.has_error and not errored_children:
+        self._record_tree_error(node)
+    for child in errored_children:
+        self._collect_pre_walk_tree_errors(child, node.type)
 
 
 def _parse_error_message(self: _Walker, node: Node, fallback: str) -> str:

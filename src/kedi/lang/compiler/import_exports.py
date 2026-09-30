@@ -358,7 +358,9 @@ def _public_runtime_names(self: ProgramCompiler, rt: KediRuntime) -> list[str]:
 
 
 def _is_public_name(self: ProgramCompiler, name: str) -> bool:
-    return bool(name) and not name.startswith("_")
+    from kedi.lang.compiler.environment import cli_args_identifier
+
+    return bool(name) and not name.startswith("_") and name != cli_args_identifier()
 
 
 def _resolve_export(
