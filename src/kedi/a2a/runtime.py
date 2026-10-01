@@ -28,11 +28,12 @@ from kedi.lang import compile_program, parse_program
 from kedi.module_registry import resolve_module_path
 from kedi.source_loading import load_kedi_source_bundle
 
-from .protocol import DEFAULT_A2A_MAX_RESPONSE_BYTES, response_size
 from ._storage_io import finish_storage_operation
+from .protocol import DEFAULT_A2A_MAX_RESPONSE_BYTES, response_size
 
 if TYPE_CHECKING:
     from kedi.core import KediRuntime
+
     from .persistence import A2APersistence
 
 

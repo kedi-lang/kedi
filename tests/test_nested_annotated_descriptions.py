@@ -9,9 +9,9 @@ from pydantic_ai.models.test import TestModel
 
 from kedi import Constraints
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
+from kedi.decisions import BooleanCriteria, ChoiceCriteria, Probability, Rubric
 from kedi.lang import compile_program, parse_program
 from kedi.lang.procedure_schema import procedure_json_schema, procedure_return_json_schema
-from kedi.decisions import BooleanCriteria, ChoiceCriteria, Probability, Rubric
 from tests.mock_adapter import MockAdapter
 from tests.utils_llm import run_without_llm
 

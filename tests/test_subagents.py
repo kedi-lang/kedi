@@ -43,6 +43,7 @@ from kedi.agent_adapter.invocation import (
     report_invocation,
 )
 from kedi.agent_adapter.meta import AdapterCapabilities
+from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
 from kedi.agent_adapter.subagents import (
     MAX_FINAL_SCHEMA_BYTES,
     DelegationResult,
@@ -125,7 +126,6 @@ from kedi.agent_profile import (
 from kedi.agent_profile.compile import build_capture_env, profile_stmt_to_definition
 from kedi.agent_profile.evaluation import eval_profile_definition
 from kedi.artifacts import artifact_instructions
-from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
 from kedi.core.runtime import KediRuntime
 from kedi.errors import KediExecutionError
 from kedi.lang import KediParseError, compile_program, parse_program

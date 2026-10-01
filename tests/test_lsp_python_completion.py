@@ -1,9 +1,9 @@
 """Completion edits must be executable in the source, not the shadow file."""
 
-from copy import deepcopy
 import io
 import json
 import sys
+from copy import deepcopy
 
 import pytest
 

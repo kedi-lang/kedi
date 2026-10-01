@@ -1,7 +1,7 @@
 """Exercise the published workflows, not a second implementation of their source."""
 
-import runpy
 import re
+import runpy
 from pathlib import Path
 from threading import Barrier
 

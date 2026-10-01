@@ -22,7 +22,6 @@ from .telemetry.naming import program_name, qualified_type_name
 from .tests_runner import run_evals, run_tests
 from .utils import ArgType, AttrDict
 
-
 _DEFAULT_ADAPTER_MODELS = {
     "pydantic": "groq:qwen/qwen3-32b",
     "langchain": "groq:qwen/qwen3-32b",

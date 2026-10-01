@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -9,7 +9,6 @@ import threading
 from pathlib import Path
 
 import pytest
-
 from kedi_debugger.protocol import read_message, write_message
 
 

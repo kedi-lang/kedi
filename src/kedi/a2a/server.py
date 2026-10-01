@@ -6,8 +6,8 @@ import ipaddress
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from functools import partial
-from threading import RLock
 from pathlib import Path
+from threading import RLock
 from typing import Any
 from urllib.parse import urlsplit
 

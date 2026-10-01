@@ -8,8 +8,8 @@ import kedi.lsp.features.scope as lsp_scope_module
 import kedi.lsp.features.semantic_tokens as lsp_semantic_tokens_module
 import kedi.lsp.features.symbols as lsp_symbols_module
 import kedi.lsp.python_virtual.scope as virtual_scope_module
-from kedi.artifacts import artifact_instructions
 from kedi.agent_adapter.request.prompts import GROUNDING_INSTRUCTION
+from kedi.artifacts import artifact_instructions
 from kedi.core.expressions import o
 from kedi.core.runtime import KediRuntime
 from kedi.engine import ThreadEngine
@@ -149,8 +149,8 @@ def test_optimize_block_allows_layout_whitespace_and_preserves_paragraphs(ending
     ],
 )
 def test_optimize_rejects_bare_prompt_in_grammar_and_runtime_parser(body):
-    from tree_sitter import Language, Parser
     import tree_sitter_kedi
+    from tree_sitter import Language, Parser
 
     source = "@summarize(topic):\n  > optimize: prompt:\n" + body + "  = <answer>\n"
     tree = Parser(Language(tree_sitter_kedi.language())).parse(source.encode())

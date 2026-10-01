@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from kedi.artifacts import ArtifactHistory, ArtifactManager, ArtifactPolicy
 from kedi.agent_adapter.conversation import ConversationState
+from kedi.artifacts import ArtifactHistory, ArtifactManager, ArtifactPolicy
 
 
 @pytest.mark.parametrize("capacity", [1, 17, 4096])

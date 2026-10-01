@@ -25,21 +25,20 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import FunctionModel
 
 from kedi.a2a import persistence as persistence_module
-from kedi.a2a._storage_io import finish_storage_operation
-from kedi.a2a.persistence import A2APersistence
 from kedi.a2a import runtime as a2a_runtime
+from kedi.a2a._storage_io import finish_storage_operation
 from kedi.a2a.auth import A2AServerAuth
-from kedi.a2a.runtime import prepare_a2a_program
-from kedi.a2a.runtime import _source_fingerprint
+from kedi.a2a.persistence import A2APersistence
+from kedi.a2a.runtime import _source_fingerprint, prepare_a2a_program
 from kedi.a2a.server import create_a2a_app
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
 from kedi.agent_adapter.conversation import ConversationState, _checkpoint_lane_state
 from kedi.agent_adapter.history_provenance import HistoryLineage
+from kedi.artifacts.errors import ArtifactExpiredError, ArtifactNotFoundError, ArtifactReleasedError
 from kedi.artifacts.history import ArtifactHistory
 from kedi.artifacts.manager import ArtifactManager
 from kedi.artifacts.models import ArtifactStatus
 from kedi.artifacts.policy import ArtifactPolicy
-from kedi.artifacts.errors import ArtifactExpiredError, ArtifactNotFoundError, ArtifactReleasedError
 from kedi.lang import parse_program
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -371,6 +370,7 @@ def test_artifact_pruning_rejects_unsafe_state(tmp_path: Path, monkeypatch: Any)
 @pytest.mark.parametrize("durable", [False, True])
 def test_executor_queue_failure_aborts_uncommitted_state(tmp_path: Path, durable: bool) -> None:
     from a2a.types import Message, Role, TaskArtifactUpdateEvent, TaskStatusUpdateEvent
+
     from kedi.a2a.server import _KediAgentExecutor
 
     async def scenario() -> None:

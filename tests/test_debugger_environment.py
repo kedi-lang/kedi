@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from kedi_debugger.server import validate_launch
 
 

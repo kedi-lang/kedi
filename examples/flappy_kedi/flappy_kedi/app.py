@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-from importlib.util import find_spec
 import json
 import logging
 import os
-from pathlib import Path
 import time
+from dataclasses import asdict
+from importlib.util import find_spec
+from pathlib import Path
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 

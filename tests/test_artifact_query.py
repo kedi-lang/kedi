@@ -305,10 +305,11 @@ def test_query_runs_through_langchain_tool_boundary(stored):
     ],
 )
 def test_query_signature_errors_are_model_correctable(stored, adapter, arguments):
-    from pydantic_ai import ModelRetry
     from langchain_core.tools import ToolException
-    from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
+    from pydantic_ai import ModelRetry
+
     from kedi.agent_adapter.adapters.langchain.tools import _langchain_sync_tool_function
+    from kedi.agent_adapter.adapters.pydantic.tools import _validated_tool_function
 
     manager, _ = stored
     spec = next(

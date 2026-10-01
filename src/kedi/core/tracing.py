@@ -7,9 +7,9 @@ from typing import (
     Any,
 )
 
+from kedi.debugging import checkpoint
 from kedi.errors import KediExecutionError, KediPythonOrigin, KediTraceFrame
 from kedi.errors import build_execution_error as _build_execution_error
-from kedi.debugging import checkpoint
 
 if TYPE_CHECKING:
     from kedi.core.runtime import KediRuntime

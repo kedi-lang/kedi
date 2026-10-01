@@ -12,9 +12,9 @@ from typing import (
 
 from kedi.core.expressions import _type_display_name
 from kedi.core.model_calls import _tool_request_context
-from kedi.telemetry import capture_enabled
 from kedi.debugging import checkpoint, execution_frame, execution_observed, observation_only
 from kedi.errors import KediExecutionError
+from kedi.telemetry import capture_enabled
 
 if TYPE_CHECKING:
     from kedi.agent_adapter.conversation import ConversationState, ConversationTurnTicket

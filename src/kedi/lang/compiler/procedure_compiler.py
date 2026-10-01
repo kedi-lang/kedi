@@ -7,8 +7,8 @@ from typing import Any, Callable
 
 from ...agent_adapter.tools.retry import ToolRetryPolicy, resolve_retry_on
 from ...core import KediRuntime
-from ...errors import KediTypeExecutionError
 from ...debugging import execution_frame
+from ...errors import KediTypeExecutionError
 from ..ast import ProcDefStmt, ProcedureDef, TypeRef
 from ..procedure_introspection import attach_procedure_metadata
 from .environment import BindingMetadata, ScopeFrame, build_python_env

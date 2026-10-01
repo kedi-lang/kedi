@@ -96,8 +96,8 @@ def test_kedi_capture_keeps_local_provider_confidence_and_typed_output(adapter, 
 def test_decisions_module_exports_shared_primitives_without_selecting_model(selected):
     from kedi_decisions import Probability, Rubric
 
-    from kedi.lang import compile_program, parse_program
     from kedi.decisions import Probability as ExportedProbability
+    from kedi.lang import compile_program, parse_program
     from kedi.lsp.module_surface import load_imported_surface
     from kedi.module_registry import resolve_module_path
 

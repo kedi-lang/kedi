@@ -1,8 +1,8 @@
 """Exercise the published game without paid model calls or a visible display."""
 
 import importlib
-from io import StringIO
 import json
+from io import StringIO
 from pathlib import Path
 from queue import Queue
 from typing import Any
@@ -101,10 +101,11 @@ def test_missing_decision_evidence_does_not_block_selected_action(game):
 
 @pytest.mark.parametrize("max_decisions", [160, 1000])
 def test_worker_budget_supports_the_full_requested_round(game, monkeypatch, max_decisions):
-    from flappy_kedi.pilot import Answer, serve
-    from kedi.agent_adapter.request_budget import ModelRequestBudget
-    from pydantic_ai.models.test import TestModel
     import kedi_typesafe
+    from flappy_kedi.pilot import Answer, serve
+    from pydantic_ai.models.test import TestModel
+
+    from kedi.agent_adapter.request_budget import ModelRequestBudget
 
     class Channel:
         answers = 0
@@ -131,9 +132,10 @@ def test_worker_budget_supports_the_full_requested_round(game, monkeypatch, max_
 
 
 def test_pilot_errors_log_details_without_credentials(game, monkeypatch, caplog):
-    from flappy_kedi.pilot import serve
-    from kedi.errors import KediExecutionError
     import kedi_typesafe
+    from flappy_kedi.pilot import serve
+
+    from kedi.errors import KediExecutionError
 
     secret = "test-only-secret-not-a-real-api-key"
     monkeypatch.setenv("TYPESAFE_API_KEY", secret)
@@ -155,9 +157,9 @@ def test_pilot_errors_log_details_without_credentials(game, monkeypatch, caplog)
 
 
 def test_worker_logs_failed_decision_and_unwraps_runtime_error(game, monkeypatch, caplog):
+    import kedi_typesafe
     from flappy_kedi.pilot import Answer, serve
     from pydantic_ai.models.test import TestModel
-    import kedi_typesafe
 
     calls = 0
 

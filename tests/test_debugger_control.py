@@ -6,10 +6,10 @@ import threading
 from pathlib import Path
 
 import pytest
+from kedi_debugger.controller import Controller
 
 from kedi.debugging import DebugEvent, observe_execution
 from kedi.lang import compile_program, parse_program
-from kedi_debugger.controller import Controller
 from tests.mock_adapter import MockAdapter
 
 

@@ -25,8 +25,8 @@ from ...agent_profile.directives import (
 )
 from ...agent_profile.use_resolution import eval_use_directive
 from ...core import KediRuntime
-from ...errors import KediTraceFrame
 from ...debugging import checkpoint
+from ...errors import KediTraceFrame
 from ..ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,

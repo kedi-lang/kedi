@@ -24,6 +24,7 @@ from kedi.agent_profile.directives import (
     eval_system_directive,
 )
 from kedi.agent_profile.use_resolution import eval_use_directive
+from kedi.debugging import checkpoint
 from kedi.lang.ast import (
     AdapterDirectiveStmt,
     AgentDirectiveStmt,
@@ -71,7 +72,6 @@ from kedi.lang.compiler.control_flow import (
 )
 from kedi.lang.compiler.type_system import register_type
 from kedi.run_budget import RunBudget, current_run_budget, run_budget_scope
-from kedi.debugging import checkpoint
 
 if TYPE_CHECKING:
     from kedi.lang.compiler.program_compiler import ProgramCompiler, _PreparedProgram
