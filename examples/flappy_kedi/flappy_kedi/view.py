@@ -158,13 +158,14 @@ class View:
         best: int,
         accepted: bool | None = None,
         auto_mode: str = "jev",
+        speed: float = 1.0,
         error: str = "",
         hover=None,
     ):
         self.canvas.fill(INK)
         self.canvas.blit(pygame.transform.scale(self.cat, (40, 36)), (24, 26))
         self.text("flappy kedi", (78, 17), 30, PAPER)
-        self.text("BOSPHORUS HOP", (80, 51), 16, MINT)
+        self.text(f"BOSPHORUS HOP / {speed:g}x", (80, 51), 16, MINT)
         for name, label in (("manual", "YOU"), ("jev", f"{auto_mode.upper()} PILOT")):
             rect = self.buttons[name]
             active = (name == "manual") == (mode == "manual")
@@ -194,7 +195,7 @@ class View:
         )
 
         pygame.draw.rect(self.canvas, INK, (0, 628, 960, 52))
-        state = "PAUSED" if paused else "JEV THINKING" if pending else "IN FLIGHT"
+        state = "PAUSED" if paused else f"{auto_mode.upper()} THINKING" if pending else "IN FLIGHT"
         if not paused and not pending and accepted is False:
             state = "LOW CONFIDENCE"
         if status != "running":
@@ -208,19 +209,22 @@ class View:
         )
         self.text("-- ms" if latency is None else f"{latency * 1000:.0f} ms", (810, 642), 20, MINT)
 
-        if status in {"ready", "over", "complete", "error"}:
+        if status in {"ready", "preparing", "over", "complete", "error"}:
             panel = pygame.Rect(220, 228, 520, 225)
             pygame.draw.rect(self.canvas, INK, panel.move(6, 6))
             pygame.draw.rect(self.canvas, PAPER, panel)
             pygame.draw.rect(self.canvas, MINT, (220, 228, 520, 7))
             heading = {
                 "ready": "A little leap.",
+                "preparing": "Preparing pilot...",
                 "over": "Missed the gap!",
                 "complete": "Round complete.",
                 "error": "Pilot unavailable.",
             }[status]
             self.text(heading, (480, 278), 40, center=True)
             sub = "Your turn." if mode == "manual" else f"{auto_mode.title()} at the controls."
+            if status == "preparing":
+                sub = f"{auto_mode.title()} is preparing the first move."
             if status in {"over", "complete"}:
                 sub = f"{world.score} gates / {world.elapsed:.1f}s of flight"
             if status == "error":
@@ -236,11 +240,12 @@ class View:
             lines.append(current)
             for i, line in enumerate(lines[:2]):
                 self.text(line, (480, 326 + i * 22), 20, center=True)
-            rect = self.buttons["launch"]
-            pygame.draw.rect(self.canvas, INK, rect)
-            self.text(
-                "TAKE OFF" if status == "ready" else "TRY AGAIN", rect.center, 24, PAPER, True
-            )
+            if status != "preparing":
+                rect = self.buttons["launch"]
+                pygame.draw.rect(self.canvas, INK, rect)
+                self.text(
+                    "TAKE OFF" if status == "ready" else "TRY AGAIN", rect.center, 24, PAPER, True
+                )
         elif paused:
             self.text("PAUSED", (480, 312), 54, INK, center=True)
         if hover in {"pause", "restart"}:

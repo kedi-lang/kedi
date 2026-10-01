@@ -1,6 +1,6 @@
 ```
 from typing import Annotated
-from kedi.typesafe import Probability
+from kedi.decisions import Probability
 RefundProbability = Annotated[
     Probability,
     "Does the customer request a refund?",

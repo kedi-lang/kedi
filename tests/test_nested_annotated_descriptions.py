@@ -11,7 +11,7 @@ from kedi import Constraints
 from kedi.agent_adapter.adapters import LangChainAdapter, PydanticAdapter
 from kedi.lang import compile_program, parse_program
 from kedi.lang.procedure_schema import procedure_json_schema, procedure_return_json_schema
-from kedi.typesafe import BooleanCriteria, ChoiceCriteria, Probability, Rubric
+from kedi.decisions import BooleanCriteria, ChoiceCriteria, Probability, Rubric
 from tests.mock_adapter import MockAdapter
 from tests.utils_llm import run_without_llm
 
@@ -143,7 +143,7 @@ def test_nested_constraint_without_description_is_preserved() -> None:
 def test_native_computed_jev_metadata_reaches_output_schema(base, metadata, kind):
     source = (
         "```\nfrom typing import Literal\n"
-        "from kedi.typesafe import Rubric, BooleanCriteria, ChoiceCriteria\n```\n"
+        "from kedi.decisions import Rubric, BooleanCriteria, ChoiceCriteria\n```\n"
         f'~Review(value: Annotated[{base}, "Review decision", `{metadata}`])\n'
         "= `Review.model_json_schema()`\n"
     )
@@ -213,7 +213,7 @@ def test_jev_alias_keeps_its_criteria_and_new_description(annotation, descriptio
 
 def test_native_kedi_annotation_can_describe_probability_alias() -> None:
     source = """```
-from kedi.typesafe import Probability
+from kedi.decisions import Probability
 ```
 ~Result(value: Annotated[Probability, "Decision confidence"])
 = `Result.model_json_schema()`

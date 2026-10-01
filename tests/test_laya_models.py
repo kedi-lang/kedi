@@ -1,6 +1,4 @@
 import builtins
-import runpy
-from pathlib import Path
 
 import pytest
 
@@ -50,27 +48,6 @@ def test_laya_optional_dependency_errors_preserve_transitive_failures(monkeypatc
         laya_model("laya/test", "pydantic")
 
 
-@pytest.mark.parametrize("missing_name", ["kedi_laya", "numpy"])
-def test_laya_primitive_import_errors(monkeypatch, missing_name):
-    original = builtins.__import__
-    missing = ModuleNotFoundError("Dependency missing", name=missing_name)
-
-    def imported(name, *args, **kwargs):
-        if name == "kedi_laya":
-            raise missing
-        return original(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", imported)
-    with pytest.raises(ModuleNotFoundError) as error:
-        runpy.run_path(str(Path(__file__).parents[1] / "src/kedi/laya.py"))
-    assert error.value.name == missing_name
-    if missing_name == "kedi_laya":
-        assert "kedi-decisions[laya]" in str(error.value)
-        assert error.value.__cause__ is missing
-    else:
-        assert error.value is missing
-
-
 @pytest.mark.parametrize("adapter", ["pydantic", "langchain"])
 def test_kedi_capture_keeps_local_provider_confidence_and_typed_output(adapter, tmp_path):
     from kedi_laya import LayaClient
@@ -116,25 +93,27 @@ def test_kedi_capture_keeps_local_provider_confidence_and_typed_output(adapter, 
 
 
 @pytest.mark.parametrize("selected", ["", ":\n  Probability\n  Rubric"])
-def test_laya_module_exports_shared_primitives_without_selecting_model(selected):
+def test_decisions_module_exports_shared_primitives_without_selecting_model(selected):
     from kedi_decisions import Probability, Rubric
 
     from kedi.lang import compile_program, parse_program
-    from kedi.laya import Probability as ExportedProbability
+    from kedi.decisions import Probability as ExportedProbability
     from kedi.lsp.module_surface import load_imported_surface
     from kedi.module_registry import resolve_module_path
 
     assert ExportedProbability is Probability
     profile = AgentProfile(model="openai:unchanged")
     runtime = compile_program(
-        parse_program(f"> import: laya{selected}\n= imported\n"),
+        parse_program(f"> import: decisions{selected}\n= imported\n"),
         default_agent_profile=profile,
     )
     assert runtime.run_main() == "imported"
     assert runtime.default_agent_profile.model == profile.model
     assert runtime._import_env["Probability"] is Probability
     assert runtime._import_env["Rubric"] is Rubric
-    surface = load_imported_surface(resolve_module_path("laya", source_path=None), set(), "laya")
+    surface = load_imported_surface(
+        resolve_module_path("decisions", source_path=None), set(), "decisions"
+    )
     assert surface.exported_names() == {
         "BooleanCriteria",
         "ChoiceCriteria",

@@ -1,4 +1,4 @@
-> import: typesafe:
+> import: decisions:
   BooleanCriteria
   ChoiceCriteria
 

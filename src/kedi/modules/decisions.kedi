@@ -1,0 +1,13 @@
+###
+Shared decision types and criteria. Importing this module does not select a model.
+###
+
+```
+from kedi.decisions import BooleanCriteria, ChoiceCriteria, Probability, Rubric
+```
+
+> export:
+  BooleanCriteria
+  ChoiceCriteria
+  Probability
+  Rubric

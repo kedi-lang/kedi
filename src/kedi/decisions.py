@@ -1,4 +1,4 @@
-"""Immutable provenance for model-backed Kedi output bindings."""
+"""Shared decision criteria and immutable provenance for Kedi output bindings."""
 
 from __future__ import annotations
 
@@ -13,10 +13,31 @@ from contextvars import ContextVar
 from dataclasses import dataclass, fields, is_dataclass
 from threading import Lock
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from kedi_decisions import BooleanCriteria, ChoiceCriteria, Probability, Rubric
+
+
+def __getattr__(name: str) -> Any:
+    # Evidence is core functionality; criteria remain an optional dependency.
+    if name not in {"BooleanCriteria", "ChoiceCriteria", "Probability", "Rubric"}:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        import kedi_decisions
+    except ModuleNotFoundError as exc:
+        if exc.name != "kedi_decisions":
+            raise
+        raise ModuleNotFoundError(
+            "Decision criteria require the optional kedi-decisions package. "
+            "Install it with: uv add kedi-decisions",
+            name="kedi_decisions",
+        ) from exc
+    return getattr(kedi_decisions, name)
+
 
 _FINGERPRINT_CODEC = "kedi-decision-value-v1"
 _current_evidence_collector: ContextVar[list[CapturedDecisionEvidence] | None] = ContextVar(
@@ -710,6 +731,8 @@ def _decode_output(value: Any) -> DecisionOutput:
 
 
 __all__ = [
+    "BooleanCriteria",
+    "ChoiceCriteria",
     "DecisionCapture",
     "DecisionInfo",
     "DecisionInput",
@@ -717,6 +740,8 @@ __all__ = [
     "DecisionRecord",
     "DecisionReference",
     "DecisionSource",
+    "Probability",
+    "Rubric",
     "capture_decision_evidence",
     "capture_decisions",
     "decision_info",

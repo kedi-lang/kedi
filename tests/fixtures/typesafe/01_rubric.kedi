@@ -1,6 +1,6 @@
 ```
 from typing import Annotated
-from kedi.typesafe import Rubric
+from kedi.decisions import Rubric
 Severity = Annotated[
     float,
     "How severe is the service problem?",

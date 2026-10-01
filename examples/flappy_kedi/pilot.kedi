@@ -1,7 +1,9 @@
+> import: decisions:
+  ChoiceCriteria
+
 ```
 from typing import Annotated, Any, Literal
 from kedi import decision_info
-from kedi_decisions import ChoiceCriteria
 
 Movement = Annotated[
     Literal["flap", "coast"],
@@ -25,7 +27,7 @@ Movement = Annotated[
   action = movement
   evidence = decision_info("movement")
   confidence = evidence.confidence if evidence is not None else None
-  return Decision(action, confidence, confidence is not None and confidence >= 0.60)
+  return Decision(action, confidence, True)
   ```
 
 @play(turns: Any) -> str:

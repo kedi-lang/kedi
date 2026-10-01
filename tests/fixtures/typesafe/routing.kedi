@@ -1,6 +1,6 @@
 ```
 from typing import Annotated
-from kedi.typesafe import Probability
+from kedi.decisions import Probability
 Evidence = Annotated[
     Probability,
     "Does the ticket explicitly describe a billing or technical issue?",

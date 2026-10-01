@@ -26,10 +26,10 @@ def test_runtime_cli_binding_is_not_a_public_export(monkeypatch, identifier):
         ("import xml.etree", [("xml", "import xml.etree")]),
         ("import json as serializer", [("serializer", "import json as serializer")]),
         (
-            "from kedi.typesafe import Probability, Rubric as Score",
+            "from kedi.decisions import Probability, Rubric as Score",
             [
-                ("Probability", "from kedi.typesafe import Probability"),
-                ("Score", "from kedi.typesafe import Rubric as Score"),
+                ("Probability", "from kedi.decisions import Probability"),
+                ("Score", "from kedi.decisions import Rubric as Score"),
             ],
         ),
         ("from .helpers import Value", [("Value", "from .helpers import Value")]),

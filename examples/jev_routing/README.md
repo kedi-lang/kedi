@@ -26,10 +26,10 @@ urgency probability and the threshold used for the decision.
 
 ## Criteria are not a text-generation prompt
 
-`> import: typesafe` exposes the optional decision primitives directly in Kedi.
+`> import: decisions` exposes the optional decision primitives directly in Kedi.
 This example imports only `BooleanCriteria` and `ChoiceCriteria`. The import
 does not select a model, configure credentials, or make a provider request.
-Python callers still use explicit imports from `kedi.typesafe`.
+Python callers still use explicit imports from `kedi.decisions`.
 
 `Team` is an `Annotated` finite choice with explicit `ChoiceCriteria`. `Urgent`
 is a Boolean with positive and negative `BooleanCriteria`. Both are requested

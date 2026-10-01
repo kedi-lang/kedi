@@ -1,6 +1,6 @@
 ```
 from typing import Annotated, Literal
-from kedi.typesafe import ChoiceCriteria
+from kedi.decisions import ChoiceCriteria
 Department = Annotated[
     Literal["billing", "technical", "other"],
     "Which department should handle the request?",

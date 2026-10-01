@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from importlib.util import find_spec
 import json
+import logging
 import os
 from pathlib import Path
 import time
@@ -20,8 +21,19 @@ from .world import STEP, TURN_STEPS, World
 
 class Flight:
     def __init__(
-        self, source: Path, *, seed=7, mode="jev", model=None, max_decisions=80, record=None
+        self,
+        source: Path,
+        *,
+        seed=7,
+        mode="jev",
+        model=None,
+        max_decisions=80,
+        record=None,
+        speed=None,
     ):
+        if speed is not None and (isinstance(speed, bool) or not 0.1 <= float(speed) <= 1.0):
+            raise ValueError("--speed must be between 0.1 and 1.0")
+        self.configured_speed = float(speed) if speed is not None else None
         self.source = source
         self.seed = seed
         self.mode = mode
@@ -35,7 +47,8 @@ class Flight:
         self.status = "ready"
         self.paused = False
         self.decisions = 0
-        self.steps_remaining = 0
+        self.steps_until_request = 0
+        self.observed_at = 0.0
         self.accumulator = 0.0
         self.last_action = "--"
         self.accepted = None
@@ -43,6 +56,13 @@ class Flight:
         self.latency = None
         self.error = ""
         self.started = time.monotonic()
+        self.startup_seconds = 0.0
+
+    @property
+    def speed(self):
+        if self.configured_speed is not None:
+            return self.configured_speed
+        return 1.0 if self.mode == "manual" else 0.5
 
     def emit(self, event: str, **fields):
         if self.record is not None:
@@ -55,28 +75,32 @@ class Flight:
             self.pilot = None
 
     def start(self, mode=None):
-        if self.status == "running":
+        if self.status in {"preparing", "running"}:
             self.finish("stopped")
         else:
             self.stop_pilot()
         if mode is not None:
             self.mode = mode
         self.world = World(self.seed)
-        self.decisions = self.steps_remaining = 0
+        self.decisions = self.steps_until_request = 0
+        self.observed_at = 0.0
         self.accumulator = 0.0
         self.paused = False
         self.last_action = "--"
         self.accepted = None
         self.confidence = self.latency = None
         self.error = ""
-        self.status = "running"
+        self.status = "running" if self.mode == "manual" else "preparing"
         self.started = time.monotonic()
+        self.startup_seconds = 0.0
         self.emit(
             "start",
             seed=self.seed,
             mode=self.mode,
             max_decisions=self.max_decisions,
             model=self.model if self.mode == "laya" else "jev-latest",
+            timing="realtime" if self.speed == 1.0 else "scaled_realtime",
+            speed=self.speed,
         )
         if self.mode != "manual":
             package = "kedi_laya" if self.mode == "laya" else "kedi_typesafe"
@@ -85,8 +109,10 @@ class Flight:
             elif self.mode == "jev" and not os.getenv("TYPESAFE_API_KEY"):
                 self.error = "TYPESAFE_API_KEY is missing. Manual play is available."
             else:
-                self.pilot = (
-                    Pilot(self.source, self.model) if self.mode == "laya" else Pilot(self.source)
+                self.pilot = Pilot(
+                    self.source,
+                    self.model if self.mode == "laya" else None,
+                    max_decisions=self.max_decisions,
                 )
             if self.error:
                 self.finish("error")
@@ -100,6 +126,8 @@ class Flight:
             "decisions": self.decisions,
             "simulation_seconds": round(self.world.elapsed, 3),
             "wall_seconds": round(time.monotonic() - self.started, 3),
+            "startup_seconds": round(self.startup_seconds, 3),
+            "speed": self.speed,
         }
 
     def finish(self, status):
@@ -107,62 +135,87 @@ class Flight:
         self.best = max(self.best, self.world.score)
         self.stop_pilot()
         if self.error:
+            logging.getLogger(__name__).error(
+                "Flight stopped after %d decisions: %s", self.decisions, self.error
+            )
             self.emit("error", message=self.error)
         self.emit("finish", **self.summary())
 
     def tick(self, seconds: float):
-        if self.status != "running" or self.paused:
+        if self.status not in {"preparing", "running"} or self.paused:
             return
-        if self.mode != "manual" and self.steps_remaining == 0:
-            self.accumulator = 0.0
-            if self.decisions >= self.max_decisions:
-                self.finish("complete")
-                return
-            if not self.pilot.pending:
+        if self.mode != "manual":
+            if (
+                self.decisions < self.max_decisions
+                and not self.pilot.pending
+                and self.steps_until_request == 0
+            ):
                 observation = self.world.observation()
-                self.emit("observation", turn=self.decisions + 1, state=observation)
+                self.observed_at = self.world.elapsed
+                self.emit(
+                    "observation",
+                    turn=self.decisions + 1,
+                    simulation_seconds=self.observed_at,
+                    state=observation,
+                )
                 self.pilot.request(observation)
-            answer = self.pilot.poll()
-            if answer is None:
-                return
+                self.steps_until_request = TURN_STEPS
+            answer = self.pilot.poll() if self.pilot.pending else None
             if isinstance(answer, str):
                 self.error = answer
                 self.finish("error")
                 return
-            if answer.action not in {"flap", "coast"}:
-                self.error = "Pilot returned an invalid movement."
-                self.finish("error")
-                return
-            self.decisions += 1
-            self.accepted = answer.accepted
-            self.last_action, self.confidence, self.latency = (
-                answer.action if answer.accepted else "coast",
-                answer.confidence,
-                answer.seconds,
-            )
-            self.emit(
-                "decision", turn=self.decisions, applied_action=self.last_action, **asdict(answer)
-            )
-            if self.last_action == "flap":
-                self.world.flap()
-            self.steps_remaining = TURN_STEPS
-        self.accumulator += min(seconds, 0.1)
+            if answer is not None:
+                if answer.action not in {"flap", "coast"}:
+                    self.error = "Pilot returned an invalid movement."
+                    self.finish("error")
+                    return
+                self.decisions += 1
+                self.accepted = answer.accepted
+                self.last_action, self.confidence, self.latency = (
+                    answer.action if answer.accepted else "coast",
+                    answer.confidence,
+                    answer.seconds,
+                )
+                if self.status == "preparing":
+                    self.startup_seconds = time.monotonic() - self.started
+                    self.status = "running"
+                    self.emit("takeoff", startup_seconds=self.startup_seconds)
+                self.emit(
+                    "decision",
+                    turn=self.decisions,
+                    applied_action=self.last_action,
+                    simulation_seconds=self.world.elapsed,
+                    observation_age_seconds=self.world.elapsed - self.observed_at,
+                    **asdict(answer),
+                )
+                if self.last_action == "flap":
+                    self.world.flap()
+                if self.decisions >= self.max_decisions:
+                    # Observe the final movement before ending a bounded round.
+                    self.steps_until_request = TURN_STEPS
+        if self.status == "preparing":
+            return
+        self.accumulator += min(seconds, 0.1) * self.speed
         while self.accumulator >= STEP and self.world.alive:
-            if self.mode != "manual" and self.steps_remaining == 0:
-                break
             self.world.step()
             self.accumulator -= STEP
             if self.mode != "manual":
-                self.steps_remaining -= 1
+                self.steps_until_request = max(0, self.steps_until_request - 1)
+                if self.decisions >= self.max_decisions and self.steps_until_request == 0:
+                    break
         if not self.world.alive:
             self.finish("over")
+        elif self.mode != "manual" and self.decisions >= self.max_decisions:
+            if self.steps_until_request == 0:
+                self.finish("complete")
 
     def command(self, command):
         if command in {"manual", "jev"}:
             self.start(self.auto_mode if command == "jev" else "manual")
         elif command in {"launch", "restart"}:
             self.start()
-        elif command == "pause" and self.status == "running":
+        elif command == "pause" and self.status in {"preparing", "running"}:
             self.paused = not self.paused
         elif command == "flap" and self.mode == "manual" and not self.paused:
             if self.status != "running":
@@ -178,6 +231,7 @@ def run_game(
     model=None,
     seed=7,
     max_decisions=80,
+    speed=None,
     headless=False,
     autostart=False,
     frames=None,
@@ -196,6 +250,14 @@ def run_game(
         raise ValueError("--frames must be positive")
     if not isinstance(headless, bool) or not isinstance(autostart, bool):
         raise ValueError("--headless and --autostart are flags; do not supply a value")
+    flight = Flight(
+        Path(source).resolve(),
+        seed=seed,
+        mode=pilot,
+        model=model,
+        max_decisions=max_decisions,
+        speed=speed,
+    )
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
         os.environ["SDL_AUDIODRIVER"] = "dummy"
@@ -207,20 +269,13 @@ def run_game(
     pygame.display.set_icon(view.cat)
     clock = pygame.time.Clock()
     record = Path(trace).open("a", encoding="utf-8") if trace else None
-    flight = Flight(
-        Path(source).resolve(),
-        seed=seed,
-        mode=pilot,
-        model=model,
-        max_decisions=max_decisions,
-        record=record,
-    )
+    flight.record = record
     frame_count, running = 0, True
     try:
         if headless or autostart:
             flight.start()
         while running:
-            seconds = clock.tick(120 if headless else 60) / 1000
+            seconds = clock.tick(60) / 1000
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
@@ -239,11 +294,12 @@ def run_game(
                     flight.command(command or "flap")
             if not running:
                 break
-            flight.tick(0.1 if headless else seconds)
+            flight.tick(seconds)
             view.draw(
                 screen,
                 flight.world,
                 mode=flight.mode,
+                speed=flight.speed,
                 auto_mode=flight.auto_mode,
                 status=flight.status,
                 paused=flight.paused,
@@ -259,13 +315,13 @@ def run_game(
             )
             pygame.display.flip()
             frame_count += 1
-            if headless and flight.status not in {"ready", "running"}:
+            if headless and flight.status not in {"ready", "preparing", "running"}:
                 running = False
             if frames and frame_count >= frames:
                 running = False
         if screenshot:
             pygame.image.save(view.canvas, str(screenshot))
-        if flight.status == "running":
+        if flight.status in {"preparing", "running"}:
             flight.finish("stopped")
         if flight.status == "error":
             raise RuntimeError(flight.error)

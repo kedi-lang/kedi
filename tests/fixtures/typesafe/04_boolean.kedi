@@ -1,6 +1,6 @@
 ```
 from typing import Annotated
-from kedi.typesafe import BooleanCriteria
+from kedi.decisions import BooleanCriteria
 Urgency = Annotated[
     bool,
     "Does this need immediate intervention?",

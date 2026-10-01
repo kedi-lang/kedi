@@ -154,6 +154,7 @@ tree-sitter-kedi = { path = "tree-sitter-kedi", editable = true }
 kedi-notebook = { path = "notebook", editable = true }
 kedi-decisions = { git = "https://github.com/kedi-lang/kedi-decisions.git", rev = "1d66d5170986b23c712dd8f490857e93e41c147d" }
 kedi-laya = { git = "https://github.com/kedi-lang/kedi-decisions.git", rev = "1d66d5170986b23c712dd8f490857e93e41c147d", subdirectory = "packages/kedi-laya" }
+kedi-typesafe = { git = "https://github.com/kedi-lang/kedi-decisions.git", rev = "1d66d5170986b23c712dd8f490857e93e41c147d", subdirectory = "packages/kedi-typesafe" }
 
 [tool.ruff]
 line-length = 100
@@ -197,7 +198,7 @@ dev = [
     "langchain-mcp-adapters==0.3.2",
     "langchain-openai==1.6.0",
     "langchain-openrouter==0.2.8",
-    "kedi-typesafe[all]>=0.2.1,<0.4",
+    "kedi-typesafe[all]==0.3.0",
     "pre-commit==4.6.0",
     "pydantic-ai==2.45.0",
     "pytest==9.0.3",

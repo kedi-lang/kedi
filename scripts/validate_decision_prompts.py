@@ -70,7 +70,9 @@ def measure(checkpoint: str, repeats: int) -> dict:
     with RecordingClient(checkpoint) as client:
         for repeat in range(repeats):
             for case_id, (text, team, refund) in enumerate(CASES):
-                source = "> import: laya:\n  Probability\n  ChoiceCriteria\n\n>> " + text + CAPTURES
+                source = (
+                    "> import: decisions:\n  Probability\n  ChoiceCriteria\n\n>> " + text + CAPTURES
+                )
                 program = parse_program(source)
                 modes = (
                     ("completion", "decision")
