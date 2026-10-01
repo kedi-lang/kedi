@@ -200,12 +200,17 @@ class ReadlineHistory(History):
     """Share the existing Kedi readline history with prompt-toolkit input."""
 
     def __init__(self) -> None:
-        import readline
-
-        self._readline = readline
+        try:
+            import readline
+        except ImportError:
+            self._readline = None
+        else:
+            self._readline = readline
         super().__init__()
 
     def load_history_strings(self) -> list[str]:
+        if self._readline is None:
+            return []
         entries = [
             self._readline.get_history_item(index)
             for index in range(1, self._readline.get_current_history_length() + 1)
@@ -213,7 +218,8 @@ class ReadlineHistory(History):
         return [entry for entry in reversed(entries) if entry is not None]
 
     def store_string(self, string: str) -> None:
-        self._readline.add_history(string)
+        if self._readline is not None:
+            self._readline.add_history(string)
 
 
 def _line_key_bindings() -> KeyBindings:

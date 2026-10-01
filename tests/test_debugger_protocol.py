@@ -330,13 +330,14 @@ if mode == "refuse":
     sys.exit(1)
 if mode == "silent":
     time.sleep(60)
+if mode == "close_control":
+    control.close()
 response(launch)
 if mode == "bad_worker":
     send(config["workerMessage"])
 if mode == "bad_framing":
     os.write(protocol.fileno(), b"Content-Length: 1\r\n\r\n{")
 if mode == "close_control":
-    control.close()
     time.sleep(60)
 if mode == "output":
     secret = os.environ["KEDI_TEST_SECRET"]

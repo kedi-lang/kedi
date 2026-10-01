@@ -776,7 +776,7 @@ def _atomic_write(path: Path, payload: bytes) -> None:
     try:
         fd, raw_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
         temporary = Path(raw_path)
-        os.fchmod(fd, 0o600)
+        # mkstemp already creates owner-only files on POSIX; Windows uses ACLs.
         with os.fdopen(fd, "wb") as stream:
             fd = None
             stream.write(payload)
@@ -784,11 +784,12 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         temporary = None
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if os.name != "nt":
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         if fd is not None:
             os.close(fd)

@@ -146,9 +146,9 @@ def test_source_byte_limit_applies_to_registration_and_disk(sources_module, tmp_
     sources = sources_module.Sources()
     text = "#" + "x" * (maximum - 2) + "\n"
     sources.register(str(path), text)
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))
     sources.verify()
-    path.write_text(text + "\n", encoding="utf-8")
+    path.write_bytes((text + "\n").encode("utf-8"))
     with pytest.raises(ValueError, match="restart required"):
         sources.verify()
     with pytest.raises(ValueError, match="2 MiB"):

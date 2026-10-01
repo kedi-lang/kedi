@@ -60,6 +60,16 @@ requires_posix_processes = pytest.mark.skipif(
 )
 
 
+def test_atomic_records_without_posix_directory_sync(tmp_path: Path, monkeypatch) -> None:
+    from kedi.integrations.harbor import records
+
+    monkeypatch.setattr(records, "os", SimpleNamespace(**(vars(os) | {"name": "nt"})))
+    destination = tmp_path / "result.json"
+    records.atomic_write_json(destination, {"state": "completed"})
+    assert json.loads(destination.read_text()) == {"state": "completed"}
+    assert list(tmp_path.iterdir()) == [destination]
+
+
 @pytest.fixture
 def terminal(tmp_path: Path) -> Iterator[TerminalSession]:
     if os.name != "posix":
@@ -2786,7 +2796,7 @@ def test_runner_helpers_signal_state_and_main(
 
     with monkeypatch.context() as context:
         context.setattr(runner, "threading_is_main", lambda: True)
-        context.delattr(runner.signal, "SIGALRM")
+        context.delattr(runner.signal, "SIGALRM", raising=False)
         no_alarm_state = runner._SignalState(
             cast(TerminalSession, SimpleNamespace(close=lambda: None))
         )
@@ -2805,7 +2815,9 @@ def test_runner_helpers_signal_state_and_main(
         timers.append(args)
         return (2.0, 0.5)
 
-    monkeypatch.setattr(runner.signal, "setitimer", fake_setitimer)
+    monkeypatch.setattr(runner.signal, "SIGALRM", 14, raising=False)
+    monkeypatch.setattr(runner.signal, "ITIMER_REAL", 0, raising=False)
+    monkeypatch.setattr(runner.signal, "setitimer", fake_setitimer, raising=False)
     active_state = runner._SignalState(cast(TerminalSession, SimpleNamespace(close=lambda: None)))
     active_state.install(timeout_seconds=1)
     active_state.restore()
@@ -4128,6 +4140,7 @@ def test_harbor_agent_repeated_cancellation_does_not_leave_cleanup_task(
 
 
 @pytest.mark.parametrize("exit_code", [0, 23])
+@requires_posix_processes
 def test_harbor_setup_records_phases_and_preserves_exit_code(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_code: int
 ) -> None:
@@ -4191,6 +4204,7 @@ def test_harbor_setup_keeps_partial_output_when_install_is_cancelled(
     assert "phase=last" not in output
 
 
+@requires_posix_processes
 def test_harbor_setup_stops_when_an_early_and_list_command_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

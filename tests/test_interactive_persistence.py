@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import operator
+import os
 import re
 from concurrent.futures import Future
 from datetime import date, datetime, time, timedelta, timezone
@@ -368,7 +369,16 @@ def test_snapshot_file_round_trip_and_validation(tmp_path: Path) -> None:
     payload = {"value": 42}
     assert persistence.write_snapshot(snapshot, payload) == snapshot
     assert persistence.read_snapshot(snapshot) == payload
-    assert snapshot.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert snapshot.stat().st_mode & 0o777 == 0o600
+
+
+def test_snapshot_write_without_posix_directory_sync(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(persistence, "os", SimpleNamespace(**(vars(os) | {"name": "nt"})))
+    snapshot = tmp_path / "snapshot.json"
+    persistence.write_snapshot(snapshot, {"value": 42})
+    assert persistence.read_snapshot(snapshot) == {"value": 42}
+    assert list(tmp_path.iterdir()) == [snapshot]
 
 
 def test_snapshot_write_and_read_enforce_size_limit(
@@ -444,11 +454,11 @@ def test_atomic_write_cleans_temporary_file_when_initialization_fails(
 ) -> None:
     destination = tmp_path / "snapshot.json"
 
-    def fail_chmod(_fd: int, _mode: int) -> None:
-        raise OSError("chmod failed")
+    def fail_fdopen(_fd: int, _mode: str) -> None:
+        raise OSError("fdopen failed")
 
-    monkeypatch.setattr(persistence.os, "fchmod", fail_chmod)
-    with pytest.raises(OSError, match="chmod failed"):
+    monkeypatch.setattr(persistence.os, "fdopen", fail_fdopen)
+    with pytest.raises(OSError, match="fdopen failed"):
         persistence._atomic_write(destination, b"value")
     assert not destination.exists()
     assert not tuple(tmp_path.iterdir())

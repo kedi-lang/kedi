@@ -829,6 +829,14 @@ def test_prompt_toolkit_uses_existing_readline_history(monkeypatch: Any) -> None
     assert entries[-1] == "> if: `True`:\n  = done"
 
 
+def test_prompt_toolkit_history_without_readline(monkeypatch: Any) -> None:
+    monkeypatch.setitem(sys.modules, "readline", None)
+    history = idle_input_module.ReadlineHistory()
+    assert history.load_history_strings() == []
+    history.append_string("> show: `42`")
+    assert history.get_strings() == ["> show: `42`"]
+
+
 def test_run_idle_owns_session_and_saves_history(monkeypatch: Any) -> None:
     events: list[str] = []
 

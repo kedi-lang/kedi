@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from contextlib import contextmanager
@@ -1916,7 +1917,8 @@ def test_subagent_state_restores_terminal_results_and_continuation(tmp_path: Pat
         first_tools["delegate_task"].fn(subagent="worker", task="Persist this result")
     )
     assert state_path.exists()
-    assert state_path.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert state_path.stat().st_mode & 0o777 == 0o600
 
     second_adapter = RecordingPydanticAdapter()
     second_runtime = compile_program(

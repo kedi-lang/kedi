@@ -176,7 +176,7 @@ def run_trial(
     )
     terminal = TerminalSession(
         root=workspace,
-        cwd_root=Path("/"),
+        cwd_root=Path(workspace.anchor),
         records_dir=records_dir,
         command_timeout_seconds=command_timeout_seconds,
         preview_bytes=terminal_preview_bytes,
