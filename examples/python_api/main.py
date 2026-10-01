@@ -23,7 +23,10 @@ def extract_incident(update: str) -> Incident:
     ...
 
 
-@kedi.bind(file=Path(__file__).with_name("notice.kedi"))
+path = Path(__file__)
+
+
+@kedi.bind(file=path.with_name("notice.kedi"))
 def draft_notice(incident: Incident) -> str:
     """Draft a customer-facing notice from the extracted incident."""
     ...

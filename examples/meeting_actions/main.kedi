@@ -20,4 +20,8 @@ from kedi import Constraints
   The agreed actions are [actions: list[Action]].
   = `actions`
 
-= `extract_actions(Path(__file__).with_name("notes.md").read_text(encoding="utf-8"))`
+= ```
+path = Path(__file__)
+path = path.with_name("notes.md")
+return extract_actions(path.read_text(encoding="utf-8"))
+```

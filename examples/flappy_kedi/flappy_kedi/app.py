@@ -250,8 +250,9 @@ def run_game(
         raise ValueError("--frames must be positive")
     if not isinstance(headless, bool) or not isinstance(autostart, bool):
         raise ValueError("--headless and --autostart are flags; do not supply a value")
+    source_path = Path(source)
     flight = Flight(
-        Path(source).resolve(),
+        source_path.resolve(),
         seed=seed,
         mode=pilot,
         model=model,
@@ -268,7 +269,10 @@ def run_game(
     view = View()
     pygame.display.set_icon(view.cat)
     clock = pygame.time.Clock()
-    record = Path(trace).open("a", encoding="utf-8") if trace else None
+    record = None
+    if trace:
+        trace_path = Path(trace)
+        record = trace_path.open("a", encoding="utf-8")
     flight.record = record
     frame_count, running = 0, True
     try:

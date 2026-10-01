@@ -15,7 +15,11 @@ from pathlib import Path
   Read the full deployment and incident log for the checkout service.
   Entries include timestamps, configuration changes, and measured outcomes.
   ###
-  = `Path(__file__).with_name("incident.md").read_text(encoding="utf-8")`
+  = ```
+  path = Path(__file__)
+  path = path.with_name("incident.md")
+  return path.read_text(encoding="utf-8")
+  ```
 
 > use: read_incident_log
 > approval: allow

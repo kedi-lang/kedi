@@ -37,4 +37,8 @@ from pathlib import Path
   )
   ```
 
-= `review_change(Path(__file__).with_name("change.diff").read_text(encoding="utf-8"))`
+= ```
+path = Path(__file__)
+path = path.with_name("change.diff")
+return review_change(path.read_text(encoding="utf-8"))
+```

@@ -3,4 +3,7 @@ from pathlib import Path
 from flappy_kedi import run_game
 ```
 
-= `run_game(Path(__file__).with_name("pilot.kedi"), **args)`
+= ```
+path = Path(__file__)
+return run_game(path.with_name("pilot.kedi"), **args)
+```

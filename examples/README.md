@@ -40,7 +40,8 @@ entrypoint does so explicitly. A configured provider can be changed without edit
 the examples. The Jev guide has its own optional-package and credential setup.
 
 File-backed Kedi programs expose their absolute source path as `__file__`.
-The examples read sibling inputs with `Path(__file__).with_name(...)`, so
+The examples bind `Path(__file__)` to a local variable in a Python block, then
+use `path.with_name(...)` to read sibling inputs, so
 `kedi examples/meeting_actions/main.kedi` works directly from the repository root.
 Running `kedi main.kedi` inside the example directory also works. Kedi does not
 change the process working directory; ordinary Python relative paths remain

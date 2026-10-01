@@ -14,7 +14,8 @@ INK = (30, 48, 52)
 PAPER = (244, 248, 239)
 MINT = (157, 229, 195)
 CORAL = (239, 131, 119)
-ASSETS = Path(__file__).with_name("assets")
+ASSETS = Path(__file__)
+ASSETS = ASSETS.with_name("assets")
 
 CAT = (
     "  XX            XX  ",

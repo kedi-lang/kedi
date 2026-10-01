@@ -9,7 +9,11 @@ from pathlib import Path
   Read the shop's delivery policy, including delayed parcels and refunds.
   This is policy text, not an order-status lookup or a refund action.
   ###
-  = `Path(__file__).with_name("delivery_policy.md").read_text(encoding="utf-8")`
+  = ```
+  path = Path(__file__)
+  path = path.with_name("delivery_policy.md")
+  return path.read_text(encoding="utf-8")
+  ```
 
 > profile: support:
   > system:
