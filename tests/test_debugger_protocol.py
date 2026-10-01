@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, BinaryIO
+from unittest.mock import Mock
 
 import pytest
 
@@ -22,10 +23,51 @@ from kedi_debugger.protocol import (  # noqa: E402
     MAX_HEADER_BYTES,
     MAX_MESSAGE_BYTES,
     ProtocolError,
+    cancel_windows_read,
     read_message,
     write_message,
 )
 from kedi_debugger.server import DebugAdapter, _Redactor, validate_launch  # noqa: E402
+
+
+def test_windows_input_cancellation_retries_the_read_start_race(monkeypatch) -> None:
+    import ctypes
+
+    kernel = Mock()
+    kernel.OpenThread.return_value = 1 << 40
+    kernel.CancelSynchronousIo.side_effect = [False, True]
+    monkeypatch.setattr(ctypes, "WinDLL", Mock(return_value=kernel), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 1168, raising=False)
+    reader = Mock(spec=threading.Thread)
+    reader.native_id = 123
+    reader.is_alive.return_value = True
+
+    def joined(timeout):
+        if reader.join.call_count == 2:
+            reader.is_alive.return_value = False
+
+    reader.join.side_effect = joined
+    cancel_windows_read(reader, 1)
+    kernel.OpenThread.assert_called_once_with(0x0001, False, 123)
+    assert kernel.CancelSynchronousIo.call_count == 2
+    kernel.CloseHandle.assert_called_once_with(1 << 40)
+
+
+def test_windows_input_cancellation_closes_thread_handle_on_error(monkeypatch) -> None:
+    import ctypes
+
+    kernel = Mock()
+    kernel.OpenThread.return_value = 42
+    kernel.CancelSynchronousIo.return_value = False
+    monkeypatch.setattr(ctypes, "WinDLL", Mock(return_value=kernel), raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda code: OSError(code, "denied"), raising=False)
+    reader = Mock(spec=threading.Thread)
+    reader.native_id = 123
+    reader.is_alive.return_value = True
+    with pytest.raises(OSError, match="denied"):
+        cancel_windows_read(reader, 1)
+    kernel.CloseHandle.assert_called_once_with(42)
 
 
 def frame(message: dict[str, Any]) -> bytes:

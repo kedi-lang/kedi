@@ -97,6 +97,13 @@ def client():
     value.close()
 
 
+def test_disconnect_exits_without_waiting_for_client_stdin_eof(client):
+    client.request("initialize", adapterID="kedi")
+    client.request("disconnect")
+    assert not client.process.stdin.closed
+    assert client.process.wait(timeout=5) == 0
+
+
 def test_real_dap_worker_steps_inspects_and_preserves_raw_stdout(client, tmp_path):
     program = tmp_path / "session.kedi"
     program.write_text(
