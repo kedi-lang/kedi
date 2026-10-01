@@ -302,10 +302,10 @@ def _run_notebook_command(arguments: list[str]) -> int:
     help="Resume an interactive session snapshot",
 )
 @click.option(
-    "--highlight",
+    "--highlight/--no-color",
     "highlight_idle",
-    is_flag=True,
-    help="Enable syntax highlighting in interactive mode",
+    default=True,
+    help="Highlight interactive input by default; --no-color disables REPL colors",
 )
 @click.option(
     "--quiet",
@@ -345,7 +345,7 @@ def main(
     idle_mode: bool = False,
     record_idle: bool = False,
     load_session_path: Path | None = None,
-    highlight_idle: bool = False,
+    highlight_idle: bool = True,
     quiet: bool = False,
     parse_only: bool = False,
     show_help: bool = False,
@@ -397,8 +397,12 @@ def main(
             )
         except SessionPersistenceError as exc:
             raise click.ClickException(str(exc)) from exc
-    if record_idle or load_session_path is not None or highlight_idle:
-        raise click.UsageError("--record, --load, and --highlight require --idle.")
+    if (
+        record_idle
+        or load_session_path is not None
+        or ctx.get_parameter_source("highlight_idle") is ParameterSource.COMMANDLINE
+    ):
+        raise click.UsageError("--record, --load, --highlight, and --no-color require --idle.")
     if source == "debug" and command_source is None:
         if list(ctx.args) != ["--stdio"]:
             raise click.UsageError("Usage: kedi debug --stdio (launch a program from your editor)")

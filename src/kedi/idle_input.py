@@ -127,7 +127,7 @@ class PromptToolkitInput:
     ) -> None:
         self._requires_continuation = requires_continuation
         self._continuation_marker = continuation_marker
-        self._color_depth = ColorDepth.DEPTH_24_BIT if highlight else None
+        self._color_depth = ColorDepth.DEPTH_24_BIT if highlight else ColorDepth.MONOCHROME
         self._line_bindings = _line_key_bindings()
         self._multiline_bindings = self._build_multiline_bindings()
         self._session: PromptSession[str] = PromptSession(

@@ -86,6 +86,41 @@ The [installation guide](https://docs.kedi-lang.org/getting-started/installation
 covers package installs; the PyPI badge reports the published release, which may
 lag the source examples.
 
+## Program in the Terminal
+
+**`kedi --idle` brings the language into a live session, with syntax highlighting
+on by default.** Write templates, inspect typed captures, call procedures, and
+mix in Python without creating a file. Bindings stay available between inputs.
+
+<p align="center">
+  <img src="docs/assets/repl/terminal-session.png" alt="A highlighted Kedi REPL session captures Istanbul and prints Cats love Istanbul" width="960">
+</p>
+
+<details>
+<summary>Try a template and inspect its result</summary>
+
+<!-- kedi-repl-example -->
+
+```console
+$ kedi --idle
++++ [country] = Sweden
++++ >> The capital of <country> is [capital: str].
++++ :show <capital>
+Stockholm
++++ :show `capital.upper()`
+STOCKHOLM
+```
+
+</details>
+
+Kedi and embedded Python are both highlighted as you type. Use `:multiline` to
+compose a larger fragment, `:show` to inspect a value, and `:dump` to save the
+session. Resume it later with `kedi --idle --load PATH`, or start with `--record`
+to save on exit. No language server is needed.
+
+Prefer plain input? Run `kedi --idle --no-color`.
+[Explore the terminal REPL](https://docs.kedi-lang.org/tooling/repl/).
+
 ## Let the Program Carry the Workflow
 
 Conditions can ask a model a question. Loops, assignments, and returns remain

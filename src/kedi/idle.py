@@ -46,7 +46,7 @@ class IdleConsole:
         input_reader: Callable[[str], str] | None = None,
         multiline_reader: Callable[[str], str] | None = None,
         session_path: str | Path | None = None,
-        highlight: bool = False,
+        highlight: bool = True,
     ) -> None:
         self._session = session
         self._stdin = stdin
@@ -57,7 +57,7 @@ class IdleConsole:
         self._buffer: list[str] = []
         self._multiline_requested = False
         self._exit_requested = False
-        self._highlight = highlight
+        self._highlight = highlight and not bool(os.environ.get("NO_COLOR"))
         self._prompt_input: PromptToolkitInput | None = None
         self._session_path = (
             None if session_path is None else Path(session_path).expanduser().resolve()
@@ -147,7 +147,7 @@ class IdleConsole:
     def _read_line(self, prompt: str) -> str:
         if self._input_reader is not None:
             return self._input_reader(prompt)
-        if self._highlight:
+        if self._highlight and self._stdin.isatty() and self._stdout.isatty():
             return self._get_prompt_input().read_line(prompt)
         return input(prompt)
 
@@ -217,7 +217,7 @@ class IdleConsole:
         )
 
     def _use_color(self) -> bool:
-        return bool(getattr(self._stderr, "isatty", lambda: False)())
+        return self._highlight and bool(getattr(self._stderr, "isatty", lambda: False)())
 
 
 def _requires_continuation(source: str) -> bool:
@@ -312,7 +312,7 @@ def run_idle(
     model: str,
     record: bool = False,
     load_path: str | Path | None = None,
-    highlight: bool = False,
+    highlight: bool = True,
 ) -> int:
     """Run a terminal Kedi session with Python-style prompts."""
     from .api import interactive

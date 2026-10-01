@@ -324,7 +324,8 @@ def run_game(
             if frames and frame_count >= frames:
                 running = False
         if screenshot:
-            pygame.image.save(view.canvas, str(screenshot))
+            # A screenshot is opaque; only the individual sprites need transparency.
+            pygame.image.save(view.canvas.convert(24), str(screenshot))
         if flight.status in {"preparing", "running"}:
             flight.finish("stopped")
         if flight.status == "error":

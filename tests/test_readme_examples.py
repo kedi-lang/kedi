@@ -1,10 +1,12 @@
 """Execute the README's Kedi source, including its actual decision criteria."""
 
 import re
+from io import StringIO
 from pathlib import Path
 from threading import Barrier
 
 import pytest
+import pydantic_ai.models
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
@@ -21,6 +23,17 @@ SOURCES = dict(
         README.read_text(),
     )
 )
+
+
+@pytest.fixture(autouse=True)
+def isolated_api_config():
+    from kedi.api.state import _DEFAULT_CONFIG, _config_var
+
+    token = _config_var.set(_DEFAULT_CONFIG)
+    try:
+        yield
+    finally:
+        _config_var.reset(token)
 
 
 @pytest.fixture
@@ -46,6 +59,7 @@ def test_readme_marks_all_kedi_examples():
 
 
 def test_readme_python_api_returns_the_capture(monkeypatch):
+    monkeypatch.setattr(pydantic_ai.models, "ALLOW_MODEL_REQUESTS", False)
     monkeypatch.delenv("KEDI_ADAPTER_MODEL", raising=False)
     monkeypatch.delenv("KEDI_AGENT", raising=False)
     source = re.search(r"(?m)^```python\n(import kedi\n[\s\S]*?)^```", README.read_text())
@@ -56,6 +70,25 @@ def test_readme_python_api_returns_the_capture(monkeypatch):
     with kedi.context(adapter=PydanticAdapter(model), model=None):
         exec(compile(source[1], str(README), "exec"), namespace)
     assert namespace["notice"] == notice
+
+
+def test_readme_repl_preserves_typed_captures_between_inputs():
+    from kedi.idle import IdleConsole
+
+    transcript = re.search(
+        r"<!-- kedi-repl-example -->\n\n```console\n([\s\S]*?)\n```", README.read_text()
+    )
+    assert transcript is not None
+    stdout, stderr = StringIO(), StringIO()
+    model = TestModel(call_tools=[], custom_output_args={"capital": "Stockholm"})
+    with kedi.interactive(adapter=PydanticAdapter(model), model=None) as session:
+        console = IdleConsole(session, stdout=stdout, stderr=stderr)
+        for line in transcript[1].splitlines():
+            if line.startswith("+++ "):
+                assert console.push(line[4:]) is False
+
+    assert stderr.getvalue() == ""
+    assert stdout.getvalue() == "Stockholm\nSTOCKHOLM\n"
 
 
 def test_readme_actions_return_native_typed_objects(run_example):

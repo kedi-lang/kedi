@@ -122,6 +122,7 @@ def test_idle_console_ignores_blank_explicit_multiline_fragment() -> None:
 
 
 def test_idle_console_lazily_shares_prompt_toolkit_input(monkeypatch: Any) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
     created: list[tuple[bool, object, str]] = []
 
     class PromptInput:
@@ -141,16 +142,50 @@ def test_idle_console_lazily_shares_prompt_toolkit_input(monkeypatch: Any) -> No
             return f"multiline:{prompt}"
 
     monkeypatch.setattr(idle_input_module, "PromptToolkitInput", PromptInput)
+    stdin, stdout = StringIO(), StringIO()
+    monkeypatch.setattr(stdin, "isatty", lambda: True)
+    monkeypatch.setattr(stdout, "isatty", lambda: True)
     console = IdleConsole(
         object(),  # type: ignore[arg-type]
-        stdout=StringIO(),
+        stdin=stdin,
+        stdout=stdout,
         stderr=StringIO(),
-        highlight=True,
     )
 
     assert console._read_line("+++ ") == "line:+++ "
     assert console._read_multiline("... ") == "multiline:... "
     assert created == [(True, idle_module._requires_continuation, "...")]
+
+
+@pytest.mark.parametrize("input_tty, output_tty", [(False, True), (True, False), (False, False)])
+def test_idle_redirected_streams_use_plain_input(monkeypatch, input_tty, output_tty):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stdin, stdout = StringIO(), StringIO()
+    monkeypatch.setattr(stdin, "isatty", lambda: input_tty)
+    monkeypatch.setattr(stdout, "isatty", lambda: output_tty)
+    monkeypatch.setattr(builtins, "input", lambda prompt: f"plain:{prompt}")
+    console = IdleConsole(object(), stdin=stdin, stdout=stdout)  # type: ignore[arg-type]
+
+    assert console._read_line("+++ ") == "plain:+++ "
+    assert console._prompt_input is None
+
+
+@pytest.mark.parametrize(
+    "highlight, no_color", [(False, ""), (True, "1"), (True, ""), (True, None)]
+)
+def test_idle_color_preference_covers_input_and_errors(monkeypatch, highlight, no_color):
+    if no_color is None:
+        monkeypatch.delenv("NO_COLOR", raising=False)
+    else:
+        monkeypatch.setenv("NO_COLOR", no_color)
+    stderr = StringIO()
+    monkeypatch.setattr(stderr, "isatty", lambda: True)
+    console = IdleConsole(object(), stderr=stderr, highlight=highlight)  # type: ignore[arg-type]
+
+    assert console._highlight is (highlight and not bool(no_color))
+    assert console._use_color() is (highlight and not bool(no_color))
+    console._execute("invalid syntax")
+    assert ("\x1b[" in stderr.getvalue()) is (highlight and not bool(no_color))
 
 
 def test_idle_console_multiline_command_selects_continuation_prompt() -> None:
@@ -290,7 +325,7 @@ def test_prompt_toolkit_input_configures_prompts_and_key_bindings(monkeypatch: A
         requires_continuation=idle_module._requires_continuation,
         continuation_marker="...",
     )
-    assert plain_input._color_depth is None
+    assert plain_input._color_depth is idle_input_module.ColorDepth.MONOCHROME
     assert sessions[1]["lexer"] is None
     assert sessions[1]["style"] is None
 
@@ -857,7 +892,7 @@ def test_run_idle_owns_session_and_saves_history(monkeypatch: Any) -> None:
             highlight: bool = False,
         ) -> None:
             assert session_path is None
-            assert highlight is False
+            assert highlight is True
             events.append("console")
 
         def interact(self) -> None:
@@ -892,7 +927,7 @@ def test_run_idle_records_before_close_and_preserves_system_exit(monkeypatch: An
         ) -> None:
             assert isinstance(session, Session)
             assert session_path is None
-            assert highlight is False
+            assert highlight is True
 
         def interact(self) -> None:
             events.append("interact")
@@ -935,7 +970,7 @@ def test_run_idle_loads_and_continues_recording_same_snapshot(
             highlight: bool = False,
         ) -> None:
             assert isinstance(session, Session)
-            assert highlight is False
+            assert highlight is True
             events.append(("path", session_path))
 
         def interact(self) -> None:
@@ -1082,7 +1117,7 @@ def test_cli_idle_launches_without_source(monkeypatch: Any) -> None:
         "model": "openai:gpt-test",
         "record": False,
         "load_path": None,
-        "highlight": False,
+        "highlight": True,
     }
 
 
@@ -1105,7 +1140,17 @@ def test_cli_idle_forwards_record_and_load(tmp_path: Path, monkeypatch: Any) -> 
     assert received["load_path"] == snapshot
 
 
-def test_cli_idle_forwards_highlighting(monkeypatch: Any) -> None:
+@pytest.mark.parametrize(
+    "flags, expected",
+    [
+        ([], True),
+        (["--highlight"], True),
+        (["--no-color"], False),
+        (["--highlight", "--no-color"], False),
+        (["--no-color", "--highlight"], True),
+    ],
+)
+def test_cli_idle_forwards_highlighting(monkeypatch: Any, flags, expected) -> None:
     received: dict[str, object] = {}
 
     def fake_run_idle(**kwargs: object) -> int:
@@ -1113,10 +1158,10 @@ def test_cli_idle_forwards_highlighting(monkeypatch: Any) -> None:
         return 0
 
     monkeypatch.setattr(cli_module, "run_idle", fake_run_idle)
-    result = CliRunner().invoke(cli_module.main, ["--idle", "--highlight"])
+    result = CliRunner().invoke(cli_module.main, ["--idle", *flags])
 
     assert result.exit_code == 0
-    assert received["highlight"] is True
+    assert received["highlight"] is expected
 
 
 def test_cli_idle_renders_snapshot_load_failure(monkeypatch: Any) -> None:
@@ -1146,6 +1191,7 @@ def test_cli_idle_renders_snapshot_load_failure(monkeypatch: Any) -> None:
         (["program.kedi", "--record"], "require --idle"),
         (["program.kedi", "--load", "session.kedi-state"], "require --idle"),
         (["program.kedi", "--highlight"], "require --idle"),
+        (["program.kedi", "--no-color"], "require --idle"),
         (["install", "--record"], "require --idle"),
         (["skills", "--load", "session.kedi-state"], "require --idle"),
         (["--idle", "install"], "does not accept SOURCE"),
@@ -1165,4 +1211,5 @@ def test_cli_help_lists_idle_mode() -> None:
     assert "--idle" in result.output
     assert "--record" in result.output
     assert "--highlight" in result.output
+    assert "--no-color" in result.output
     assert "--load" in result.output

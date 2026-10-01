@@ -588,6 +588,24 @@ def test_bounded_kedi_entrypoint_saves_nonblank_frame(game, tmp_path, monkeypatc
         runtime.artifacts.close()
     assert image.stat().st_size > 1000
     assert result["status"] == "stopped" and result["mode"] == "manual"
+    frame = game.pygame.image.load(str(image))
+    assert set(game.pygame.image.tobytes(frame, "RGBA")[3::4]) == {255}
+
+
+def test_published_preview_keeps_cat_visible_on_any_background(game):
+    from flappy_kedi.view import PAPER
+
+    frame = game.pygame.image.load(str(EXAMPLE / "flappy_kedi/assets/preview.png"))
+    assert set(game.pygame.image.tobytes(frame, "RGBA")[3::4]) == {255}
+    header_cat = frame.subsurface((24, 26, 40, 36))
+    assert (
+        sum(
+            header_cat.get_at((x, y))[:3] == PAPER
+            for x in range(header_cat.get_width())
+            for y in range(header_cat.get_height())
+        )
+        > 500
+    )
 
 
 @pytest.mark.parametrize("headless", [False, True])
