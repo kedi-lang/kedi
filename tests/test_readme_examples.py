@@ -5,8 +5,8 @@ from io import StringIO
 from pathlib import Path
 from threading import Barrier
 
-import pytest
 import pydantic_ai.models
+import pytest
 from pydantic import BaseModel
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
