@@ -74,9 +74,15 @@ def test_catalog_has_no_loose_scripts_and_every_workflow_has_a_guide():
 
 @pytest.mark.parametrize("document", ["README.md", "docs/KEDI_DSL.md"])
 def test_repository_introduction_and_specification_have_parseable_kedi_blocks(document):
+    # README fences use GitHub's Python colors; markers retain their Kedi identity.
+    opening = (
+        r"<!-- kedi-example: [a-z-]+ -->\n\n(?P<fence>`{3,})python\n"
+        if document == "README.md"
+        else r"(?P<fence>`{3,})kedi\n"
+    )
     blocks = list(
         re.finditer(
-            r"(?m)^(?P<fence>`{3,})kedi\n(?P<source>[\s\S]*?)^(?P=fence)\s*$",
+            r"(?m)^" + opening + r"(?P<source>[\s\S]*?)^(?P=fence)\s*$",
             (EXAMPLES.parent / document).read_text(),
         )
     )
