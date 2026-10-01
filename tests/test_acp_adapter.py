@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import sys
 from concurrent.futures import Future
 from pathlib import Path
@@ -200,14 +201,16 @@ def test_acp_adapter_async_invoke_emits_final_message(
     assert [(event.phase, event.content) for event in messages] == [("final", "echo:async-event")]
 
 
-def test_acp_adapter_uses_explicit_profile_command(tmp_path: Path) -> None:
+@pytest.mark.parametrize("as_string", [False, True], ids=["argv", "quoted-string"])
+def test_acp_adapter_uses_explicit_profile_command(tmp_path: Path, as_string: bool) -> None:
     profile_log_path = tmp_path / "profile-acp.jsonl"
     adapter = ACPAdapter(
         model_settings={
             "env": {"KEDI_ACP_FAKE_LOG": str(profile_log_path)},
         }
     )
-    profile = AgentProfile(agent_command=f"{sys.executable} {FAKE_ACP_AGENT}")
+    command = (sys.executable, str(FAKE_ACP_AGENT))
+    profile = AgentProfile(agent_command=shlex.join(command) if as_string else command)
 
     try:
         with adapter.profile_override(profile):

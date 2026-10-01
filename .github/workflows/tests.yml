@@ -85,7 +85,9 @@ jobs:
           if-no-files-found: ignore
 
   coverage:
-    name: Python 3.11 coverage
+    # Python 3.11 misattributes exit arcs after async context managers.
+    # Keep compatibility testing there, but measure branches on Python 3.12.
+    name: Python 3.12 coverage
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -101,10 +103,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install dependencies with uv
-        run: uv sync --locked --dev --python 3.11
+        run: uv sync --locked --dev --python 3.12
 
       - name: Run tests with coverage
         run: make check-coverage
