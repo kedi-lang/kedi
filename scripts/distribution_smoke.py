@@ -10,7 +10,17 @@ import sysconfig
 from pathlib import Path
 
 import kedi
-from kedi.lang.ast import AwaitStmt, BudgetDirectiveStmt, ShowStmt, TaskGroupStmt, TaskStmt
+from kedi import AgentInput, InputReceipt
+from kedi.agent_adapter import AgentInput as AdapterInput
+from kedi.agent_adapter import InputReceipt as AdapterInputReceipt
+from kedi.lang.ast import (
+    AwaitStmt,
+    BudgetDirectiveStmt,
+    SendStmt,
+    ShowStmt,
+    TaskGroupStmt,
+    TaskStmt,
+)
 from kedi.lang.parser import parse_program
 
 
@@ -27,12 +37,36 @@ def main() -> None:
         "> task [job]: reviewer:\n    >> The recommendation is [answer: str].\n"
         "> await [result]: job\n",
         "> task_group:\n    > await [result]: job\n    > process:\n        > show: done\n",
+        "> send: job:\n    >> Include the migration evidence.\n",
+        "> interrupt: job:\n    >> Review access tokens only.\n",
     )
     for source, expected_type in zip(
-        sources, (ShowStmt, BudgetDirectiveStmt, TaskStmt, TaskGroupStmt)
+        sources,
+        (ShowStmt, BudgetDirectiveStmt, TaskStmt, TaskGroupStmt, SendStmt, SendStmt),
     ):
         assert isinstance(parse_program(source).toplevel_body[0], expected_type), source
     assert isinstance(parse_program(sources[2]).toplevel_body[1], AwaitStmt)
+    for source, interrupt in ((sources[4], False), (sources[5], True)):
+        statement = parse_program(source).toplevel_body[0]
+        assert isinstance(statement, SendStmt) and statement.interrupt is interrupt
+        assert statement.handle == "job"
+    assert AgentInput is AdapterInput and InputReceipt is AdapterInputReceipt
+    input = AgentInput("message-1", "worker-1", "parent-1", 1, "Review tokens.", True)
+    assert json.loads(input.render().split("\n", 1)[1])["message"] == "Review tokens."
+    receipt = InputReceipt("message-1", "worker-1", 1, "interrupt_requested")
+    assert receipt.as_tool_result()["status"] == "interrupt_requested"
+    package_root = Path(kedi.__file__).resolve().parent
+    for module in (
+        "subagents/control.py",
+        "subagents/communication.py",
+        "subagents/messaging.py",
+        "subagents/tool_activity.py",
+        "adapters/pydantic/live.py",
+        "adapters/langchain/live.py",
+        "adapters/codex/live.py",
+        "adapters/claude/live.py",
+    ):
+        assert (package_root / "agent_adapter" / module).is_file(), module
 
     scripts = Path(sysconfig.get_path("scripts"))
     suffix = ".exe" if os.name == "nt" else ""

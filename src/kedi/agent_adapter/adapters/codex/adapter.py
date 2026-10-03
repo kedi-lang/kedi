@@ -44,7 +44,7 @@ from kedi.agent_adapter.hooks import (
 from kedi.agent_adapter.invocation import InvocationUsage, invocation_observer, report_invocation
 from kedi.agent_adapter.meta import AdapterCapabilities, AgentAdapterKind, HookCapabilities
 from kedi.agent_adapter.output_schema import build_output_model
-from kedi.agent_adapter.subagents import SubagentExecutionRequest
+from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.tools.execution import arguments_target_secret_file, with_approval
@@ -102,6 +102,8 @@ class CodexAdapter(HookRegistrationMixin):
         supports_native_approval_handler=False,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_live_subagent_input=True,
+        supports_subagent_interrupt=True,
         supports_artifacts=True,
         supports_native_artifacts=False,
         supports_stateful_history=True,
@@ -161,7 +163,9 @@ class CodexAdapter(HookRegistrationMixin):
             f"kedi_codex_approval_ceiling_{id(self)}",
             default=(),
         )
-        self._conversation_var: ContextVar[AdapterConversationContext | None] = ContextVar(
+        self._conversation_var: ContextVar[
+            AdapterConversationContext | SubagentConversationContext | None
+        ] = ContextVar(
             f"kedi_codex_conversation_{id(self)}",
             default=None,
         )
@@ -298,12 +302,16 @@ class CodexAdapter(HookRegistrationMixin):
 
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        token = self._conversation_var.set(request.conversation)
         with (
             self.tool_scope(request.tools),
             self.profile_override(request.profile),
             self.approval_ceiling(request.approval_ceiling),
         ):
-            yield
+            try:
+                yield
+            finally:
+                self._conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(_limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -350,6 +358,19 @@ class CodexAdapter(HookRegistrationMixin):
                     self._commit_conversation_turn(conversation, run, result, thread_id)
                 if invocation_observer() is not None:
                     report_invocation(_codex_invocation_usage(result))
+                from kedi.agent_adapter.subagents.control import (
+                    RunInterrupted,
+                    current_live_input,
+                    current_live_revision,
+                )
+
+                control = current_live_input()
+                if control is not None:
+                    await control.wait_quiescent()
+                    if result.turn.get(
+                        "status"
+                    ) == "interrupted" or control.revision != current_live_revision(control):
+                        raise RunInterrupted
                 if resolver is not None:
                     resolver.complete_run(final_text=result.text if emit_final else None)
                 return result
@@ -548,20 +569,20 @@ class CodexAdapter(HookRegistrationMixin):
 
     def _conversation_thread_id(
         self,
-        conversation: AdapterConversationContext,
+        conversation: AdapterConversationContext | SubagentConversationContext,
         run: _CodexRun,
     ) -> str | None:
         thread_id = conversation.resume_state.get("codex_thread_id")
         fingerprint = conversation.resume_state.get("codex_thread_fingerprint")
         if isinstance(thread_id, str) and fingerprint == run.thread_fingerprint:
             return thread_id
-        if isinstance(thread_id, str):
+        if isinstance(thread_id, str) and isinstance(conversation, AdapterConversationContext):
             conversation.cache_prefix_changed = True
         return None
 
     def _commit_conversation_turn(
         self,
-        conversation: AdapterConversationContext,
+        conversation: AdapterConversationContext | SubagentConversationContext,
         run: _CodexRun,
         result: CodexTurnResult,
         resumed_thread_id: str | None,
@@ -576,14 +597,18 @@ class CodexAdapter(HookRegistrationMixin):
                 "codex_thread_fingerprint": run.thread_fingerprint,
             }
         )
-        if resumed_thread_id != result.thread_id:
+        if (
+            isinstance(conversation, AdapterConversationContext)
+            and resumed_thread_id != result.thread_id
+        ):
             conversation.cache_prefix_changed = resumed_thread_id is not None or bool(
                 conversation.resume_state
             )
             conversation.cleanup = _codex_thread_cleanup(self._client, result.thread_id)
-        if result.compacted:
+        if isinstance(conversation, AdapterConversationContext) and result.compacted:
             conversation.cache_prefix_changed = True
-        conversation.mark_completed()
+        if isinstance(conversation, AdapterConversationContext):
+            conversation.mark_completed()
 
     def _approval_policies(
         self,
@@ -733,8 +758,11 @@ def _codex_invocation_usage(result: CodexTurnResult) -> InvocationUsage:
     if total_tokens == 0:
         total_tokens = input_tokens + output_tokens
     return InvocationUsage(
-        requests=1,
+        requests=_usage_int(values, "requests") or 1,
+        tool_calls=_usage_int(result.turn, "toolCalls"),
         input_tokens=input_tokens,
+        cache_read_tokens=_usage_int(values, "cachedInputTokens", "cache_read_tokens"),
+        cache_write_tokens=_usage_int(values, "cacheWriteInputTokens", "cache_write_tokens"),
         output_tokens=output_tokens,
         total_tokens=total_tokens,
     )

@@ -37,6 +37,7 @@ from kedi.lang.ast import (
     TaskGroupArm,
     TaskGroupStmt,
     TaskStmt,
+    SendStmt,
     TemplateLine,
     TestSuite,
     TypeDefStmt,
@@ -292,7 +293,7 @@ def walk_program(self: _Walker) -> Union[Program, ProgramWithValidation]:
             stmt = _walk_show_stmt(self, child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
-        elif t in ("task_stmt", "await_stmt"):
+        elif t in ("task_stmt", "await_stmt", "send_stmt"):
             stmt = _walk_task_or_await(self, child)
             prog.toplevel_body.append(stmt)
             prog.ordered_toplevel.append(stmt)
@@ -596,7 +597,7 @@ def _walk_stmt(self: _Walker, node: Node, proc: Optional[ProcedureDef]) -> Optio
         return self._walk_return_stmt(node)
     if t == "show_stmt":
         return _walk_show_stmt(self, node)
-    if t in ("task_stmt", "await_stmt"):
+    if t in ("task_stmt", "await_stmt", "send_stmt"):
         return _walk_task_or_await(self, node)
     if t == "task_group_stmt":
         return _walk_task_group(self, node, proc)
@@ -958,7 +959,7 @@ def _walk_task_group(self: _Walker, node: Node, proc: Optional[ProcedureDef]) ->
     return TaskGroupStmt(arms=arms, loc=self._span(node))
 
 
-def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:
+def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt | SendStmt:
     if node.type == "await_stmt":
         handle = _field(node, "handle")
         binder = _field(node, "binder")
@@ -974,7 +975,7 @@ def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:
     binder = _field(node, "binder")
     subagent = _field(node, "subagent")
     body = _field(node, "body")
-    assert binder is not None and subagent is not None and body is not None
+    assert body is not None
     template_node = _field(body, "template")
     assert template_node is not None
     if _field(body, "extra_template") is not None:
@@ -985,6 +986,22 @@ def _walk_task_or_await(self: _Walker, node: Node) -> TaskStmt | AwaitStmt:
         )
     template = self._walk_template_block_stmt(template_node)
     self._validate_template_block_scope(template.lines)
+    if node.type == "send_stmt":
+        if any(contains_output_captures(line.segments) for line in template.lines):
+            self._error(
+                node, "Agent input cannot declare output captures", code="kedi.send_capture"
+            )
+        handle = _field(node, "handle")
+        operation = _field(node, "operation")
+        assert handle is not None and operation is not None
+        return SendStmt(
+            handle=_identifier_name(self.source, handle),
+            handle_loc=self._span(handle),
+            template=template,
+            interrupt=_src_text(self.source, operation) == "interrupt",
+            loc=self._span(node),
+        )
+    assert binder is not None and subagent is not None
     return TaskStmt(
         binder=_identifier_name(self.source, binder),
         binder_loc=self._span(binder),

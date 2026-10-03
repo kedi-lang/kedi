@@ -243,6 +243,14 @@ class AwaitStmt(Stmt):
 
 
 @dataclass
+class SendStmt(Stmt):
+    handle: str = ""
+    handle_loc: Optional[Span] = field(default=None, repr=False, compare=False)
+    template: TemplateBlock = field(default_factory=TemplateBlock)
+    interrupt: bool = False
+
+
+@dataclass
 class TaskGroupArm(Stmt):
     wait: AwaitStmt = field(default_factory=AwaitStmt)
     body: Optional[List[Stmt]] = None

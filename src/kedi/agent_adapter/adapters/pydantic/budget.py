@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelResponse
@@ -19,6 +20,27 @@ from kedi.run_budget import (
 )
 
 
+_MODEL_ADMISSION: ContextVar[Callable[[Sequence[ModelMessage]], None] | None] = ContextVar(
+    "kedi_pydantic_model_admission", default=None
+)
+
+
+@contextmanager
+def observe_model_admissions(observer: Callable[[Sequence[ModelMessage]], None]) -> Iterator[None]:
+    token = _MODEL_ADMISSION.set(observer)
+    try:
+        yield
+    finally:
+        _MODEL_ADMISSION.reset(token)
+
+
+def _admit_request(messages: Sequence[ModelMessage]) -> None:
+    admit_run_operation("request")
+    observer = _MODEL_ADMISSION.get()
+    if observer is not None:
+        observer(messages)
+
+
 class BudgetedModel(WrapperModel):
     """Admit every model generation, including tool-loop and output-repair turns."""
 
@@ -32,7 +54,7 @@ class BudgetedModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        admit_run_operation("request")
+        _admit_request(messages)
         return await super().request(messages, model_settings, model_request_parameters)
 
     @asynccontextmanager
@@ -43,7 +65,7 @@ class BudgetedModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncGenerator[Any]:
-        admit_run_operation("request")
+        _admit_request(messages)
         async with super().request_stream(
             messages, model_settings, model_request_parameters, run_context
         ) as response:

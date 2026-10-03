@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import inspect
 import json
 import subprocess
 import sys
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from re import Pattern
-from threading import Thread, current_thread
+from threading import Event, Thread, current_thread
 from typing import Annotated, Any, cast
 
 import pytest
-from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl
+from pydantic import BaseModel, EmailStr, FileUrl, HttpUrl, JsonValue
 
 import kedi.agent_adapter.adapters.codex.adapter as codex_adapter_module
 from kedi.agent_adapter import CodexAdapter as ExportedCodexAdapter
@@ -461,7 +462,11 @@ def test_codex_subagent_execution_contract() -> None:
             return CodexTurnResult(
                 text='{"task_summary":"done","final_result":{"value":17}}',
                 turn={"usage": {"inputTokens": 2, "output_tokens": 3}},
+                thread_id="child-thread",
             )
+
+        async def run_conversation_turn(self, **kwargs: Any) -> CodexTurnResult:
+            return await self.run_stateless_turn(**kwargs)
 
         def close(self) -> None:
             pass
@@ -563,6 +568,113 @@ def test_codex_subagent_result_and_usage_validation() -> None:
     assert observed == [InvocationUsage(requests=1, input_tokens=1, total_tokens=1)]
 
 
+def test_codex_usage_notifications_count_request_deltas_not_thread_totals(tmp_path: Path) -> None:
+    first = {
+        "last": {
+            "inputTokens": 100,
+            "outputTokens": 10,
+            "cachedInputTokens": 80,
+            "totalTokens": 110,
+        },
+        "total": {"totalTokens": 10_110},
+    }
+    second = {
+        "last": {
+            "inputTokens": 250,
+            "outputTokens": 25,
+            "cachedInputTokens": 200,
+            "cacheWriteInputTokens": 5,
+            "totalTokens": 275,
+            "reasoningOutputTokens": True,
+            "unknown": "not a token count",
+        },
+        "total": {"totalTokens": 10_385},
+    }
+    adapter, log = _adapter(
+        tmp_path,
+        extra_env={
+            "KEDI_CODEX_FAKE_USAGE_UPDATES": json.dumps(
+                [{"tokenUsage": usage} for usage in (first, first, second, second)]
+            )
+        },
+    )
+    observed: list[InvocationUsage] = []
+    conversation = ConversationState()
+    try:
+        with observe_invocations(observed.append):
+            for prompt in ("first", "second"):
+                with conversation.adapter_turn("codex") as turn:
+                    with adapter.conversation_scope(turn):
+                        assert adapter.produce_sync(prompt, output_type=Answer).answer == prompt
+    finally:
+        conversation.close()
+        adapter.close()
+    expected = InvocationUsage(
+        requests=2,
+        input_tokens=350,
+        output_tokens=35,
+        total_tokens=385,
+        cache_read_tokens=280,
+        cache_write_tokens=5,
+    )
+    assert observed == [expected, expected]
+    turns = _method(_messages(log), "turn/start")
+    assert turns[0]["params"]["threadId"] == turns[1]["params"]["threadId"]
+
+
+@pytest.mark.parametrize(
+    "token_usage",
+    [
+        None,
+        {},
+        {"last": [], "total": {}},
+        {"last": {}, "total": []},
+        {"last": {"inputTokens": 40}, "total": {"totalTokens": True}},
+        {"last": {"inputTokens": 40}, "total": {"totalTokens": "40"}},
+        {"last": {"inputTokens": True}, "total": {"totalTokens": 1}},
+    ],
+    ids=[
+        "null",
+        "missing",
+        "invalid-last",
+        "invalid-total",
+        "bool-total",
+        "str-total",
+        "bool-count",
+    ],
+)
+def test_codex_malformed_usage_does_not_corrupt_invocation_totals(
+    tmp_path: Path, token_usage: JsonValue
+) -> None:
+    adapter, _ = _adapter(
+        tmp_path,
+        extra_env={"KEDI_CODEX_FAKE_USAGE_UPDATES": json.dumps([{"tokenUsage": token_usage}])},
+    )
+    observed: list[InvocationUsage] = []
+    try:
+        with observe_invocations(observed.append):
+            assert adapter.produce_sync("answer", output_type=Answer).answer == "answer"
+    finally:
+        adapter.close()
+    assert observed == [InvocationUsage(requests=1)]
+
+
+def test_codex_dynamic_tool_calls_are_visible_in_usage(tmp_path: Path) -> None:
+    def checkpoint() -> str:
+        return "evidence"
+
+    adapter, _ = _adapter(tmp_path)
+    adapter.register_tool(ToolSpec(fn=checkpoint, name="checkpoint", risk="read_only"))
+    observed: list[InvocationUsage] = []
+    try:
+        with observe_invocations(observed.append):
+            result = adapter.produce_sync("tool:checkpoint:{}", output_type=ToolAnswer)
+    finally:
+        adapter.close()
+    assert result == ToolAnswer(answer="evidence", success=True)
+    assert observed == [InvocationUsage(requests=1, tool_calls=1)]
+
+
 def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None:
     adapter, log_path = _adapter(tmp_path)
     context_value: ContextVar[str] = ContextVar("codex_test_context", default="missing")
@@ -627,6 +739,120 @@ def test_codex_adapter_runs_sync_and_async_dynamic_tools(tmp_path: Path) -> None
     assert specs[1]["inputSchema"]["properties"]["limit"]["default"] == 2
     tool_responses = [message for message in messages if message.get("id", 0) >= 10_000]
     assert all(message["result"]["success"] for message in tool_responses)
+
+
+def test_codex_sync_tools_share_background_loop_until_client_close(tmp_path: Path) -> None:
+    adapter, _ = _adapter(tmp_path)
+    context_value: ContextVar[str] = ContextVar("background_context", default="missing")
+    tasks: list[asyncio.Task[str]] = []
+    loops: list[asyncio.AbstractEventLoop] = []
+    release: list[asyncio.Event] = []
+    cancelled = Event()
+
+    async def spawn() -> str:
+        loops.append(asyncio.get_running_loop())
+        release.append(asyncio.Event())
+
+        async def complete() -> str:
+            await release[0].wait()
+            return context_value.get()
+
+        async def pending() -> str:
+            try:
+                await asyncio.Event().wait()
+                return "unreachable"
+            finally:
+                cancelled.set()
+
+        tasks.extend((asyncio.create_task(complete()), asyncio.create_task(pending())))
+        await asyncio.sleep(0)
+        return "started"
+
+    async def collect() -> str:
+        assert asyncio.get_running_loop() is loops[0]
+        assert context_value.get() == "collector"
+        release[0].set()
+        return await tasks[0]
+
+    token = context_value.set("worker")
+    try:
+        with adapter.tool_scope(
+            (
+                ToolSpec(fn=spawn, name="spawn", risk="read_only"),
+                ToolSpec(fn=collect, name="collect", risk="read_only"),
+            )
+        ):
+            first = adapter.produce_sync("tool:spawn:{}", output_type=ToolAnswer)
+            assert first == ToolAnswer(answer="started", success=True)
+            assert not any(task.done() for task in tasks)
+            context_value.set("collector")
+            second = adapter.produce_sync("tool:collect:{}", output_type=ToolAnswer)
+            assert second == ToolAnswer(answer="worker", success=True)
+            assert not tasks[1].done()
+    finally:
+        adapter.close()
+        context_value.reset(token)
+    assert tasks[1].cancelled()
+    assert cancelled.is_set()
+    assert loops[0].is_closed()
+
+
+def test_codex_concurrent_sync_tool_bridges_preserve_each_call_context() -> None:
+    client = CodexAppServerClient((sys.executable,))
+    marker: ContextVar[str] = ContextVar("bridge_context", default="missing")
+    arrivals: list[asyncio.AbstractEventLoop] = []
+    gates: list[asyncio.Event] = []
+
+    async def rendezvous() -> str:
+        arrivals.append(asyncio.get_running_loop())
+        if not gates:
+            gates.append(asyncio.Event())
+        if len(arrivals) == 2:
+            gates[0].set()
+        await gates[0].wait()
+        await asyncio.sleep(0)
+        return marker.get()
+
+    def call(value: str) -> str:
+        token = marker.set(value)
+        try:
+            return client._await_sync_result(contextvars.copy_context(), rendezvous())
+        finally:
+            marker.reset(token)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first, second = executor.submit(call, "first"), executor.submit(call, "second")
+            assert (first.result(timeout=2), second.result(timeout=2)) == ("first", "second")
+        assert len(arrivals) == 2 and arrivals[0] is arrivals[1]
+    finally:
+        client.close()
+    assert arrivals[0].is_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("awaitable_kind", ["coroutine", "future"])
+async def test_codex_sync_tool_bridge_rejects_closed_client_without_leaking_coroutine(
+    awaitable_kind: str,
+) -> None:
+    client = CodexAppServerClient((sys.executable,))
+    client.close()
+
+    async def response() -> str:
+        return "unused"
+
+    if awaitable_kind == "coroutine":
+        operation = response()
+    else:
+        operation = asyncio.get_running_loop().create_future()
+        operation.set_result("unused")
+    with pytest.raises(CodexAppServerDisconnected, match="client is closed"):
+        client._await_sync_result(contextvars.copy_context(), operation)
+    if awaitable_kind == "coroutine":
+        assert inspect.getcoroutinestate(operation) == inspect.CORO_CLOSED
+    else:
+        assert operation.result() == "unused"
+    assert client._tool_loop is None
 
 
 def test_codex_codemode_projects_dynamic_controls_and_executes_nested_tool() -> None:
@@ -1377,7 +1603,11 @@ def test_codex_client_tool_request_system_exit_and_notifications(
         raise SystemExit(3)
 
     client._thread_tools["thread"] = {
-        "exit": codex_server_module._ToolBinding(fn=exit_tool, context=contextvars.copy_context())
+        "exit": codex_server_module._ToolBinding(
+            fn=exit_tool,
+            context=contextvars.copy_context(),
+            await_result=client._await_sync_result,
+        )
     }
     with pytest.raises(SystemExit):
         client._handle_server_request(
@@ -1508,6 +1738,7 @@ def test_codex_client_native_approval_fallback_and_validation_edges(
     client._thread_approvals["bound"] = codex_server_module._ApprovalBinding(
         handler=broken_approval,
         context=contextvars.copy_context(),
+        await_result=client._await_sync_result,
     )
     client._handle_server_request(3, command_method, {"threadId": "bound"})
     assert sent[-1]["error"]["code"] == -32000
@@ -1519,6 +1750,7 @@ def test_codex_client_native_approval_fallback_and_validation_edges(
     client._thread_approvals["interrupted"] = codex_server_module._ApprovalBinding(
         handler=interrupted_approval,
         context=contextvars.copy_context(),
+        await_result=client._await_sync_result,
     )
     with pytest.raises(KeyboardInterrupt):
         client._handle_server_request(4, command_method, {"threadId": "interrupted"})

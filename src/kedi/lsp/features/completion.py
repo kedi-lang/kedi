@@ -43,6 +43,8 @@ _DIRECTIVE_COMPLETIONS = {
     "adapter": "Select the model integration for this scope",
     "agent": "Select an agent harness or remote agent",
     "await": "Wait for a subagent task and bind its result",
+    "send": "Send context to a running subagent task",
+    "interrupt": "Redirect a running subagent task with updated input",
     "approval": "Control permission for tool execution",
     "artifacts": "Keep large tool results outside model context",
     "auto": "Generate a procedure implementation from its specification",
@@ -182,7 +184,7 @@ def compute_completion(
         ]
     if re.fullmatch(r"\s*>\s*task\s+\[\w+\]\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=True)
-    if re.fullmatch(r"\s*>\s*await(?:\s+\[\w+\])?\s*:\s*\w+", before_cursor):
+    if re.fullmatch(r"\s*>\s*(?:await(?:\s+\[\w+\])?|send|interrupt)\s*:\s*\w+", before_cursor):
         return _native_task_completions(source, source_path, pos, child=False)
     directive_prefix = re.fullmatch(r"\s*(>\s*)[A-Za-z_]*", before_cursor)
     if directive_prefix:

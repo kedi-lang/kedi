@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .runs import SubagentRun
 
 MAX_SUBAGENT_REQUESTS = 50
 MAX_SUBAGENT_TOOL_CALLS = 100
@@ -48,6 +52,26 @@ class SubagentUsageLimits:
                 self.input_tokens_limit is not None or self.total_tokens_limit is not None
             ),
         )
+
+    def remaining(self, run: SubagentRun) -> SubagentUsageLimits:
+        """Physical attempts share a logical task's budget, including aborted requests."""
+        return _RemainingSubagentUsageLimits(
+            request_limit=max(0, self.request_limit - run.requests),
+            tool_calls_limit=max(0, self.tool_calls_limit - run.tool_calls),
+            input_tokens_limit=_remaining_optional(self.input_tokens_limit, run.input_tokens),
+            output_tokens_limit=_remaining_optional(self.output_tokens_limit, run.output_tokens),
+            total_tokens_limit=_remaining_optional(self.total_tokens_limit, run.total_tokens),
+        )
+
+
+class _RemainingSubagentUsageLimits(SubagentUsageLimits):
+    def __post_init__(self) -> None:
+        # User budgets must be positive; an internal remaining budget may be exhausted.
+        pass
+
+
+def _remaining_optional(limit: int | None, used: int) -> int | None:
+    return None if limit is None else max(0, limit - used)
 
 
 def _validate_limit(name: str, value: int | None) -> None:

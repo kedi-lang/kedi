@@ -121,6 +121,19 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
                     supports_background=capabilities.supports("background_subagents"),
                 )
             )
+    from kedi.agent_adapter.subagents.control import current_live_input
+    from kedi.agent_adapter.subagents.messaging import input_tool_specs
+
+    capabilities = getattr(adapter, "capabilities", None)
+    live_control = current_live_input()
+    if capabilities is not None and capabilities.supports("live_subagent_input"):
+        specs.extend(
+            input_tool_specs(
+                self,
+                children=bool(profile.subagents),
+                parent=live_control is not None and live_control.parent is not None,
+            )
+        )
     artifact_policy = getattr(profile, "artifacts", None)
     artifact_contract_needed = self._artifact_contract_needed(
         profile,
@@ -172,7 +185,12 @@ def _resolve_agent_tool_specs(self: KediRuntime, profile: Any, adapter: Any) -> 
     from kedi.agent_adapter.tools.execution import with_required_before_output, with_tool_telemetry
 
     specs = [with_required_before_output(spec) for spec in specs]
-    specs = [with_tool_telemetry(spec, adapter_shortname=adapter_name) for spec in specs]
+    from kedi.agent_adapter.subagents.tool_activity import with_live_tool_tracking
+
+    specs = [
+        with_tool_telemetry(with_live_tool_tracking(spec), adapter_shortname=adapter_name)
+        for spec in specs
+    ]
     return tuple(specs)
 
 

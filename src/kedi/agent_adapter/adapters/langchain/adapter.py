@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from typing import (
@@ -48,6 +50,7 @@ from kedi.agent_adapter.codemode.tool_specs import (
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.compaction.native_settings import langchain_settings_with_native_compaction
 from kedi.agent_adapter.conversation import AdapterConversationContext
+from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.events import agent_event_run
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
@@ -116,6 +119,8 @@ class LangChainAdapter(HookRegistrationMixin):
         supports_native_approval_handler=True,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_live_subagent_input=True,
+        supports_subagent_interrupt=True,
         supports_artifacts=True,
         supports_native_artifacts=True,
         supports_stateful_history=True,
@@ -205,7 +210,9 @@ class LangChainAdapter(HookRegistrationMixin):
             f"kedi_langchain_approval_ceiling_{id(self)}",
             default=(),
         )
-        self._conversation_var: ContextVar[AdapterConversationContext | None] = ContextVar(
+        self._conversation_var: ContextVar[
+            AdapterConversationContext | SubagentConversationContext | None
+        ] = ContextVar(
             f"kedi_langchain_conversation_{id(self)}",
             default=None,
         )
@@ -476,12 +483,16 @@ class LangChainAdapter(HookRegistrationMixin):
 
     @contextmanager
     def subagent_scope(self, request: SubagentExecutionRequest) -> Iterator[None]:
+        token = self._conversation_var.set(request.conversation)
         with (
             self.tool_scope(request.tools),
             self.profile_override(request.profile),
             self.approval_ceiling(request.approval_ceiling),
         ):
-            yield
+            try:
+                yield
+            finally:
+                self._conversation_var.reset(token)
 
     @staticmethod
     def subagent_run_kwargs(limits: SubagentUsageLimits) -> dict[str, Any]:
@@ -514,9 +525,10 @@ class LangChainAdapter(HookRegistrationMixin):
             request_limit = limits.request_limit if limits is not None else 50
             if request_limit is not None:
                 config["recursion_limit"] = request_limit * 3 + 5
+        conversation = self._conversation_var.get()
         with (
             self._history_processor_runner.run_scope(
-                self._conversation_var.get(),
+                conversation if isinstance(conversation, AdapterConversationContext) else None,
                 processor=self.active_history_processor,
                 condition=self.active_history_processor_condition,
             ),
@@ -534,10 +546,30 @@ class LangChainAdapter(HookRegistrationMixin):
                     callbacks.add_handler(callback)
                     config["callbacks"] = callbacks
             try:
-                result = await agent.ainvoke(payload, config=config)
+                from kedi.agent_adapter.subagents.control import current_live_input
+
+                control = current_live_input()
+                if control is None:
+                    result = await agent.ainvoke(payload, config=config)
+                else:
+                    from .live import run_with_input
+                    from langchain.agents.middleware.types import InputAgentState
+                    from langchain_core.runnables import RunnableConfig
+
+                    result = await run_with_input(
+                        agent,
+                        cast(InputAgentState, payload),
+                        cast(RunnableConfig, config),
+                        control,
+                        lambda messages: self._capture_conversation_messages(
+                            {"messages": messages}
+                        ),
+                    )
             finally:
-                if invocation_observer() is not None and run_state.usage.requests:
-                    report_invocation(run_state.usage)
+                if invocation_observer() is not None and run_state.native_usage.requests:
+                    report_invocation(
+                        replace(run_state.usage, requests=run_state.native_usage.requests)
+                    )
             self._capture_conversation_messages(result)
             if invocation_observer() is not None and not run_state.usage.requests:
                 report_invocation(
@@ -707,10 +739,11 @@ class LangChainAdapter(HookRegistrationMixin):
             conversation.result_state["langchain_messages"] = [
                 message_to_dict(_langchain_without_cache_control(message)) for message in messages
             ]
-            self._history_processor_runner.capture(
-                messages, conversation.result_state["langchain_messages"]
-            )
-            conversation.mark_completed()
+            if isinstance(conversation, AdapterConversationContext):
+                self._history_processor_runner.capture(
+                    messages, conversation.result_state["langchain_messages"]
+                )
+                conversation.mark_completed()
 
     def _create_agent(
         self,
@@ -736,6 +769,12 @@ class LangChainAdapter(HookRegistrationMixin):
         }
         if response_format is not None:
             kwargs["response_format"] = response_format
+        from kedi.agent_adapter.subagents.control import current_live_input
+
+        if current_live_input() is not None:
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            kwargs["checkpointer"] = InMemorySaver()
         return create_agent(**kwargs)
 
     async def _tools_for_run(self) -> list[Any]:

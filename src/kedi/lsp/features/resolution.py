@@ -8,6 +8,7 @@ from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
     AwaitStmt,
+    SendStmt,
     CallSegment,
     InputSegment,
     LoopStmt,
@@ -467,7 +468,7 @@ def _resolve_in_stmt(
                 scope_proc=proc,
                 cursor_span=stmt.subagent_loc,
             )
-    if isinstance(stmt, AwaitStmt) and stmt.handle_loc is not None:
+    if isinstance(stmt, (AwaitStmt, SendStmt)) and stmt.handle_loc is not None:
         if _position_inside(pos, stmt.handle_loc):
             declaration = _resolve_value_declaration(
                 prog, proc, ancestor_procs, stmt.handle, stmt.handle_loc

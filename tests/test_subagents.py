@@ -2481,6 +2481,7 @@ def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
         "wait_subagent",
         "cancel_subagent",
         "subagent_status",
+        "send_subagent_input",
     )
     artifact_tools = (
         "read_artifact",
@@ -2489,7 +2490,7 @@ def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
         "run_artifact_code",
     )
     assert calls[0] == (lifecycle_tools + artifact_tools, ())
-    assert calls[1] == (artifact_tools, ())
+    assert calls[1] == (("send_parent_message",) + artifact_tools, ())
     assert calls[2][0] == lifecycle_tools + artifact_tools
     tool_name, tool_result = calls[2][1][0]
     assert tool_name == "delegate_task"
@@ -2567,18 +2568,19 @@ def test_wait_subagent_propagates_terminal_errors_without_delegation_attempt(mon
         asyncio.run(tools["wait_subagent"].fn(run_id="untracked"))
 
 
-def test_wait_subagent_can_observe_result_outside_delegation_scope(monkeypatch):
+def test_wait_subagent_can_observe_result_outside_delegation_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _adapter, runtime, tools = _manager_tools()
 
-    class Result:
-        def as_tool_result(self):
-            return {"status": "completed"}
+    result = DelegationResult(run_id="restored", subagent="worker", task_summary="Completed.")
 
-    async def wait(*args, **kwargs):
-        return Result()
+    async def wait(run_id: str, *, timeout: float | None = None) -> DelegationResult:
+        assert run_id == result.run_id
+        return result
 
     monkeypatch.setattr(runtime, "_wait_subagent", wait)
-    assert asyncio.run(tools["wait_subagent"].fn(run_id="restored")) == {"status": "completed"}
+    assert asyncio.run(tools["wait_subagent"].fn(run_id="restored")) == result.as_tool_result()
 
 
 def test_waiter_cancellation_does_not_fail_still_running_child(monkeypatch):

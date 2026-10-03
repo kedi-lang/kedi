@@ -57,6 +57,8 @@ AdapterCapability = Literal[
     "native_approval_handler",
     "subagents",
     "background_subagents",
+    "live_subagent_input",
+    "subagent_interrupt",
     "artifacts",
     "native_artifacts",
     "stateful_history",
@@ -155,6 +157,8 @@ class AdapterCapabilities:
     supports_native_approval_handler: bool | None = None
     supports_subagents: bool | None = None
     supports_background_subagents: bool | None = None
+    supports_live_subagent_input: bool | None = None
+    supports_subagent_interrupt: bool | None = None
     supports_artifacts: bool | None = None
     supports_native_artifacts: bool | None = None
     supports_stateful_history: bool | None = None
@@ -194,6 +198,8 @@ class AdapterCapabilities:
             "native_approval_handler": self.supports_native_approval_handler,
             "subagents": self.supports_subagents,
             "background_subagents": self.supports_background_subagents,
+            "live_subagent_input": self.supports_live_subagent_input,
+            "subagent_interrupt": self.supports_subagent_interrupt,
             "artifacts": self.supports_artifacts,
             "native_artifacts": self.supports_native_artifacts,
             "stateful_history": self.supports_stateful_history,

@@ -7,6 +7,7 @@ from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
     AwaitStmt,
+    SendStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -463,7 +464,7 @@ def _stmt_segments(stmt: Stmt) -> list:
         for line in stmt.lines:
             segments.extend(line.segments)
         return segments
-    if isinstance(stmt, TaskStmt):
+    if isinstance(stmt, (TaskStmt, SendStmt)):
         return _stmt_segments(stmt.template)
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)

@@ -6,10 +6,13 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware.types import AgentState, hook_config
+from langchain_core.messages import ToolMessage
 from langgraph.types import Overwrite
+from langgraph.runtime import Runtime
 from pydantic_ai import UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.usage import RunUsage
@@ -32,6 +35,8 @@ class LangChainRunState:
     native_usage: RunUsage = field(default_factory=RunUsage)
     corrections: Counter[str] = field(default_factory=Counter)
     pending_tools: int = 0
+    revision: int = 0
+    completed_tools: dict[str, ToolMessage] = field(default_factory=dict)
 
 
 _RUN: ContextVar[LangChainRunState | None] = ContextVar("kedi_langchain_run", default=None)
@@ -49,6 +54,11 @@ def langchain_run_scope(limits: UsageLimits | None) -> Iterator[LangChainRunStat
             "LangChain usage limits require token/request limits, not a provider cost_limit"
         )
     state = LangChainRunState(limits=limits)
+    from kedi.agent_adapter.subagents.control import current_live_input, current_live_revision
+
+    control = current_live_input()
+    if control is not None:
+        state.revision = current_live_revision(control)
     token = _RUN.set(state)
     try:
         yield state
@@ -74,6 +84,15 @@ class LangChainRunMiddleware(AgentMiddleware):
         del runtime
         messages = state["messages"]
         updated = self.archiver(messages) if self.archiver is not None else messages
+        from kedi.agent_adapter.subagents.control import current_live_input
+        from langchain_core.messages import HumanMessage
+
+        control = current_live_input()
+        if control is not None:
+            run_state = _RUN.get()
+            items = control.take_pending(revision=run_state.revision if run_state else 0)
+            if items:
+                updated = [*updated, *(HumanMessage(content=item.render()) for item in items)]
         if self.history_processor is not None:
             outcome = await self.history_processor.process(updated, model_id=self.model_id)
             updated = outcome.messages
@@ -82,13 +101,31 @@ class LangChainRunMiddleware(AgentMiddleware):
         # Replace the graph's durable message state, not just this request's view.
         return {"messages": Overwrite(updated)}
 
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(
+        self, state: AgentState, runtime: Runtime
+    ) -> dict[str, Literal["model"] | None] | None:
+        del runtime
+        from kedi.agent_adapter.subagents.control import current_live_input
+
+        control = current_live_input()
+        if control is not None and control.pending:
+            last = state["messages"][-1]
+            if (
+                not getattr(last, "tool_calls", None)
+                or state.get("structured_response") is not None
+            ):
+                return {"jump_to": "model", "structured_response": None}
+        return None
+
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         from kedi.agent_adapter.adapters.langchain import _langchain_invocation_usage
+        from kedi.agent_adapter.subagents.control import current_live_input
+        from langchain_core.messages import HumanMessage
 
         state = _RUN.get()
         if state is not None:
             state.limits.check_before_request(state.native_usage)
-            state.native_usage.requests += 1
         checkpoint_id = next(
             (
                 message.additional_kwargs["kedi_compaction_checkpoint"]
@@ -130,6 +167,17 @@ class LangChainRunMiddleware(AgentMiddleware):
             request = request.override(model=model, model_settings=settings)
         assert_no_hidden_model_retries(model)
         admit_run_operation("request")
+        if state is not None:
+            state.native_usage.requests += 1
+        control = current_live_input()
+        if control is not None:
+            control.confirm_contents(
+                tuple(
+                    message.content
+                    for message in request.messages
+                    if isinstance(message, HumanMessage) and isinstance(message.content, str)
+                )
+            )
         response = await handler(request)
         if state is not None:
             usage = _langchain_invocation_usage({"messages": response.result})
@@ -158,6 +206,8 @@ class LangChainRunMiddleware(AgentMiddleware):
             state.pending_tools -= 1
         call = request.tool_call
         message = _langchain_tool_message_for_call(result, call.get("id"))
+        if message is not None:
+            state.completed_tools[message.tool_call_id] = message
         if message is not None and message.status == "error":
             name = call["name"]
             if state.corrections[name] >= self.tool_retries:

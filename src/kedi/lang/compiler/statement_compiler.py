@@ -25,6 +25,7 @@ from ...agent_profile.directives import (
 )
 from ...agent_profile.use_resolution import eval_use_directive
 from ...core import KediRuntime
+from ...core.expressions import ValueEnv
 from ...debugging import checkpoint
 from ...errors import KediTraceFrame
 from ..ast import (
@@ -60,6 +61,7 @@ from ..ast import (
     SystemDirectiveStmt,
     TaskGroupStmt,
     TaskStmt,
+    SendStmt,
     TemplateBlock,
     TemplateLine,
     UseDirectiveStmt,
@@ -230,6 +232,23 @@ class StatementCompiler:
             result = owner.wait_sync(job)
             if stmt.binder is not None:
                 self._declare_value(stmt.binder, result, env, source=stmt.loc)
+
+    def execute_send(self, stmt: SendStmt, env: ValueEnv) -> None:
+        from kedi.agent_adapter.subagents.native import SubagentTask
+        from .evaluation import lookup_value, merge_template_block_lines
+
+        job = lookup_value(self.rt, stmt.handle, env)
+        if not isinstance(job, SubagentTask):
+            raise TypeError(f"> send/interrupt expects a subagent task, got {type(job).__name__}")
+        owner = self.rt._native_subagent_owner.get()
+        if owner is None or job._owner is not owner:
+            raise RuntimeError("Agent input requires the task's active invocation")
+        merged = merge_template_block_lines(stmt.template.lines, loc=stmt.template.loc)
+        with self.rt.trace_frame(KediTraceFrame(kind="send", label=stmt.handle, span=stmt.loc)):
+            message = render_expression(self.rt, merged.segments, env, context="send")
+            receipt = owner._run_sync(lambda: job.send(message, interrupt=stmt.interrupt))
+            if receipt.status == "rejected":
+                raise RuntimeError(f"Agent input rejected: {receipt.reason}")
 
     def compile_return_block(self, stmt: ReturnBlockStmt, kwargs: dict[str, Any]) -> Any:
         """Execute a return block and return its value."""
@@ -720,6 +739,9 @@ class StatementExecutor:
 
         if isinstance(stmt, AwaitStmt):
             self.compiler.execute_await(stmt, closure_env)
+            return _NO_RETURN
+        if isinstance(stmt, SendStmt):
+            self.compiler.execute_send(stmt, closure_env)
             return _NO_RETURN
 
         if isinstance(stmt, TemplateBlock):

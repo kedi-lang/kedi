@@ -17,7 +17,11 @@ from kedi.errors import KediExecutionError
 from kedi.telemetry import capture_enabled
 
 if TYPE_CHECKING:
-    from kedi.agent_adapter.conversation import ConversationState, ConversationTurnTicket
+    from kedi.agent_adapter.conversation import (
+        AdapterConversationContext,
+        ConversationState,
+        ConversationTurnTicket,
+    )
     from kedi.agent_adapter.request import (
         AgentRunRequest,
         InstructionPart,
@@ -25,6 +29,7 @@ if TYPE_CHECKING:
         PromptDraft,
     )
     from kedi.agent_adapter.tools.specs import ToolSpec
+    from kedi.agent_adapter.subagents import SubagentConversationContext
     from kedi.agent_profile import AgentProfile
     from kedi.core.runtime import KediRuntime
 
@@ -137,6 +142,7 @@ def _execute_conversation_call(
         *,
         resume_state: Mapping[str, Any] | None = None,
         conversation_scope: Any = None,
+        live_conversation: AdapterConversationContext | SubagentConversationContext | None = None,
     ) -> Any:
         from kedi.run_budget import assert_run_budget_supported
 
@@ -234,7 +240,67 @@ def _execute_conversation_call(
                             )
 
                     with observe_invocations(observe):
-                        result = call(request)
+                        from kedi.agent_adapter.subagents.control import (
+                            LiveInput,
+                            current_live_input,
+                            live_input_scope,
+                        )
+
+                        control = current_live_input()
+                        owns_control = (
+                            control is None
+                            and bool(profile.subagents)
+                            and adapter.capabilities.supports("live_subagent_input")
+                        )
+                        if owns_control:
+                            control = LiveInput(request.metadata.run_id)
+                            control.configure(
+                                input=adapter.capabilities.supports("live_subagent_input")
+                            )
+                        ephemeral = None
+                        if owns_control and conversation_scope is None:
+                            from kedi.agent_adapter.conversation import AdapterConversationContext
+
+                            ephemeral = AdapterConversationContext(
+                                session_id=request.metadata.run_id,
+                                cache_key=request.metadata.run_id,
+                            )
+                        try:
+                            with (
+                                live_input_scope(control),
+                                (
+                                    adapter.conversation_scope(ephemeral)
+                                    if ephemeral is not None
+                                    else nullcontext()
+                                ),
+                            ):
+                                active_request = request
+                                while True:
+                                    result = call(active_request)
+                                    if (
+                                        not owns_control
+                                        or control is None
+                                        or control.try_finish(0, lambda: None)
+                                    ):
+                                        break
+                                    from dataclasses import replace
+
+                                    continuation = live_conversation or ephemeral
+                                    assert continuation is not None
+                                    continuation.resume_state.update(continuation.result_state)
+                                    control.begin_attempt()
+                                    inputs = control.take_pending(revision=0)
+                                    active_request = replace(
+                                        request,
+                                        prompt=request.prompt.with_content(
+                                            "\n\n".join(item.render() for item in inputs)
+                                        ),
+                                    )
+                        finally:
+                            if owns_control and control is not None:
+                                control.close()
+                            if ephemeral is not None and ephemeral.cleanup is not None:
+                                ephemeral.cleanup()
                     validate_required_tool_calls()
                     model = resolved_adapter_model(adapter, configured_model)
                     model_telemetry.complete(result, model=model)
@@ -318,6 +384,7 @@ def _execute_conversation_call(
                     request,
                     resume_state=conversation.resume_state,
                     conversation_scope=adapter_scope,
+                    live_conversation=conversation,
                 )
                 conversation.apply_outcome(
                     request.prompt.content,

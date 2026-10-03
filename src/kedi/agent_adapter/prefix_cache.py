@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .conversation import AdapterConversationContext
+
+if TYPE_CHECKING:
+    from .subagents import SubagentConversationContext
 
 _RESPONSE_CACHE = "response_cache"
 _RESPONSE_CACHE_TTL = "response_cache_ttl"
@@ -301,7 +304,7 @@ def langchain_prefix_cache_settings(
     base: Mapping[str, Any],
     *,
     model: str | object,
-    conversation: AdapterConversationContext,
+    conversation: AdapterConversationContext | SubagentConversationContext,
 ) -> dict[str, Any]:
     """Apply provider cache defaults to LangChain model construction settings."""
 
@@ -312,7 +315,7 @@ def langchain_cache_settings(
     base: Mapping[str, Any],
     *,
     model: str | object,
-    conversation: AdapterConversationContext | None = None,
+    conversation: AdapterConversationContext | SubagentConversationContext | None = None,
 ) -> dict[str, Any]:
     """Translate Kedi cache policy to LangChain provider settings."""
 

@@ -20,6 +20,7 @@ from kedi.agent_adapter.subagents import (
 )
 from kedi.agent_adapter.subagents import execution as _execution
 from kedi.agent_adapter.subagents.attempts import bind_current_delegation_run
+from kedi.agent_adapter.subagents.communication import control_for_run
 from kedi.agent_adapter.subagents.budget import (
     DelegationBudget,
     DelegationConcurrency,
@@ -27,6 +28,12 @@ from kedi.agent_adapter.subagents.budget import (
     SubagentConcurrencyExceeded,
 )
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
+from kedi.agent_adapter.subagents.control import (
+    InputReceipt,
+    LiveInput,
+    current_live_input,
+    sender_is_current,
+)
 from kedi.agent_adapter.subagents.persistence import StoredConversation, SubagentStateStore
 from kedi.agent_adapter.subagents.runs import (
     SubagentEventLog,
@@ -104,6 +111,15 @@ class SubagentHandle:
     async def wait(self, *, timeout: float | None = None) -> DelegationResult:
         return await self._coordinator.wait(self.run_id, timeout=timeout)
 
+    async def send(self, message: str, *, interrupt: bool = False) -> InputReceipt:
+        control = self._coordinator._controls.get(self.run_id)
+        return self._coordinator.send_input(
+            self.run_id,
+            message,
+            interrupt=interrupt,
+            sender=control.parent if control is not None else None,
+        )
+
     def cancel(self) -> bool:
         return self._coordinator.cancel(self.run_id)
 
@@ -158,6 +174,7 @@ class SubagentCoordinator:
         )
         self.events = SubagentEventLog(max_events=max_retained_runs * 2)
         self._tasks: dict[str, _OwnedSubagentTask] = {}
+        self._controls: dict[str, LiveInput] = {}
         self._retained_native_runs: set[str] = set()
         self._timeout_handles: dict[str, asyncio.TimerHandle] = {}
         self._cancel_requested: set[str] = set()
@@ -168,6 +185,23 @@ class SubagentCoordinator:
 
     def new_concurrency(self) -> DelegationConcurrency:
         return DelegationConcurrency.for_limit(self.max_concurrency)
+
+    def send_input(
+        self,
+        run_id: str,
+        message: str,
+        *,
+        interrupt: bool = False,
+        sender: LiveInput | None = None,
+    ) -> InputReceipt:
+        from .communication import send_input
+
+        return send_input(self, run_id, message, interrupt=interrupt, sender=sender)
+
+    async def stop_descendants(self, run_id: str) -> None:
+        from .communication import stop_descendants
+
+        await stop_descendants(self, run_id)
 
     @property
     def active_runs(self) -> int:
@@ -253,6 +287,9 @@ class SubagentCoordinator:
             )
             raise KediExecutionError(f"Subagent depth limit {self.max_depth} exceeded: {chain}")
 
+        sender = current_live_input()
+        if sender is not None and not sender_is_current(sender):
+            raise KediExecutionError("A superseded agent attempt cannot start child tasks")
         budgets = (*budget_stack, parent_budget)
         concurrency = self._concurrency.get() or parent_concurrency
         self._reserve_start(budgets, concurrency)
@@ -262,6 +299,8 @@ class SubagentCoordinator:
         conversation_id = conversation_id or run_id
         owner_profile_name = parent_profile.name
         try:
+            evaluated_profile = evaluated_profile or self._deps.evaluate_profile(definition)
+            child_adapter = self._deps.resolve_adapter(evaluated_profile)
             self._activate_conversation(
                 conversation_id=conversation_id,
                 profile_name=subagent,
@@ -281,6 +320,10 @@ class SubagentCoordinator:
             bind_current_delegation_run(run_id)
             started = self.runs.transition(run_id, "running")
             self.events.append(SubagentStarted(started))
+            capabilities = getattr(child_adapter, "capabilities", None)
+            control = control_for_run(self, run_id, capabilities)
+            with self._task_lock:
+                self._controls[run_id] = control
             if retain_for_native_owner:
                 with self._task_lock:
                     self._retained_native_runs.add(run_id)
@@ -316,6 +359,7 @@ class SubagentCoordinator:
         except BaseException as exc:
             with self._task_lock:
                 self._retained_native_runs.discard(run_id)
+            control.close()
             failed = self.runs.transition(run_id, "failed", error=exc)
             self.events.append(SubagentFailed(failed))
             self._deactivate_conversation(conversation_id, run_id)
@@ -410,6 +454,8 @@ class SubagentCoordinator:
         if owned_task is None:
             return self._terminal_result(run_id)
         awaited = self._bridge_task_wait(run_id, owned_task)
+        # Waiting can end before the child; still retrieve the bridge's eventual error.
+        awaited.add_done_callback(_consume_wait_exception)
         if timeout is None:
             return await asyncio.shield(awaited)
         done, _ = await asyncio.wait((awaited,), timeout=timeout)
@@ -524,6 +570,7 @@ class SubagentCoordinator:
                 break
             if candidate_id not in self._retained_native_runs and candidate.task.done():
                 self._tasks.pop(candidate_id)
+                self._controls.pop(candidate_id, None)
                 self._cancel_requested.discard(candidate_id)
                 discarded.append(candidate_id)
         return discarded
@@ -906,6 +953,11 @@ class SubagentCoordinator:
                 results=results,
                 conversations=conversations,
             )
+
+
+def _consume_wait_exception(waiter: asyncio.Future[DelegationResult]) -> None:
+    if not waiter.cancelled():
+        waiter.exception()
 
 
 def _running_loop() -> asyncio.AbstractEventLoop | None:

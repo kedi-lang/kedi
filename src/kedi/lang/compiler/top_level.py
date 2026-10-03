@@ -53,6 +53,7 @@ from kedi.lang.ast import (
     SystemDirectiveStmt,
     TaskGroupStmt,
     TaskStmt,
+    SendStmt,
     TemplateLine,
     TypeDef,
     TypeDefStmt,
@@ -324,6 +325,10 @@ def _execute_top_level_sequence(
         if isinstance(item, AwaitStmt):
             with block_agent_profile_scope(state.active_profile):
                 self.stmt_compiler.execute_await(item, env)
+            continue
+        if isinstance(item, SendStmt):
+            with block_agent_profile_scope(state.active_profile):
+                self.stmt_compiler.execute_send(item, env)
             continue
         if isinstance(item, ReturnStmt):
             with block_agent_profile_scope(state.active_profile):

@@ -10,6 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from threading import Lock
 from typing import TYPE_CHECKING, Any, TypeVar
+from uuid import uuid4
 
 from pydantic import TypeAdapter
 
@@ -17,6 +18,13 @@ from kedi.agent_adapter.execution import OwnedAsyncLoop, _resolve_deadline
 from kedi.agent_adapter.subagents import DelegationResult
 from kedi.agent_adapter.subagents.attempts import track_delegation_attempt
 from kedi.agent_adapter.subagents.budget import DelegationBudget
+from kedi.agent_adapter.subagents.control import (
+    AgentInput,
+    InputReceipt,
+    LiveInput,
+    current_live_input,
+    live_input_scope,
+)
 from kedi.agent_profile import current_block_agent_profile
 from kedi.errors import KediExecutionError
 
@@ -46,6 +54,18 @@ class SubagentTask:
         self.run_id = run_id
         self._result: SubagentResult | None = None
         self._output_adapter = output_adapter
+
+    @property
+    def task_id(self) -> str:
+        return self.run_id
+
+    async def send(self, message: str, *, interrupt: bool = False) -> InputReceipt:
+        self._owner._check_owner()
+        self._owner._bind_execution_loop()
+        sender = current_live_input() or self._owner.inbox
+        return self._owner.runtime._subagent_coordinator.send_input(
+            self.run_id, message, interrupt=interrupt, sender=sender
+        )
 
     async def wait(self) -> SubagentResult:
         self._owner._check_owner()
@@ -88,6 +108,21 @@ class NativeSubagentOwner:
         self._groups: dict[Future[None], Callable[[], None]] = {}
         self._closing = False
         self._closed = False
+        self.inbox = LiveInput("owner-" + uuid4().hex)
+        self.inbox.configure(input=True)
+
+    async def receive_messages(self) -> tuple[AgentInput, ...]:
+        self._check_owner()
+        self._bind_execution_loop()
+        while True:
+            sequence = self.inbox.sequence
+            items = self.inbox.take_pending()
+            if items:
+                self.inbox.mark_delivered(items)
+                return items
+            if self.inbox.finished:
+                return ()
+            await self.inbox.wait_changed(sequence)
 
     def budget_for(self, profile: AgentProfile) -> DelegationBudget:
         name = profile.name or "<anonymous>"
@@ -156,7 +191,10 @@ class NativeSubagentOwner:
                 )
             if output_adapter is None and child_profile.output_type is not None:
                 output_adapter = TypeAdapter(child_profile.output_type)
-        with track_delegation_attempt(requested_profile=subagent, task=task):
+        with (
+            live_input_scope(current_live_input() or self.inbox),
+            track_delegation_attempt(requested_profile=subagent, task=task),
+        ):
             handle = self.runtime._start_subagent(
                 allowed_subagents=tuple(parent_profile.subagents),
                 subagent=subagent,
@@ -245,6 +283,7 @@ class NativeSubagentOwner:
     async def close(self, primary_error: BaseException | None = None) -> None:
         if self._closed:
             return
+        self.inbox.close()
         self._bind_execution_loop()
         with self._state_lock:
             self._closing = True
@@ -393,3 +432,9 @@ class SubagentScope:
         if active_stack and active_stack[-1][1] != profile.name:
             raise KediExecutionError("Cannot impersonate another subagent parent")
         return await self._owner.start(subagent, task=task, parent_profile=profile)
+
+    async def receive_messages(self) -> tuple[AgentInput, ...]:
+        """Receive child updates without creating an implicit parent model call."""
+        if not self._active or self._owner is None:
+            raise KediExecutionError("Subagent scope is not active")
+        return await self._owner.receive_messages()

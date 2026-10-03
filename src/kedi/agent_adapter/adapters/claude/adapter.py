@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager, AsyncExitStack, contextmanager
 from contextvars import ContextVar
-from typing import Any, Iterator, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, cast
 
 from kedi.agent_adapter.adapters.claude.hooks import _with_kedi_approval_hook
 from kedi.agent_adapter.adapters.claude.messages import (
@@ -50,6 +50,9 @@ from kedi.resolved_types import ResolvedKediType
 
 from .tools import _CLAUDE_KEDI_MCP_TOOL_PREFIX
 
+if TYPE_CHECKING:
+    from claude_agent_sdk import Message, ResultMessage
+
 OutputDataT = Any
 
 
@@ -81,6 +84,8 @@ class ClaudeAdapter(HookRegistrationMixin):
         supports_native_approval_handler=True,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_live_subagent_input=True,
+        supports_subagent_interrupt=True,
         supports_artifacts=True,
         supports_native_artifacts=False,
         supports_stateful_history=True,
@@ -217,7 +222,7 @@ class ClaudeAdapter(HookRegistrationMixin):
         output_schema: dict[str, Any] | None,
         kwargs: Mapping[str, Any],
         emit_final: bool,
-    ) -> Any:
+    ) -> ResultMessage:
         sdk = _claude_sdk()
         run_kwargs = dict(kwargs)
         instructions = cast(str | None, run_kwargs.pop("instructions", None))
@@ -233,13 +238,15 @@ class ClaudeAdapter(HookRegistrationMixin):
                 codemode_settings=codemode_settings,
                 codemode_preloaded_tools=projection.preloaded_tools,
             )
-            result = None
+            result: ResultMessage | None = None
             message_index = 0
             with (
                 delegation_scope(self._subagent_failure_policy),
                 agent_event_run(self.shortname) as resolver,
             ):
-                async for message in sdk.query(prompt=prompt, options=options):
+
+                def observe_message(message: Message) -> None:
+                    nonlocal result, message_index
                     system_error = _claude_non_retryable_system_error(sdk, message)
                     if system_error is not None:
                         raise RuntimeError(system_error)
@@ -251,7 +258,28 @@ class ClaudeAdapter(HookRegistrationMixin):
                             message_index,
                         )
                     if _is_result_message(sdk, message):
-                        result = message
+                        result = cast("ResultMessage", message)
+                        conversation = self._conversation_var.get()
+                        if conversation is not None:
+                            conversation.result_state.update(
+                                {
+                                    "claude_session_id": result.session_id,
+                                    "claude_session_fingerprint": session_fingerprint,
+                                }
+                            )
+                        if invocation_observer() is not None:
+                            report_invocation(_claude_invocation_usage(message))
+
+                from kedi.agent_adapter.subagents.control import current_live_input
+
+                control = current_live_input()
+                if control is None:
+                    async for message in sdk.query(prompt=prompt, options=options):
+                        observe_message(message)
+                else:
+                    from .live import run_query
+
+                    result = await run_query(options, prompt, control, observe_message)
 
                 if result is None:
                     raise RuntimeError("Claude Agent SDK did not return a result message.")
@@ -259,8 +287,6 @@ class ClaudeAdapter(HookRegistrationMixin):
                     raise RuntimeError(
                         str(getattr(result, "result", "Claude Agent SDK run failed."))
                     )
-                if invocation_observer() is not None:
-                    report_invocation(_claude_invocation_usage(result))
                 conversation = self._conversation_var.get()
                 if conversation is not None:
                     conversation.result_state.update(

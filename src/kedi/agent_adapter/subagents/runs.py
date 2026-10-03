@@ -77,7 +77,19 @@ class SubagentCancelled:
     run: SubagentRun
 
 
-SubagentEvent: TypeAlias = SubagentStarted | SubagentCompleted | SubagentFailed | SubagentCancelled
+@dataclass(frozen=True, slots=True)
+class SubagentInputEvent:
+    run: SubagentRun
+    message_id: str
+    sender_id: str
+    revision: int
+    phase: Literal["admitted", "delivered", "undelivered"]
+    interrupt: bool
+
+
+SubagentEvent: TypeAlias = (
+    SubagentStarted | SubagentCompleted | SubagentFailed | SubagentCancelled | SubagentInputEvent
+)
 
 
 class SubagentEventLog:

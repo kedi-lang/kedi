@@ -35,6 +35,7 @@ def _emit_runtime_args_stub(builder: VirtualBuilder) -> None:
     builder.add("from typing import Any, Generic, Iterable, TypeAlias, TypeVar, Union, cast")
     builder.add("from kedi.agent_adapter import SubagentResult, SubagentTask")
     builder.add("def __kedi_await(task: SubagentTask) -> SubagentResult: ...")
+    builder.add("def __kedi_send(task: SubagentTask) -> None: ...")
     builder.add("_K = TypeVar('_K')")
     builder.add("_V = TypeVar('_V')")
     builder.add("ArgType: TypeAlias = Union[str, bool, None]")

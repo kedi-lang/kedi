@@ -10,6 +10,7 @@ from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
     AwaitStmt,
+    SendStmt,
     CallArg,
     CallSegment,
     ConditionalLoopStmt,
@@ -295,7 +296,7 @@ def _collect_value_reference_candidates(
     out: List[Span],
 ) -> None:
     for stmt in _iter_control_statements(statements):
-        if isinstance(stmt, AwaitStmt) and stmt.handle == name:
+        if isinstance(stmt, (AwaitStmt, SendStmt)) and stmt.handle == name:
             if stmt.handle_loc is not None:
                 out.append(stmt.handle_loc)
         if isinstance(stmt, (AssignmentStmt, AssignmentBlockStmt)) and stmt.name == name:

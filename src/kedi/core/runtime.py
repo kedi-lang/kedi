@@ -36,6 +36,7 @@ from kedi.run_budget import RunBudget
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
     from kedi.agent_adapter.conversation import ConversationState, ConversationTurnTicket
+    from kedi.agent_adapter.subagents import DelegationResult
     from kedi.agent_adapter.request import (
         AgentRunRequest,
         InstructionPart,
@@ -710,7 +711,7 @@ class KediRuntime:
         run_id: str,
         *,
         timeout: float | None = None,
-    ) -> Any:
+    ) -> DelegationResult:
         return await self._subagent_coordinator.wait(run_id, timeout=timeout)
 
     def _cancel_subagent(self, run_id: str) -> bool:

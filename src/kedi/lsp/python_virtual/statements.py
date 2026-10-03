@@ -6,6 +6,7 @@ from kedi.lang.ast import (
     AssignmentBlockStmt,
     AssignmentStmt,
     AwaitStmt,
+    SendStmt,
     BacktickLineStmt,
     CallSegment,
     ConditionalLoopStmt,
@@ -223,6 +224,15 @@ def _emit_statements(
                     virtual_range=_line_range(line, len(indent), stmt.binder),
                 )
                 scope[stmt.binder] = ScopeName(typ="SubagentResult", source_range=source_range)
+        elif isinstance(stmt, SendStmt):
+            _emit_segments(builder, cursor, stmt, scope, indent, emit_outputs=False)
+            line = builder.add(f"{indent}__kedi_send({stmt.handle})")
+            builder.add_symbol(
+                kind="reference",
+                name=stmt.handle,
+                source_range=_span_range(stmt.handle_loc) if stmt.handle_loc else None,
+                virtual_range=_line_range(line, len(indent) + len("__kedi_send("), stmt.handle),
+            )
         elif isinstance(stmt, PythonBlock):
             region = cursor.next("fenced", stmt.loc)
             if region is not None:

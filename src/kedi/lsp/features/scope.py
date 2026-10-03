@@ -10,6 +10,7 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentStmt,
     AwaitStmt,
+    SendStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -53,7 +54,7 @@ def _segments_of(stmt) -> list:
         for line in stmt.lines:
             segs.extend(line.segments)
         return segs
-    if isinstance(stmt, TaskStmt):
+    if isinstance(stmt, (TaskStmt, SendStmt)):
         return _segments_of(stmt.template)
     if isinstance(stmt, TemplateLine):
         return list(stmt.segments)

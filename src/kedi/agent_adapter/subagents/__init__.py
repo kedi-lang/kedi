@@ -77,6 +77,10 @@ class SubagentConversationContext:
     resume_state: dict[str, Any] = field(default_factory=dict)
     result_state: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def cache_key(self) -> str:
+        return "kedi-subagent-" + self.conversation_id
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SubagentExecutionRequest:
@@ -358,7 +362,11 @@ def subagent_tool_specs(
     ) -> dict[str, Any]:
         attempt = active_delegation_attempt_for_run(run_id)
         try:
-            result = await rt._wait_subagent(run_id, timeout=timeout)
+            from .messaging import wait_for_child
+
+            result = await wait_for_child(rt, run_id, timeout)
+            if not isinstance(result, DelegationResult):
+                return dict(result)
         except TimeoutError:
             status = rt._subagent_status(run_id)
             if status == "running":
@@ -416,6 +424,7 @@ def subagent_tool_specs(
                         "timeout": {
                             "anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "null"}],
                             "default": None,
+                            "description": "Maximum wait in seconds, not milliseconds.",
                         },
                     },
                     "required": ["run_id"],
@@ -488,6 +497,7 @@ def _subagent_handle_schema() -> dict[str, Any]:
             "run_id": {"type": "string"},
             "subagent": {"type": "string"},
             "status": {"type": "string"},
+            "input_available": {"type": "boolean"},
         },
         "required": ["run_id", "subagent", "status"],
         "additionalProperties": False,

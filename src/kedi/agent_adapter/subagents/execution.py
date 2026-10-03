@@ -21,6 +21,7 @@ from kedi.agent_adapter.subagents import (
 )
 from kedi.agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
 from kedi.agent_adapter.subagents.context import SubagentExecutionContext, _subagent_execution_scope
+from kedi.agent_adapter.subagents.control import RunInterrupted, live_input_scope
 from kedi.agent_adapter.subagents.runs import SubagentCancelled, SubagentCompleted, SubagentFailed
 from kedi.agent_adapter.subagents.safety import SubagentSafetyCeiling
 from kedi.agent_adapter.telemetry import current_tool_call_name
@@ -134,7 +135,8 @@ async def _execute_run(
             if model is not None:
                 span.set_attribute("gen_ai.request.model", model)
             self._deps.assert_profile_override_supported(child_profile, child_adapter)
-            child_tools = self._deps.resolve_tools(child_profile, child_adapter)
+            with live_input_scope(self._controls[run_id]):
+                child_tools = self._deps.resolve_tools(child_profile, child_adapter)
             from kedi.run_budget import assert_run_budget_supported, run_budget_scope
 
             with run_budget_scope(child_profile.run_budget):
@@ -144,45 +146,75 @@ async def _execute_run(
                 )
             instructions = self._deps.instructions_for_profile(child_profile, child_adapter)
             conversation = self._conversation_context(conversation_id)
-            child_call = self._run_child(
-                run_id=run_id,
-                subagent=subagent,
-                task=task,
-                final_schema=final_schema,
-                adapter=child_adapter,
-                profile=child_profile,
-                tools=child_tools,
-                instructions=instructions,
-                approval_ceiling=parent_ceiling.approval_policies,
-                conversation=conversation,
-            )
+            control = self._controls[run_id]
             safety_token = self._safety_ceiling.set(child_ceiling)
-            with bind_agent_run(
-                run_id,
-                parent_run_id=event_parent_run_id,
-                agent_name=subagent,
+            with (
+                live_input_scope(control),
+                bind_agent_run(
+                    run_id,
+                    parent_run_id=event_parent_run_id,
+                    agent_name=subagent,
+                ),
             ):
                 with run_budget_scope(child_profile.run_budget):
                     with observe_invocations(
                         lambda usage: self._record_and_assert_usage(run_id, span, usage)
                     ):
-                        result = await child_call
-            self._assert_usage_limits(run_id)
-            if self.runs.get(run_id).status != "running":
-                raise asyncio.CancelledError
-            self._record_success(
-                conversation_id=conversation_id,
-                run_id=run_id,
-                task=task,
-                result=result,
-                adapter_state=conversation.result_state,
-            )
-            completed = self.runs.transition(run_id, "completed")
-            self.events.append(SubagentCompleted(completed))
+                        attempt_task = task
+                        while True:
+                            revision = control.begin_attempt()
+                            inputs = control.take_pending()
+                            if inputs:
+                                attempt_task = (
+                                    attempt_task
+                                    + "\n\n"
+                                    + "\n\n".join(item.render() for item in inputs)
+                                )
+                            try:
+                                with live_input_scope(control, revision=revision):
+                                    result = await self._run_child(
+                                        run_id=run_id,
+                                        subagent=subagent,
+                                        task=attempt_task,
+                                        final_schema=final_schema,
+                                        adapter=child_adapter,
+                                        profile=child_profile,
+                                        tools=child_tools,
+                                        instructions=instructions,
+                                        approval_ceiling=parent_ceiling.approval_policies,
+                                        conversation=conversation,
+                                    )
+                            except RunInterrupted:
+                                await self.stop_descendants(run_id)
+                                conversation.resume_state.update(conversation.result_state)
+                                attempt_task = "Continue with the updated task input."
+                                continue
+                            self._assert_usage_limits(run_id)
+                            if self.runs.get(run_id).status != "running":
+                                raise asyncio.CancelledError
+
+                            def publish() -> None:
+                                self._record_success(
+                                    conversation_id=conversation_id,
+                                    run_id=run_id,
+                                    task=task,
+                                    result=result,
+                                    adapter_state=conversation.result_state,
+                                )
+                                completed = self.runs.transition(run_id, "completed")
+                                self.events.append(SubagentCompleted(completed))
+
+                            if control.try_finish(revision, publish):
+                                break
+                            if control.revision != revision:
+                                await self.stop_descendants(run_id)
+                            conversation.resume_state.update(conversation.result_state)
+                            attempt_task = "Continue with the additional task input."
             self._persist_state()
             span.set_attribute("kedi.subagent.status", "completed")
             return result
         except asyncio.CancelledError as exc:
+            self._controls[run_id].close()
             if self.runs.get(run_id).status == "running":
                 cancelled = self.runs.transition(run_id, "cancelled", error=exc)
                 self.events.append(SubagentCancelled(cancelled))
@@ -191,8 +223,10 @@ async def _execute_run(
                 span.set_attribute("kedi.subagent.status", "timed_out")
             self._deactivate_conversation(conversation_id, run_id)
             self._persist_state()
+            await self.stop_descendants(run_id)
             raise
         except BaseException as exc:
+            self._controls[run_id].close()
             current = self.runs.get(run_id)
             if current.status == "running":
                 failed = self.runs.transition(run_id, "failed", error=exc)
@@ -202,6 +236,10 @@ async def _execute_run(
                 span.set_attribute("kedi.subagent.status", current.status)
             self._deactivate_conversation(conversation_id, run_id)
             self._persist_state()
+            try:
+                await self.stop_descendants(run_id)
+            except Exception as cleanup_error:
+                raise exc from cleanup_error
             raise
         finally:
             run = self.runs.get(run_id)
@@ -233,7 +271,10 @@ async def _run_child(
     approval_ceiling: tuple[Any, ...],
     conversation: SubagentConversationContext,
 ) -> DelegationResult:
-    run_kwargs = dict(adapter.subagent_run_kwargs(self.usage_limits))
+    remaining = self.usage_limits.remaining(self.runs.get(run_id))
+    if remaining.request_limit == 0:
+        raise KediExecutionError("Subagent request_limit exhausted; task was not restarted")
+    run_kwargs = dict(adapter.subagent_run_kwargs(remaining))
     if instructions is not None:
         run_kwargs["instructions"] = instructions
 
@@ -242,7 +283,7 @@ async def _run_child(
         tools=tools,
         instructions=instructions,
         approval_ceiling=approval_ceiling,
-        usage_limits=self.usage_limits,
+        usage_limits=remaining,
         conversation=conversation,
     )
     effective_task = task

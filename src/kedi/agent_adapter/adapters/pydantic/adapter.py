@@ -152,6 +152,8 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
         supports_native_approval_handler=True,
         supports_subagents=True,
         supports_background_subagents=True,
+        supports_live_subagent_input=hasattr(AgentRun, "enqueue"),
+        supports_subagent_interrupt=hasattr(AgentRun, "enqueue"),
         supports_artifacts=True,
         supports_native_artifacts=True,
         supports_stateful_history=True,
@@ -725,14 +727,11 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 run_kwargs["capabilities"] = capability_list
 
             observer = invocation_observer()
-            usage: RunUsage | None = None
-            if observer is not None:
-                usage_value = run_kwargs.get("usage")
-                if isinstance(usage_value, RunUsage):
-                    usage = usage_value
-                else:
-                    usage = RunUsage()
-                    run_kwargs["usage"] = usage
+            usage_value = run_kwargs.get("usage")
+            usage = usage_value if isinstance(usage_value, RunUsage) else None
+            if observer is not None and usage is None:
+                usage = RunUsage()
+                run_kwargs["usage"] = usage
             try:
                 selected_model = _responses_session_model(
                     agent,
@@ -745,7 +744,35 @@ class PydanticAdapter(HookRegistrationMixin, Agent[AgentDepsT, OutputDataT]):
                 # This adapter's native iter() owns the turn when agent is self.
                 model_scope = _model_responses_session if agent is self else _model_responses_turn
                 async with model_scope(selected_model):
-                    result = await agent.run(prompt, **cast(Any, run_kwargs))
+                    from kedi.agent_adapter.subagents.control import current_live_input
+
+                    control = current_live_input()
+                    if control is None or not self.capabilities.supports("live_subagent_input"):
+                        result = await agent.run(prompt, **cast(Any, run_kwargs))
+                    else:
+                        from .live import InputDeliveryCapability, run_with_input
+
+                        delivery = InputDeliveryCapability(control=control)
+                        existing_capabilities = run_kwargs.get("capabilities")
+                        if existing_capabilities is None:
+                            live_capabilities = [delivery]
+                        elif isinstance(existing_capabilities, (list, tuple)):
+                            live_capabilities = [*existing_capabilities, delivery]
+                        else:
+                            raise TypeError("Pydantic AI capabilities must be a list or tuple.")
+                        live_kwargs = {
+                            **run_kwargs,
+                            "capabilities": live_capabilities,
+                        }
+                        result = await run_with_input(
+                            agent.iter(prompt, **cast(Any, live_kwargs)),
+                            control=control,
+                            capability=delivery,
+                            capture=lambda active: self._capture_conversation_messages(
+                                conversation, active
+                            ),
+                            usage=usage,
+                        )
                 self._capture_conversation_messages(conversation, result)
             finally:
                 if usage is not None:

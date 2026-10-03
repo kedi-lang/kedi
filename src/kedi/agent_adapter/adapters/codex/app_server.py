@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
@@ -16,6 +17,10 @@ from threading import BoundedSemaphore, Event, Lock, RLock, Thread, current_thre
 from typing import Any, Awaitable, Callable, Mapping, Sequence, cast
 
 from kedi.agent_adapter.events import AgentMessagePhase, AgentMessageResolver
+from kedi.agent_adapter.execution import OwnedAsyncLoop
+from kedi.agent_adapter.subagents.control import current_live_input, current_live_revision
+
+from .live import ensure_turn_current, run_cancellable_binding, run_cancellable_turn
 
 JsonObject = dict[str, Any]
 AwaitResult = Callable[[Context, Awaitable[Any]], Any]
@@ -63,14 +68,14 @@ class CodexTurnResult:
 class _ToolBinding:
     fn: Callable[..., Any]
     context: Context
-    await_result: AwaitResult | None = None
+    await_result: AwaitResult
 
 
 @dataclass(frozen=True)
 class _ApprovalBinding:
     handler: ServerApprovalHandler
     context: Context
-    await_result: AwaitResult | None = None
+    await_result: AwaitResult
 
 
 @dataclass(frozen=True)
@@ -87,6 +92,10 @@ class _TurnState:
     turn: JsonObject | None = None
     error: BaseException | None = None
     compacted: bool = False
+    usage: dict[str, int] = field(default_factory=dict)
+    usage_total: int | None = None
+    model_requests: int = 0
+    tool_calls: int = 0
 
 
 class CodexAppServerClient:
@@ -129,6 +138,7 @@ class CodexAppServerClient:
         self._initialized = False
         self._last_disconnect: CodexAppServerDisconnected | None = None
         self._closed = False
+        self._tool_loop: OwnedAsyncLoop | None = None
         self._dynamic_slots = BoundedSemaphore(max_dynamic_requests)
         self._dynamic_executor = ThreadPoolExecutor(
             max_workers=dynamic_request_workers,
@@ -148,17 +158,19 @@ class CodexAppServerClient:
         event_resolver: AgentMessageResolver | None = None,
     ) -> CodexTurnResult:
         loop = asyncio.get_running_loop()
-        return await asyncio.to_thread(
-            self.run_stateless_turn_sync,
-            thread_params=thread_params,
-            turn_params=turn_params,
-            tools=tools,
-            tool_context=tool_context,
-            turn_timeout=turn_timeout,
-            approval_handler=approval_handler,
-            approval_context=approval_context,
-            event_resolver=event_resolver,
-            await_result=_await_result_in_loop(loop),
+        return await run_cancellable_turn(
+            lambda stop: self.run_stateless_turn_sync(
+                thread_params=thread_params,
+                turn_params=turn_params,
+                tools=tools,
+                tool_context=tool_context,
+                turn_timeout=turn_timeout,
+                approval_handler=approval_handler,
+                approval_context=approval_context,
+                event_resolver=event_resolver,
+                await_result=_await_result_in_loop(loop),
+                stop_event=stop,
+            )
         )
 
     async def run_conversation_turn(
@@ -175,18 +187,20 @@ class CodexAppServerClient:
         event_resolver: AgentMessageResolver | None = None,
     ) -> CodexTurnResult:
         loop = asyncio.get_running_loop()
-        return await asyncio.to_thread(
-            self.run_conversation_turn_sync,
-            thread_id=thread_id,
-            thread_params=thread_params,
-            turn_params=turn_params,
-            tools=tools,
-            tool_context=tool_context,
-            turn_timeout=turn_timeout,
-            approval_handler=approval_handler,
-            approval_context=approval_context,
-            event_resolver=event_resolver,
-            await_result=_await_result_in_loop(loop),
+        return await run_cancellable_turn(
+            lambda stop: self.run_conversation_turn_sync(
+                thread_id=thread_id,
+                thread_params=thread_params,
+                turn_params=turn_params,
+                tools=tools,
+                tool_context=tool_context,
+                turn_timeout=turn_timeout,
+                approval_handler=approval_handler,
+                approval_context=approval_context,
+                event_resolver=event_resolver,
+                await_result=_await_result_in_loop(loop),
+                stop_event=stop,
+            )
         )
 
     def run_stateless_turn_sync(
@@ -201,6 +215,7 @@ class CodexAppServerClient:
         approval_context: Context | None = None,
         await_result: AwaitResult | None = None,
         event_resolver: AgentMessageResolver | None = None,
+        stop_event: Event | None = None,
     ) -> CodexTurnResult:
         return self._run_turn_sync(
             thread_id=None,
@@ -214,6 +229,7 @@ class CodexAppServerClient:
             approval_context=approval_context,
             await_result=await_result,
             event_resolver=event_resolver,
+            stop_event=stop_event,
         )
 
     def run_conversation_turn_sync(
@@ -229,6 +245,7 @@ class CodexAppServerClient:
         approval_context: Context | None = None,
         await_result: AwaitResult | None = None,
         event_resolver: AgentMessageResolver | None = None,
+        stop_event: Event | None = None,
     ) -> CodexTurnResult:
         return self._run_turn_sync(
             thread_id=thread_id,
@@ -242,6 +259,7 @@ class CodexAppServerClient:
             approval_context=approval_context,
             await_result=await_result,
             event_resolver=event_resolver,
+            stop_event=stop_event,
         )
 
     def _run_turn_sync(
@@ -258,7 +276,11 @@ class CodexAppServerClient:
         approval_context: Context | None,
         await_result: AwaitResult | None,
         event_resolver: AgentMessageResolver | None,
+        stop_event: Event | None,
     ) -> CodexTurnResult:
+        control = current_live_input()
+        revision = current_live_revision(control) if control is not None else 0
+        ensure_turn_current(control, revision, stop_event)
         created_thread = thread_id is None
         thread_response = (
             self._start_thread(thread_params)
@@ -267,11 +289,12 @@ class CodexAppServerClient:
         )
         thread = _required_object(thread_response, "thread")
         resolved_thread_id = _required_string(thread, "id")
+        resolve_awaitable = await_result if await_result is not None else self._await_sync_result
         bindings = {
             name: _ToolBinding(
                 fn=fn,
                 context=tool_context.copy(),
-                await_result=await_result,
+                await_result=resolve_awaitable,
             )
             for name, fn in tools.items()
         }
@@ -283,46 +306,97 @@ class CodexAppServerClient:
                     context=(
                         approval_context if approval_context is not None else tool_context
                     ).copy(),
-                    await_result=await_result,
+                    await_result=resolve_awaitable,
                 )
             if event_resolver is not None:
                 self._thread_event_resolvers[resolved_thread_id] = event_resolver
         turn_id: str | None = None
         completed = False
         try:
+            ensure_turn_current(control, revision, stop_event)
             turn_response = self.request(
                 "turn/start", {**turn_params, "threadId": resolved_thread_id}
             )
             turn_id = _required_string(_required_object(turn_response, "turn"), "id")
-            state = self._turn_state(turn_id)
-            if not state.done.wait(timeout=turn_timeout):
-                self._interrupt_turn(resolved_thread_id, turn_id)
-                raise TimeoutError(
-                    f"Codex turn {turn_id!r} did not complete within {turn_timeout:g}s."
+            if control is not None:
+                control.confirm_contents(
+                    tuple(
+                        part["text"]
+                        for part in turn_params.get("input", ())
+                        if isinstance(part, dict)
+                        and part.get("type") == "text"
+                        and isinstance(part.get("text"), str)
+                    )
                 )
+            state = self._turn_state(turn_id)
+            deadline = time.monotonic() + turn_timeout
+            interrupted = False
+            while not state.done.wait(timeout=0.02):
+                if (stop_event is not None and stop_event.is_set()) or (
+                    control is not None and control.revision != revision
+                ):
+                    self._request_turn_control(
+                        "turn/interrupt",
+                        {"threadId": resolved_thread_id, "turnId": turn_id},
+                        state,
+                    )
+                    if not state.done.wait(timeout=5.0):
+                        raise TimeoutError("Codex interrupt did not reach terminal completion")
+                    interrupted = True
+                    break
+                if control is not None and control.pending:
+                    items = control.take_pending(revision=revision)
+                    if items:
+                        delivered = self._request_turn_control(
+                            "turn/steer",
+                            {
+                                "threadId": resolved_thread_id,
+                                "expectedTurnId": turn_id,
+                                "input": [
+                                    {"type": "text", "text": item.render()} for item in items
+                                ],
+                            },
+                            state,
+                        )
+                        if delivered:
+                            control.mark_delivered(items)
+                        else:
+                            control.restore_pending(items)
+                if time.monotonic() >= deadline:
+                    self._interrupt_turn(resolved_thread_id, turn_id)
+                    raise TimeoutError(
+                        f"Codex turn {turn_id!r} did not complete within {turn_timeout:g}s."
+                    )
             error, completed_turn, messages, compacted = self._turn_snapshot(turn_id)
             if error is not None:
                 raise error
             if completed_turn is None:
                 raise CodexAppServerProtocolError("Codex turn completed without turn data.")
             status = completed_turn.get("status")
-            if status != "completed":
+            if status != "completed" and not (interrupted and status == "interrupted"):
                 error = completed_turn.get("error")
                 message = error.get("message") if isinstance(error, Mapping) else None
                 raise CodexAppServerError(
                     str(message or f"Codex turn finished with status {status!r}.")
                 )
             final_message = _final_turn_message(messages)
-            if final_message is None:
+            if final_message is None and not interrupted:
                 raise CodexAppServerProtocolError(
                     "Codex turn completed without a final agent message."
                 )
             completed = True
+            with self._state_lock:
+                if state.usage:
+                    completed_turn = {
+                        **completed_turn,
+                        "usage": {**state.usage, "requests": state.model_requests},
+                    }
+                completed_turn = {**completed_turn, "toolCalls": state.tool_calls}
             if retain_thread:
                 with self._state_lock:
                     self._retained_threads.add(resolved_thread_id)
             return CodexTurnResult(
-                text=final_message.text,
+                text=final_message.text if final_message is not None else "",
                 turn=completed_turn,
                 thread_id=resolved_thread_id,
                 compacted=compacted,
@@ -366,9 +440,24 @@ class CodexAppServerClient:
             self._fail_waiters(CodexAppServerDisconnected("Codex App Server client closed."))
             self._stop_process()
             self._dynamic_executor.shutdown(wait=False, cancel_futures=True)
+            tool_loop = self._tool_loop
+        if tool_loop is not None:
+            tool_loop.close()
 
     async def aclose(self) -> None:
         await asyncio.to_thread(self.close)
+
+    def _await_sync_result(self, context: Context, awaitable: Awaitable[Any]) -> Any:
+        with self._start_lock:
+            if self._closed:
+                if inspect.iscoroutine(awaitable):
+                    awaitable.close()
+                raise CodexAppServerDisconnected("Codex App Server client is closed.")
+            if self._tool_loop is None:
+                self._tool_loop = OwnedAsyncLoop()
+            # A background delegation must outlive the dynamic tool that started it.
+            result = context.run(self._tool_loop.submit, run_cancellable_binding(awaitable))
+        return result.result()
 
     def _start_thread(self, params: JsonObject) -> JsonObject:
         try:
@@ -637,6 +726,10 @@ class CodexAppServerClient:
         if binding is None:
             self._tool_response(request_id, False, f"Unknown Kedi tool: {tool_name}")
             return
+        turn_id = params.get("turnId")
+        if isinstance(turn_id, str):
+            with self._state_lock:
+                self._turns.setdefault(turn_id, _TurnState()).tool_calls += 1
         try:
             result = _invoke_binding(binding, **dict(arguments))
             self._tool_response(request_id, True, _tool_result_text(result))
@@ -704,6 +797,22 @@ class CodexAppServerClient:
         thread_id = params.get("threadId")
         resolver = self._event_resolver(thread_id)
         item = params.get("item")
+        if method == "thread/tokenUsage/updated" and isinstance(turn_id, str):
+            token_usage = params.get("tokenUsage")
+            if isinstance(token_usage, Mapping):
+                last, total = token_usage.get("last"), token_usage.get("total")
+                if isinstance(last, Mapping) and isinstance(total, Mapping):
+                    total_tokens = total.get("totalTokens")
+                    if isinstance(total_tokens, int) and not isinstance(total_tokens, bool):
+                        with self._state_lock:
+                            state = self._turns.setdefault(turn_id, _TurnState())
+                            if state.usage_total != total_tokens:
+                                state.usage_total = total_tokens
+                                state.model_requests += 1
+                                for key, value in last.items():
+                                    if isinstance(value, int) and not isinstance(value, bool):
+                                        state.usage[key] = state.usage.get(key, 0) + value
+            return
         if (
             method in {"item/started", "item/completed"}
             and isinstance(turn_id, str)
@@ -792,6 +901,17 @@ class CodexAppServerClient:
             state = self._turns.setdefault(turn_id, _TurnState())
             return state.error, state.turn, tuple(state.messages), state.compacted
 
+    def _request_turn_control(self, method: str, params: JsonObject, state: _TurnState) -> bool:
+        try:
+            self.request(method, params)
+        except CodexAppServerProtocolError:
+            with self._state_lock:
+                if state.turn is not None and state.turn.get("status") == "completed":
+                    # Completion won the race; input still belongs to the next turn.
+                    return False
+            raise
+        return True
+
     def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
         with suppress(CodexAppServerError, TimeoutError):
             self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id}, timeout=5)
@@ -864,16 +984,7 @@ def _invoke_binding(
     if not inspect.isawaitable(result):
         return result
     awaitable = cast(Awaitable[Any], result)
-    if binding.await_result is not None:
-        return binding.await_result(context, awaitable)
-    return context.run(_await_result_in_new_loop, awaitable)
-
-
-def _await_result_in_new_loop(awaitable: Awaitable[Any]) -> Any:
-    async def await_value() -> Any:
-        return await awaitable
-
-    return asyncio.run(await_value())
+    return binding.await_result(context, awaitable)
 
 
 def _await_result_in_loop(loop: asyncio.AbstractEventLoop) -> AwaitResult:
@@ -885,6 +996,8 @@ def _await_result_in_loop(loop: asyncio.AbstractEventLoop) -> AwaitResult:
         def schedule() -> None:
             try:
                 task = context.run(asyncio.ensure_future, awaitable)
+                if context.run(current_live_input) is not None:
+                    task = context.run(asyncio.ensure_future, run_cancellable_binding(task))
             except BaseException as exc:
                 result.set_exception(exc)
                 return

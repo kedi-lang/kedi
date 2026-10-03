@@ -19,6 +19,13 @@ def record(message: dict[str, Any]) -> None:
 
 
 def complete_turn(turn_id: str, text: str) -> None:
+    for update in json.loads(os.getenv("KEDI_CODEX_FAKE_USAGE_UPDATES", "[]")):
+        send(
+            {
+                "method": "thread/tokenUsage/updated",
+                "params": {"turnId": turn_id, **update},
+            }
+        )
     send(
         {
             "method": "item/completed",
@@ -40,6 +47,7 @@ thread_count = 0
 turn_count = 0
 pending_tools: dict[int, str] = {}
 pending_approvals: dict[int, str] = {}
+unconfirmed_interrupts: set[str] = set()
 
 
 def request_native_approval(
@@ -132,7 +140,12 @@ for raw_line in sys.stdin:
             }
         )
         prompt = message["params"]["input"][0]["text"]
+        if prompt == "unconfirmed-interrupt":
+            unconfirmed_interrupts.add(turn_id)
+            continue
         if prompt == "timeout":
+            continue
+        if prompt == "live-input" or prompt.startswith("live-input\n"):
             continue
         if prompt == "disconnect-turn":
             print("forced disconnect", file=sys.stderr, flush=True)
@@ -214,8 +227,34 @@ for raw_line in sys.stdin:
             continue
         complete_turn(turn_id, json.dumps({"answer": prompt}, ensure_ascii=False))
         continue
+    control_race = os.getenv("KEDI_CODEX_FAKE_CONTROL_RACE")
+    if control_race and method in ("turn/interrupt", "turn/steer"):
+        turn_id = message["params"].get("turnId") or message["params"]["expectedTurnId"]
+        if control_race == "completed":
+            complete_turn(turn_id, "Original scope completed")
+        elif control_race == "failed":
+            send(
+                {
+                    "method": "turn/completed",
+                    "params": {"turn": {"id": turn_id, "status": "failed"}},
+                }
+            )
+        send({"id": request_id, "error": {"code": -32600, "message": "No active turn"}})
+        continue
     if method == "turn/interrupt":
         send({"id": request_id, "result": {}})
+        if message["params"]["turnId"] in unconfirmed_interrupts:
+            continue
+        send(
+            {
+                "method": "turn/completed",
+                "params": {"turn": {"id": message["params"]["turnId"], "status": "interrupted"}},
+            }
+        )
+        continue
+    if method == "turn/steer":
+        send({"id": request_id, "result": {"turnId": message["params"]["expectedTurnId"]}})
+        complete_turn(message["params"]["expectedTurnId"], message["params"]["input"][0]["text"])
         continue
     if method == "thread/delete":
         send({"id": request_id, "result": {}})
