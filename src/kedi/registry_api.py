@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 from .package_manifest import validate_package_name
 
 REGISTRY_URL_ENV = "KEDI_REGISTRY_URL"
-DEFAULT_REGISTRY_URL = "http://127.0.0.1:8767"
+DEFAULT_REGISTRY_URL = "https://registry.kedi-lang.org"
 REGISTRY_REQUEST_TIMEOUT_SECONDS = 10
 MAX_REGISTRY_RESPONSE_BYTES = 2 * 1024 * 1024
 

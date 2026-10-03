@@ -40,13 +40,21 @@ node scripts/sync_editor_runtime.mjs --check
 echo "==> Building and packaging kedi-zed extension..."
 (
   cd kedi-zed
-  cargo build --release --target wasm32-wasip1
+  cargo build --locked --release --target wasm32-wasip2
 
-  wasm_path="target/wasm32-wasip1/release/kedi_zed.wasm"
+  wasm_path="target/wasm32-wasip2/release/kedi_zed.wasm"
   if [[ ! -f "$wasm_path" ]]; then
     echo "Missing wasm artifact: $wasm_path"
     exit 1
   fi
+  # Zed loads a component, not the core module produced by wasm32-wasip1.
+  node -e '
+    const fs = require("node:fs");
+    const header = fs.readFileSync(process.argv[1]).subarray(0, 8).toString("hex");
+    if (header !== "0061736d0d000100") {
+      throw new Error("Zed extension must be a WebAssembly component");
+    }
+  ' "$wasm_path"
 
   staging="$(mktemp -d)"
   cp extension.toml "$staging/"

@@ -37,6 +37,23 @@ def package_record():
     return api._parse_package_record(package_payload(), registry_url="https://example.test")
 
 
+def test_registry_defaults_to_public_https(monkeypatch):
+    monkeypatch.delenv(api.REGISTRY_URL_ENV, raising=False)
+    client = api.HTTPRegistryAPIClient()
+    assert client.base_url == "https://registry.kedi-lang.org"
+    assert not client.is_local
+
+
+def test_registry_url_override_precedence(monkeypatch):
+    monkeypatch.setenv(api.REGISTRY_URL_ENV, "http://127.0.0.1:8767")
+    client = api.HTTPRegistryAPIClient()
+    assert client.base_url == "http://127.0.0.1:8767"
+    assert client.is_local
+    explicit = api.HTTPRegistryAPIClient("https://registry.example.test")
+    assert explicit.base_url == "https://registry.example.test"
+    assert not explicit.is_local
+
+
 @pytest.mark.parametrize(
     "update",
     [

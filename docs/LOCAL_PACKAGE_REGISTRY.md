@@ -1,8 +1,8 @@
 # Local Package Registry
 
-The first registry deployment target is a loopback static server. Production
-DNS and `registry.kedi-lang.org` are not required to test package installation
-or auditing.
+Kedi uses `https://registry.kedi-lang.org` by default. A loopback static server
+supports local registry development without changing the public registry or
+requiring production DNS.
 
 Generated registry files use this layout:
 
@@ -21,8 +21,8 @@ Start the server from the Kedi repository:
 python scripts/serve_package_registry.py path/to/generated
 ```
 
-The default client URL is `http://127.0.0.1:8767`. Override the host or port on
-the server and point Kedi at it when necessary:
+The local server defaults to `http://127.0.0.1:8767`; explicitly point the client
+at it with `KEDI_REGISTRY_URL=http://127.0.0.1:8767`. To use another port:
 
 ```console
 python scripts/serve_package_registry.py path/to/generated --port 8877
