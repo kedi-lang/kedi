@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import replace
 from typing import (
     Any,
     AsyncIterator,
@@ -50,7 +49,6 @@ from kedi.agent_adapter.codemode.tool_specs import (
 from kedi.agent_adapter.compaction.archive import HistoryArchiveSettings
 from kedi.agent_adapter.compaction.native_settings import langchain_settings_with_native_compaction
 from kedi.agent_adapter.conversation import AdapterConversationContext
-from kedi.agent_adapter.subagents import SubagentConversationContext
 from kedi.agent_adapter.events import agent_event_run
 from kedi.agent_adapter.history_processing import (
     HistoryProcessorCallback,
@@ -82,7 +80,7 @@ from kedi.agent_adapter.models import (
 from kedi.agent_adapter.output_schema import build_output_model
 from kedi.agent_adapter.prefix_cache import langchain_cache_settings
 from kedi.agent_adapter.responses_session import model_responses_session, model_responses_turn
-from kedi.agent_adapter.subagents import SubagentExecutionRequest
+from kedi.agent_adapter.subagents import SubagentConversationContext, SubagentExecutionRequest
 from kedi.agent_adapter.subagents.attempts import DelegationFailurePolicy, delegation_scope
 from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
 from kedi.agent_adapter.telemetry import mcp_initialization_span
@@ -552,9 +550,10 @@ class LangChainAdapter(HookRegistrationMixin):
                 if control is None:
                     result = await agent.ainvoke(payload, config=config)
                 else:
-                    from .live import run_with_input
                     from langchain.agents.middleware.types import InputAgentState
                     from langchain_core.runnables import RunnableConfig
+
+                    from .live import run_with_input
 
                     result = await run_with_input(
                         agent,

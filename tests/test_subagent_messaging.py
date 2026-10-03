@@ -15,8 +15,8 @@ from kedi.agent_adapter.subagents.control import (
     controlled_attempt,
     live_input_scope,
 )
-from kedi.lang import KediParseError, parse_program
 from kedi.core.runtime import KediRuntime
+from kedi.lang import KediParseError, parse_program
 
 
 def inbox(name: str = "worker") -> LiveInput:
@@ -235,9 +235,11 @@ def test_agent_input_syntax_rejects_output_and_multiple_templates(operation: str
 @pytest.mark.asyncio
 async def test_langchain_queued_input_reaches_next_request() -> None:
     from typing import Any
+
     from langchain_core.messages import AIMessage
-    from tests.test_langchain_branch_parity import ScriptedModel
+
     from kedi.agent_adapter.adapters.langchain import LangChainAdapter
+    from tests.test_langchain_branch_parity import ScriptedModel
 
     class WaitingModel(ScriptedModel):
         started: Any
@@ -272,8 +274,9 @@ async def test_langchain_queued_input_reaches_next_request() -> None:
 @pytest.mark.asyncio
 async def test_langchain_interrupt_preserves_checkpoint() -> None:
     from typing import Any
-    from tests.test_langchain_branch_parity import ScriptedModel
+
     from kedi.agent_adapter.adapters.langchain import LangChainAdapter
+    from tests.test_langchain_branch_parity import ScriptedModel
 
     class WaitingModel(ScriptedModel):
         started: Any
@@ -300,6 +303,7 @@ async def test_langchain_interrupt_preserves_checkpoint() -> None:
 async def test_native_task_redirect_keeps_identity_budget_and_repeated_wait() -> None:
     from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.lang import compile_program
     from tests.test_native_subagent_tasks import PROFILES
 
@@ -349,6 +353,7 @@ async def test_claude_hooks_preserve_existing_hooks_and_block_finalization(
     import claude_agent_sdk
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, ResultMessage
     from claude_agent_sdk.types import HookInput, HookJSONOutput
+
     from kedi.agent_adapter.adapters.claude.live import run_query
 
     entered, release = asyncio.Event(), asyncio.Event()
@@ -474,6 +479,7 @@ async def test_parent_message_wakes_model_wait_but_not_native_wait(
 @pytest.mark.parametrize("interrupt", [False, True])
 async def test_codex_steer_and_interrupt_reuse_native_thread(tmp_path, interrupt) -> None:
     from threading import Event
+
     from tests.test_codex_adapter import _adapter, _messages, _method
 
     adapter, log = _adapter(tmp_path, turn_timeout=3)
@@ -527,6 +533,7 @@ async def test_codex_steer_and_interrupt_reuse_native_thread(tmp_path, interrupt
 @pytest.mark.asyncio
 async def test_tool_cleanup_blocks_restart_until_thread_returns() -> None:
     from threading import Event
+
     from kedi.agent_adapter.subagents.tool_activity import with_live_tool_tracking
     from kedi.agent_adapter.tools.specs import ToolSpec
 
@@ -556,6 +563,7 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
     from langchain_core.messages import AIMessage
     from pydantic_ai.messages import ModelResponse, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.agent_adapter.adapters.langchain import LangChainAdapter
     from kedi.agent_adapter.subagents.tool_activity import with_live_tool_tracking
     from kedi.agent_adapter.tools.specs import ToolSpec
@@ -613,8 +621,10 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
 def test_send_and_interrupt_dsl_execute_and_keep_typed_result(inside_procedure: bool) -> None:
     from textwrap import indent
     from threading import Event
+
     from pydantic_ai.messages import ModelResponse, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.lang import compile_program
     from tests.test_native_subagent_tasks import PROFILES
 
@@ -657,6 +667,7 @@ def test_send_and_interrupt_dsl_execute_and_keep_typed_result(inside_procedure: 
 
 def test_send_handle_definition_references_and_virtual_python() -> None:
     import ast
+
     from kedi.lsp.python_virtual.document import compute_python_virtual_document
     from tests.lsp_helpers import definition_at, references_at
     from tests.test_native_subagent_tasks import PROFILES
@@ -683,6 +694,7 @@ def test_send_handle_definition_references_and_virtual_python() -> None:
 async def test_redirect_cannot_reset_exhausted_request_budget() -> None:
     from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
     from kedi.errors import KediExecutionError
     from kedi.lang import compile_program
@@ -715,6 +727,7 @@ async def test_redirect_cannot_reset_exhausted_request_budget() -> None:
 async def test_native_owner_receives_child_messages_without_parent_inference() -> None:
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.lang import compile_program
     from tests.test_native_subagent_tasks import PROFILES
 
@@ -908,6 +921,7 @@ async def test_redirect_cancels_obsolete_descendants_but_keeps_sibling_running()
         ToolReturnPart,
     )
     from pydantic_ai.models.function import FunctionModel
+
     from kedi.lang import compile_program
 
     worker_started, leaf_started, sibling_started, leaf_cancelled, release_sibling = (

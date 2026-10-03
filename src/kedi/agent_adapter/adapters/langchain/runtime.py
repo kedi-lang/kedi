@@ -11,8 +11,8 @@ from typing import Any, Iterator, Literal
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, hook_config
 from langchain_core.messages import ToolMessage
-from langgraph.types import Overwrite
 from langgraph.runtime import Runtime
+from langgraph.types import Overwrite
 from pydantic_ai import UsageLimits
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.usage import RunUsage
@@ -84,8 +84,9 @@ class LangChainRunMiddleware(AgentMiddleware):
         del runtime
         messages = state["messages"]
         updated = self.archiver(messages) if self.archiver is not None else messages
-        from kedi.agent_adapter.subagents.control import current_live_input
         from langchain_core.messages import HumanMessage
+
+        from kedi.agent_adapter.subagents.control import current_live_input
 
         control = current_live_input()
         if control is not None:
@@ -119,9 +120,10 @@ class LangChainRunMiddleware(AgentMiddleware):
         return None
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        from langchain_core.messages import HumanMessage
+
         from kedi.agent_adapter.adapters.langchain import _langchain_invocation_usage
         from kedi.agent_adapter.subagents.control import current_live_input
-        from langchain_core.messages import HumanMessage
 
         state = _RUN.get()
         if state is not None:

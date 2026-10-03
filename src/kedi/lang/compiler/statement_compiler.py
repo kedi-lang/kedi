@@ -54,6 +54,7 @@ from ..ast import (
     RequiresDirectiveStmt,
     ReturnBlockStmt,
     ReturnStmt,
+    SendStmt,
     SettingsDirectiveStmt,
     ShowStmt,
     SkillsDirectiveStmt,
@@ -61,7 +62,6 @@ from ..ast import (
     SystemDirectiveStmt,
     TaskGroupStmt,
     TaskStmt,
-    SendStmt,
     TemplateBlock,
     TemplateLine,
     UseDirectiveStmt,
@@ -235,6 +235,7 @@ class StatementCompiler:
 
     def execute_send(self, stmt: SendStmt, env: ValueEnv) -> None:
         from kedi.agent_adapter.subagents.native import SubagentTask
+
         from .evaluation import lookup_value, merge_template_block_lines
 
         job = lookup_value(self.rt, stmt.handle, env)

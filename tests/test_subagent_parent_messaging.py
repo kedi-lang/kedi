@@ -29,7 +29,6 @@ from kedi.errors import KediExecutionError
 from kedi.lang import compile_program, parse_program
 from tests.test_langchain_branch_parity import ScriptedModel
 
-
 Reply: TypeAlias = tuple[None, str] | tuple[str, dict[str, JsonValue]]
 Respond: TypeAlias = Callable[[Sequence[BaseMessage | ModelMessage]], Awaitable[Reply]]
 TOOL_RESULT = TypeAdapter(dict[str, JsonValue])

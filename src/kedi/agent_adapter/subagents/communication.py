@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from kedi.agent_adapter.meta import AdapterCapabilities
-from .runs import SubagentInputEvent
+
 from .control import (
     INTERRUPT_CLEANUP_SECONDS,
     InputReceipt,
@@ -14,6 +14,7 @@ from .control import (
     current_live_input,
     sender_is_current,
 )
+from .runs import SubagentInputEvent
 
 if TYPE_CHECKING:
     from .coordinator import SubagentCoordinator

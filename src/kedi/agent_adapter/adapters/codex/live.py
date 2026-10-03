@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from threading import Event
 from collections.abc import Awaitable
+from threading import Event
 from typing import TYPE_CHECKING, Callable, TypeVar
 
 from kedi.agent_adapter.subagents.control import (

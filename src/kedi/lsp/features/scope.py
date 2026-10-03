@@ -10,7 +10,6 @@ from lsprotocol import types as lsp
 from kedi.lang.ast import (
     AssignmentStmt,
     AwaitStmt,
-    SendStmt,
     ConditionalLoopStmt,
     IfStmt,
     LoopStmt,
@@ -22,6 +21,7 @@ from kedi.lang.ast import (
     PythonBlock,
     RawInvokeStmt,
     ReturnStmt,
+    SendStmt,
     ShowStmt,
     Span,
     TaskGroupStmt,

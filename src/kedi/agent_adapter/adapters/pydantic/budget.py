@@ -19,7 +19,6 @@ from kedi.run_budget import (
     current_run_budget,
 )
 
-
 _MODEL_ADMISSION: ContextVar[Callable[[Sequence[ModelMessage]], None] | None] = ContextVar(
     "kedi_pydantic_model_admission", default=None
 )

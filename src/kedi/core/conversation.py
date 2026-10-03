@@ -28,8 +28,8 @@ if TYPE_CHECKING:
         OutputContract,
         PromptDraft,
     )
-    from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.agent_adapter.subagents import SubagentConversationContext
+    from kedi.agent_adapter.tools.specs import ToolSpec
     from kedi.agent_profile import AgentProfile
     from kedi.core.runtime import KediRuntime
 

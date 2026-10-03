@@ -80,8 +80,8 @@ from .requirements import (
 )
 from .subagents import SubagentUsageLimits
 from .subagents.context import SubagentExecutionContext, current_subagent_execution
-from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .subagents.control import AgentInput, InputReceipt
+from .subagents.native import SubagentResult, SubagentScope, SubagentTask
 from .tools.records import ToolCallRecord
 from .tools.specs import SupportsToolRegistration, ToolSpec
 

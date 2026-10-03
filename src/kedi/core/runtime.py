@@ -36,13 +36,13 @@ from kedi.run_budget import RunBudget
 if TYPE_CHECKING:
     from kedi.agent_adapter import AgentAdapter
     from kedi.agent_adapter.conversation import ConversationState, ConversationTurnTicket
-    from kedi.agent_adapter.subagents import DelegationResult
     from kedi.agent_adapter.request import (
         AgentRunRequest,
         InstructionPart,
         OutputContract,
         PromptDraft,
     )
+    from kedi.agent_adapter.subagents import DelegationResult
     from kedi.agent_adapter.subagents.budget import DelegationBudget, DelegationConcurrency
     from kedi.agent_adapter.subagents.limits import SubagentUsageLimits
     from kedi.agent_adapter.tools.specs import ToolSpec

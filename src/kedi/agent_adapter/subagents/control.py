@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from threading import Lock
-from typing import Literal, TypeVar, TypedDict
+from typing import Literal, TypedDict, TypeVar
 from uuid import uuid4
 
 MAX_PENDING_INPUTS = 32
