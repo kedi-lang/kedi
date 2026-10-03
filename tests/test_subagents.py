@@ -2902,7 +2902,9 @@ def test_concurrency_limit_fails_fast_and_releases_success_and_cancel_slots(
             run for run in runtime._subagent_coordinator.runs.snapshot() if run.status == "running"
         )
         assert runtime._subagent_coordinator.cancel(active_run.run_id) is True
-        await asyncio.sleep(0)
+        with pytest.raises(asyncio.CancelledError):
+            await runtime._subagent_coordinator.wait(active_run.run_id, timeout=5)
+        assert runtime._subagent_coordinator.status(active_run.run_id) == "cancelled"
 
         monkeypatch.setattr(adapter, "invoke", RecordingPydanticAdapter.invoke.__get__(adapter))
         assert (await tool.fn(subagent="worker", task="after-cancel"))[

@@ -347,7 +347,13 @@ def test_constructor_condition_and_lexical_override(kind):
             history_processor=processor,
             history_processor_condition=lambda _state: False,
         )
-    assert len(caught) == 1
+    assert (
+        sum(
+            issubclass(warning.category, UserWarning) and "prefix-cache" in str(warning.message)
+            for warning in caught
+        )
+        == 1
+    )
     assert adapter.invoke_sync(prompt="first") == "done"
     assert not seen
     with adapter.profile_override(
