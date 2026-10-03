@@ -644,7 +644,8 @@ async def test_langchain_thread_result_is_recorded_before_cleanup_finishes(
 ) -> None:
     from langchain_core.messages import AIMessage
 
-    from kedi.agent_adapter.adapters.langchain import LangChainAdapter, runtime as native_runtime
+    from kedi.agent_adapter.adapters.langchain import LangChainAdapter
+    from kedi.agent_adapter.adapters.langchain import runtime as native_runtime
     from kedi.agent_adapter.tools.specs import ToolSpec
     from tests.test_langchain_branch_parity import ScriptedModel
 
