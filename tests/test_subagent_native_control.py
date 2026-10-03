@@ -7,6 +7,7 @@ from threading import Event
 from types import TracebackType
 from typing import TYPE_CHECKING
 
+import anyio
 import pytest
 
 from kedi.agent_adapter.adapters.claude.live import run_query
@@ -74,7 +75,7 @@ async def test_codex_interrupt_ack_without_terminal_event_cannot_restart_the_tas
         task = asyncio.create_task(adapter.invoke(prompt="unconfirmed-interrupt"))
     try:
         with live_input_scope(control):
-            async with asyncio.timeout(3):
+            with anyio.fail_after(3):
                 while not log.exists() or not _method(_messages(log), "turn/start"):
                     await asyncio.sleep(0.01)
             receipt = control.admit("Updated scope", sender_id="parent", interrupt=True)
@@ -158,7 +159,7 @@ async def test_codex_redirect_between_pending_check_and_claim_never_steers_an_em
     with live_input_scope(control):
         task = asyncio.create_task(adapter.invoke(prompt="live-input"))
     try:
-        async with asyncio.timeout(3):
+        with anyio.fail_after(3):
             while not log.exists() or not _method(_messages(log), "turn/start"):
                 await asyncio.sleep(0.01)
         first = control.admit("Additional evidence", sender_id="parent")
@@ -243,7 +244,7 @@ async def test_codex_control_racing_with_completion_preserves_undelivered_input(
     with live_input_scope(control), adapter.conversation_scope(conversation):
         task = asyncio.create_task(adapter.invoke(prompt="live-input"))
     try:
-        async with asyncio.timeout(3):
+        with anyio.fail_after(3):
             while not log.exists() or not _method(_messages(log), "turn/start"):
                 await asyncio.sleep(0.01)
         receipt = control.admit("Updated scope", sender_id="parent", interrupt=interrupt)

@@ -335,7 +335,7 @@ async def _langchain_admit_native_tool_result(
     return model_copy(update={"content": model_content})
 
 
-def _langchain_tool_message_for_call(result: Any, call_id: str) -> Any | None:
+def _langchain_tool_message_for_call(result: Any, call_id: str | None) -> Any | None:
     """Find the causal ToolMessage in a direct result or LangGraph Command update."""
 
     try:

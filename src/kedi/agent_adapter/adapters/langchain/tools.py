@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from functools import wraps
 from typing import (
     Any,
@@ -14,6 +15,7 @@ from kedi.agent_adapter.adapters.langchain.messages import _raise_langchain_code
 from kedi.agent_adapter.approvals.policy import ToolRisk
 from kedi.agent_adapter.codemode import CodeModeError
 from kedi.agent_adapter.codemode.tool_specs import CodeModeProjection
+from kedi.agent_adapter.subagents.tool_activity import with_live_tool_tracking
 from kedi.agent_adapter.tools.errors import correctable_tool_error
 from kedi.agent_adapter.tools.execution import arguments_target_secret_file
 from kedi.agent_adapter.tools.specs import ToolSpec
@@ -107,12 +109,14 @@ def _langchain_tool_spec_from_native(tool: Any) -> ToolSpec:
 def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
     @wraps(tool.fn)
     def _tool(*args: Any, **kwargs: Any) -> Any:
+        from kedi.agent_adapter.adapters.langchain.runtime import record_live_tool_result
         from kedi.agent_adapter.execution import run_sync
 
         try:
             result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
             if inspect.isawaitable(result):
-                return run_sync(cast(Coroutine[Any, Any, Any], result))
+                result = run_sync(cast(Coroutine[Any, Any, Any], result))
+            record_live_tool_result(result)
             return result
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
@@ -120,16 +124,20 @@ def _langchain_sync_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             _raise_langchain_tool_error(tool, exc)
             raise
 
-    return _tool
+    # The native result journal must settle before the physical tool barrier opens.
+    return with_live_tool_tracking(replace(tool, fn=_tool)).fn
 
 
 def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
     @wraps(tool.fn)
     async def _tool(*args: Any, **kwargs: Any) -> Any:
+        from kedi.agent_adapter.adapters.langchain.runtime import record_live_tool_result
+
         try:
             result = tool.fn(*args, **_validated_tool_arguments(tool, kwargs))
             if inspect.isawaitable(result):
-                return await result
+                result = await result
+            record_live_tool_result(result)
             return result
         except CodeModeError as exc:
             _raise_langchain_codemode_error(exc)
@@ -137,7 +145,7 @@ def _langchain_async_tool_function(tool: ToolSpec) -> Callable[..., Any]:
             _raise_langchain_tool_error(tool, exc)
             raise
 
-    return _tool
+    return with_live_tool_tracking(replace(tool, fn=_tool)).fn
 
 
 def _raise_langchain_tool_error(tool: ToolSpec, exc: Exception) -> None:

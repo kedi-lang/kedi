@@ -268,7 +268,7 @@ class LiveInput:
 
         try:
             await asyncio.wait_for(wait(), INTERRUPT_CLEANUP_SECONDS)
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             raise RuntimeError(
                 "Agent tool cleanup did not reach a terminal state; task was not restarted"
             ) from exc
@@ -391,7 +391,7 @@ async def controlled_attempt(
                 raise UnconfirmedStop(
                     "Native interrupt was cancelled before terminal confirmation"
                 ) from error
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
             task.cancel()
             task.add_done_callback(_consume_exception)
             raise RuntimeError(

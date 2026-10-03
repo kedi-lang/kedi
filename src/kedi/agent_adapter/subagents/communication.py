@@ -78,7 +78,7 @@ async def stop_descendants(coordinator: SubagentCoordinator, run_id: str) -> Non
     )
     try:
         await asyncio.wait_for(cleanup, INTERRUPT_CLEANUP_SECONDS)
-    except TimeoutError as exc:
+    except asyncio.TimeoutError as exc:
         raise RuntimeError(
             "Subagent descendants did not stop; the parent task was not restarted"
         ) from exc

@@ -10,7 +10,7 @@ from typing import Any, Iterator, Literal
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState, hook_config
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolCall, ToolMessage
 from langgraph.runtime import Runtime
 from langgraph.types import Overwrite
 from pydantic_ai import UsageLimits
@@ -40,6 +40,25 @@ class LangChainRunState:
 
 
 _RUN: ContextVar[LangChainRunState | None] = ContextVar("kedi_langchain_run", default=None)
+_TOOL_CALL: ContextVar[ToolCall | None] = ContextVar("kedi_langchain_tool_call", default=None)
+
+
+def record_live_tool_result(result: Any) -> None:
+    from kedi.agent_adapter.subagents.control import current_live_input
+
+    state = _RUN.get()
+    call = _TOOL_CALL.get()
+    if state is None or call is None or current_live_input() is None:
+        return
+    from langchain_core.tools.base import _format_output
+
+    from kedi.agent_adapter.adapters.langchain import _langchain_tool_message_for_call
+
+    # Match the SDK's result encoding before its asynchronous callback delivery.
+    output = _format_output(result, None, call.get("id"), call["name"], "success")
+    message = _langchain_tool_message_for_call(output, call.get("id"))
+    if message is not None:
+        state.completed_tools[message.tool_call_id] = message
 
 
 @contextmanager
@@ -202,9 +221,11 @@ class LangChainRunMiddleware(AgentMiddleware):
         projected.tool_calls += state.pending_tools + 1
         state.limits.check_before_tool_call(projected)
         state.pending_tools += 1
+        token = _TOOL_CALL.set(request.tool_call)
         try:
             result = await handler(request)
         finally:
+            _TOOL_CALL.reset(token)
             state.pending_tools -= 1
         call = request.tool_call
         message = _langchain_tool_message_for_call(result, call.get("id"))

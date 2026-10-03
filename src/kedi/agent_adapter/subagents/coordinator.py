@@ -456,8 +456,6 @@ class SubagentCoordinator:
         awaited = self._bridge_task_wait(run_id, owned_task)
         # Waiting can end before the child; still retrieve the bridge's eventual error.
         awaited.add_done_callback(_consume_wait_exception)
-        if timeout is None:
-            return await asyncio.shield(awaited)
         done, _ = await asyncio.wait((awaited,), timeout=timeout)
         if not done:
             raise TimeoutError

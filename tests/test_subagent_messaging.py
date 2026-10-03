@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
+from threading import Event
 
 import pytest
 
@@ -559,7 +561,11 @@ async def test_tool_cleanup_blocks_restart_until_thread_returns() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adapter_name", ["pydantic", "langchain"])
-async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: str) -> None:
+@pytest.mark.parametrize("synchronous", [False, True])
+@pytest.mark.parametrize("structured", [False, True])
+async def test_interrupt_retains_completed_parallel_tool_results(
+    adapter_name: str, synchronous: bool, structured: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from langchain_core.messages import AIMessage
     from pydantic_ai.messages import ModelResponse, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
@@ -569,13 +575,16 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
     from kedi.agent_adapter.tools.specs import ToolSpec
     from tests.test_langchain_branch_parity import ScriptedModel
 
-    completed, started = asyncio.Event(), asyncio.Event()
+    completed, started = Event(), asyncio.Event()
     effects: list[str] = []
 
-    async def fast() -> str:
+    def fast_sync() -> str | dict[str, str]:
         effects.append("committed")
         completed.set()
-        return "confirmed host effect"
+        return {"evidence": "confirmed host effect"} if structured else "confirmed host effect"
+
+    async def fast() -> str | dict[str, str]:
+        return fast_sync()
 
     async def slow() -> str:
         started.set()
@@ -583,8 +592,8 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
         return "unreachable"
 
     tools = tuple(
-        with_live_tool_tracking(ToolSpec(fn=fn, name=fn.__name__, risk="read_only"))
-        for fn in (fast, slow)
+        with_live_tool_tracking(ToolSpec(fn=fn, name=name, risk="read_only"))
+        for name, fn in (("fast", fast_sync if synchronous else fast), ("slow", slow))
     )
     calls = [{"id": name, "name": name, "args": {}} for name in ("fast", "slow")]
     if adapter_name == "pydantic":
@@ -595,6 +604,18 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
         adapter = PydanticAdapter(FunctionModel(model))
         history_key = "pydantic_messages"
     else:
+        from langchain_core.tools import StructuredTool
+
+        arun = StructuredTool._arun
+
+        @wraps(arun)
+        async def delay_delivery(self, *args, **kwargs):
+            result = await arun(self, *args, **kwargs)
+            if self.name == "fast":
+                await asyncio.Event().wait()
+            return result
+
+        monkeypatch.setattr(StructuredTool, "_arun", delay_delivery)
         adapter = LangChainAdapter(
             ScriptedModel(responses=[AIMessage(content="", tool_calls=calls)])
         )
@@ -607,7 +628,7 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
         adapter.tool_scope(tools),
     ):
         task = asyncio.create_task(adapter.invoke(prompt="Run the two tools"))
-        await asyncio.wait_for(completed.wait(), 2)
+        assert await asyncio.to_thread(completed.wait, 2)
         await asyncio.wait_for(started.wait(), 2)
         control.admit("Change scope", sender_id="parent", interrupt=True)
         with pytest.raises(RunInterrupted):
@@ -615,6 +636,62 @@ async def test_interrupt_retains_completed_parallel_tool_results(adapter_name: s
     history = str(conversation.result_state[history_key])
     assert "confirmed host effect" in history
     assert effects == ["committed"]
+
+
+@pytest.mark.asyncio
+async def test_langchain_thread_result_is_recorded_before_cleanup_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from langchain_core.messages import AIMessage
+
+    from kedi.agent_adapter.adapters.langchain import LangChainAdapter, runtime as native_runtime
+    from kedi.agent_adapter.tools.specs import ToolSpec
+    from tests.test_langchain_branch_parity import ScriptedModel
+
+    entered, release = Event(), Event()
+    record = native_runtime.record_live_tool_result
+
+    def delayed_record(result):
+        entered.set()
+        assert release.wait(3)
+        record(result)
+
+    monkeypatch.setattr(native_runtime, "record_live_tool_result", delayed_record)
+    adapter = LangChainAdapter(
+        ScriptedModel(
+            responses=[
+                AIMessage(content="", tool_calls=[{"id": "save", "name": "save", "args": {}}])
+            ]
+        )
+    )
+    control = inbox()
+    conversation = SubagentConversationContext(conversation_id="thread-result")
+    tool = ToolSpec(fn=lambda: "committed result", name="save", risk="read_only")
+    quiet = None
+    with (
+        live_input_scope(control),
+        adapter.conversation_scope(conversation),
+        adapter.tool_scope((tool,)),
+    ):
+        task = asyncio.create_task(adapter.invoke(prompt="Save the result."))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            control.admit("Updated scope", sender_id="parent", interrupt=True)
+            quiet = asyncio.create_task(control.wait_quiescent())
+            done, _ = await asyncio.wait((quiet,), timeout=0.01)
+            assert not done
+            assert not task.done()
+            release.set()
+            with pytest.raises(RunInterrupted):
+                await asyncio.wait_for(task, 3)
+            await quiet
+        finally:
+            release.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if quiet is not None:
+                await quiet
+    assert "committed result" in str(conversation.result_state["langchain_messages"])
 
 
 @pytest.mark.parametrize("inside_procedure", [False, True])

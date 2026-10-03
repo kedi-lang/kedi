@@ -203,13 +203,19 @@ async def test_langchain_pending_input_does_not_skip_an_already_requested_tool()
 
 @pytest.mark.asyncio
 async def test_langchain_graph_handoff_command_is_not_journaled_as_a_tool_result() -> None:
+    from kedi.agent_adapter.adapters.langchain.tools import _langchain_tool_from_spec
+    from kedi.agent_adapter.tools.specs import ToolSpec
+
     command: Command[str] = Command(
         graph=Command.PARENT, goto="coordinator", update={"handoff": True}
+    )
+    native_tool = _langchain_tool_from_spec(
+        ToolSpec(fn=lambda: command, name="handoff", risk="read_only")
     )
 
     async def handler(request: ToolCallRequest) -> Command[str]:
         assert request.tool_call["id"] == "handoff-1"
-        return command
+        return await native_tool.ainvoke({**request.tool_call, "type": "tool_call"})
 
     request = ToolCallRequest(
         tool_call={"name": "handoff", "args": {}, "id": "handoff-1"},
@@ -225,7 +231,7 @@ async def test_langchain_graph_handoff_command_is_not_journaled_as_a_tool_result
         ),
     )
     middleware = LangChainRunMiddleware(archive=None, tool_retries=0)
-    with langchain_run_scope(None) as state:
+    with langchain_run_scope(None) as state, live_input_scope(LiveInput("worker")):
         assert await middleware.awrap_tool_call(request, handler) is command
         assert state.native_usage.tool_calls == 1
         assert state.completed_tools == {}
