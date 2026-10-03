@@ -8,7 +8,7 @@
 
 <h1 align="center">kedi</h1>
 <p align="center"><strong>Natural language, made programmable.</strong><br>
-A typed orchestration language for model-backed programs.</p>
+A typed orchestration language for LLM programs.</p>
 
 <p align="center">
   <a href="https://pypi.org/project/kedi/"><img src="https://img.shields.io/pypi/v/kedi?color=168577" alt="PyPI version"></a>
