@@ -160,7 +160,7 @@ A profile is part of the program, not a global client configuration. Procedures
 capture their lexical configuration. Tools and subagents are explicitly made
 available to the profiles that need them.
 
-**Kedi** &middot; two independent reviews, no coordinator model call
+**Kedi** &middot; one coordinator, two scoped reviewers
 
 <!-- kedi-example: subagents -->
 
@@ -179,21 +179,16 @@ available to the profiles that need them.
 > use: coordinator
 [change] = A new endpoint exports every account's data and closes its connection only on success.
 
-> task [security_job]: security:
-  >> The main security issue in <change> is [issue: str].
-
-> task [reliability_job]: reliability:
-  >> The main reliability issue in <change> is [issue: str].
-
-> await [security_review]: security_job
-> await [reliability_review]: reliability_job
-= `(security_review.output.issue, reliability_review.output.issue)`
+>> Have security and reliability review <change>, each within its own scope.
+Based on both reviews, the release recommendation is [recommendation: str].
+= <recommendation>
 ```
 
-Both tasks can start before either await. Captures define each child's typed
-result; `security_review.output.issue` is attribute access on that result, not a guessed
-dictionary key. For model-directed delegation, the same profile graph can expose
-the `delegate_task` tool instead.
+The template runs with `coordinator`, which receives a `delegate_task` tool for
+its two declared children. Each child reviews the supplied change under its own
+system instruction; the coordinator combines their findings into the typed
+`recommendation`. For program-directed orchestration, use `> task` and `> await`
+to start and collect child work explicitly, without a coordinator model call.
 
 [Profiles](https://docs.kedi-lang.org/agentic-engineering/profiles/) &middot;
 [Task and await](https://docs.kedi-lang.org/agentic-engineering/subagent-tasks/) &middot;

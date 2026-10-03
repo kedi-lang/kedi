@@ -3,12 +3,11 @@
 import re
 from io import StringIO
 from pathlib import Path
-from threading import Barrier
 
 import pydantic_ai.models
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
@@ -119,26 +118,55 @@ def test_readme_conditions_filter_internal_changes(run_example):
     assert len(calls) == 3
 
 
-def test_readme_subagents_overlap_and_return_typed_fields(run_example):
-    rendezvous = Barrier(2, timeout=10)
+def test_readme_coordinator_delegates_and_combines_both_reviews(run_example):
     calls = []
+    recommendation = "Block release until authorization and cleanup are fixed."
 
     def respond(messages, info):
+        if "delegate_task" in {tool.name for tool in info.function_tools}:
+            calls.append("coordinator")
+            reviews = [
+                part
+                for message in messages
+                if isinstance(message, ModelRequest)
+                for part in message.parts
+                if isinstance(part, ToolReturnPart) and part.tool_name == "delegate_task"
+            ]
+            if not reviews:
+                assert "exports every account's data" in str(messages)
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            "delegate_task",
+                            {
+                                "subagent": reviewer,
+                                "task": "Review an endpoint that exports every account's data "
+                                "and closes its connection only on success.",
+                            },
+                            tool_call_id=reviewer,
+                        )
+                        for reviewer in ("security", "reliability")
+                    ]
+                )
+            assert len(reviews) == 2
+            assert "Missing authorization" in str(reviews)
+            assert "Missing cleanup" in str(reviews)
+            return ModelResponse(
+                parts=[ToolCallPart(info.output_tools[0].name, {"recommendation": recommendation})]
+            )
+
+        assert "closes its connection only on success" in str(messages)
         issue = (
             "Missing authorization"
             if "missing authorization" in str(messages)
             else "Missing cleanup"
         )
         calls.append(issue)
-        rendezvous.wait()
-        result = {"task_summary": "Review complete.", "final_result": {"issue": issue}}
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, result)])
+        return ModelResponse(parts=[TextPart(issue)])
 
-    assert run_example("subagents", FunctionModel(respond)) == (
-        "Missing authorization",
-        "Missing cleanup",
-    )
-    assert len(calls) == 2
+    assert run_example("subagents", FunctionModel(respond)) == recommendation
+    assert calls[0] == calls[-1] == "coordinator"
+    assert sorted(calls[1:-1]) == ["Missing authorization", "Missing cleanup"]
 
 
 @pytest.mark.parametrize(
