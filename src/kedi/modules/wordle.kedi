@@ -419,7 +419,7 @@ def _run_wordle_session(setup, validate_guess_proc) -> tuple[str, bool]:
     Agent profile for the language-facing parts of the Wordle game.
     ###
     > effort: low
-    > system:
+    > instructions:
         You are the language layer for a pygame Wordle game.
         Keep outputs short, plain, and machine-friendly.
         Hidden answers must be common lowercase English words with exactly five ASCII letters.

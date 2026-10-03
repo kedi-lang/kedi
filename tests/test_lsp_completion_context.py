@@ -74,7 +74,7 @@ def test_every_directive_explains_its_purpose() -> None:
         "> settings:\n    temperature: `",
         "# > mo",
         ">> Plain template text",
-        "> system: Be concise",
+        "> instructions: Be concise",
         "> model: openai",
     ],
 )

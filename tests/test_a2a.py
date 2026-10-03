@@ -546,7 +546,7 @@ def test_prepare_a2a_program_closes_owned_resources_when_validation_fails(
 
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     adapter = _ServedAdapter()
@@ -576,7 +576,7 @@ def test_prepare_a2a_program_closes_owned_resources_when_validation_fails(
 def test_served_a2a_program_close_is_idempotent_and_terminal(tmp_path: Path) -> None:
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     adapter = _ServedAdapter()
@@ -608,7 +608,7 @@ def test_served_a2a_queued_sessions_are_pinned(
 ) -> None:
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     adapter = _ServedAdapter()
@@ -672,7 +672,7 @@ def test_served_a2a_shutdown_drains_active_and_queued_calls(
 
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     adapter = _ServedAdapter()
@@ -926,7 +926,7 @@ def test_official_a2a_sdk_text_structured_status_and_context_continuation(
     uvicorn = pytest.importorskip("uvicorn")
     source = tmp_path / "remote.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     port = _unused_loopback_port()

@@ -236,7 +236,7 @@ def test_skills_directive_registers_skill_tools_and_instructions(
     adapter = MockAdapter()
     runtime = compile_program(
         parse_program(
-            "> system: Be concise.\n> skills: enabled\n>> Return [answer].\n= <answer>\n"
+            "> instructions: Be concise.\n> skills: enabled\n>> Return [answer].\n= <answer>\n"
         ),
         adapter=adapter,
     )

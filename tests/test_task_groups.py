@@ -457,7 +457,7 @@ def test_group_joins_unconsumed_model_work_and_uses_parent_config() -> None:
     engine = ThreadEngine(2)
     rt = runtime_for(
         """
-> system: Parent configuration.
+> instructions: Parent configuration.
 > task [job]: worker:
     >> First.
 > task_group:

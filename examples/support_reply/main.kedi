@@ -16,7 +16,7 @@ from pathlib import Path
   ```
 
 > profile: support:
-  > system:
+  > instructions:
     Ground policy claims in read_delivery_policy before drafting a reply.
     You cannot inspect orders, issue refunds, or promise delivery dates.
     Ask for missing order details and distinguish eligibility from completed actions.

@@ -166,10 +166,10 @@ available to the profiles that need them.
 
 ```python
 > profile: security:
-  > system: Look for missing authorization checks in the supplied change.
+  > instructions: Look for missing authorization checks in the supplied change.
 
 > profile: reliability:
-  > system: Look for failure handling and cleanup problems in the supplied change.
+  > instructions: Look for failure handling and cleanup problems in the supplied change.
 
 > profile: coordinator:
   > subagent: security

@@ -301,7 +301,7 @@ def test_raw_invoke_direct_runtime_guards(monkeypatch: Any) -> None:
 def test_raw_invoke_uses_profile_tools_system_and_parallel_engine() -> None:
     src = (
         "> model: raw-model\n"
-        "> system:\n"
+        "> instructions:\n"
         "  Keep it short.\n"
         "\n"
         "@lookup() -> str:\n"

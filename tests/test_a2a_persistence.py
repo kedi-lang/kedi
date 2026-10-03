@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import builtins
 import copy
 import json
@@ -197,7 +198,7 @@ def test_durable_program_configuration_and_commit_requirements(tmp_path: Path) -
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         program = prepare_a2a_program(
@@ -219,7 +220,7 @@ def test_durable_program_configuration_and_commit_requirements(tmp_path: Path) -
             await state.close()
 
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n"
+            "> profile: remote:\n    > instructions: Answer exactly.\n"
             "    > history:\n        enabled: true\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
@@ -252,7 +253,7 @@ def test_durable_session_failure_cleanup(
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n"
+            "> profile: remote:\n    > instructions: Answer exactly.\n"
             + ("    > history:\n        enabled: true\n" if history else "")
             + "\n> export:\n    remote\n",
             encoding="utf-8",
@@ -449,7 +450,7 @@ def test_cancelled_checkpoint_keeps_session_locked_until_worker_finishes(
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         program = prepare_a2a_program(
@@ -826,7 +827,7 @@ def test_hard_kill_releases_lock_and_reconciles_admitted_task(tmp_path: Path) ->
 def test_hard_kill_during_http_model_call_preserves_task_and_session(tmp_path: Path) -> None:
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     state_dir = tmp_path / "state"
@@ -927,7 +928,7 @@ def test_persistence_preflight_rejects_missing_identity_and_dependencies(
 ) -> None:
     source = tmp_path / "agent.kedi"
     source.write_text(
-        "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+        "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
         encoding="utf-8",
     )
     program = prepare_a2a_program(
@@ -1880,7 +1881,7 @@ def test_a2a_http_result_survives_restart(tmp_path: Path) -> None:
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         state_dir = tmp_path / "state"
@@ -1930,7 +1931,7 @@ def test_bearer_rotation_does_not_transfer_stored_tasks(tmp_path: Path) -> None:
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         state_dir = tmp_path / "state"
@@ -1988,12 +1989,38 @@ def test_bearer_rotation_does_not_transfer_stored_tasks(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("adapter_kind", ["pydantic", "langchain"])
-def test_native_history_survives_restart(tmp_path: Path, adapter_kind: str) -> None:
+@pytest.mark.parametrize(
+    ("auth", "auth_headers"),
+    [
+        pytest.param(None, {}, id="loopback"),
+        pytest.param(
+            A2AServerAuth(scheme="bearer", secret="test-token"),
+            {"Authorization": "Bearer test-token"},
+            id="bearer",
+        ),
+        pytest.param(
+            A2AServerAuth(scheme="basic", username="operator", secret="test-password"),
+            {"Authorization": "Basic " + base64.b64encode(b"operator:test-password").decode()},
+            id="basic",
+        ),
+        pytest.param(
+            A2AServerAuth(scheme="api_key", secret="test-key", header="X-Agent-Key"),
+            {"X-Agent-Key": "test-key"},
+            id="api-key",
+        ),
+    ],
+)
+def test_native_history_survives_restart(
+    tmp_path: Path,
+    adapter_kind: str,
+    auth: A2AServerAuth | None,
+    auth_headers: dict[str, str],
+) -> None:
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
             "> profile: remote:\n"
-            "    > system: Answer exactly.\n"
+            "    > instructions: Answer exactly.\n"
             "    > history:\n"
             "        enabled: true\n\n"
             "> export:\n"
@@ -2021,15 +2048,15 @@ def test_native_history_survives_restart(tmp_path: Path, adapter_kind: str) -> N
             app = create_a2a_app(
                 program,
                 public_url="http://127.0.0.1:8000",
-                auth=None,
-                allow_unauthenticated_loopback=True,
+                auth=auth,
+                allow_unauthenticated_loopback=auth is None,
                 state_dir=tmp_path / "state",
             )
             async with app.router.lifespan_context(app):
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=app),
                     base_url="http://127.0.0.1:8000",
-                    headers={"A2A-Version": "1.0"},
+                    headers={"A2A-Version": "1.0", **auth_headers},
                     timeout=10,
                 ) as client:
                     message = {
@@ -2038,6 +2065,22 @@ def test_native_history_survives_restart(tmp_path: Path, adapter_kind: str) -> N
                         "parts": [{"text": f"prompt-{turn}"}],
                         **({"contextId": context_id} if context_id else {}),
                     }
+                    if auth is not None:
+                        rejected = await client.post(
+                            "/a2a",
+                            headers={
+                                "Authorization": "Bearer invalid-test-credential",
+                                "X-Agent-Key": "invalid-test-credential",
+                            },
+                            json={
+                                "jsonrpc": "2.0",
+                                "id": "rejected",
+                                "method": "SendMessage",
+                                "params": {"message": message},
+                            },
+                        )
+                        assert rejected.status_code == 401
+                        assert seen == []
                     response = await client.post(
                         "/a2a",
                         json={
@@ -2064,7 +2107,7 @@ def test_parallel_requests_on_one_context_commit_in_order(tmp_path: Path) -> Non
         source = tmp_path / "agent.kedi"
         source.write_text(
             "> profile: remote:\n"
-            "    > system: Answer exactly.\n"
+            "    > instructions: Answer exactly.\n"
             "    > history:\n"
             "        enabled: true\n\n"
             "> export:\n"
@@ -2134,7 +2177,7 @@ def test_failed_checkpoint_does_not_enter_next_turn(tmp_path: Path, monkeypatch:
         source = tmp_path / "agent.kedi"
         source.write_text(
             "> profile: remote:\n"
-            "    > system: Answer exactly.\n"
+            "    > instructions: Answer exactly.\n"
             "    > history:\n"
             "        enabled: true\n\n"
             "> export:\n"
@@ -2212,7 +2255,7 @@ def test_terminal_store_failure_cannot_publish_completed_task(tmp_path: Path) ->
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         adapter = _ServedAdapter()
@@ -2286,7 +2329,7 @@ def test_cancelled_task_stays_cancelled_after_restart(tmp_path: Path) -> None:
     async def scenario() -> None:
         source = tmp_path / "agent.kedi"
         source.write_text(
-            "> profile: remote:\n    > system: Answer exactly.\n\n> export:\n    remote\n",
+            "> profile: remote:\n    > instructions: Answer exactly.\n\n> export:\n    remote\n",
             encoding="utf-8",
         )
         adapter = _ServedAdapter()

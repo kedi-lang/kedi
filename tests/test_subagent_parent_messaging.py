@@ -211,7 +211,7 @@ def test_child_message_wakes_mixed_backend_parent_and_parent_redirects_same_task
     source = f"""
 > profile: worker:
     > adapter: {child_backend}
-    > system: Review the supplied change.
+    > instructions: Review the supplied change.
 
 > profile: manager:
     > adapter: {parent_backend}

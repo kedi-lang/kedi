@@ -51,7 +51,7 @@ echo "==> Building and packaging kedi-zed extension..."
   staging="$(mktemp -d)"
   cp extension.toml "$staging/"
   cp "$wasm_path" "$staging/extension.wasm"
-  cp -R languages snippets LICENSE "$staging/"
+  cp -R languages snippets debug_adapter_schemas LICENSE "$staging/"
   mkdir -p "$staging/embedded-python-proxy"
   cp embedded-python-proxy/server.mjs "$staging/embedded-python-proxy/"
 

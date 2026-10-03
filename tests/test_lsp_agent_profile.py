@@ -45,13 +45,13 @@ def test_semantic_tokens_cover_agent_profile_directives() -> None:
         "> adapter: pydantic\n"
         "> model: haiku\n"
         "> effort: low\n"
-        "> system: Be concise.\n"
+        "> instructions: Be concise.\n"
         "> profile: light:\n"
         "    > agent: codex\n"
         "    > adapter: pydantic\n"
         "    > model: opus\n"
         "    > effort: high\n"
-        "    > system: Keep answers short.\n"
+        "    > instructions: Keep answers short.\n"
         "    > mcp:\n"
         "        command: fs-mcp\n"
         "    > settings:\n"
@@ -155,19 +155,19 @@ def test_hover_on_model_profile_and_use_directives() -> None:
 > agent: `agent_name`
 > adapter: `adapter_name`
 > effort: low
-> system: Be concise.
+> instructions: Be concise.
 > settings:
     parallel_tool_calls: true
-> system: Be <tone>.
+> instructions: Be <tone>.
 > profile: light:
     > agent: codex
     > adapter: pydantic
     > model: opus
     > effort: high
-    > system: Keep answers short.
+    > instructions: Keep answers short.
     > mcp:
         command: profile-mcp
-    > system:
+    > instructions:
         Prefer <tone> answers.
     > settings:
         temperature: 0.2
@@ -193,7 +193,7 @@ def test_hover_on_model_profile_and_use_directives() -> None:
     assert "> adapter:" in hover_text_at(src, "profile.kedi", "adapter", occurrence=1)
     assert "`adapter_name`" in hover_text_at(src, "profile.kedi", "adapter_name", occurrence=1)
     assert "> effort:" in hover_text_at(src, "profile.kedi", "effort", occurrence=1)
-    assert "> system:" in hover_text_at(src, "profile.kedi", "system", occurrence=1)
+    assert "> instructions:" in hover_text_at(src, "profile.kedi", "instructions", occurrence=1)
     assert "> settings:" in hover_text_at(src, "profile.kedi", "settings", occurrence=1)
     parallel_tool_calls_hover = hover_text_at(src, "profile.kedi", "parallel_tool_calls")
     assert "Pydantic AI `ModelSettings`" in parallel_tool_calls_hover
@@ -324,7 +324,7 @@ def test_profile_docstring_replaces_default_profile_hover() -> None:
     Use this profile for short answers.
     ###
     > model: opus
-    > system: Keep it tight.
+    > instructions: Keep it tight.
 
 > profile: fallback:
     > model: haiku
@@ -552,7 +552,7 @@ def test_hover_on_profile_name_in_multiline_use_is_tool_entry() -> None:
 def test_hover_on_profile_composed_inside_profile_resolves_profile() -> None:
     src = """
 > profile: readonlyfs:
-    > system: Read files only.
+    > instructions: Read files only.
 
 > profile: filesystem:
     > use: readonlyfs
@@ -734,11 +734,11 @@ def test_document_symbols_include_profile_definition() -> None:
 
 > profile: light:
     > model: opus
-    > system: Be concise.
+    > instructions: Be concise.
     > use: web_search
 @foo():
     > model: haiku
-    > system: Keep answers short.
+    > instructions: Keep answers short.
     > use:
         web_search
     >> x [y]
@@ -748,12 +748,12 @@ def test_document_symbols_include_profile_definition() -> None:
     assert "> profile: light" in names
     profile = next(symbol for symbol in symbols if symbol.name == "> profile: light")
     profile_children = [child.name for child in profile.children or ()]
-    assert any(child.startswith("> system:") for child in profile_children)
+    assert any(child.startswith("> instructions:") for child in profile_children)
     assert any(child.startswith("> use:") for child in profile_children)
     proc = next(symbol for symbol in symbols if symbol.name == "foo")
     child_names = [child.name for child in proc.children or ()]
     assert any(name.startswith("> model:") for name in child_names)
-    assert any(name.startswith("> system:") for name in child_names)
+    assert any(name.startswith("> instructions:") for name in child_names)
     assert any(name.startswith("> use:") and "web_search" in name for name in child_names)
 
 
@@ -793,7 +793,7 @@ def test_profile_def_symbol_without_tools() -> None:
     )
     child_names = [child.name for child in symbol.children or ()]
     assert any(name.startswith("> model:") for name in child_names)
-    assert any(name == "> system: Use <tone> tone." for name in child_names)
+    assert any(name == "> instructions: Use <tone> tone." for name in child_names)
     assert not any("Skip me" in name for name in child_names)
     assert not any(name.startswith("> use:") for name in child_names)
 

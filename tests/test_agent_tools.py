@@ -144,7 +144,7 @@ def test_profile_body_single_line_use_adds_tool() -> None:
 def test_profile_body_single_line_use_composes_profile() -> None:
     src = """
 > profile: filesystem:
-    > system: Filesystem access.
+    > instructions: Filesystem access.
 
 > profile: orchestrator:
     > use: filesystem

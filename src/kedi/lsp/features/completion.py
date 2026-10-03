@@ -75,7 +75,7 @@ _DIRECTIVE_COMPLETIONS = {
     "settings": "Set model and runtime options for this scope",
     "skills": "Configure discovery of agent skill documents",
     "subagent": "Make a child agent available for delegation",
-    "system": "Set the agent's system instructions",
+    "instructions": "Set the agent's instructions for this lexical scope",
     "task": "Start a subagent task and bind its handle",
     "task_group": "Group subagent tasks for structured execution",
     "test_data": "Supply held-out evaluation data",

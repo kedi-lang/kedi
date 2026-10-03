@@ -870,7 +870,7 @@ def test_tools_fixture_parses_multiline_backtick_use() -> None:
 
 def test_system_directive_accepts_text_and_input_segments_only() -> None:
     prog = parse_program(
-        "> system:\n    You are <style>.\n    Your name is <`args.name`>.\n    Use <``> fences.\n"
+        "> instructions:\n    You are <style>.\n    Your name is <`args.name`>.\n    Use <``> fences.\n"
     )
     stmt = prog.ordered_toplevel[0]
     assert isinstance(stmt, SystemDirectiveStmt)
@@ -891,8 +891,8 @@ def test_system_directive_accepts_text_and_input_segments_only() -> None:
 @pytest.mark.parametrize(
     "src",
     [
-        "> system: fill [answer]\n",
-        "> system: call <tool()>\n",
+        "> instructions: fill [answer]\n",
+        "> instructions: call <tool()>\n",
     ],
 )
 def test_system_directive_rejects_llm_output_and_calls(src: str) -> None:

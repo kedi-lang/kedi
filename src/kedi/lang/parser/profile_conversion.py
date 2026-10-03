@@ -368,7 +368,7 @@ def _walk_profile_directive(self: _Walker, node: Node) -> ProfileDefStmt:
     ):
         self._error(
             node,
-            f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> hooks:', '> history:', '> skills:', '> codemode:', '> requires:', '> system:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
+            f"Profile {name!r} must contain at least one '> agent:', '> adapter:', '> model:', '> effort:', '> approval:', '> hooks:', '> history:', '> skills:', '> codemode:', '> requires:', '> instructions:', '> mcp:', '> settings:', '> artifacts:', '> output:', '> subagent:', '> max_agents:', '> workflow:', or '> use:' member",
             code="K-PROFILE-EMPTY",
         )
     return ProfileDefStmt(

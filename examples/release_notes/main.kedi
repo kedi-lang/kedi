@@ -1,5 +1,5 @@
 @release_notes(changes: list[str]) -> list[str]:
-  > system:
+  > instructions:
     Classify the meaning of the supplied changelog text.
     Do not verify whether the product exists or whether the change was deployed.
   [notes: list[str]] = `[]`

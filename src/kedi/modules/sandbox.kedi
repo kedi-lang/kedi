@@ -37,7 +37,7 @@ require("pydantic_monty", required_by="Sandbox")
     ###
     Sandbox profile to run Python code in a sandboxed environment.
     ###
-    > system:
+    > instructions:
         Execute requested sandbox code faithfully without repairing or reinterpreting it.
         Treat code quoted in a request as opaque source: pass its exact characters without the surrounding quotes, and never replace or reinterpret it.
         When a request says not to fail fast or asks for an error result, set fail_fast to false.

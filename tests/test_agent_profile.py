@@ -85,12 +85,12 @@ def test_parse_model_profile_use_directives() -> None:
 > adapter: pydantic
 > model: haiku
 > effort: low
-> system: top-system
+> instructions: top-system
 > profile: light:
     > agent: codex
     > model: opus
     > effort: high
-    > system: Be concise.
+    > instructions: Be concise.
 > use: light
 @foo():
     >> answer [x]
@@ -1085,10 +1085,10 @@ def test_procedure_capture_uses_source_order_model() -> None:
 
 def test_procedure_capture_uses_source_order_system() -> None:
     src = """
-> system: first-system
+> instructions: first-system
 @foo():
     >> value [x]
-> system: second-system
+> instructions: second-system
 @bar():
     >> value [x]
 """
@@ -1144,7 +1144,7 @@ def test_procedure_capture_uses_source_order_settings() -> None:
 def test_runtime_globals_are_available_during_profile_capture() -> None:
     src = """
 > profile: personalized:
-    > system:
+    > instructions:
         Address the user as <`args.name or "Guest"`>.
 
 > use: personalized
@@ -1211,7 +1211,7 @@ def test_block_state_system_within_procedure_body() -> None:
     src = """
 @foo():
     >> first [x]
-    > system: Answer tersely.
+    > instructions: Answer tersely.
     >> second [y]
 """
     adapter = _adapter()
@@ -1243,7 +1243,7 @@ def test_block_state_system_within_procedure_body() -> None:
 def test_block_state_system_renders_multiline_substitutions() -> None:
     src = """
 @foo(style):
-    > system:
+    > instructions:
         You are <style>.
         Keep it short.
     >> answer [x]
@@ -1258,7 +1258,7 @@ def test_block_state_system_renders_multiline_substitutions() -> None:
 
 def test_top_level_system_applies_to_following_prompt() -> None:
     src = """
-> system: Top-level instructions.
+> instructions: Top-level instructions.
 >> answer [x]
 """
     adapter = _adapter()
@@ -1270,7 +1270,7 @@ def test_top_level_system_applies_to_following_prompt() -> None:
 def test_top_level_system_renders_multiline_substitutions() -> None:
     src = """
 [style: str] = `"concise"`
-> system:
+> instructions:
     You are <style>.
     No extra text.
 >> answer [x]
@@ -1289,7 +1289,7 @@ def test_top_level_system_renders_inline_python_substitution() -> None:
 from types import SimpleNamespace
 person = SimpleNamespace(name="Mert")
 ```
-> system:
+> instructions:
     Your name is <`person.name`>.
 >> answer [x]
 """
@@ -1316,7 +1316,7 @@ def test_use_profile_applies_model_at_capture_time() -> None:
 def test_use_profile_applies_system_at_capture_time() -> None:
     src = """
 > profile: dynamic:
-    > system: from-profile-system
+    > instructions: from-profile-system
 > use: dynamic
 @foo():
     >> value [x]

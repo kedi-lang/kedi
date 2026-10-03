@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 from typing import Any
 
@@ -21,13 +22,23 @@ from kedi.agent_adapter.conversation import ConversationState
 )
 @pytest.mark.parametrize("rewrite", [False, True])
 @pytest.mark.parametrize("server_conversation", [False, True])
+@pytest.mark.parametrize("failed_attempt", [False, True])
 def test_native_responses_wire_continuation_after_history_edit(
-    adapter_name: str, settings_on_model: bool, rewrite: bool, server_conversation: bool
+    adapter_name: str,
+    settings_on_model: bool,
+    rewrite: bool,
+    server_conversation: bool,
+    failed_attempt: bool,
 ) -> None:
     bodies: list[dict[str, Any]] = []
     contexts: list[HistoryProcessorContext[Any]] = []
+    failures: list[dict[str, Any]] = []
+    reject_request = False
 
     def respond(request: httpx.Request) -> httpx.Response:
+        if reject_request:
+            failures.append(json.loads(request.content))
+            return httpx.Response(400, json={"error": {"message": "deliberate test rejection"}})
         bodies.append(json.loads(request.content))
         index = len(bodies)
         return httpx.Response(
@@ -61,14 +72,16 @@ def test_native_responses_wire_continuation_after_history_edit(
 
     def processor(ctx: HistoryProcessorContext[Any]):
         contexts.append(ctx)
-        if rewrite and len(contexts) == 2:
+        if rewrite and len(bodies) == 1:
             return ctx.messages[-1:]
         return ctx.messages
 
     async def scenario() -> None:
+        nonlocal reject_request
+
         def respond2(request: httpx2.Request) -> httpx2.Response:
             response = respond(httpx.Request("POST", str(request.url), content=request.content))
-            return httpx2.Response(200, json=response.json())
+            return httpx2.Response(response.status_code, json=response.json())
 
         async with (
             httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client,
@@ -107,6 +120,18 @@ def test_native_responses_wire_continuation_after_history_edit(
                 adapter = LangChainAdapter(model, history_processor=processor)
             conversation = ConversationState(session_id="wire-test")
             for index, prompt in enumerate(("obsolete task", "current task", "follow-up"), start=1):
+                if failed_attempt and index == 2:
+                    before = deepcopy(conversation.adapter_state_snapshot(adapter_name))
+                    reject_request = True
+                    with pytest.raises(Exception, match="deliberate test rejection"):
+                        with conversation.adapter_turn(
+                            adapter_name, lane_identity=adapter_name
+                        ) as context:
+                            with adapter.conversation_scope(context):
+                                await adapter.invoke(prompt=prompt)
+                    reject_request = False
+                    assert conversation.adapter_state_snapshot(adapter_name) == before
+                    assert conversation.cache_epoch == 0
                 with conversation.adapter_turn(adapter_name, lane_identity=adapter_name) as context:
                     with adapter.conversation_scope(context):
                         assert await adapter.invoke(prompt=prompt) == f"answer-{index}"
@@ -115,7 +140,11 @@ def test_native_responses_wire_continuation_after_history_edit(
     asyncio.run(scenario())
 
     assert len(bodies) == 3
-    assert [ctx.request_index for ctx in contexts] == [1, 1, 1]
+    assert [ctx.request_index for ctx in contexts] == [1] * (3 + int(failed_attempt))
+    if failed_attempt:
+        assert len(failures) == 1
+        assert failures[0]["prompt_cache_key"] == bodies[1]["prompt_cache_key"]
+        assert failures[0].get("previous_response_id") == bodies[1].get("previous_response_id")
     if server_conversation:
         assert bodies[0]["conversation"] == "conv_old"
         if rewrite:
@@ -128,7 +157,7 @@ def test_native_responses_wire_continuation_after_history_edit(
         assert "obsolete task" not in json.dumps(bodies[1]["input"])
         assert "current task" in json.dumps(bodies[1]["input"])
         assert bodies[0]["prompt_cache_key"] != bodies[1]["prompt_cache_key"]
-        assert "obsolete task" not in str(contexts[2].messages)
+        assert "obsolete task" not in str(contexts[-1].messages)
     else:
         if not server_conversation:
             assert bodies[1]["previous_response_id"] == "resp_1"

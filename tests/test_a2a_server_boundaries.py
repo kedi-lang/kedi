@@ -209,7 +209,7 @@ def test_runtime_limits_validate_before_execution(options):
 def _program(tmp_path, **kwargs):
     source = tmp_path / "worker.kedi"
     source.write_text(
-        "> profile: worker:\n    > system: Answer precisely.\n> export:\n    worker\n"
+        "> profile: worker:\n    > instructions: Answer precisely.\n> export:\n    worker\n"
     )
     return runtime.prepare_a2a_program(
         source, entry="worker", model="test:model", adapter=_ServedAdapter(), **kwargs
@@ -300,9 +300,9 @@ def test_prepare_requires_export_model_and_matching_adapter(tmp_path):
     source = tmp_path / "worker.kedi"
     for text, message, adapter in [
         ("", "not an agent profile", None),
-        ("> profile: worker:\n    > system: Answer.\n", "explicitly exported", None),
+        ("> profile: worker:\n    > instructions: Answer.\n", "explicitly exported", None),
         (
-            "> profile: worker:\n    > system: Answer.\n> export:\n    worker\n",
+            "> profile: worker:\n    > instructions: Answer.\n> export:\n    worker\n",
             "requires a model",
             None,
         ),

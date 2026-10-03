@@ -6,10 +6,10 @@ from pathlib import Path
 ~ReleaseReview(security: Review, reliability: Review)
 
 > profile: security:
-  > system: Review only authorization and data exposure in the supplied change.
+  > instructions: Review only authorization and data exposure in the supplied change.
 
 > profile: reliability:
-  > system: Review failure handling and resource cleanup in the supplied change.
+  > instructions: Review failure handling and resource cleanup in the supplied change.
 
 > profile: coordinator:
   > subagent: security

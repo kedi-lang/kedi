@@ -232,7 +232,7 @@ def _codemode_directive_markdown(stmt: CodeModeDirectiveStmt) -> str:
 def _system_directive_markdown(stmt: SystemDirectiveStmt) -> str:
     value = _system_value_preview(stmt)
     return (
-        f"**`> system:`** {value}\n\n"
+        f"**`> instructions:`** {value}\n\n"
         "System instructions for subsequent model calls in the current scope. "
         "Text and `<substitutions>` are evaluated when this directive is applied."
     )
@@ -442,7 +442,7 @@ def _profile_model_entry_markdown(entry: ProfileModelEntry) -> str:
 def _profile_system_entry_markdown(entry: ProfileSystemEntry) -> str:
     value = _system_value_preview(entry)
     return (
-        f"**`> system:`** {value}\n\n"
+        f"**`> instructions:`** {value}\n\n"
         "System instructions stored in this profile. Applied when the profile is used."
     )
 

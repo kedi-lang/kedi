@@ -153,7 +153,7 @@ def _proc_symbol(proc: ProcedureDef) -> lsp.DocumentSymbol:
             value = _system_value_preview(stmt).strip("`")
             children.append(
                 lsp.DocumentSymbol(
-                    name=f"> system: {value}",
+                    name=f"> instructions: {value}",
                     detail="agent instructions",
                     kind=lsp.SymbolKind.Event,
                     range=_span_to_range(stmt.loc),
@@ -267,7 +267,7 @@ def _profile_def_symbol(profile: ProfileDefStmt) -> lsp.DocumentSymbol:
         value = _system_value_preview(member).strip("`")
         children.append(
             lsp.DocumentSymbol(
-                name=f"> system: {value}",
+                name=f"> instructions: {value}",
                 detail="agent instructions",
                 kind=lsp.SymbolKind.Event,
                 range=_span_to_range(member.loc),

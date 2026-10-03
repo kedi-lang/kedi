@@ -573,7 +573,9 @@ def test_child_definition_prefers_lexical_binding_over_registry() -> None:
     manager = runtime._evaluate_profile_definition(runtime._profile_registry["manager"])
 
     def worker_definition(instructions: str) -> Any:
-        source = f"> profile: worker:\n    > adapter: pydantic\n    > system: {instructions}\n"
+        source = (
+            f"> profile: worker:\n    > adapter: pydantic\n    > instructions: {instructions}\n"
+        )
         return compile_program(parse_program(source), adapter=adapter)._profile_registry["worker"]
 
     bound_worker = worker_definition("Bound instructions.")

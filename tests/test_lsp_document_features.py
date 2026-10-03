@@ -510,7 +510,7 @@ def test_imported_procedure_references_preserve_the_declaration_uri(tmp_path: Pa
 def test_profile_references_include_composition_subagent_and_use() -> None:
     source = (
         "> profile: base:\n"
-        "    > system: Base.\n\n"
+        "    > instructions: Base.\n\n"
         "> profile: child:\n"
         "    > use: base\n"
         "    > subagent: base\n\n"

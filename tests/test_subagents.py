@@ -281,7 +281,7 @@ def _profiles_source() -> str:
     Handles one isolated worker task.
     ###
     > adapter: pydantic
-    > system: Work carefully.
+    > instructions: Work carefully.
     > use: lookup
 
 > profile: manager:
@@ -570,8 +570,8 @@ def test_subagent_workflow_profile_parses_and_compiles() -> None:
 
 def test_subagent_profile_output_type_is_default_delegation_schema() -> None:
     source = _profiles_source().replace(
-        "    > system: Work carefully.\n",
-        "    > system: Work carefully.\n    > output: dict[str, int]\n",
+        "    > instructions: Work carefully.\n",
+        "    > instructions: Work carefully.\n    > output: dict[str, int]\n",
     )
     adapter = RecordingPydanticAdapter()
     runtime = compile_program(parse_program(source), adapter=adapter)
@@ -877,7 +877,7 @@ class _RequiredWorkflowMockAdapter(MockAdapter):
 def _required_workflow_source() -> str:
     return """
 > profile: worker:
-    > system: Complete one isolated task.
+    > instructions: Complete one isolated task.
 
 > profile: manager:
     > subagent: worker
@@ -2459,7 +2459,7 @@ def test_pydantic_agent_delegates_and_resumes_parent_run() -> None:
     source = """
 > profile: worker:
     > adapter: pydantic
-    > system: Work carefully.
+    > instructions: Work carefully.
 
 > profile: manager:
     > adapter: pydantic

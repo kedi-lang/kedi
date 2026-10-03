@@ -67,12 +67,12 @@ class KediParseError(ValueError):
     """
 
     def __init__(self, diagnostics: List[KediDiagnostic]):
-        self.diagnostics = diagnostics
+        self.diagnostics = sorted(diagnostics, key=lambda d: d.severity != "error")
         if not diagnostics:
             super().__init__("kedi parse error")
             return
         # The first error's message is the str-representation so
         # legacy `pytest.raises(ValueError, match="<legacy substring>")`
         # invocations keep matching.
-        primary = diagnostics[0]
+        primary = self.diagnostics[0]
         super().__init__(primary.message)
