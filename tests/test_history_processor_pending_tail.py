@@ -1,4 +1,5 @@
 import asyncio
+
 import pytest
 
 
@@ -21,6 +22,7 @@ def test_history_policy_keeps_previous_exchange_and_current_unfinished_tool(back
             ToolCallPart,
             UserPromptPart,
         )
+
         from kedi.agent_adapter.adapters.pydantic.history_processing import (
             PydanticHistoryMessageCodec,
         )
@@ -38,6 +40,7 @@ def test_history_policy_keeps_previous_exchange_and_current_unfinished_tool(back
         ]
     else:
         from langchain_core.messages import AIMessage, HumanMessage
+
         from kedi.agent_adapter.adapters.langchain.history_processing import (
             LangChainHistoryMessageCodec,
         )

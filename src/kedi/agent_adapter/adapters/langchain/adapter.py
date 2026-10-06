@@ -742,6 +742,7 @@ class LangChainAdapter(HookRegistrationMixin):
         if not isinstance(messages, Sequence) or isinstance(messages, (str, bytes)):
             return
         from langchain_core.messages import AIMessage, BaseMessage, message_to_dict
+
         from kedi.agent_adapter.request_budget import capture_history_usage
 
         if all(isinstance(message, BaseMessage) for message in messages):

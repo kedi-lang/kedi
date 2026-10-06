@@ -23,13 +23,13 @@ from kedi.agent_adapter.history_provenance import (
     HistoryLineageEntry,
 )
 from kedi.agent_adapter.request_budget import (
+    HISTORY_USAGE_KEY,
     ModelRequestBudget,
     ModelRequestBudgetError,
     ModelRequestBudgetLimits,
     SupportsHistoryTokenEstimate,
-    estimate_content_tokens,
     capture_history_usage,
-    HISTORY_USAGE_KEY,
+    estimate_content_tokens,
 )
 
 
@@ -244,6 +244,7 @@ def test_projected_history_still_reserves_cumulative_and_request_limits():
 @pytest.mark.parametrize("surface", ["pydantic", "langchain"])
 def test_successful_capture_anchors_usage_to_unchanged_history(surface):
     from types import SimpleNamespace
+
     from kedi.agent_adapter.conversation import AdapterConversationContext
 
     text = "completed known content " * 10_000
@@ -329,9 +330,10 @@ def test_measured_checkpoint_is_invalid_for_another_lane_key_or_modified_value()
 @pytest.mark.parametrize("key", ["pydantic_messages", "langchain_messages"])
 def test_usage_checkpoint_roundtrips_storage_without_losing_native_history(key):
     import json
+
     from kedi.agent_adapter.request_budget import (
-        encode_history_usage_state,
         decode_history_usage_state,
+        encode_history_usage_state,
     )
 
     state = {key: [{"content": "known"}]}
@@ -346,8 +348,8 @@ def test_usage_checkpoint_roundtrips_storage_without_losing_native_history(key):
 )
 def test_stored_usage_checkpoint_is_validated_before_trusting_its_estimate(mutation):
     from kedi.agent_adapter.request_budget import (
-        encode_history_usage_state,
         decode_history_usage_state,
+        encode_history_usage_state,
     )
 
     state = {"pydantic_messages": [{"content": "known"}]}

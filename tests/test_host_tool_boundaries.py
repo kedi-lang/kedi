@@ -5,9 +5,9 @@ import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
 
-from tests.host_boundary_helpers import ROOT, filesystem_boundary, thread_boundary
 from kedi.agent_adapter import PydanticAdapter
 from kedi.lang import parse_program
+from tests.host_boundary_helpers import ROOT, filesystem_boundary, thread_boundary
 
 
 def test_programs_parse():

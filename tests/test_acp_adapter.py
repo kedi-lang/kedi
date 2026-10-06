@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import io
+import json
 import os
-import signal
 import shlex
+import signal
 import sys
-from threading import Event, current_thread
-from types import SimpleNamespace
 from concurrent.futures import Future
 from pathlib import Path
+from threading import Event, current_thread
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest

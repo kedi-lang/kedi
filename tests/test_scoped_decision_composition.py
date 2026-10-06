@@ -1,8 +1,10 @@
 import asyncio
 from pathlib import Path
+
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
+
 from kedi.agent_adapter import PydanticAdapter
 from kedi.agent_adapter.execution import use_async_owner_loop
 from kedi.engine import SequentialEngine

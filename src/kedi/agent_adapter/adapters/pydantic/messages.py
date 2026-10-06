@@ -22,6 +22,7 @@ def _capture_conversation_messages(
     if conversation is None:
         return
     from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
+
     from kedi.agent_adapter.request_budget import capture_history_usage
 
     conversation.result_state["pydantic_messages"] = ModelMessagesTypeAdapter.dump_python(

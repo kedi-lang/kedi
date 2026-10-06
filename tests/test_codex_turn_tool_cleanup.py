@@ -264,12 +264,13 @@ async def test_closed_turn_cancels_awaitable_registered_after_close():
 
 
 def test_legacy_async_tool_binding_without_turn_lifetime():
-    from contextvars import ContextVar, copy_context
     import sys
+    from contextvars import ContextVar, copy_context
+
     from kedi.agent_adapter.adapters.codex.app_server import (
         CodexAppServerClient,
-        _ToolBinding,
         _invoke_binding,
+        _ToolBinding,
     )
 
     scope = ContextVar("legacy_binding_scope", default="outside")

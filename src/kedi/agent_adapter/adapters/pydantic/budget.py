@@ -19,7 +19,6 @@ from kedi.agent_adapter.request_budget import (
     estimate_content_tokens,
     measured_history_tokens,
 )
-
 from kedi.run_budget import (
     RunBudgetExceeded,
     admit_run_operation,

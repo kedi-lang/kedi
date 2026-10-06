@@ -4,10 +4,10 @@ from threading import Event
 
 import pytest
 
+from kedi import ApprovalDecision
 from kedi.agent_adapter.approvals.policy import ApprovalPolicy, resolve_tool_approval_async
 from kedi.agent_adapter.execution import run_sync
 from tests.test_async_approval_owner import request
-from kedi import ApprovalDecision
 
 
 @pytest.mark.asyncio

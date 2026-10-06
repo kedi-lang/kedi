@@ -20,8 +20,8 @@ from kedi.lang.ast import (
 from kedi.optimization.config import OptimizerConfig
 from kedi.optimization.services import dspy_config as dspy_config_module
 from kedi.optimization.services.dspy_config import (
-    JSONAdapter,
     DSPyConfigurationService,
+    JSONAdapter,
 )
 from kedi.optimization.services.dspy_example_formatter import DSPyExampleFormatter
 from kedi.optimization.services.dspy_module_builder import (

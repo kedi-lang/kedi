@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import signal
 import shlex
+import signal
 import subprocess
 from collections import deque
 from collections.abc import Mapping, Sequence
-from concurrent.futures import CancelledError as FutureCancelledError, Future
+from concurrent.futures import CancelledError as FutureCancelledError
+from concurrent.futures import Future
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field

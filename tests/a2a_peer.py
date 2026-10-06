@@ -1,6 +1,7 @@
 """Official-SDK suspension fixture that resumes into a real compiled Kedi agent."""
 
 import asyncio
+import socket
 from contextlib import asynccontextmanager, contextmanager
 from functools import partial
 
@@ -16,11 +17,10 @@ from starlette.middleware.authentication import AuthenticationMiddleware
 from kedi.a2a.auth import A2AServerAuth
 from kedi.a2a.server import (
     _A2AAuthenticationBackend,
-    _authentication_error,
     _agent_card,
+    _authentication_error,
     _KediAgentExecutor,
 )
-import socket
 
 
 def unused_port():

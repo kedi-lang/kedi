@@ -1,8 +1,8 @@
 """Private ephemeral TLS material for loopback protocol probes."""
 
-from datetime import datetime, timedelta, timezone
 import ipaddress
 import ssl
+from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization

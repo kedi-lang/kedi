@@ -4,7 +4,6 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.profiles import ModelProfile

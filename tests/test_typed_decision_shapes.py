@@ -1,9 +1,8 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 from pydantic_ai.models.test import TestModel
-
-from pathlib import Path
 
 from kedi.agent_adapter import PydanticAdapter
 from kedi.engine import SequentialEngine

@@ -5,7 +5,9 @@ import json
 import os
 import sqlite3
 import sys
+
 from pydantic_ai.models.test import TestModel
+
 from kedi.a2a.runtime import prepare_a2a_program
 from kedi.agent_adapter import LangChainAdapter, PydanticAdapter
 from tests.test_a2a_persistence import _ScriptedChatModel

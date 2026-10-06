@@ -11,9 +11,9 @@ from pydantic_ai.models.test import TestModel
 from kedi.agent_adapter import PydanticAdapter
 from kedi.agent_adapter.adapters.langchain.tools import _langchain_tool_from_spec
 from kedi.agent_adapter.adapters.pydantic.tools import pydantic_tool_from_spec
-from kedi.lang import compile_program, parse_program
 from kedi.agent_profile.compile import build_capture_env
 from kedi.agent_profile.evaluation import eval_profile_definition
+from kedi.lang import compile_program, parse_program
 
 
 @pytest.fixture
