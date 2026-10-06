@@ -29,7 +29,7 @@ async def test_failed_checkpoint_restores_sdk_mutable_task(tmp_path):
         )
         task.status.state = TaskState.TASK_STATE_COMPLETED
         task.artifacts.add(artifact_id="uncommitted", parts=[])
-        event.listen(engine, "before_cursor_execute", hook)
+        event.listen(engine, "do_execute", hook)
         with pytest.raises(OperationalError, match="database or disk is full"):
             await state.save(task, owner)
         with pytest.raises(OperationalError, match="database or disk is full"):
@@ -44,7 +44,7 @@ async def test_failed_checkpoint_restores_sdk_mutable_task(tmp_path):
     finally:
         if pending is not None and pending.done() and not pending.cancelled():
             pending.exception()
-        event.remove(engine, "before_cursor_execute", hook)
+        event.remove(engine, "do_execute", hook)
         await state.close()
 
 
@@ -62,7 +62,7 @@ async def test_sdk_marks_checkpoint_fault_failed_without_poll_timeout(tmp_path, 
     async with app.router.lifespan_context(app):
         state = program._persistence
         hook = disk_full_hook(tmp_path / "fault.json")
-        event.listen(state._engine.sync_engine, "before_cursor_execute", hook)
+        event.listen(state._engine.sync_engine, "do_execute", hook)
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=app),
@@ -86,7 +86,8 @@ async def test_sdk_marks_checkpoint_fault_failed_without_poll_timeout(tmp_path, 
                     },
                 )
                 task_id = sent.json()["result"]["task"]["id"]
-                async with asyncio.timeout(5):
+
+                async def wait_until_failed():
                     while True:
                         response = await client.post(
                             "/a2a",
@@ -102,9 +103,11 @@ async def test_sdk_marks_checkpoint_fault_failed_without_poll_timeout(tmp_path, 
                             break
                         assert task["status"]["state"] != "TASK_STATE_COMPLETED"
                         await asyncio.sleep(0.01)
+
+                await asyncio.wait_for(wait_until_failed(), 5)
                 assert (tmp_path / "fault.json").exists()
         finally:
-            event.remove(state._engine.sync_engine, "before_cursor_execute", hook)
+            event.remove(state._engine.sync_engine, "do_execute", hook)
     assert "already in a terminal state" not in caplog.text
 
 
@@ -118,14 +121,14 @@ async def test_persistent_write_failure_never_exposes_uncommitted_completion(tmp
     task = _task("task-1", TaskState.TASK_STATE_WORKING)
     await state.save(task, owner)
 
-    def reject_writes(connection, cursor, statement, parameters, context, executemany):
+    def reject_writes(cursor, statement, parameters, context):
         if statement.startswith(("INSERT", "UPDATE")):
             raise sqlite3.OperationalError("database or disk is full")
 
     pending = state.stage_completion(
         task_id=task.id, owner="operator", context_id=task.context_id, checkpoint={}
     )
-    event.listen(engine, "before_cursor_execute", reject_writes)
+    event.listen(engine, "do_execute", reject_writes)
     try:
         for terminal in (TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_FAILED):
             task.status.state = terminal
@@ -138,7 +141,7 @@ async def test_persistent_write_failure_never_exposes_uncommitted_completion(tmp
     finally:
         if pending.done() and not pending.cancelled():
             pending.exception()
-        event.remove(engine, "before_cursor_execute", reject_writes)
+        event.remove(engine, "do_execute", reject_writes)
         await state.close()
     restarted = _test_state(root, identity="test", max_tasks_per_principal=2)
     await restarted.open()

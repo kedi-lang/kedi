@@ -53,14 +53,14 @@ async def client_probe(endpoint, secret, *, ca=None, operation="invoke"):
 
 
 def disk_full_hook(marker):
-    def before_execute(connection, cursor, statement, parameters, context, executemany):
+    def execute(cursor, statement, parameters, context):
         if "INSERT INTO kedi_a2a_sessions" in statement and not marker.exists():
             marker.write_text(
                 json.dumps({"error": "SQLITE_FULL", "boundary": "session_checkpoint_insert"})
             )
             raise sqlite3.OperationalError("database or disk is full")
 
-    return before_execute
+    return execute
 
 
 def served_program(tmp_path, backend):

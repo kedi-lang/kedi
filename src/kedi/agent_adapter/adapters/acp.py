@@ -10,6 +10,7 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -184,9 +185,9 @@ class ACPClient:
                         return future.result(
                             timeout=min(remaining, 0.05) if _cancelled is not None else remaining
                         )
-                    except TimeoutError:
+                    except FutureTimeoutError as exc:
                         if monotonic() >= deadline:
-                            raise
+                            raise TimeoutError("ACP request deadline elapsed") from exc
             except (TimeoutError, FutureCancelledError):
                 if method == "session/prompt" and params is not None:
                     with suppress(ACPDisconnected):
@@ -199,7 +200,7 @@ class ACPClient:
                         )
                         try:
                             future.result(timeout=5)
-                        except TimeoutError:
+                        except FutureTimeoutError:
                             # An unresponsive agent cannot safely retain ownership
                             # of a cancelled call. Closing also fails sibling calls.
                             self.close()

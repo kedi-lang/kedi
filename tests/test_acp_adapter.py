@@ -8,6 +8,7 @@ import shlex
 import signal
 import sys
 from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from threading import Event, current_thread
 from types import SimpleNamespace
@@ -451,7 +452,7 @@ def test_acp_expired_deadline_without_session_does_not_cancel(monkeypatch, metho
     assert not client._pending
 
 
-@pytest.mark.parametrize("drain_error", [TimeoutError, ACPDisconnected])
+@pytest.mark.parametrize("drain_error", [FutureTimeoutError, ACPDisconnected])
 def test_acp_cancel_closes_transport_only_when_handshake_stalls(monkeypatch, drain_error):
     from kedi.agent_adapter.adapters import acp
 
@@ -471,7 +472,7 @@ def test_acp_cancel_closes_transport_only_when_handshake_stalls(monkeypatch, dra
         client.request("session/prompt", {"sessionId": "owned"}, _cancelled=cancelled)
     assert [m["method"] for m in messages] == ["session/prompt", "session/cancel"]
     assert messages[-1]["params"] == {"sessionId": "owned"}
-    assert client._closed is (drain_error is TimeoutError)
+    assert client._closed is (drain_error is FutureTimeoutError)
     assert not client._pending
 
 
@@ -622,9 +623,12 @@ def test_acp_cancellation_notifies_and_drains_only_owned_session(tmp_path, cance
         blocked = asyncio.create_task(
             client.run_prompt(prompt="wait", cwd=str(tmp_path), timeout=2 if cancel else 0.1)
         )
-        async with asyncio.timeout(3):
+
+        async def wait_for_message():
             while not any(state.messages for state in client._sessions.values()):
                 await asyncio.sleep(0.005)
+
+        await asyncio.wait_for(wait_for_message(), 3)
         # A second call uses its own session even while the first is active.
         assert (
             await client.run_prompt(prompt="sibling", cwd=str(tmp_path), timeout=1)
@@ -687,14 +691,16 @@ def test_acp_cancel_before_session_setup_does_not_submit_prompt(monkeypatch):
 
     async def scenario():
         task = asyncio.create_task(client.run_prompt(prompt="unused", cwd="/tmp", timeout=1))
-        async with asyncio.timeout(2):
-            while not entered.is_set():
-                await asyncio.sleep(0.005)
-        task.cancel()
-        await asyncio.sleep(0)
-        release.set()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
         assert not client._sessions
 
     asyncio.run(scenario())

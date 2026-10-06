@@ -16,6 +16,7 @@ from tests.test_langchain_branch_parity import ScriptedModel
 @pytest.mark.parametrize("sequential", [False, True])
 async def test_native_tool_batch_respects_exclusive_spec(backend, sequential):
     active, peak, calls = 0, 0, []
+    together = asyncio.Event()
 
     async def first() -> str:
         nonlocal active, peak
@@ -23,8 +24,12 @@ async def test_native_tool_batch_respects_exclusive_spec(backend, sequential):
         peak = max(peak, active)
         calls.append("first")
         try:
-            for _ in range(20):
+            if sequential:
                 await asyncio.sleep(0)
+            else:
+                if active == 2:
+                    together.set()
+                await asyncio.wait_for(together.wait(), 5)
             return "first receipt"
         finally:
             active -= 1
@@ -35,8 +40,12 @@ async def test_native_tool_batch_respects_exclusive_spec(backend, sequential):
         peak = max(peak, active)
         calls.append("second")
         try:
-            for _ in range(20):
+            if sequential:
                 await asyncio.sleep(0)
+            else:
+                if active == 2:
+                    together.set()
+                await asyncio.wait_for(together.wait(), 5)
             return "second receipt"
         finally:
             active -= 1
@@ -73,7 +82,7 @@ async def test_native_tool_batch_respects_exclusive_spec(backend, sequential):
                 artifact_result="never",
             )
         )
-    assert await adapter.invoke(prompt="Use both tools.") == "done"
+    assert await asyncio.wait_for(adapter.invoke(prompt="Use both tools."), 10) == "done"
     assert sorted(calls) == ["first", "second"]
     assert active == 0
     assert peak == (1 if sequential else 2)

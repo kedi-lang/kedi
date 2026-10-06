@@ -22,7 +22,7 @@ def test_disk_fault_rolls_back_real_transaction_once(tmp_path):
         with engine.begin() as connection:
             connection.execute(text("CREATE TABLE tasks (value TEXT)"))
             connection.execute(text("CREATE TABLE kedi_a2a_sessions (value TEXT)"))
-        event.listen(engine, "before_cursor_execute", hook)
+        event.listen(engine, "do_execute", hook)
         with pytest.raises(OperationalError, match="database or disk is full"):
             with engine.begin() as connection:
                 connection.execute(text("INSERT INTO tasks VALUES ('completed')"))
@@ -37,7 +37,7 @@ def test_disk_fault_rolls_back_real_transaction_once(tmp_path):
             assert connection.scalar(text("SELECT count(*) FROM tasks")) == 1
             assert connection.scalar(text("SELECT count(*) FROM kedi_a2a_sessions")) == 1
     finally:
-        event.remove(engine, "before_cursor_execute", hook)
+        event.remove(engine, "do_execute", hook)
         engine.dispose()
 
 
